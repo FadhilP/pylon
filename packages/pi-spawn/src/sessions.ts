@@ -7,7 +7,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { listSessionInventory } from "pylon-core/session-inventory";
 
-type ParentSessionManager = Pick<SessionManager, "getSessionFile" | "getSessionId" | "getBranch">;
+type ParentSessionManager = Pick<
+  SessionManager,
+  "getSessionFile" | "getSessionId" | "getBranch"
+>;
 
 export const AGENT_MARKER = "pi-spawn-agent";
 export const SESSION_MARKER = "pi-spawn-session";
@@ -64,82 +67,140 @@ const canonical = (path: string) => {
   return process.platform === "win32" ? value.toLowerCase() : value;
 };
 
-export function requireParent(manager: ParentSessionManager): { id: string; file: string } {
+export function requireParent(manager: ParentSessionManager): {
+  id: string;
+  file: string;
+} {
   const file = manager.getSessionFile();
   if (!file) throw new Error("pi-spawn requires a persisted parent session.");
   return { id: manager.getSessionId(), file };
 }
 
-export function privateAgentDir(parentSessionId: string, agentDir = getAgentDir()): string {
-  return join(agentDir, "pi-spawn", "agents", encodeURIComponent(parentSessionId));
+export function privateAgentDir(
+  parentSessionId: string,
+  agentDir = getAgentDir(),
+): string {
+  return join(
+    agentDir,
+    "pi-spawn",
+    "agents",
+    encodeURIComponent(parentSessionId),
+  );
 }
 
-export function resultDetails(kind: SpawnKind, id: string, path?: string, cwd?: string) {
-  return { piSpawn: { version: 1, kind, id, ...(path && cwd ? { path, cwd } : {}) } };
+export function resultDetails(
+  kind: SpawnKind,
+  id: string,
+  path?: string,
+  cwd?: string,
+) {
+  return {
+    piSpawn: { version: 1, kind, id, ...(path && cwd ? { path, cwd } : {}) },
+  };
 }
 
 export type SpawnReference = { path: string; cwd: string };
 
-export function branchSpawnReferences(manager: ParentSessionManager, kind: SpawnKind): Map<string, SpawnReference | undefined> {
+export function branchSpawnReferences(
+  manager: ParentSessionManager,
+  kind: SpawnKind,
+): Map<string, SpawnReference | undefined> {
   const references = new Map<string, SpawnReference | undefined>();
   for (const entry of manager.getBranch()) {
-    if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+    if (entry.type !== "message" || entry.message.role !== "toolResult")
+      continue;
     const value = (entry.message.details as any)?.piSpawn;
-    if (value?.version !== 1 || value.kind !== kind || typeof value.id !== "string") continue;
-    references.set(value.id, typeof value.path === "string" && typeof value.cwd === "string"
-      ? { path: value.path, cwd: value.cwd }
-      : undefined);
+    if (
+      value?.version !== 1 ||
+      value.kind !== kind ||
+      typeof value.id !== "string"
+    )
+      continue;
+    references.set(
+      value.id,
+      typeof value.path === "string" && typeof value.cwd === "string"
+        ? { path: value.path, cwd: value.cwd }
+        : undefined,
+    );
   }
   return references;
 }
 
-export function branchSpawnIds(manager: ParentSessionManager, kind: SpawnKind): Set<string> {
+export function branchSpawnIds(
+  manager: ParentSessionManager,
+  kind: SpawnKind,
+): Set<string> {
   return new Set(branchSpawnReferences(manager, kind).keys());
 }
 
 function materialize(manager: SessionManager): void {
   const path = manager.getSessionFile();
   const header = manager.getHeader();
-  if (!path || !header) throw new Error("Unable to create spawned session file.");
+  if (!path || !header)
+    throw new Error("Unable to create spawned session file.");
   const records = [header, ...manager.getEntries()];
-  writeFileSync(path, `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`, { flag: "wx", mode: 0o600 });
+  writeFileSync(
+    path,
+    `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
 }
 
 function customData<T>(manager: SessionManager, customType: string): T[] {
   const result: T[] = [];
   for (const entry of manager.getEntries()) {
-    if (entry.type === "custom" && entry.customType === customType) result.push(entry.data as T);
+    if (entry.type === "custom" && entry.customType === customType)
+      result.push(entry.data as T);
   }
   return result;
 }
 
-const boundedText = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max;
-const validHooks = (value: any): value is SpawnHooks => value !== undefined
-  && typeof value === "object" && !Array.isArray(value)
-  && (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024))
-  && (value.sessionStart === undefined || boundedText(value.sessionStart?.customType, 128)
-    && boundedText(value.sessionStart?.content, 300 * 1024))
-  && (value.sessionCompact === undefined || boundedText(value.sessionCompact?.customType, 128)
-    && boundedText(value.sessionCompact?.content, 300 * 1024));
+const boundedText = (value: unknown, max: number) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  Buffer.byteLength(value) <= max;
+const validHooks = (value: any): value is SpawnHooks =>
+  value !== undefined &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  (value.beforeAgentStart === undefined ||
+    boundedText(value.beforeAgentStart, 300 * 1024)) &&
+  (value.sessionStart === undefined ||
+    (boundedText(value.sessionStart?.customType, 128) &&
+      boundedText(value.sessionStart?.content, 300 * 1024))) &&
+  (value.sessionCompact === undefined ||
+    (boundedText(value.sessionCompact?.customType, 128) &&
+      boundedText(value.sessionCompact?.content, 300 * 1024)));
 
 function validMarker(value: any): value is SpawnMarker {
-  return value?.version === 1
-    && boundedText(value.ownerSessionId, 128)
-    && boundedText(value.ownerSessionFile, 32_768)
-    && typeof value.createdAt === "string" && !Number.isNaN(Date.parse(value.createdAt))
-    && (value.model === undefined || boundedText(value.model, 300))
-    && (value.hooks === undefined || validHooks(value.hooks));
+  return (
+    value?.version === 1 &&
+    boundedText(value.ownerSessionId, 128) &&
+    boundedText(value.ownerSessionFile, 32_768) &&
+    typeof value.createdAt === "string" &&
+    !Number.isNaN(Date.parse(value.createdAt)) &&
+    (value.model === undefined || boundedText(value.model, 300)) &&
+    (value.hooks === undefined || validHooks(value.hooks))
+  );
 }
 
 function validOwner(value: any, parent: { id: string; file: string }): boolean {
-  return validMarker(value)
-    && value.ownerSessionId === parent.id
-    && canonical(value.ownerSessionFile) === canonical(parent.file);
+  return (
+    validMarker(value) &&
+    value.ownerSessionId === parent.id &&
+    canonical(value.ownerSessionFile) === canonical(parent.file)
+  );
 }
 
-function ownedBy(manager: SessionManager, markerType: string, parent: { id: string; file: string }): boolean {
+function ownedBy(
+  manager: SessionManager,
+  markerType: string,
+  parent: { id: string; file: string },
+): boolean {
   const markers = customData<any>(manager, markerType);
-  return markers.length > 0 && markers.every((marker) => validOwner(marker, parent));
+  return (
+    markers.length > 0 && markers.every((marker) => validOwner(marker, parent))
+  );
 }
 
 export class SessionAdoptionError extends Error {
@@ -157,12 +218,25 @@ export async function findSessionForAdoption(
   id: string,
   parent: { id: string; file: string },
 ): Promise<SessionInfo> {
-  const matches = (await SessionManager.list(cwd)).filter((session) => session.id === id);
-  if (matches.length === 0) throw new SessionAdoptionError("not_found", "Existing session was not found in the selected project.");
-  if (matches.length > 1) throw new SessionAdoptionError("invalid", "Existing session ID is ambiguous.");
+  const matches = (await SessionManager.list(cwd)).filter(
+    (session) => session.id === id,
+  );
+  if (matches.length === 0)
+    throw new SessionAdoptionError(
+      "not_found",
+      "Existing session was not found in the selected project.",
+    );
+  if (matches.length > 1)
+    throw new SessionAdoptionError(
+      "invalid",
+      "Existing session ID is ambiguous.",
+    );
   const info = matches[0];
   if (info.id === parent.id || canonical(info.path) === canonical(parent.file))
-    throw new SessionAdoptionError("invalid", "The active parent session cannot adopt itself.");
+    throw new SessionAdoptionError(
+      "invalid",
+      "The active parent session cannot adopt itself.",
+    );
   return info;
 }
 
@@ -173,16 +247,34 @@ export function claimSpawnedSession(
   hooks?: SpawnHooks,
 ): void {
   const manager = SessionManager.open(path);
-  if (manager.getSessionId() !== expectedId || canonical(manager.getSessionFile() ?? path) !== canonical(path))
-    throw new SessionAdoptionError("invalid", "Existing session identity changed before adoption.");
-  if (manager.getSessionId() === parent.id || canonical(path) === canonical(parent.file))
-    throw new SessionAdoptionError("invalid", "The active parent session cannot adopt itself.");
+  if (
+    manager.getSessionId() !== expectedId ||
+    canonical(manager.getSessionFile() ?? path) !== canonical(path)
+  )
+    throw new SessionAdoptionError(
+      "invalid",
+      "Existing session identity changed before adoption.",
+    );
+  if (
+    manager.getSessionId() === parent.id ||
+    canonical(path) === canonical(parent.file)
+  )
+    throw new SessionAdoptionError(
+      "invalid",
+      "The active parent session cannot adopt itself.",
+    );
   if (customData(manager, AGENT_MARKER).length > 0)
-    throw new SessionAdoptionError("owned", "Existing session has incompatible pi-spawn ownership metadata.");
+    throw new SessionAdoptionError(
+      "owned",
+      "Existing session has incompatible pi-spawn ownership metadata.",
+    );
   const markers = customData<any>(manager, SESSION_MARKER);
   if (markers.length > 0) {
     if (markers.every((marker) => validOwner(marker, parent))) return;
-    throw new SessionAdoptionError("owned", "Existing session is already owned by another pi-spawn parent or has invalid ownership metadata.");
+    throw new SessionAdoptionError(
+      "owned",
+      "Existing session is already owned by another pi-spawn parent or has invalid ownership metadata.",
+    );
   }
   manager.appendCustomEntry(SESSION_MARKER, {
     version: 1,
@@ -196,11 +288,18 @@ export function claimSpawnedSession(
 export function createPrivateAgent(
   cwd: string,
   parent: { id: string; file: string },
-  policy: Omit<AgentPolicy, "version" | "ownerSessionId" | "ownerSessionFile" | "createdAt">,
+  policy: Omit<
+    AgentPolicy,
+    "version" | "ownerSessionId" | "ownerSessionFile" | "createdAt"
+  >,
   name: string,
   agentDir = getAgentDir(),
 ): { manager: SessionManager; info: SessionInfo; policy: AgentPolicy } {
-  const manager = SessionManager.create(cwd, privateAgentDir(parent.id, agentDir), { parentSession: parent.file });
+  const manager = SessionManager.create(
+    cwd,
+    privateAgentDir(parent.id, agentDir),
+    { parentSession: parent.file },
+  );
   const stored: AgentPolicy = {
     version: 1,
     ownerSessionId: parent.id,
@@ -236,7 +335,9 @@ export function createSpawnedSession(
   name: string,
   options: { model?: string; hooks?: SpawnHooks } = {},
 ): { manager: SessionManager; info: SessionInfo; policy: SpawnMarker } {
-  const manager = SessionManager.create(cwd, undefined, { parentSession: parent.file });
+  const manager = SessionManager.create(cwd, undefined, {
+    parentSession: parent.file,
+  });
   const marker: SpawnMarker = {
     version: 1,
     ownerSessionId: parent.id,
@@ -279,7 +380,9 @@ async function authorized(
     try {
       const manager = SessionManager.open(info.path);
       if (ownedBy(manager, markerType, parent)) result.push({ info, manager });
-    } catch { /* Ignore deleted or malformed child sessions. */ }
+    } catch {
+      /* Ignore deleted or malformed child sessions. */
+    }
   }
   return result;
 }
@@ -290,7 +393,12 @@ export async function listPrivateAgents(
   allowedIds: Set<string>,
   agentDir = getAgentDir(),
 ) {
-  return authorized(await SessionManager.list(cwd, privateAgentDir(parent.id, agentDir)), allowedIds, parent, AGENT_MARKER);
+  return authorized(
+    await SessionManager.list(cwd, privateAgentDir(parent.id, agentDir)),
+    allowedIds,
+    parent,
+    AGENT_MARKER,
+  );
 }
 
 export async function listSpawnedSessions(
@@ -299,53 +407,102 @@ export async function listSpawnedSessions(
 ) {
   const located: SessionInfo[] = [];
   const legacyIds = new Set<string>();
-  const locations = new Map<string, { cwd: string; directory: string; ids: Set<string> }>();
+  const locations = new Map<
+    string,
+    { cwd: string; directory: string; ids: Set<string> }
+  >();
   for (const [id, reference] of references) {
-    if (!reference) { legacyIds.add(id); continue; }
+    if (!reference) {
+      legacyIds.add(id);
+      continue;
+    }
     const directory = dirname(reference.path);
     const key = `${canonical(reference.cwd)}\0${canonical(directory)}`;
-    const location = locations.get(key) ?? { cwd: reference.cwd, directory, ids: new Set<string>() };
+    const location = locations.get(key) ?? {
+      cwd: reference.cwd,
+      directory,
+      ids: new Set<string>(),
+    };
     location.ids.add(id);
     locations.set(key, location);
   }
   for (const location of locations.values()) {
-    const sessions = await SessionManager.list(location.cwd, location.directory);
+    const sessions = await SessionManager.list(
+      location.cwd,
+      location.directory,
+    );
     located.push(...sessions.filter((session) => location.ids.has(session.id)));
   }
   if (legacyIds.size) {
-    const legacyLocations = new Map<string, { cwd: string; directory: string }>();
+    const legacyLocations = new Map<
+      string,
+      { cwd: string; directory: string }
+    >();
     for (const session of await listSessionInventory()) {
       if (!legacyIds.has(session.id)) continue;
       const directory = dirname(session.path);
-      legacyLocations.set(`${canonical(session.cwd)}\0${canonical(directory)}`, { cwd: session.cwd, directory });
+      legacyLocations.set(
+        `${canonical(session.cwd)}\0${canonical(directory)}`,
+        { cwd: session.cwd, directory },
+      );
     }
     for (const location of legacyLocations.values()) {
-      located.push(...(await SessionManager.list(location.cwd, location.directory))
-        .filter((session) => legacyIds.has(session.id)));
+      located.push(
+        ...(await SessionManager.list(location.cwd, location.directory)).filter(
+          (session) => legacyIds.has(session.id),
+        ),
+      );
     }
   }
-  return authorized(located, new Set(references.keys()), parent, SESSION_MARKER);
+  return authorized(
+    located,
+    new Set(references.keys()),
+    parent,
+    SESSION_MARKER,
+  );
 }
 
-export function agentPolicy(manager: SessionManager, parent: { id: string; file: string }): AgentPolicy | undefined {
+export function agentPolicy(
+  manager: SessionManager,
+  parent: { id: string; file: string },
+): AgentPolicy | undefined {
   const policies = customData<AgentPolicy>(manager, AGENT_MARKER);
-  return policies.length > 0 && policies.every((policy) => validOwner(policy, parent)) ? policies[0] : undefined;
+  return policies.length > 0 &&
+    policies.every((policy) => validOwner(policy, parent))
+    ? policies[0]
+    : undefined;
 }
 
-export function sessionPolicy(manager: SessionManager, parent: { id: string; file: string }): SpawnMarker | undefined {
+export function sessionPolicy(
+  manager: SessionManager,
+  parent: { id: string; file: string },
+): SpawnMarker | undefined {
   const policies = customData<SpawnMarker>(manager, SESSION_MARKER);
-  return policies.length > 0 && policies.every((policy) => validOwner(policy, parent)) ? policies.at(-1) : undefined;
+  return policies.length > 0 &&
+    policies.every((policy) => validOwner(policy, parent))
+    ? policies.at(-1)
+    : undefined;
 }
 
-export function spawnedHooks(manager: ParentSessionManager): SpawnHooks | undefined {
+export function spawnedHooks(
+  manager: ParentSessionManager,
+): SpawnHooks | undefined {
   const policies: SpawnMarker[] = [];
   for (const entry of manager.getBranch()) {
-    if (entry.type === "custom" && entry.customType === SESSION_MARKER && validMarker(entry.data)) policies.push(entry.data);
+    if (
+      entry.type === "custom" &&
+      entry.customType === SESSION_MARKER &&
+      validMarker(entry.data)
+    )
+      policies.push(entry.data);
   }
   return policies.length > 0 ? policies.at(-1)?.hooks : undefined;
 }
 
-export function threadInfo(kind: SpawnKind, info: SessionInfo): SpawnThreadInfo {
+export function threadInfo(
+  kind: SpawnKind,
+  info: SessionInfo,
+): SpawnThreadInfo {
   return {
     id: info.id,
     kind,
@@ -358,59 +515,112 @@ export function threadInfo(kind: SpawnKind, info: SessionInfo): SpawnThreadInfo 
 
 type RecentMessage = { label: string; text: string; toolCalls?: string[] };
 
-const clipped = (value: string, max: number) => value.length <= max
-  ? { text: value, truncated: false }
-  : { text: max <= 1 ? "…" : `${value.slice(0, max - 1)}…`, truncated: true };
+const clipped = (value: string, max: number) =>
+  value.length <= max
+    ? { text: value, truncated: false }
+    : { text: max <= 1 ? "…" : `${value.slice(0, max - 1)}…`, truncated: true };
 
 const contentText = (content: unknown): string => {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content.flatMap((part: any) => {
-    if (part?.type === "text" && typeof part.text === "string") return [part.text];
-    if (part?.type === "image") return ["[image]"];
-    return [];
-  }).join("\n");
+  return content
+    .flatMap((part: any) => {
+      if (part?.type === "text" && typeof part.text === "string")
+        return [part.text];
+      if (part?.type === "image") return ["[image]"];
+      return [];
+    })
+    .join("\n");
+};
+
+/** Bounded read-only rendering of one transcript entry, keyed by entry type then message role. */
+const labelled = (label: string, text: string): RecentMessage | undefined =>
+  text ? { label, text } : undefined;
+const namedLabel = (prefix: string, name: unknown) =>
+  `${prefix}:${String(name ?? "message").slice(0, 80)}`;
+
+const entryRenderers: Record<
+  string,
+  (entry: any) => RecentMessage | undefined
+> = {
+  custom_message: (entry) =>
+    labelled(
+      namedLabel("custom", entry.customType),
+      contentText(entry.content),
+    ),
+  compaction: (entry) =>
+    typeof entry.summary === "string"
+      ? { label: "compaction", text: entry.summary }
+      : undefined,
+  branch_summary: (entry) =>
+    typeof entry.summary === "string"
+      ? { label: "branch-summary", text: entry.summary }
+      : undefined,
+};
+
+const messageRenderers: Record<
+  string,
+  (message: any) => RecentMessage | undefined
+> = {
+  user: (message) => labelled("user", contentText(message.content)),
+  assistant: (message) => {
+    const text = contentText(message.content);
+    const toolCalls = Array.isArray(message.content)
+      ? message.content
+          .filter(
+            (part: any) =>
+              part?.type === "toolCall" && typeof part.name === "string",
+          )
+          .slice(0, 12)
+          .map((part: any) => part.name.slice(0, 80))
+      : [];
+    if (!text && !toolCalls.length) return;
+    return {
+      label: "assistant",
+      text,
+      ...(toolCalls.length ? { toolCalls } : {}),
+    };
+  },
+  toolResult: (message) =>
+    labelled(
+      namedLabel("tool", message.toolName),
+      contentText(message.content),
+    ),
+  bashExecution: (message) => ({
+    label: "bash",
+    text: [message.command, message.output]
+      .filter((value) => typeof value === "string" && value)
+      .join("\n"),
+  }),
+  custom: (message) =>
+    labelled(
+      namedLabel("custom", message.customType),
+      contentText(message.content),
+    ),
+  branchSummary: (message) =>
+    typeof message.summary === "string"
+      ? { label: "branch-summary", text: message.summary }
+      : undefined,
+  compactionSummary: (message) =>
+    typeof message.summary === "string"
+      ? { label: "compaction", text: message.summary }
+      : undefined,
 };
 
 function recentMessage(entry: any): RecentMessage | undefined {
   try {
-    if (entry?.type === "custom_message") {
-      const text = contentText(entry.content);
-      return text ? { label: `custom:${String(entry.customType ?? "message").slice(0, 80)}`, text } : undefined;
-    }
-    if (entry?.type === "compaction" && typeof entry.summary === "string")
-      return { label: "compaction", text: entry.summary };
-    if (entry?.type === "branch_summary" && typeof entry.summary === "string")
-      return { label: "branch-summary", text: entry.summary };
-    if (entry?.type !== "message" || !entry.message || typeof entry.message !== "object") return;
-    const message = entry.message;
-    if (message.role === "user") {
-      const text = contentText(message.content);
-      return text ? { label: "user", text } : undefined;
-    }
-    if (message.role === "assistant") {
-      const text = contentText(message.content);
-      const toolCalls = Array.isArray(message.content)
-        ? message.content
-          .filter((part: any) => part?.type === "toolCall" && typeof part.name === "string")
-          .slice(0, 12)
-          .map((part: any) => part.name.slice(0, 80))
-        : [];
-      return text || toolCalls.length ? { label: "assistant", text, ...(toolCalls.length ? { toolCalls } : {}) } : undefined;
-    }
-    if (message.role === "toolResult") {
-      const text = contentText(message.content);
-      return text ? { label: `tool:${String(message.toolName ?? "result").slice(0, 80)}`, text } : undefined;
-    }
-    if (message.role === "bashExecution")
-      return { label: "bash", text: [message.command, message.output].filter((value) => typeof value === "string" && value).join("\n") };
-    if (message.role === "custom") {
-      const text = contentText(message.content);
-      return text ? { label: `custom:${String(message.customType ?? "message").slice(0, 80)}`, text } : undefined;
-    }
-    if ((message.role === "branchSummary" || message.role === "compactionSummary") && typeof message.summary === "string")
-      return { label: message.role === "branchSummary" ? "branch-summary" : "compaction", text: message.summary };
-  } catch { /* Malformed transcript entries are omitted from read-only inspection. */ }
+    const renderEntry = entryRenderers[entry?.type];
+    if (renderEntry) return renderEntry(entry);
+    if (
+      entry?.type !== "message" ||
+      !entry.message ||
+      typeof entry.message !== "object"
+    )
+      return;
+    return messageRenderers[entry.message.role]?.(entry.message);
+  } catch {
+    /* Malformed transcript entries are omitted from read-only inspection. */
+  }
 }
 
 export function recentThreadTranscript(
@@ -428,13 +638,20 @@ export function recentThreadTranscript(
   let remaining = RECENT_THREAD_MAX_TOTAL_CHARS;
   let truncated = selected.length < available.length;
   for (const message of selected) {
-    if (remaining <= 0) { truncated = true; break; }
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
     const body = clipped(message.text, maxChars);
     const rendered = [
       `[${message.label}]`,
-      message.toolCalls?.length ? `tool calls: ${message.toolCalls.join(", ")}` : "",
+      message.toolCalls?.length
+        ? `tool calls: ${message.toolCalls.join(", ")}`
+        : "",
       body.text,
-    ].filter(Boolean).join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
     const bounded = clipped(rendered, remaining);
     blocks.push(bounded.text);
     remaining -= bounded.text.length + 2;
@@ -451,16 +668,24 @@ export function recentThreadTranscript(
 export class SpawnBusyError extends Error {}
 
 const activeThreads = new Set<string>();
-const abortError = () => new DOMException("Spawned thread turn was aborted.", "AbortError");
+const abortError = () =>
+  new DOMException("Spawned thread turn was aborted.", "AbortError");
 
 export function isThreadActive(sessionPath: string): boolean {
   return activeThreads.has(canonical(sessionPath));
 }
 
-export async function withThreadLock<T>(sessionPath: string, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+export async function withThreadLock<T>(
+  sessionPath: string,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   if (signal?.aborted) throw abortError();
   const key = canonical(sessionPath);
-  if (activeThreads.has(key)) throw new SpawnBusyError("Spawned thread is already running in this Pi process.");
+  if (activeThreads.has(key))
+    throw new SpawnBusyError(
+      "Spawned thread is already running in this Pi process.",
+    );
   activeThreads.add(key);
   try {
     if (signal?.aborted) throw abortError();

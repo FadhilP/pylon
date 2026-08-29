@@ -1,4 +1,7 @@
-import { redact } from "./redact.ts";
+import { packRecentRecords } from "pylon-core/context-packing";
+import { redact } from "pylon-core/redact";
+
+const MAX_ITEM_CHARS = 1200;
 
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -22,7 +25,10 @@ export function buildParentContext(
       if (message?.role === "user") {
         const text = contentText(message.content);
         if (text) items.push(`User: ${text}`);
-      } else if (message?.role === "assistant" && Array.isArray(message.content)) {
+      } else if (
+        message?.role === "assistant" &&
+        Array.isArray(message.content)
+      ) {
         const text = contentText(message.content);
         if (text) items.push(`Main assistant: ${text}`);
         for (const part of message.content) {
@@ -48,25 +54,22 @@ export function buildParentContext(
         const data = { ...entry.data };
         delete data.worktreeRef;
         delete data.indexRef;
-        items.push(`Repository state (${entry.customType}): ${JSON.stringify(data)}`);
+        items.push(
+          `Repository state (${entry.customType}): ${JSON.stringify(data)}`,
+        );
       } catch {
         items.push(`Repository state (${entry.customType}): [unserializable]`);
       }
     }
   }
 
-  const selected: string[] = [];
-  const seen = new Set<string>();
-  let used = 0;
-  for (let index = items.length - 1; index >= 0 && selected.length < maxItems; index--) {
-    const item = redact(items[index]).text.slice(0, 1200);
-    const identity = item.replace(/\r\n/g, "\n").trim();
-    if (!identity || seen.has(identity)) continue;
-    seen.add(identity);
-    const size = item.length + (selected.length ? 2 : 0);
-    if (used + size > maxChars) continue;
-    selected.push(item);
-    used += size;
-  }
-  return selected.reverse().join("\n\n");
+  // Redact and clip each candidate before packing, so the budget reflects what is actually sent.
+  const bounded = items.map((item) =>
+    redact(item).text.slice(0, MAX_ITEM_CHARS),
+  );
+  return packRecentRecords(bounded, {
+    maxChars,
+    maxItems,
+    identity: (record) => record.replace(/\r\n/g, "\n").trim(),
+  });
 }

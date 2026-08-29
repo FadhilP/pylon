@@ -24,13 +24,16 @@ test("spawn tool availability defaults to deferred and persists independently", 
       agentThinkingLevels: allThinking,
     });
 
-    await updateSettings({
-      kind: "spawn",
-      agentAvailability: "active",
-      sessionAvailability: "deferred",
-      models: ["custom/model"],
-      agentThinkingLevels: ["low", "high"],
-    }, { agentDir });
+    await updateSettings(
+      {
+        kind: "spawn",
+        agentAvailability: "active",
+        sessionAvailability: "deferred",
+        models: ["custom/model"],
+        agentThinkingLevels: ["low", "high"],
+      },
+      { agentDir },
+    );
     assert.deepEqual(await readSettings({ agentDir }), {
       kind: "spawn",
       agentAvailability: "active",
@@ -46,7 +49,15 @@ test("spawn tool availability defaults to deferred and persists independently", 
       agentThinkingLevels: ["low", "high"],
     });
     await assert.rejects(
-      updateSettings({ kind: "spawn", agentAvailability: "sometimes", sessionAvailability: "active", agentThinkingLevels: ["high"] }, { agentDir }),
+      updateSettings(
+        {
+          kind: "spawn",
+          agentAvailability: "sometimes",
+          sessionAvailability: "active",
+          agentThinkingLevels: ["high"],
+        },
+        { agentDir },
+      ),
       /invalid Spawn settings/,
     );
   } finally {
@@ -59,13 +70,19 @@ test("combined availability configs migrate both tools without rewriting", async
   try {
     const path = configPath(agentDir);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify({ version: 1, toolAvailability: "active" }));
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, toolAvailability: "active" }),
+    );
     assert.deepEqual(await loadConfig(path), {
       version: 1,
       agentAvailability: "active",
       sessionAvailability: "active",
     });
-    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { version: 1, toolAvailability: "active" });
+    assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+      version: 1,
+      toolAvailability: "active",
+    });
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }
@@ -76,7 +93,10 @@ test("invalid spawn config is quarantined and safely defaults to deferred", asyn
   try {
     const path = configPath(agentDir);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, JSON.stringify({ version: 1, agentAvailability: "active" }));
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, agentAvailability: "active" }),
+    );
     assert.deepEqual(await loadConfig(path), deferred);
   } finally {
     await rm(agentDir, { recursive: true, force: true });

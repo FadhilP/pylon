@@ -1,10 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access, mkdtemp, mkdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
-import { JobManager, pruneStaleSessionDirs, STALE_SESSION_DIR_MS, type Job } from "../src/jobs.ts";
+import {
+  JobManager,
+  pruneStaleSessionDirs,
+  STALE_SESSION_DIR_MS,
+  type Job,
+} from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs, MIN_CHECK_INTERVAL_MS } from "../src/polling.ts";
 import { shellInvocation } from "../src/process-tree.ts";
@@ -66,7 +79,10 @@ test("running status checks stay over 30 seconds apart", async () => {
   assert.equal(checkWaitMs(job, job.startedAt), MIN_CHECK_INTERVAL_MS + 1);
   assert.equal(checkWaitMs(job, job.startedAt + MIN_CHECK_INTERVAL_MS), 1);
   assert.equal(checkWaitMs(job, job.startedAt + MIN_CHECK_INTERVAL_MS + 1), 0);
-  assert.match(jobContext([job], job.startedAt), /Do not call heartbeat_status yet/);
+  assert.match(
+    jobContext([job], job.startedAt),
+    /Do not call heartbeat_status yet/,
+  );
   assert.match(
     jobContext([job], job.startedAt + MIN_CHECK_INTERVAL_MS + 1),
     /status available now/,
@@ -108,7 +124,11 @@ test("running status includes a bounded current output snapshot", async () => {
   );
   const job = await manager.start(`node "${script}"`, process.cwd());
   for (let i = 0; i < 100; i++) {
-    if (job.stdoutTail.toString().includes("STDOUT_END") && job.stderrTail.toString().includes("STDERR_END")) break;
+    if (
+      job.stdoutTail.toString().includes("STDOUT_END") &&
+      job.stderrTail.toString().includes("STDERR_END")
+    )
+      break;
     await delay(10);
   }
   const formatted = manager.format(job);

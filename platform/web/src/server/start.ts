@@ -10,7 +10,8 @@ const running = await startPylonServer({
   port: process.env.PYLON_PORT ? Number(process.env.PYLON_PORT) : undefined,
 });
 const address = running.server.address();
-if (address && typeof address !== "string") console.log(`Pylon web: http://127.0.0.1:${address.port}`);
+if (address && typeof address !== "string")
+  console.log(`Pylon web: http://127.0.0.1:${address.port}`);
 const shutdown = () => void running.close().finally(() => process.exit());
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);

@@ -3,9 +3,22 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const thinkingLevels = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
-export type AdvisorConfig = { version: 1; advisorModel?: string; thinking?: ThinkingLevel; useMainModel?: boolean };
+export type AdvisorConfig = {
+  version: 1;
+  advisorModel?: string;
+  thinking?: ThinkingLevel;
+  useMainModel?: boolean;
+};
 export const configPath = (agentDir = getAgentDir()) =>
   join(agentDir, "pi-advisor", "config.json");
 export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
@@ -14,9 +27,12 @@ export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
     if (
       value?.version !== 1 ||
       (value.advisorModel !== undefined &&
-        (typeof value.advisorModel !== "string" || !value.advisorModel.trim())) ||
-      (value.thinking !== undefined && !thinkingLevels.includes(value.thinking)) ||
-      (value.useMainModel !== undefined && typeof value.useMainModel !== "boolean")
+        (typeof value.advisorModel !== "string" ||
+          !value.advisorModel.trim())) ||
+      (value.thinking !== undefined &&
+        !thinkingLevels.includes(value.thinking)) ||
+      (value.useMainModel !== undefined &&
+        typeof value.useMainModel !== "boolean")
     )
       throw new Error("invalid config");
     const config: AdvisorConfig = {

@@ -1,26 +1,141 @@
-import { IconArrowBackUp, IconArrowUp, IconBotId, IconBulb, IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconFileText, IconGitFork, IconLoader2, IconPaperclip, IconPencil, IconPhoto, IconPlus, IconSearch, IconSquareFilled, IconTool, IconX } from "@tabler/icons-react";
+import {
+  IconArrowBackUp,
+  IconArrowUp,
+  IconBotId,
+  IconBulb,
+  IconCheck,
+  IconChevronDown,
+  IconChevronRight,
+  IconCopy,
+  IconFileText,
+  IconGitFork,
+  IconLoader2,
+  IconPaperclip,
+  IconPencil,
+  IconPhoto,
+  IconPlus,
+  IconSearch,
+  IconSquareFilled,
+  IconTool,
+  IconX,
+} from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { aggregateToolTiming, groupConversationMessages, includeLatestLoadedTurn, latestUniqueToolNames, liveToolMessage, reconcileToolActivity, toolElapsedDuration, turnIdsInViewport } from "../shared/transcript";
-import { formatCompactNumber, formatToolDuration, formatWorkDuration } from "../shared/format";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+  type CSSProperties,
+  type DragEvent as ReactDragEvent,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
+import {
+  aggregateToolTiming,
+  groupConversationMessages,
+  includeLatestLoadedTurn,
+  latestUniqueToolNames,
+  liveToolMessage,
+  reconcileToolActivity,
+  toolElapsedDuration,
+  turnIdsInViewport,
+} from "../shared/transcript";
+import {
+  formatCompactNumber,
+  formatToolDuration,
+  formatWorkDuration,
+} from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
-import { fileMentionAtCaret, insertFileMention, isNearTranscriptBottom, loginCommandProvider, replaceFileMention, WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
+import {
+  fileMentionAtCaret,
+  insertFileMention,
+  isNearTranscriptBottom,
+  loginCommandProvider,
+  replaceFileMention,
+  WORKSPACE_FILE_DRAG_TYPE,
+} from "../shared/composer-input";
 import type { PromptImage, PromptTextFile } from "../shared/protocol/commands";
-import type { DelegatedAgentKind, DelegatedAgentRunReadModel, MessageAttachmentReadModel, MessageReadModel, ModelOptionReadModel, QueuedPromptReadModel, SessionControlsReadModel, ThinkingLevelReadModel } from "../shared/protocol/events";
-import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
+import type {
+  DelegatedAgentKind,
+  DelegatedAgentRunReadModel,
+  MessageAttachmentReadModel,
+  MessageReadModel,
+  ModelOptionReadModel,
+  QueuedPromptReadModel,
+  SessionControlsReadModel,
+  ThinkingLevelReadModel,
+} from "../shared/protocol/events";
+import type {
+  ConversationTurnIndexItem,
+  ConversationTurnIndexPage,
+} from "../shared/protocol/snapshots";
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor, type AgentColorMap } from "./agent-color";
-import { matrixSelectionAtPoint, matrixThinkingAxis, moveMatrixSelection } from "../shared/model-matrix";
+import {
+  matrixSelectionAtPoint,
+  matrixThinkingAxis,
+  moveMatrixSelection,
+} from "../shared/model-matrix";
 import { AnimatedDetails } from "./animated-details";
 import { UiDialog } from "./ui-dialog";
-import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
+import {
+  modelKey as toModelKey,
+  useHiddenModels,
+  visibleModels,
+} from "./model-visibility";
 
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
-const markdownTags = ["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "span", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"];
-const markdownAttributes = ["alt", "checked", "class", "data-language", "disabled", "href", "src", "title", "type"];
+const markdownTags = [
+  "a",
+  "blockquote",
+  "br",
+  "code",
+  "del",
+  "em",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "img",
+  "input",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "span",
+  "strong",
+  "table",
+  "tbody",
+  "td",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+];
+const markdownAttributes = [
+  "alt",
+  "checked",
+  "class",
+  "data-language",
+  "disabled",
+  "href",
+  "src",
+  "title",
+  "type",
+];
 type PastedImage = PromptImage & { id: string };
 type DroppedTextFile = PromptTextFile & { id: string };
 interface PromptEdit {
@@ -98,7 +213,10 @@ export function ConversationPanel({
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
   onOpenCompaction: (message: MessageReadModel) => void;
-  onOpenAttachment: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
+  onOpenAttachment: (
+    attachment: MessageAttachmentReadModel,
+    trigger: HTMLButtonElement,
+  ) => void;
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -107,16 +225,23 @@ export function ConversationPanel({
   const [edit, setEdit] = useState<PromptEdit>();
   const [undo, setUndo] = useState<PromptUndo>();
   const [fork, setFork] = useState<PromptFork>();
-  const [visibleTurnIds, setVisibleTurnIds] = useState<Set<string>>(() => new Set());
+  const [visibleTurnIds, setVisibleTurnIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [toolNow, setToolNow] = useState(Date.now());
   const [railPage, setRailPage] = useState<ConversationTurnIndexPage>();
   const [railLoading, setRailLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [controlBusy, setControlBusy] = useState("");
-  const [historyLoading, setHistoryLoading] = useState<"page" | "all" | "newer">();
+  const [historyLoading, setHistoryLoading] = useState<
+    "page" | "all" | "newer"
+  >();
   const [openMenu, setOpenMenu] = useState<"plus" | "model">();
   const [planMode, setPlanMode] = useState(false);
-  const [queueBusy, setQueueBusy] = useState<{ id: string; action: "edit" | "steer" }>();
+  const [queueBusy, setQueueBusy] = useState<{
+    id: string;
+    action: "edit" | "steer";
+  }>();
   const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = useState(false);
   const [caretPosition, setCaretPosition] = useState(0);
@@ -130,7 +255,8 @@ export function ConversationPanel({
   const draftingOnly = Boolean(pendingSession);
   const runtime = draftingOnly ? undefined : live.runtime;
   const controls = runtime?.sessionControls;
-  const continuityPlanning = runtime?.operational.continuity.work?.mode === "planning";
+  const continuityPlanning =
+    runtime?.operational.continuity.work?.mode === "planning";
   const updateMessage = (value: string) => {
     setMessage(value);
     onDraftChange?.(value);
@@ -143,7 +269,11 @@ export function ConversationPanel({
     if (streamRef.current) scrollTranscriptToBottom(streamRef.current);
   };
   useEffect(() => {
-    if (editorRevision > 0 && (!initialDraft || editorRevision !== initialEditorRevision.current)) updateMessage(editorText);
+    if (
+      editorRevision > 0 &&
+      (!initialDraft || editorRevision !== initialEditorRevision.current)
+    )
+      updateMessage(editorText);
   }, [editorRevision, editorText]);
   useLayoutEffect(() => {
     forceTranscriptBottom();
@@ -156,7 +286,10 @@ export function ConversationPanel({
     if (!prompt) return;
     prompt.focus();
     if (restoreComposerSelection) {
-      const start = Math.min(restoreComposerSelection.start, prompt.value.length);
+      const start = Math.min(
+        restoreComposerSelection.start,
+        prompt.value.length,
+      );
       const end = Math.min(restoreComposerSelection.end, prompt.value.length);
       prompt.setSelectionRange(start, end, restoreComposerSelection.direction);
     }
@@ -186,7 +319,11 @@ export function ConversationPanel({
     setVisibleTurnIds(new Set());
     turnRefs.current.clear();
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
-  const connected = !draftingOnly && live.connection === "connected" && runtime?.ready === true && projectAvailable;
+  const connected =
+    !draftingOnly &&
+    live.connection === "connected" &&
+    runtime?.ready === true &&
+    projectAvailable;
   const streaming = runtime?.conversation.streaming === true;
   const running = Boolean(runtime?.conversation.workStartedAt);
   const stopping = runtime?.conversation.stopping === true;
@@ -194,25 +331,40 @@ export function ConversationPanel({
   const composerBlocked = !draftingOnly && Boolean(live.pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const sending = submitting && !edit && !undo && !fork;
-  const planAvailable = controls?.commands?.some((command) => command.name === "plan" && command.source === "extension") === true;
+  const planAvailable =
+    controls?.commands?.some(
+      (command) => command.name === "plan" && command.source === "extension",
+    ) === true;
   const activeHistoryWindow = live.historyWindow;
-  const transcriptSourceMessages = activeHistoryWindow
-    && activeHistoryWindow.sessionId === runtime?.sessionId
-    && activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
-    ? activeHistoryWindow.messages
-    : runtime?.conversation.messages ?? [];
+  const transcriptSourceMessages =
+    activeHistoryWindow &&
+    activeHistoryWindow.sessionId === runtime?.sessionId &&
+    activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
+      ? activeHistoryWindow.messages
+      : (runtime?.conversation.messages ?? []);
   const liveTools = runtime?.conversation.tools ?? [];
   const liveToolsById = new Map(liveTools.map((tool) => [tool.id, tool]));
   const transcriptMessages = transcriptSourceMessages.map((message) => {
-    const activity = message.tool?.id ? liveToolsById.get(message.tool.id) : undefined;
+    const activity = message.tool?.id
+      ? liveToolsById.get(message.tool.id)
+      : undefined;
     return activity ? reconcileToolActivity(message, activity) : message;
   });
-  const pendingMessages = (live.pendingMessages ?? []).filter((item) =>
-    item.sessionId === runtime?.sessionId && item.sessionGeneration === runtime?.sessionGeneration);
+  const pendingMessages = (live.pendingMessages ?? []).filter(
+    (item) =>
+      item.sessionId === runtime?.sessionId &&
+      item.sessionGeneration === runtime?.sessionGeneration,
+  );
   const pendingById = new Map(pendingMessages.map((item) => [item.id, item]));
-  const queuedByCommand = new Map(queuedItems.map((item) => [item.commandId, item]));
-  const transcriptToolIds = new Set(transcriptMessages.flatMap((item) => item.tool?.id ? [item.tool.id] : []));
-  const transcriptMessageIds = new Set(transcriptMessages.map((item) => item.id));
+  const queuedByCommand = new Map(
+    queuedItems.map((item) => [item.commandId, item]),
+  );
+  const transcriptToolIds = new Set(
+    transcriptMessages.flatMap((item) => (item.tool?.id ? [item.tool.id] : [])),
+  );
+  const transcriptMessageIds = new Set(
+    transcriptMessages.map((item) => item.id),
+  );
   const runningTools = liveTools.filter((tool) => tool.status === "running");
   const hasRunningTools = runningTools.length > 0;
   useEffect(() => {
@@ -234,10 +386,15 @@ export function ConversationPanel({
       attachmentCount: item.attachmentCount,
       fileAttachmentCount: item.fileAttachmentCount,
     }));
-  const visibleMessages = [...transcriptMessages, ...liveToolMessages, ...pendingTranscriptMessages].filter((item) => {
-    const text = item.text.trim();
-    return item.role !== "assistant" || !["", "...", "…"].includes(text);
-  }) ?? [];
+  const visibleMessages =
+    [
+      ...transcriptMessages,
+      ...liveToolMessages,
+      ...pendingTranscriptMessages,
+    ].filter((item) => {
+      const text = item.text.trim();
+      return item.role !== "assistant" || !["", "...", "…"].includes(text);
+    }) ?? [];
   const conversationBlocks = useMemo(
     () => groupConversationMessages(visibleMessages),
     [transcriptMessages, runtime?.conversation.tools, live.pendingMessages],
@@ -254,27 +411,52 @@ export function ConversationPanel({
     return ids;
   }, [conversationBlocks]);
   const activeToolGroupId = running
-    ? [...conversationBlocks].reverse().find((block) => "tools" in block && !toolBlocksBeforeLaterPrompt.has(block.id))?.id
+    ? [...conversationBlocks]
+        .reverse()
+        .find(
+          (block) =>
+            "tools" in block && !toolBlocksBeforeLaterPrompt.has(block.id),
+        )?.id
     : undefined;
-  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
-  const userTurns = useMemo(
-    () => visibleMessages.filter((item) => item.role === "user" && item.entryId),
+  const copyableAssistants = useMemo(
+    () => finalAssistantIds(visibleMessages),
     [transcriptMessages],
   );
-  const userTurnKey = userTurns.map((item) => item.entryId ?? item.id).join("\0");
+  const userTurns = useMemo(
+    () =>
+      visibleMessages.filter((item) => item.role === "user" && item.entryId),
+    [transcriptMessages],
+  );
+  const userTurnKey = userTurns
+    .map((item) => item.entryId ?? item.id)
+    .join("\0");
   const latestUserTurn = userTurns.at(-1);
   const displayedRailPage = useMemo(() => {
     if (!railPage || !latestUserTurn?.entryId) return railPage;
-    const preview = latestUserTurn.text.replace(/\s+/g, " ").trim()
-      || (latestUserTurn.attachmentCount
+    const preview =
+      latestUserTurn.text.replace(/\s+/g, " ").trim() ||
+      (latestUserTurn.attachmentCount
         ? `${latestUserTurn.attachmentCount} attached image${latestUserTurn.attachmentCount === 1 ? "" : "s"}`
         : "Empty prompt");
-    return includeLatestLoadedTurn(railPage, {
-      promptId: latestUserTurn.entryId,
-      preview: preview.slice(0, 120),
-      ...(latestUserTurn.createdAt ? { createdAt: latestUserTurn.createdAt } : {}),
-    }, activeHistoryWindow?.laterCursor === undefined);
-  }, [activeHistoryWindow?.laterCursor, latestUserTurn?.attachmentCount, latestUserTurn?.createdAt, latestUserTurn?.entryId, latestUserTurn?.text, railPage]);
+    return includeLatestLoadedTurn(
+      railPage,
+      {
+        promptId: latestUserTurn.entryId,
+        preview: preview.slice(0, 120),
+        ...(latestUserTurn.createdAt
+          ? { createdAt: latestUserTurn.createdAt }
+          : {}),
+      },
+      activeHistoryWindow?.laterCursor === undefined,
+    );
+  }, [
+    activeHistoryWindow?.laterCursor,
+    latestUserTurn?.attachmentCount,
+    latestUserTurn?.createdAt,
+    latestUserTurn?.entryId,
+    latestUserTurn?.text,
+    railPage,
+  ]);
   useEffect(() => {
     const root = streamRef.current;
     if (!root || !userTurns.length) return;
@@ -290,12 +472,17 @@ export function ConversationPanel({
         return [{ id, top: rect.top, bottom: rect.bottom }];
       });
       const visible = new Set(turnIdsInViewport(turns, rootRect));
-      setVisibleTurnIds((current) => sameStringSet(current, visible) ? current : visible);
+      setVisibleTurnIds((current) =>
+        sameStringSet(current, visible) ? current : visible,
+      );
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(update);
     };
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(schedule);
     if (transcriptRef.current) observer?.observe(transcriptRef.current);
     root.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("resize", schedule);
@@ -315,30 +502,67 @@ export function ConversationPanel({
     if (live.connection !== "connected" || !runtime.ready) return;
     let active = true;
     setRailLoading(true);
-    void runtimeStore.conversationTurnIndex().then((page) => {
-      if (active) setRailPage(page);
-    }).catch((error) => {
-      if (!active) return;
-      setRailPage(undefined);
-      runtimeStore.reportError(error instanceof Error ? error.message : "Unable to load conversation turns");
-    }).finally(() => {
-      if (active) setRailLoading(false);
-    });
-    return () => { active = false; };
-  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.metrics.userMessages]);
+    void runtimeStore
+      .conversationTurnIndex()
+      .then((page) => {
+        if (active) setRailPage(page);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setRailPage(undefined);
+        runtimeStore.reportError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load conversation turns",
+        );
+      })
+      .finally(() => {
+        if (active) setRailLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    live.connection,
+    runtime?.ready,
+    runtime?.sessionId,
+    runtime?.sessionGeneration,
+    runtime?.metrics.userMessages,
+  ]);
   const activeAgents = useMemo(
-    () => runtime?.conversation.delegatedRuns.filter((run) => run.status === "running") ?? [],
+    () =>
+      runtime?.conversation.delegatedRuns.filter(
+        (run) => run.status === "running",
+      ) ?? [],
     [runtime?.conversation.delegatedRuns],
   );
   const slashMatch = draftingOnly ? null : /^\/([^\s]*)$/.exec(message);
-  const suggestions = slashMatch && !suggestionsDismissed
-    ? [{ name: "login", description: "Connect an AI provider", source: "extension" as const }, ...(controls?.commands ?? [])]
-        .filter((command, index, commands) => commands.findIndex((candidate) => candidate.name === command.name) === index)
-        .filter((command) => command.name.toLowerCase().startsWith(slashMatch[1]!.toLowerCase()))
-        .slice(0, 8)
-    : [];
+  const suggestions =
+    slashMatch && !suggestionsDismissed
+      ? [
+          {
+            name: "login",
+            description: "Connect an AI provider",
+            source: "extension" as const,
+          },
+          ...(controls?.commands ?? []),
+        ]
+          .filter(
+            (command, index, commands) =>
+              commands.findIndex(
+                (candidate) => candidate.name === command.name,
+              ) === index,
+          )
+          .filter((command) =>
+            command.name.toLowerCase().startsWith(slashMatch[1]!.toLowerCase()),
+          )
+          .slice(0, 8)
+      : [];
   const fileMention = useMemo(
-    () => slashMatch || suggestionsDismissed ? undefined : fileMentionAtCaret(message, caretPosition),
+    () =>
+      slashMatch || suggestionsDismissed
+        ? undefined
+        : fileMentionAtCaret(message, caretPosition),
     [caretPosition, message, slashMatch, suggestionsDismissed],
   );
   useEffect(() => {
@@ -348,20 +572,26 @@ export function ConversationPanel({
     }
     let active = true;
     const timer = window.setTimeout(() => {
-      void runtimeStore.fileSuggestions(fileMention.query).then((result) => {
-        if (active) setFileSuggestions(result.available ? result.paths : []);
-      }).catch(() => {
-        if (active) setFileSuggestions([]);
-      });
+      void runtimeStore
+        .fileSuggestions(fileMention.query)
+        .then((result) => {
+          if (active) setFileSuggestions(result.available ? result.paths : []);
+        })
+        .catch(() => {
+          if (active) setFileSuggestions([]);
+        });
     }, 120);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
   }, [connected, fileMention?.query, runtime?.sessionId]);
-  useEffect(() => { setSuggestionIndex(0); }, [message, controls?.commands, fileSuggestions.join("\0")]);
   useEffect(() => {
-    suggestionListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+    setSuggestionIndex(0);
+  }, [message, controls?.commands, fileSuggestions.join("\0")]);
+  useEffect(() => {
+    suggestionListRef.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest" });
   }, [suggestionIndex]);
   const chooseSuggestion = (index: number) => {
@@ -386,8 +616,15 @@ export function ConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
-    if (draftingOnly || (!value && images.length === 0 && files.length === 0) || !connected || composerBlocked) return;
-    const loginProvider = !images.length && !files.length ? loginCommandProvider(value) : null;
+    if (
+      draftingOnly ||
+      (!value && images.length === 0 && files.length === 0) ||
+      !connected ||
+      composerBlocked
+    )
+      return;
+    const loginProvider =
+      !images.length && !files.length ? loginCommandProvider(value) : null;
     if (loginProvider !== null) {
       onOpenLogin?.(loginProvider);
       updateMessage("");
@@ -398,16 +635,23 @@ export function ConversationPanel({
       await runtimeStore.sendMessage(
         value,
         images.map(({ data, mimeType }) => ({ data, mimeType })),
-        files.map(({ name, text, size, mimeType }) => ({ name, text, size, ...(mimeType ? { mimeType } : {}) })),
+        files.map(({ name, text, size, mimeType }) => ({
+          name,
+          text,
+          size,
+          ...(mimeType ? { mimeType } : {}),
+        })),
         planMode,
       );
       updateMessage("");
       setImages([]);
       setFiles([]);
       setPlanMode(false);
+    } catch {
+      /* Store exposes the command error in the live connection state. */
+    } finally {
+      setSubmitting(false);
     }
-    catch { /* Store exposes the command error in the live connection state. */ }
-    finally { setSubmitting(false); }
   };
   const onPaste = async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
     try {
@@ -415,7 +659,11 @@ export function ConversationPanel({
       if (!pasted) return;
       setImages(pasted);
     } catch (error) {
-      runtimeStore.reportError(error instanceof Error ? error.message : "The pasted image could not be read.");
+      runtimeStore.reportError(
+        error instanceof Error
+          ? error.message
+          : "The pasted image could not be read.",
+      );
     }
   };
   const onDrop = async (event: ReactDragEvent<HTMLFormElement>) => {
@@ -441,7 +689,11 @@ export function ConversationPanel({
       setImages(next.images);
       setFiles(next.files);
     } catch (error) {
-      runtimeStore.reportError(error instanceof Error ? error.message : "The dropped files could not be read.");
+      runtimeStore.reportError(
+        error instanceof Error
+          ? error.message
+          : "The dropped files could not be read.",
+      );
     }
   };
   const addFiles = async (selected: File[]) => {
@@ -451,13 +703,23 @@ export function ConversationPanel({
       setImages(next.images);
       setFiles(next.files);
     } catch (error) {
-      runtimeStore.reportError(error instanceof Error ? error.message : "The selected files could not be read.");
+      runtimeStore.reportError(
+        error instanceof Error
+          ? error.message
+          : "The selected files could not be read.",
+      );
     }
   };
-  const setSessionControls = async (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => {
+  const setSessionControls = async (
+    model: ModelOptionReadModel,
+    level: ThinkingLevelReadModel,
+  ) => {
     setControlBusy("controls");
-    try { await runtimeStore.setSessionControls(model.provider, model.id, level); }
-    finally { setControlBusy(""); }
+    try {
+      await runtimeStore.setSessionControls(model.provider, model.id, level);
+    } finally {
+      setControlBusy("");
+    }
   };
   const controlsDisabled = !connected || submitting || Boolean(controlBusy);
   const restoreQueued = async (queued: QueuedPromptReadModel) => {
@@ -466,8 +728,18 @@ export function ConversationPanel({
     try {
       const restored = await runtimeStore.restoreQueuedPrompt(queued.id);
       updateMessage(restored.message);
-      setImages((restored.images ?? []).map((image) => ({ ...image, id: crypto.randomUUID() })));
-      setFiles((restored.files ?? []).map((file) => ({ ...file, id: crypto.randomUUID() })));
+      setImages(
+        (restored.images ?? []).map((image) => ({
+          ...image,
+          id: crypto.randomUUID(),
+        })),
+      );
+      setFiles(
+        (restored.files ?? []).map((file) => ({
+          ...file,
+          id: crypto.randomUUID(),
+        })),
+      );
       setPlanMode(restored.planMode);
       requestAnimationFrame(() => promptRef.current?.focus());
     } catch {
@@ -479,18 +751,24 @@ export function ConversationPanel({
   const steerQueued = async (queued: QueuedPromptReadModel) => {
     if (queued.state !== "queued") return;
     setQueueBusy({ id: queued.id, action: "steer" });
-    try { await runtimeStore.steerQueuedPrompt(queued.id); }
-    catch { /* Store routes the failure through the application toast. */ }
-    finally { setQueueBusy(undefined); }
+    try {
+      await runtimeStore.steerQueuedPrompt(queued.id);
+    } catch {
+      /* Store routes the failure through the application toast. */
+    } finally {
+      setQueueBusy(undefined);
+    }
   };
   const loadHistory = async (all: boolean, preserveAnchor = false) => {
     const stream = streamRef.current;
     followBottomRef.current = false;
     const viewportTop = stream?.getBoundingClientRect().top ?? 0;
     const anchor = preserveAnchor
-      ? [...(transcriptRef.current?.children ?? [])].find((element) =>
-          !element.classList.contains("history-loader")
-          && element.getBoundingClientRect().bottom > viewportTop) as HTMLElement | undefined
+      ? ([...(transcriptRef.current?.children ?? [])].find(
+          (element) =>
+            !element.classList.contains("history-loader") &&
+            element.getBoundingClientRect().bottom > viewportTop,
+        ) as HTMLElement | undefined)
       : undefined;
     const anchorTop = anchor?.getBoundingClientRect().top;
     setHistoryLoading(all ? "all" : "page");
@@ -501,7 +779,12 @@ export function ConversationPanel({
           if (!stream) return;
           if (preserveAnchor) {
             if (anchor?.isConnected && anchorTop !== undefined) {
-              setTranscriptScrollTop(stream, stream.scrollTop + anchor.getBoundingClientRect().top - anchorTop);
+              setTranscriptScrollTop(
+                stream,
+                stream.scrollTop +
+                  anchor.getBoundingClientRect().top -
+                  anchorTop,
+              );
             }
             return;
           }
@@ -526,11 +809,16 @@ export function ConversationPanel({
       setHistoryLoading(undefined);
     }
   };
-  const loadRailPage = async (direction: "earlier" | "later", cursor?: string) => {
+  const loadRailPage = async (
+    direction: "earlier" | "later",
+    cursor?: string,
+  ) => {
     if (!cursor || railLoading) return;
     setRailLoading(true);
     try {
-      setRailPage(await runtimeStore.conversationTurnIndex({ cursor, direction }));
+      setRailPage(
+        await runtimeStore.conversationTurnIndex({ cursor, direction }),
+      );
     } catch {
       // Keep the current rail segment when paging fails.
     } finally {
@@ -547,9 +835,13 @@ export function ConversationPanel({
     setHistoryLoading("page");
     try {
       await runtimeStore.jumpToHistory(turn.cursor);
-      requestAnimationFrame(() => requestAnimationFrame(() => {
-        turnRefs.current.get(turn.promptId)?.scrollIntoView({ behavior: "auto", block: "start" });
-      }));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          turnRefs.current
+            .get(turn.promptId)
+            ?.scrollIntoView({ behavior: "auto", block: "start" });
+        }),
+      );
     } catch {
       // Store routes the failure through the application toast.
     } finally {
@@ -607,9 +899,12 @@ export function ConversationPanel({
   };
   const startFork = (item: MessageReadModel) => {
     if (!item.entryId) return;
-    const timelineEnabled = runtime?.runtimePolicy.effective.timelineEnabled === true;
-    const timelineAvailable = runtime?.operational.timeline.availability === "available";
-    const canUseTimeline = timelineEnabled && timelineAvailable && item.canForkWithTimeline === true;
+    const timelineEnabled =
+      runtime?.runtimePolicy.effective.timelineEnabled === true;
+    const timelineAvailable =
+      runtime?.operational.timeline.availability === "available";
+    const canUseTimeline =
+      timelineEnabled && timelineAvailable && item.canForkWithTimeline === true;
     const timelineReason = !timelineEnabled
       ? "Timeline is disabled by the effective runtime policy."
       : !timelineAvailable
@@ -620,12 +915,17 @@ export function ConversationPanel({
     const sourceName = runtime?.sessionName?.trim();
     setFork({
       entryId: item.entryId,
-      name: sourceName ? `${sourceName} (fork)`.slice(0, 200) : "Forked session",
+      name: sourceName
+        ? `${sourceName} (fork)`.slice(0, 200)
+        : "Forked session",
       canUseTimeline,
       timelineReason,
     });
   };
-  const submitFork = async (name: string, mode: "conversation" | "timeline") => {
+  const submitFork = async (
+    name: string,
+    mode: "conversation" | "timeline",
+  ) => {
     if (!fork) return;
     setRailPage(undefined);
     setVisibleTurnIds(new Set());
@@ -641,14 +941,26 @@ export function ConversationPanel({
   };
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (draftingOnly) return;
-    const activeSuggestions = suggestions.length ? suggestions : fileSuggestions;
+    const activeSuggestions = suggestions.length
+      ? suggestions
+      : fileSuggestions;
     if (activeSuggestions.length) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        setSuggestionIndex((current) => (current + (event.key === "ArrowDown" ? 1 : -1) + activeSuggestions.length) % activeSuggestions.length);
+        setSuggestionIndex(
+          (current) =>
+            (current +
+              (event.key === "ArrowDown" ? 1 : -1) +
+              activeSuggestions.length) %
+            activeSuggestions.length,
+        );
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
         event.preventDefault();
         if (suggestions.length) chooseSuggestion(suggestionIndex);
         else chooseFileSuggestion(suggestionIndex);
@@ -660,206 +972,498 @@ export function ConversationPanel({
         return;
       }
     }
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    )
+      return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   };
   return (
     <section className="conversation-panel" aria-label="Live conversation">
-      {pendingSession
-        ? <PendingSessionShell pending={pendingSession} />
-        : live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>}
-      {!draftingOnly && <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />}
-      {runtime && <div
-        ref={streamRef}
-        className="message-stream"
-        aria-live="polite"
-        onScroll={(event) => {
-          followBottomRef.current = isNearTranscriptBottom(event.currentTarget);
-          if (!historyLoading && event.currentTarget.scrollTop < 64 && live.historyWindow?.earlierCursor) {
-            void loadHistory(false, true);
-          } else if (!historyLoading && isNearTranscriptBottom(event.currentTarget, 64)
-            && live.historyWindow?.laterCursor) {
-            void loadNewerHistory();
-          }
-        }}
-      >
-        <div className="transcript-layout">
-          <div ref={transcriptRef} className="transcript-column">
-        {live.historyWindow?.earlierCursor && <div className="history-loader">
-          <span>{runtime.conversation.historyRemaining?.toLocaleString()} earlier entries</span>
-          <div>
-            <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadHistory(false)}>
-              {historyLoading === "page" ? "Loading…" : "Load 100 earlier"}
-            </button>
-            <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadHistory(true)}>
-              {historyLoading === "all" ? "Loading all…" : "Load all"}
-            </button>
-          </div>
-        </div>}
-        {conversationBlocks.length === 0 && live.connection === "connected" && <div className="conversation-state">No messages yet. Start the conversation below.</div>}
-        {conversationBlocks.map((block) => {
-          if ("tools" in block) {
-            return <ToolTurnGroup key={block.id} tools={block.tools} running={block.id === activeToolGroupId} now={toolNow} onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom} />;
-          }
-          if (block.role === "tool") return <ToolDisclosure key={block.id} message={block} now={toolNow} />;
-          if (block.compaction) return <CompactionDisclosure key={block.id} message={block} onOpen={onOpenCompaction} />;
-          if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
-          const editing = edit?.messageId === block.id;
-          const pending = pendingById.get(block.id);
-          const queued = pending ? queuedByCommand.get(pending.commandId) : undefined;
-          const queueIndex = queued ? queuedItems.indexOf(queued) : -1;
-          const busy = queued && queueBusy?.id === queued.id ? queueBusy.action : undefined;
-          return <div className={`message-block role-${block.role}${pending ? ` is-pending is-${pending.state}` : ""}`} key={block.id}>
-            <article
-              className={`conversation-message role-${block.role}${editing ? " is-editing" : ""}${pending ? " is-pending" : ""}`}
-              data-turn-id={block.role === "user" && !pending ? block.id : undefined}
-              ref={block.role === "user" && !pending ? (element) => {
-                const turnId = block.entryId ?? block.id;
-                if (element) turnRefs.current.set(turnId, element);
-                else turnRefs.current.delete(turnId);
-              } : undefined}
-            >
-              <small>{block.role}{pending?.state === "queued" ? " - pending" : block.streaming ? " · streaming" : ""}</small>
-              {editing && edit
-                ? <PromptEditor edit={edit} disabled={submitting} onChange={setEdit} onCancel={() => setEdit(undefined)} onSubmit={() => void submitEdit()} />
-                : <>
-                  {block.text && <MarkdownContent text={block.text} />}
-                  <MessageAttachments message={block} onOpen={onOpenAttachment} />
-                </>}
-            </article>
-            {block.role === "assistant" && Boolean(block.changedFiles?.length) && <ChangedFiles files={block.changedFiles!} entryId={block.entryId} />}
-            {pending ? <div className="pending-message-footer" role="status">
-              <span><IconLoader2 className="pending-message-spinner" size={12} />{pending.state === "queued" ? "Waiting to send" : "Sending"}</span>
-              {pending.planMode && <span>Plan mode</span>}
-              {queued?.state === "queued" && <span className="pending-message-actions">
-                <button type="button" disabled={Boolean(queueBusy) || hasDraft} title={hasDraft ? "Finish or clear the current draft before editing this message" : "Edit in composer"} onClick={() => void restoreQueued(queued)} aria-label={`Edit queued message ${queueIndex + 1}`}>
-                  {busy === "edit" ? <IconLoader2 className="prompt-send-spinner" size={13} /> : <IconPencil size={13} />}Edit
-                </button>
-                <button type="button" disabled={Boolean(queueBusy)} onClick={() => void steerQueued(queued)} aria-label={`Steer with queued message ${queueIndex + 1}`}>
-                  {busy === "steer" ? <IconLoader2 className="prompt-send-spinner" size={13} /> : <IconArrowBackUp size={13} />}Steer
-                </button>
-              </span>}
-            </div> : !editing && (block.role === "user" || copyableAssistants.has(block.id) || (block.role === "assistant" && block.workDurationMs !== undefined)) && <MessageFooter
-              message={block}
-              canCopy={Boolean(block.text) && (block.role === "user" || copyableAssistants.has(block.id))}
-              disabled={!connected || streaming || submitting || Boolean(edit)}
-              onEdit={block.role === "user" && block.entryId ? () => startEdit(block) : undefined}
-              onUndo={block.role === "user" && block.entryId ? () => setUndo({
-                entryId: block.entryId!,
-                text: block.text,
-                attachmentCount: block.attachmentCount ?? 0,
-              }) : undefined}
-              onFork={block.role === "user" && block.entryId ? () => startFork(block) : undefined}
-            />}
-          </div>;
-        })}
-        {runtime.conversation.retry.active && <TranscriptActivity
-          kind="retry"
-          attempt={runtime.conversation.retry.attempt}
-          maxAttempts={runtime.conversation.retry.maxAttempts}
-        />}
-        {runtime.conversation.compaction.active && <TranscriptActivity kind="compaction" />}
-        {runtime.conversation.workStartedAt ? <WorkTimer
-          startedAt={runtime.conversation.workStartedAt}
-          modelName={runtime.conversation.workModelName}
-          thinkingLevel={runtime.conversation.workThinkingLevel}
-        /> : runtime.conversation.stoppedRun && <WorkTimer
-          durationMs={runtime.conversation.stoppedRun.durationMs}
-          modelName={runtime.conversation.stoppedRun.modelName}
-          thinkingLevel={runtime.conversation.stoppedRun.thinkingLevel}
-          stopped
-        />}
-        {runtime.conversation.agentError && <div className="agent-error" role="alert">
-          <strong>Model request failed</strong>
-          <span>{runtime.conversation.agentError}</span>
-        </div>}
-        {live.historyWindow?.laterCursor && <div className="history-loader is-later">
-          <button type="button" disabled={Boolean(historyLoading)} onClick={() => void loadNewerHistory()}>
-            {historyLoading === "newer" ? "Loading…" : "Load 100 newer"}
-          </button>
-        </div>}
+      {pendingSession ? (
+        <PendingSessionShell pending={pendingSession} />
+      ) : (
+        live.connection === "loading" && (
+          <div className="conversation-state">Loading runtime…</div>
+        )
+      )}
+      {!draftingOnly && (
+        <ActiveAgents
+          runs={activeAgents}
+          colors={agentColors}
+          onSelect={onSelectAgent}
+        />
+      )}
+      {runtime && (
+        <div
+          ref={streamRef}
+          className="message-stream"
+          aria-live="polite"
+          onScroll={(event) => {
+            followBottomRef.current = isNearTranscriptBottom(
+              event.currentTarget,
+            );
+            if (
+              !historyLoading &&
+              event.currentTarget.scrollTop < 64 &&
+              live.historyWindow?.earlierCursor
+            ) {
+              void loadHistory(false, true);
+            } else if (
+              !historyLoading &&
+              isNearTranscriptBottom(event.currentTarget, 64) &&
+              live.historyWindow?.laterCursor
+            ) {
+              void loadNewerHistory();
+            }
+          }}
+        >
+          <div className="transcript-layout">
+            <div ref={transcriptRef} className="transcript-column">
+              {live.historyWindow?.earlierCursor && (
+                <div className="history-loader">
+                  <span>
+                    {runtime.conversation.historyRemaining?.toLocaleString()}{" "}
+                    earlier entries
+                  </span>
+                  <div>
+                    <button
+                      type="button"
+                      disabled={Boolean(historyLoading)}
+                      onClick={() => void loadHistory(false)}
+                    >
+                      {historyLoading === "page"
+                        ? "Loading…"
+                        : "Load 100 earlier"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(historyLoading)}
+                      onClick={() => void loadHistory(true)}
+                    >
+                      {historyLoading === "all" ? "Loading all…" : "Load all"}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {conversationBlocks.length === 0 &&
+                live.connection === "connected" && (
+                  <div className="conversation-state">
+                    No messages yet. Start the conversation below.
+                  </div>
+                )}
+              {conversationBlocks.map((block) => {
+                if ("tools" in block) {
+                  return (
+                    <ToolTurnGroup
+                      key={block.id}
+                      tools={block.tools}
+                      running={block.id === activeToolGroupId}
+                      now={toolNow}
+                      onExpand={
+                        toolBlocksBeforeLaterPrompt.has(block.id)
+                          ? undefined
+                          : forceTranscriptBottom
+                      }
+                    />
+                  );
+                }
+                if (block.role === "tool")
+                  return (
+                    <ToolDisclosure
+                      key={block.id}
+                      message={block}
+                      now={toolNow}
+                    />
+                  );
+                if (block.compaction)
+                  return (
+                    <CompactionDisclosure
+                      key={block.id}
+                      message={block}
+                      onOpen={onOpenCompaction}
+                    />
+                  );
+                if (block.role === "system")
+                  return <SystemDisclosure key={block.id} message={block} />;
+                const editing = edit?.messageId === block.id;
+                const pending = pendingById.get(block.id);
+                const queued = pending
+                  ? queuedByCommand.get(pending.commandId)
+                  : undefined;
+                const queueIndex = queued ? queuedItems.indexOf(queued) : -1;
+                const busy =
+                  queued && queueBusy?.id === queued.id
+                    ? queueBusy.action
+                    : undefined;
+                return (
+                  <div
+                    className={`message-block role-${block.role}${pending ? ` is-pending is-${pending.state}` : ""}`}
+                    key={block.id}
+                  >
+                    <article
+                      className={`conversation-message role-${block.role}${editing ? " is-editing" : ""}${pending ? " is-pending" : ""}`}
+                      data-turn-id={
+                        block.role === "user" && !pending ? block.id : undefined
+                      }
+                      ref={
+                        block.role === "user" && !pending
+                          ? (element) => {
+                              const turnId = block.entryId ?? block.id;
+                              if (element)
+                                turnRefs.current.set(turnId, element);
+                              else turnRefs.current.delete(turnId);
+                            }
+                          : undefined
+                      }
+                    >
+                      <small>
+                        {block.role}
+                        {pending?.state === "queued"
+                          ? " - pending"
+                          : block.streaming
+                            ? " · streaming"
+                            : ""}
+                      </small>
+                      {editing && edit ? (
+                        <PromptEditor
+                          edit={edit}
+                          disabled={submitting}
+                          onChange={setEdit}
+                          onCancel={() => setEdit(undefined)}
+                          onSubmit={() => void submitEdit()}
+                        />
+                      ) : (
+                        <>
+                          {block.text && <MarkdownContent text={block.text} />}
+                          <MessageAttachments
+                            message={block}
+                            onOpen={onOpenAttachment}
+                          />
+                        </>
+                      )}
+                    </article>
+                    {block.role === "assistant" &&
+                      Boolean(block.changedFiles?.length) && (
+                        <ChangedFiles
+                          files={block.changedFiles!}
+                          entryId={block.entryId}
+                        />
+                      )}
+                    {pending ? (
+                      <div className="pending-message-footer" role="status">
+                        <span>
+                          <IconLoader2
+                            className="pending-message-spinner"
+                            size={12}
+                          />
+                          {pending.state === "queued"
+                            ? "Waiting to send"
+                            : "Sending"}
+                        </span>
+                        {pending.planMode && <span>Plan mode</span>}
+                        {queued?.state === "queued" && (
+                          <span className="pending-message-actions">
+                            <button
+                              type="button"
+                              disabled={Boolean(queueBusy) || hasDraft}
+                              title={
+                                hasDraft
+                                  ? "Finish or clear the current draft before editing this message"
+                                  : "Edit in composer"
+                              }
+                              onClick={() => void restoreQueued(queued)}
+                              aria-label={`Edit queued message ${queueIndex + 1}`}
+                            >
+                              {busy === "edit" ? (
+                                <IconLoader2
+                                  className="prompt-send-spinner"
+                                  size={13}
+                                />
+                              ) : (
+                                <IconPencil size={13} />
+                              )}
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              disabled={Boolean(queueBusy)}
+                              onClick={() => void steerQueued(queued)}
+                              aria-label={`Steer with queued message ${queueIndex + 1}`}
+                            >
+                              {busy === "steer" ? (
+                                <IconLoader2
+                                  className="prompt-send-spinner"
+                                  size={13}
+                                />
+                              ) : (
+                                <IconArrowBackUp size={13} />
+                              )}
+                              Steer
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      !editing &&
+                      (block.role === "user" ||
+                        copyableAssistants.has(block.id) ||
+                        (block.role === "assistant" &&
+                          block.workDurationMs !== undefined)) && (
+                        <MessageFooter
+                          message={block}
+                          canCopy={
+                            Boolean(block.text) &&
+                            (block.role === "user" ||
+                              copyableAssistants.has(block.id))
+                          }
+                          disabled={
+                            !connected ||
+                            streaming ||
+                            submitting ||
+                            Boolean(edit)
+                          }
+                          onEdit={
+                            block.role === "user" && block.entryId
+                              ? () => startEdit(block)
+                              : undefined
+                          }
+                          onUndo={
+                            block.role === "user" && block.entryId
+                              ? () =>
+                                  setUndo({
+                                    entryId: block.entryId!,
+                                    text: block.text,
+                                    attachmentCount: block.attachmentCount ?? 0,
+                                  })
+                              : undefined
+                          }
+                          onFork={
+                            block.role === "user" && block.entryId
+                              ? () => startFork(block)
+                              : undefined
+                          }
+                        />
+                      )
+                    )}
+                  </div>
+                );
+              })}
+              {runtime.conversation.retry.active && (
+                <TranscriptActivity
+                  kind="retry"
+                  attempt={runtime.conversation.retry.attempt}
+                  maxAttempts={runtime.conversation.retry.maxAttempts}
+                />
+              )}
+              {runtime.conversation.compaction.active && (
+                <TranscriptActivity kind="compaction" />
+              )}
+              {runtime.conversation.workStartedAt ? (
+                <WorkTimer
+                  startedAt={runtime.conversation.workStartedAt}
+                  modelName={runtime.conversation.workModelName}
+                  thinkingLevel={runtime.conversation.workThinkingLevel}
+                />
+              ) : (
+                runtime.conversation.stoppedRun && (
+                  <WorkTimer
+                    durationMs={runtime.conversation.stoppedRun.durationMs}
+                    modelName={runtime.conversation.stoppedRun.modelName}
+                    thinkingLevel={
+                      runtime.conversation.stoppedRun.thinkingLevel
+                    }
+                    stopped
+                  />
+                )
+              )}
+              {runtime.conversation.agentError && (
+                <div className="agent-error" role="alert">
+                  <strong>Model request failed</strong>
+                  <span>{runtime.conversation.agentError}</span>
+                </div>
+              )}
+              {live.historyWindow?.laterCursor && (
+                <div className="history-loader is-later">
+                  <button
+                    type="button"
+                    disabled={Boolean(historyLoading)}
+                    onClick={() => void loadNewerHistory()}
+                  >
+                    {historyLoading === "newer" ? "Loading…" : "Load 100 newer"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>}
-      {runtime && <HistoryRail
-        page={live.treeChanging ? undefined : displayedRailPage}
-        visibleIds={visibleTurnIds}
-        loading={railLoading}
-        onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
-        onSelect={(turn) => void selectRailTurn(turn)}
-      />}
-      {undo && <UndoConfirmDialog
-        undo={undo}
-        submitting={submitting}
-        onCancel={() => setUndo(undefined)}
-        onConfirm={() => void submitUndo()}
-      />}
-      {fork && <ForkDialog
-        fork={fork}
-        submitting={submitting}
-        onCancel={() => setFork(undefined)}
-        onConfirm={(name, mode) => void submitFork(name, mode)}
-      />}
+      )}
+      {runtime && (
+        <HistoryRail
+          page={live.treeChanging ? undefined : displayedRailPage}
+          visibleIds={visibleTurnIds}
+          loading={railLoading}
+          onPage={(direction, cursor) => void loadRailPage(direction, cursor)}
+          onSelect={(turn) => void selectRailTurn(turn)}
+        />
+      )}
+      {undo && (
+        <UndoConfirmDialog
+          undo={undo}
+          submitting={submitting}
+          onCancel={() => setUndo(undefined)}
+          onConfirm={() => void submitUndo()}
+        />
+      )}
+      {fork && (
+        <ForkDialog
+          fork={fork}
+          submitting={submitting}
+          onCancel={() => setFork(undefined)}
+          onConfirm={(name, mode) => void submitFork(name, mode)}
+        />
+      )}
       {runtime && <ExtensionUiSurface runtime={runtime} />}
-      {runtime?.commandResult && <div className={`composer-surface command-result is-${runtime.commandResult.severity}`} role="status">
-        <div><strong>/{runtime.commandResult.command}</strong><span>{runtime.commandResult.output || "Command completed with no output."}</span></div>
-        <button type="button" aria-label="Close command result" onClick={() => void runtimeStore.dismissCommandResult(runtime.commandResult!.id).catch(() => undefined)}><IconX size={15} /></button>
-      </div>}
-      {(suggestions.length > 0 || fileSuggestions.length > 0) && <div
-        ref={suggestionListRef}
-        className={`composer-surface slash-suggestions${suggestions.length ? "" : " file-suggestions"}`}
-        id={suggestions.length ? "slash-command-suggestions" : "file-mention-suggestions"}
-        role="listbox"
-        aria-label={suggestions.length ? "Slash commands" : "Project files"}
-      >
-        {suggestions.map((command, index) => <button
-          className={index === suggestionIndex ? "is-selected" : ""}
-          type="button"
-          role="option"
-          aria-selected={index === suggestionIndex}
-          key={`${command.source}-${command.name}`}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => chooseSuggestion(index)}
-        ><strong>/{command.name}</strong>{command.description && <span>{command.description}</span>}</button>)}
-        {suggestions.length === 0 && fileSuggestions.map((path, index) => {
-          const separator = path.lastIndexOf("/");
-          const name = separator >= 0 ? path.slice(separator + 1) : path;
-          const directory = separator >= 0 ? path.slice(0, separator) : "";
-          return <button
-            className={index === suggestionIndex ? "is-selected" : ""}
+      {runtime?.commandResult && (
+        <div
+          className={`composer-surface command-result is-${runtime.commandResult.severity}`}
+          role="status"
+        >
+          <div>
+            <strong>/{runtime.commandResult.command}</strong>
+            <span>
+              {runtime.commandResult.output ||
+                "Command completed with no output."}
+            </span>
+          </div>
+          <button
             type="button"
-            role="option"
-            aria-selected={index === suggestionIndex}
-            key={path}
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={() => chooseFileSuggestion(index)}
-          ><strong><IconFileText size={13} />{name}</strong>{directory && <span>{directory}</span>}</button>;
-        })}
-      </div>}
+            aria-label="Close command result"
+            onClick={() =>
+              void runtimeStore
+                .dismissCommandResult(runtime.commandResult!.id)
+                .catch(() => undefined)
+            }
+          >
+            <IconX size={15} />
+          </button>
+        </div>
+      )}
+      {(suggestions.length > 0 || fileSuggestions.length > 0) && (
+        <div
+          ref={suggestionListRef}
+          className={`composer-surface slash-suggestions${suggestions.length ? "" : " file-suggestions"}`}
+          id={
+            suggestions.length
+              ? "slash-command-suggestions"
+              : "file-mention-suggestions"
+          }
+          role="listbox"
+          aria-label={suggestions.length ? "Slash commands" : "Project files"}
+        >
+          {suggestions.map((command, index) => (
+            <button
+              className={index === suggestionIndex ? "is-selected" : ""}
+              type="button"
+              role="option"
+              aria-selected={index === suggestionIndex}
+              key={`${command.source}-${command.name}`}
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={() => chooseSuggestion(index)}
+            >
+              <strong>/{command.name}</strong>
+              {command.description && <span>{command.description}</span>}
+            </button>
+          ))}
+          {suggestions.length === 0 &&
+            fileSuggestions.map((path, index) => {
+              const separator = path.lastIndexOf("/");
+              const name = separator >= 0 ? path.slice(separator + 1) : path;
+              const directory = separator >= 0 ? path.slice(0, separator) : "";
+              return (
+                <button
+                  className={index === suggestionIndex ? "is-selected" : ""}
+                  type="button"
+                  role="option"
+                  aria-selected={index === suggestionIndex}
+                  key={path}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => chooseFileSuggestion(index)}
+                >
+                  <strong>
+                    <IconFileText size={13} />
+                    {name}
+                  </strong>
+                  {directory && <span>{directory}</span>}
+                </button>
+              );
+            })}
+        </div>
+      )}
       <RetainedUiDialog request={draftingOnly ? undefined : live.pendingUi} />
-      {pendingSession && <div className={`pending-session-draft-note is-${pendingSession.phase}`} role="status">
-        <strong>{pendingSession.phase === "failed" ? "Setup failed. Your draft is safe" : "You can write while setup finishes"}</strong>
-        <span>{pendingSession.phase === "failed" ? "Retry without losing your text" : "Draft stays in this tab"}</span>
-      </div>}
+      {pendingSession && (
+        <div
+          className={`pending-session-draft-note is-${pendingSession.phase}`}
+          role="status"
+        >
+          <strong>
+            {pendingSession.phase === "failed"
+              ? "Setup failed. Your draft is safe"
+              : "You can write while setup finishes"}
+          </strong>
+          <span>
+            {pendingSession.phase === "failed"
+              ? "Retry without losing your text"
+              : "Draft stays in this tab"}
+          </span>
+        </div>
+      )}
       <form
         className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${(!draftingOnly && live.pendingUi) || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
-        onDragEnter={(event) => { event.preventDefault(); if (!draftingOnly) setDropActive(true); }}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          if (!draftingOnly) setDropActive(true);
+        }}
         onDragOver={(event) => event.preventDefault()}
         onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropActive(false);
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDropActive(false);
         }}
-        onDrop={(event) => { if (draftingOnly) event.preventDefault(); else void onDrop(event); }}
+        onDrop={(event) => {
+          if (draftingOnly) event.preventDefault();
+          else void onDrop(event);
+        }}
       >
-        {dropActive && <div className="composer-drop-overlay"><IconFileText size={18} />Drop workspace files to reference, or external files to attach</div>}
-        {images.length > 0 && <ImageStrip
-          images={images}
-          label="Attached images"
-          onRemove={(id) => setImages((current) => current.filter((item) => item.id !== id))}
-        />}
-        {files.length > 0 && <FileStrip files={files} onRemove={(id) => setFiles((current) => current.filter((item) => item.id !== id))} />}
-        <label className="sr-only" htmlFor="runtime-prompt">Message</label>
+        {dropActive && (
+          <div className="composer-drop-overlay">
+            <IconFileText size={18} />
+            Drop workspace files to reference, or external files to attach
+          </div>
+        )}
+        {images.length > 0 && (
+          <ImageStrip
+            images={images}
+            label="Attached images"
+            onRemove={(id) =>
+              setImages((current) => current.filter((item) => item.id !== id))
+            }
+          />
+        )}
+        {files.length > 0 && (
+          <FileStrip
+            files={files}
+            onRemove={(id) =>
+              setFiles((current) => current.filter((item) => item.id !== id))
+            }
+          />
+        )}
+        <label className="sr-only" htmlFor="runtime-prompt">
+          Message
+        </label>
         <div className="prompt-input-wrap">
           <textarea
             ref={promptRef}
@@ -871,13 +1475,33 @@ export function ConversationPanel({
               setCaretPosition(event.target.selectionStart);
               setSuggestionsDismissed(false);
             }}
-            onSelect={(event) => setCaretPosition(event.currentTarget.selectionStart)}
+            onSelect={(event) =>
+              setCaretPosition(event.currentTarget.selectionStart)
+            }
             onPaste={draftingOnly ? undefined : (event) => void onPaste(event)}
             onKeyDown={onPromptKeyDown}
-            placeholder={draftingOnly ? "Write your first prompt" : !projectAvailable ? "Add a project to start" : connected ? (running || queuedItems.length > 0 ? "Queue a follow-up" : "Send a prompt") : "Runtime must be connected"}
-            disabled={(!connected && !draftingOnly) || submitting || composerBlocked}
+            placeholder={
+              draftingOnly
+                ? "Write your first prompt"
+                : !projectAvailable
+                  ? "Add a project to start"
+                  : connected
+                    ? running || queuedItems.length > 0
+                      ? "Queue a follow-up"
+                      : "Send a prompt"
+                    : "Runtime must be connected"
+            }
+            disabled={
+              (!connected && !draftingOnly) || submitting || composerBlocked
+            }
             aria-autocomplete="list"
-            aria-controls={suggestions.length ? "slash-command-suggestions" : fileSuggestions.length ? "file-mention-suggestions" : undefined}
+            aria-controls={
+              suggestions.length
+                ? "slash-command-suggestions"
+                : fileSuggestions.length
+                  ? "file-mention-suggestions"
+                  : undefined
+            }
             aria-expanded={suggestions.length > 0 || fileSuggestions.length > 0}
           />
         </div>
@@ -888,32 +1512,66 @@ export function ConversationPanel({
               active={planMode}
               disabled={!connected || submitting || composerBlocked}
               available={planAvailable}
-              onToggle={() => setOpenMenu((current) => current === "plus" ? undefined : "plus")}
+              onToggle={() =>
+                setOpenMenu((current) =>
+                  current === "plus" ? undefined : "plus",
+                )
+              }
               onClose={() => setOpenMenu(undefined)}
               onChange={setPlanMode}
               onFiles={addFiles}
             />
-            {planMode && <button className="plan-mode-indicator" type="button" onClick={() => setPlanMode(false)} aria-label="Turn off Plan mode" title="Turn off Plan mode"><IconBulb size={14} />Plan mode</button>}
-            {continuityPlanning && <span className="continuity-planning-indicator" role="status" aria-live="polite"><IconBulb size={14} />Planning</span>}
+            {planMode && (
+              <button
+                className="plan-mode-indicator"
+                type="button"
+                onClick={() => setPlanMode(false)}
+                aria-label="Turn off Plan mode"
+                title="Turn off Plan mode"
+              >
+                <IconBulb size={14} />
+                Plan mode
+              </button>
+            )}
+            {continuityPlanning && (
+              <span
+                className="continuity-planning-indicator"
+                role="status"
+                aria-live="polite"
+              >
+                <IconBulb size={14} />
+                Planning
+              </span>
+            )}
           </div>
           <div className="prompt-right">
-          <div className="prompt-metrics" aria-label="Session usage">
-            <span title={`${runtime?.metrics.contextTokens.toLocaleString() ?? 0} of ${runtime?.metrics.contextLimit.toLocaleString() ?? 0} tokens`}>
-              {runtime ? `${runtime.metrics.contextPercent.toFixed(2)}%` : "—"}
-            </span>
-            <span>{runtime ? `$${runtime.metrics.cost.toFixed(2)}` : "—"}</span>
-          </div>
-          <ModelControl
-            controls={controls}
-            open={openMenu === "model"}
-            disabled={controlsDisabled}
-            busy={controlBusy === "controls"}
-            onToggle={() => setOpenMenu((current) => current === "model" ? undefined : "model")}
-            onClose={() => setOpenMenu(undefined)}
-            onApply={setSessionControls}
-          />
-          {running && !hasDraft
-            ? <button
+            <div className="prompt-metrics" aria-label="Session usage">
+              <span
+                title={`${runtime?.metrics.contextTokens.toLocaleString() ?? 0} of ${runtime?.metrics.contextLimit.toLocaleString() ?? 0} tokens`}
+              >
+                {runtime
+                  ? `${runtime.metrics.contextPercent.toFixed(2)}%`
+                  : "—"}
+              </span>
+              <span>
+                {runtime ? `$${runtime.metrics.cost.toFixed(2)}` : "—"}
+              </span>
+            </div>
+            <ModelControl
+              controls={controls}
+              open={openMenu === "model"}
+              disabled={controlsDisabled}
+              busy={controlBusy === "controls"}
+              onToggle={() =>
+                setOpenMenu((current) =>
+                  current === "model" ? undefined : "model",
+                )
+              }
+              onClose={() => setOpenMenu(undefined)}
+              onApply={setSessionControls}
+            />
+            {running && !hasDraft ? (
+              <button
                 className="prompt-abort"
                 type="button"
                 onClick={() => void runtimeStore.abort().catch(() => undefined)}
@@ -923,14 +1581,32 @@ export function ConversationPanel({
               >
                 <IconSquareFilled size={13} />
               </button>
-            : <button
+            ) : (
+              <button
                 className="prompt-send"
-                disabled={!connected || composerBlocked || submitting || !hasDraft || !controls?.model}
+                disabled={
+                  !connected ||
+                  composerBlocked ||
+                  submitting ||
+                  !hasDraft ||
+                  !controls?.model
+                }
                 type="submit"
-                aria-label={sending ? "Sending message" : running ? "Queue message" : "Send message"}
+                aria-label={
+                  sending
+                    ? "Sending message"
+                    : running
+                      ? "Queue message"
+                      : "Send message"
+                }
               >
-                {sending ? <IconLoader2 className="prompt-send-spinner" size={16} /> : <IconArrowUp size={16} />}
-              </button>}
+                {sending ? (
+                  <IconLoader2 className="prompt-send-spinner" size={16} />
+                ) : (
+                  <IconArrowUp size={16} />
+                )}
+              </button>
+            )}
           </div>
         </div>
       </form>
@@ -939,23 +1615,53 @@ export function ConversationPanel({
 }
 
 function PendingSessionShell({ pending }: { pending: PendingSessionView }) {
-  if (pending.phase === "failed") return <div className="pending-session-shell is-failed" role="alert">
-    <span className="pending-session-symbol" aria-hidden="true"><IconX size={18} /></span>
-    <h2>Workspace setup failed</h2>
-    <p>{pending.error || "Pylon could not prepare this session. Your draft is still available below."}</p>
-    <button type="button" onClick={pending.onRetry}>Retry setup</button>
-  </div>;
+  if (pending.phase === "failed")
+    return (
+      <div className="pending-session-shell is-failed" role="alert">
+        <span className="pending-session-symbol" aria-hidden="true">
+          <IconX size={18} />
+        </span>
+        <h2>Workspace setup failed</h2>
+        <p>
+          {pending.error ||
+            "Pylon could not prepare this session. Your draft is still available below."}
+        </p>
+        <button type="button" onClick={pending.onRetry}>
+          Retry setup
+        </button>
+      </div>
+    );
 
-  return <div className="pending-session-shell is-preparing" role="status" aria-live="polite">
-    <span className="pending-session-symbol" aria-hidden="true"><img src="/pylon-mark.svg" alt="" /></span>
-    <h2>Preparing your workspace</h2>
-    <p>This session is open now. Start writing while Pylon creates the workspace and loads the runtime.</p>
-    <div className="pending-session-progress" aria-hidden="true"><span /></div>
-    <div className="pending-session-progress-copy"><strong>Preparing {pending.projectLabel}</strong><span>Usually a few seconds</span></div>
-  </div>;
+  return (
+    <div
+      className="pending-session-shell is-preparing"
+      role="status"
+      aria-live="polite"
+    >
+      <span className="pending-session-symbol" aria-hidden="true">
+        <img src="/pylon-mark.svg" alt="" />
+      </span>
+      <h2>Preparing your workspace</h2>
+      <p>
+        This session is open now. Start writing while Pylon creates the
+        workspace and loads the runtime.
+      </p>
+      <div className="pending-session-progress" aria-hidden="true">
+        <span />
+      </div>
+      <div className="pending-session-progress-copy">
+        <strong>Preparing {pending.projectLabel}</strong>
+        <span>Usually a few seconds</span>
+      </div>
+    </div>
+  );
 }
 
-function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingUi"] }) {
+function RetainedUiDialog({
+  request,
+}: {
+  request: RuntimeStoreSnapshot["pendingUi"];
+}) {
   const [displayed, setDisplayed] = useState(request);
   const [exiting, setExiting] = useState(false);
 
@@ -972,9 +1678,13 @@ function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingU
   }, [request, displayed]);
 
   if (!displayed || displayed.payload.context === "provider-auth") return null;
-  return <div className={exiting ? "ui-request-motion is-exiting" : "ui-request-motion"}>
-    <UiDialog key={displayed.requestId} request={displayed} />
-  </div>;
+  return (
+    <div
+      className={exiting ? "ui-request-motion is-exiting" : "ui-request-motion"}
+    >
+      <UiDialog key={displayed.requestId} request={displayed} />
+    </div>
+  );
 }
 
 function PlusMenu({
@@ -1012,54 +1722,82 @@ function PlusMenu({
     };
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("keydown", keyDown);
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus());
+    requestAnimationFrame(() =>
+      rootRef.current
+        ?.querySelector<HTMLButtonElement>("[role=menuitem]")
+        ?.focus(),
+    );
     return () => {
       document.removeEventListener("pointerdown", pointerDown);
       document.removeEventListener("keydown", keyDown);
     };
   }, [open]);
-  return <div ref={rootRef} className="composer-popover-root">
-    <button
-      ref={triggerRef}
-      className={`composer-plus${active ? " is-active" : ""}`}
-      type="button"
-      disabled={disabled}
-      aria-label="Add prompt option"
-      aria-haspopup="menu"
-      aria-expanded={open}
-      onClick={onToggle}
-    ><IconPlus size={17} /></button>
-    {open && <div className="plus-menu composer-popover" role="menu">
-      <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
-        <IconPaperclip size={16} />
-        <span><strong>Files and images</strong><small>Select one or more attachments</small></span>
-      </button>
+  return (
+    <div ref={rootRef} className="composer-popover-root">
       <button
+        ref={triggerRef}
+        className={`composer-plus${active ? " is-active" : ""}`}
         type="button"
-        role="menuitem"
-        disabled={!available}
-        onClick={() => { onChange(!active); onClose(); triggerRef.current?.focus(); }}
+        disabled={disabled}
+        aria-label="Add prompt option"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
       >
-        <IconBulb size={16} />
-        <span><strong>Plan mode</strong><small>{available ? "Plan the next prompt" : "Continuity /plan is unavailable"}</small></span>
-        {active && <IconCheck size={15} />}
+        <IconPlus size={17} />
       </button>
-    </div>}
-    <input
-      ref={fileRef}
-      className="sr-only"
-      type="file"
-      multiple
-      tabIndex={-1}
-      aria-label="Select files and images"
-      onChange={(event) => {
-        const selected = [...(event.currentTarget.files ?? [])];
-        event.currentTarget.value = "";
-        onClose();
-        void onFiles(selected).finally(() => triggerRef.current?.focus());
-      }}
-    />
-  </div>;
+      {open && (
+        <div className="plus-menu composer-popover" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => fileRef.current?.click()}
+          >
+            <IconPaperclip size={16} />
+            <span>
+              <strong>Files and images</strong>
+              <small>Select one or more attachments</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!available}
+            onClick={() => {
+              onChange(!active);
+              onClose();
+              triggerRef.current?.focus();
+            }}
+          >
+            <IconBulb size={16} />
+            <span>
+              <strong>Plan mode</strong>
+              <small>
+                {available
+                  ? "Plan the next prompt"
+                  : "Continuity /plan is unavailable"}
+              </small>
+            </span>
+            {active && <IconCheck size={15} />}
+          </button>
+        </div>
+      )}
+      <input
+        ref={fileRef}
+        className="sr-only"
+        type="file"
+        multiple
+        tabIndex={-1}
+        aria-label="Select files and images"
+        onChange={(event) => {
+          const selected = [...(event.currentTarget.files ?? [])];
+          event.currentTarget.value = "";
+          onClose();
+          void onFiles(selected).finally(() => triggerRef.current?.focus());
+        }}
+      />
+    </div>
+  );
 }
 
 function matrixThinkingLabel(level: ThinkingLevelReadModel): string {
@@ -1084,16 +1822,23 @@ function ModelControl({
   busy: boolean;
   onToggle: () => void;
   onClose: () => void;
-  onApply: (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => Promise<void>;
+  onApply: (
+    model: ModelOptionReadModel,
+    level: ThinkingLevelReadModel,
+  ) => Promise<void>;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const matrixRef = useRef<HTMLDivElement>(null);
   const matrixBodyRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLSpanElement>(null);
-  const dragStartRef = useRef<{ modelKey: string; level: ThinkingLevelReadModel } | undefined>(undefined);
+  const dragStartRef = useRef<
+    { modelKey: string; level: ThinkingLevelReadModel } | undefined
+  >(undefined);
   const applyingRef = useRef(false);
-  const queuedSelectionRef = useRef<{ model: ModelOptionReadModel; level: ThinkingLevelReadModel } | undefined>(undefined);
+  const queuedSelectionRef = useRef<
+    { model: ModelOptionReadModel; level: ThinkingLevelReadModel } | undefined
+  >(undefined);
   const [modelKey, setModelKey] = useState("");
   const [level, setLevel] = useState<ThinkingLevelReadModel>("off");
   const [dragging, setDragging] = useState(false);
@@ -1102,34 +1847,69 @@ function ModelControl({
   const models = useMemo(() => {
     const base = visibleModels(controls?.models ?? [], hiddenModels);
     for (const applied of [controls?.model, controls?.pending?.model]) {
-      if (applied && !base.some((model) => toModelKey(model) === toModelKey(applied))) {
-        const original = (controls?.models ?? []).find((model) => toModelKey(model) === toModelKey(applied));
+      if (
+        applied &&
+        !base.some((model) => toModelKey(model) === toModelKey(applied))
+      ) {
+        const original = (controls?.models ?? []).find(
+          (model) => toModelKey(model) === toModelKey(applied),
+        );
         if (original) base.push(original);
       }
     }
     const query = modelQuery.trim().toLowerCase();
     if (!query) return base;
-    const matched = base.filter((model) => `${model.provider} ${model.id} ${model.name}`.toLowerCase().includes(query));
-    const selected = base.find((model) => `${model.provider}/${model.id}` === modelKey);
+    const matched = base.filter((model) =>
+      `${model.provider} ${model.id} ${model.name}`
+        .toLowerCase()
+        .includes(query),
+    );
+    const selected = base.find(
+      (model) => `${model.provider}/${model.id}` === modelKey,
+    );
     if (selected && !matched.includes(selected)) matched.push(selected);
     return matched;
-  }, [controls?.models, controls?.model, controls?.pending?.model, hiddenModels, modelKey, modelQuery]);
-  const axisLevels = useMemo(() => matrixThinkingAxis(models), [controls?.models, hiddenModels, modelQuery]);
-  const selectedModelIndex = Math.max(0, models.findIndex((model) => `${model.provider}/${model.id}` === modelKey));
+  }, [
+    controls?.models,
+    controls?.model,
+    controls?.pending?.model,
+    hiddenModels,
+    modelKey,
+    modelQuery,
+  ]);
+  const axisLevels = useMemo(
+    () => matrixThinkingAxis(models),
+    [controls?.models, hiddenModels, modelQuery],
+  );
+  const selectedModelIndex = Math.max(
+    0,
+    models.findIndex((model) => `${model.provider}/${model.id}` === modelKey),
+  );
   const selectedModel = models[selectedModelIndex];
   const selectedLevelIndex = Math.max(0, axisLevels.indexOf(level));
   const selectedCellId = `model-matrix-cell-${selectedModelIndex}-${selectedLevelIndex}`;
 
   useEffect(() => {
-    if (!open) { setModelQuery(""); return; }
+    if (!open) {
+      setModelQuery("");
+      return;
+    }
     const selectedControls = controls?.pending ?? controls;
-    const currentKey = selectedControls?.model ? `${selectedControls.model.provider}/${selectedControls.model.id}` : "";
-    const currentModel = models.find((model) => `${model.provider}/${model.id}` === currentKey) ?? models[0];
+    const currentKey = selectedControls?.model
+      ? `${selectedControls.model.provider}/${selectedControls.model.id}`
+      : "";
+    const currentModel =
+      models.find((model) => `${model.provider}/${model.id}` === currentKey) ??
+      models[0];
     const availableLevels = currentModel?.thinkingLevels ?? [];
-    const currentLevel = availableLevels.includes(selectedControls?.thinkingLevel ?? "off")
-      ? selectedControls?.thinkingLevel ?? "off"
-      : availableLevels[0] ?? "off";
-    setModelKey(currentModel ? `${currentModel.provider}/${currentModel.id}` : "");
+    const currentLevel = availableLevels.includes(
+      selectedControls?.thinkingLevel ?? "off",
+    )
+      ? (selectedControls?.thinkingLevel ?? "off")
+      : (availableLevels[0] ?? "off");
+    setModelKey(
+      currentModel ? `${currentModel.provider}/${currentModel.id}` : "",
+    );
     setLevel(currentLevel);
     const pointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onClose();
@@ -1143,7 +1923,9 @@ function ModelControl({
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("keydown", keyDown);
     requestAnimationFrame(() => {
-      rootRef.current?.querySelector<HTMLElement>('[data-active-model="true"]')?.scrollIntoView({ block: "nearest" });
+      rootRef.current
+        ?.querySelector<HTMLElement>('[data-active-model="true"]')
+        ?.scrollIntoView({ block: "nearest" });
       matrixRef.current?.focus();
     });
     return () => {
@@ -1159,7 +1941,8 @@ function ModelControl({
       const thumb = thumbRef.current;
       const body = matrixBodyRef.current;
       if (!cell || !thumb || !body) return;
-      if (!dragging) cell.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (!dragging)
+        cell.scrollIntoView({ block: "nearest", inline: "nearest" });
       const cellRect = cell.getBoundingClientRect();
       const bodyRect = body.getBoundingClientRect();
       const transform = `translate3d(${cellRect.left - bodyRect.left + cellRect.width / 2}px, ${cellRect.top - bodyRect.top + cellRect.height / 2}px, 0) translate(-50%, -50%)`;
@@ -1178,7 +1961,10 @@ function ModelControl({
     return () => resize.disconnect();
   }, [dragging, open, selectedCellId]);
 
-  const applySelection = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel) => {
+  const applySelection = (
+    model: ModelOptionReadModel,
+    nextLevel: ThinkingLevelReadModel,
+  ) => {
     queuedSelectionRef.current = { model, level: nextLevel };
     if (applyingRef.current) return;
     applyingRef.current = true;
@@ -1198,7 +1984,11 @@ function ModelControl({
       }
     })();
   };
-  const select = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel, apply: boolean) => {
+  const select = (
+    model: ModelOptionReadModel,
+    nextLevel: ThinkingLevelReadModel,
+    apply: boolean,
+  ) => {
     setModelKey(`${model.provider}/${model.id}`);
     setLevel(nextLevel);
     if (apply) applySelection(model, nextLevel);
@@ -1207,8 +1997,12 @@ function ModelControl({
     const body = matrixBodyRef.current;
     if (!body) return undefined;
     const rect = body.getBoundingClientRect();
-    const firstCell = document.getElementById("model-matrix-cell-0-0")?.getBoundingClientRect();
-    const lastCell = document.getElementById(`model-matrix-cell-0-${axisLevels.length - 1}`)?.getBoundingClientRect();
+    const firstCell = document
+      .getElementById("model-matrix-cell-0-0")
+      ?.getBoundingClientRect();
+    const lastCell = document
+      .getElementById(`model-matrix-cell-0-${axisLevels.length - 1}`)
+      ?.getBoundingClientRect();
     if (!firstCell || !lastCell) return undefined;
     return matrixSelectionAtPoint(
       models,
@@ -1222,7 +2016,9 @@ function ModelControl({
     dragStartRef.current = undefined;
     setDragging(false);
     if (!start) return;
-    const model = models.find((item) => `${item.provider}/${item.id}` === start.modelKey);
+    const model = models.find(
+      (item) => `${item.provider}/${item.id}` === start.modelKey,
+    );
     if (model) select(model, start.level, false);
   };
   const moveSelection = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1235,120 +2031,222 @@ function ModelControl({
     const move = moves[event.key];
     if (!move || !selectedModel) return;
     event.preventDefault();
-    const next = moveMatrixSelection(models, axisLevels, selectedModelIndex, level, move[0], move[1]);
+    const next = moveMatrixSelection(
+      models,
+      axisLevels,
+      selectedModelIndex,
+      level,
+      move[0],
+      move[1],
+    );
     if (!next) return;
     const nextKey = `${next.model.provider}/${next.model.id}`;
-    if (nextKey !== modelKey || next.level !== level) select(next.model, next.level, true);
+    if (nextKey !== modelKey || next.level !== level)
+      select(next.model, next.level, true);
   };
 
-  return <div ref={rootRef} className="composer-popover-root model-control">
-    <button
-      ref={triggerRef}
-      className="model-trigger"
-      type="button"
-      disabled={disabled || !models.length}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      onClick={onToggle}
-    >
-      <span>{controls?.pending ? `Next: ${controls.pending.model.name}` : controls?.model?.name ?? "No model"}</span>
-      {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && <small>{thinkingLabel(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel ?? "off")}</small>}
-      <IconChevronDown size={14} />
-    </button>
-    {open && <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy}>
-      <div className="model-search">
-        <IconSearch size={13} />
-        <input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} placeholder="Filter models…" aria-label="Filter models" autoComplete="off" spellCheck={false} />
-        {modelQuery && <button type="button" onClick={() => setModelQuery("")} aria-label="Clear filter"><IconX size={12} /></button>}
-      </div>
-      <div
-        ref={matrixRef}
-        className={`model-matrix${dragging ? " is-dragging" : ""}`}
-        role="grid"
-        tabIndex={0}
-        aria-label="Model and thinking selector"
-        aria-rowcount={models.length + 1}
-        aria-colcount={axisLevels.length + 1}
-        aria-activedescendant={selectedCellId}
-        aria-describedby="model-matrix-help"
-        style={{ "--matrix-level-count": axisLevels.length } as CSSProperties}
-        onKeyDown={moveSelection}
+  return (
+    <div ref={rootRef} className="composer-popover-root model-control">
+      <button
+        ref={triggerRef}
+        className="model-trigger"
+        type="button"
+        disabled={disabled || !models.length}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={onToggle}
       >
-        <div className="model-matrix-header" role="row">
-          <span role="columnheader">Model</span>
-          {axisLevels.map((item) => <span role="columnheader" key={item} title={thinkingLabel(item)}>{matrixThinkingLabel(item)}</span>)}
-        </div>
-        {!models.length && <p className="model-matrix-empty">No matching models. Clear the filter or hide fewer models in Settings → Models.</p>}
+        <span>
+          {controls?.pending
+            ? `Next: ${controls.pending.model.name}`
+            : (controls?.model?.name ?? "No model")}
+        </span>
+        {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && (
+          <small>
+            {thinkingLabel(
+              controls?.pending?.thinkingLevel ??
+                controls?.thinkingLevel ??
+                "off",
+            )}
+          </small>
+        )}
+        <IconChevronDown size={14} />
+      </button>
+      {open && (
         <div
-          ref={matrixBodyRef}
-          className="model-matrix-body"
-          role="rowgroup"
-          onPointerDown={(event) => {
-            if ((event.target as HTMLElement).closest(".model-matrix-name")) return;
-            if (event.pointerType === "mouse" && event.button !== 0) return;
-            event.preventDefault();
-            const next = selectionFromPointer(event);
-            if (!next) return;
-            dragStartRef.current = { modelKey, level };
-            setDragging(true);
-            matrixRef.current?.focus();
-            event.currentTarget.setPointerCapture(event.pointerId);
-            select(next.model, next.level, false);
-          }}
-          onPointerMove={(event) => {
-            if (!dragStartRef.current) return;
-            const next = selectionFromPointer(event);
-            if (next) select(next.model, next.level, false);
-          }}
-          onPointerUp={(event) => {
-            if (!dragStartRef.current) return;
-            const next = selectionFromPointer(event);
-            const start = dragStartRef.current;
-            dragStartRef.current = undefined;
-            setDragging(false);
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-            if (!next) return;
-            select(next.model, next.level, false);
-            if (`${next.model.provider}/${next.model.id}` !== start.modelKey || next.level !== start.level) applySelection(next.model, next.level);
-          }}
-          onPointerCancel={cancelDrag}
-          onLostPointerCapture={() => {
-            if (dragStartRef.current) cancelDrag();
-          }}
+          className="model-popover composer-popover"
+          role="dialog"
+          aria-label="Model and thinking"
+          aria-busy={busy}
         >
-          {models.map((model, modelIndex) => {
-            const key = `${model.provider}/${model.id}`;
-            return <div className="model-matrix-row" role="row" key={key} data-active-model={key === modelKey}>
-              <span className="model-matrix-name" role="rowheader">
-                <strong>{model.name}</strong>
-                <small>{model.provider}</small>
-              </span>
-              {axisLevels.map((item, axisIndex) => {
-                const available = model.thinkingLevels?.includes(item) ?? item === "off";
-                const active = key === modelKey && item === level;
-                return <span
-                  className={`model-matrix-cell${available ? "" : " is-unavailable"}${active ? " is-active" : ""}`}
-                  role="gridcell"
-                  id={`model-matrix-cell-${modelIndex}-${axisIndex}`}
-                  aria-selected={active}
-                  aria-disabled={!available}
-                  aria-label={available ? `${model.name}, ${thinkingLabel(item)} thinking` : `${model.name}, ${thinkingLabel(item)} thinking unavailable`}
-                  title={available ? `${model.name}, ${thinkingLabel(item)}` : `${thinkingLabel(item)} unavailable for ${model.name}`}
+          <div className="model-search">
+            <IconSearch size={13} />
+            <input
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.target.value)}
+              placeholder="Filter models…"
+              aria-label="Filter models"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {modelQuery && (
+              <button
+                type="button"
+                onClick={() => setModelQuery("")}
+                aria-label="Clear filter"
+              >
+                <IconX size={12} />
+              </button>
+            )}
+          </div>
+          <div
+            ref={matrixRef}
+            className={`model-matrix${dragging ? " is-dragging" : ""}`}
+            role="grid"
+            tabIndex={0}
+            aria-label="Model and thinking selector"
+            aria-rowcount={models.length + 1}
+            aria-colcount={axisLevels.length + 1}
+            aria-activedescendant={selectedCellId}
+            aria-describedby="model-matrix-help"
+            style={
+              { "--matrix-level-count": axisLevels.length } as CSSProperties
+            }
+            onKeyDown={moveSelection}
+          >
+            <div className="model-matrix-header" role="row">
+              <span role="columnheader">Model</span>
+              {axisLevels.map((item) => (
+                <span
+                  role="columnheader"
                   key={item}
-                />;
+                  title={thinkingLabel(item)}
+                >
+                  {matrixThinkingLabel(item)}
+                </span>
+              ))}
+            </div>
+            {!models.length && (
+              <p className="model-matrix-empty">
+                No matching models. Clear the filter or hide fewer models in
+                Settings → Models.
+              </p>
+            )}
+            <div
+              ref={matrixBodyRef}
+              className="model-matrix-body"
+              role="rowgroup"
+              onPointerDown={(event) => {
+                if ((event.target as HTMLElement).closest(".model-matrix-name"))
+                  return;
+                if (event.pointerType === "mouse" && event.button !== 0) return;
+                event.preventDefault();
+                const next = selectionFromPointer(event);
+                if (!next) return;
+                dragStartRef.current = { modelKey, level };
+                setDragging(true);
+                matrixRef.current?.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                select(next.model, next.level, false);
+              }}
+              onPointerMove={(event) => {
+                if (!dragStartRef.current) return;
+                const next = selectionFromPointer(event);
+                if (next) select(next.model, next.level, false);
+              }}
+              onPointerUp={(event) => {
+                if (!dragStartRef.current) return;
+                const next = selectionFromPointer(event);
+                const start = dragStartRef.current;
+                dragStartRef.current = undefined;
+                setDragging(false);
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                if (!next) return;
+                select(next.model, next.level, false);
+                if (
+                  `${next.model.provider}/${next.model.id}` !==
+                    start.modelKey ||
+                  next.level !== start.level
+                )
+                  applySelection(next.model, next.level);
+              }}
+              onPointerCancel={cancelDrag}
+              onLostPointerCapture={() => {
+                if (dragStartRef.current) cancelDrag();
+              }}
+            >
+              {models.map((model, modelIndex) => {
+                const key = `${model.provider}/${model.id}`;
+                return (
+                  <div
+                    className="model-matrix-row"
+                    role="row"
+                    key={key}
+                    data-active-model={key === modelKey}
+                  >
+                    <span className="model-matrix-name" role="rowheader">
+                      <strong>{model.name}</strong>
+                      <small>{model.provider}</small>
+                    </span>
+                    {axisLevels.map((item, axisIndex) => {
+                      const available =
+                        model.thinkingLevels?.includes(item) ?? item === "off";
+                      const active = key === modelKey && item === level;
+                      return (
+                        <span
+                          className={`model-matrix-cell${available ? "" : " is-unavailable"}${active ? " is-active" : ""}`}
+                          role="gridcell"
+                          id={`model-matrix-cell-${modelIndex}-${axisIndex}`}
+                          aria-selected={active}
+                          aria-disabled={!available}
+                          aria-label={
+                            available
+                              ? `${model.name}, ${thinkingLabel(item)} thinking`
+                              : `${model.name}, ${thinkingLabel(item)} thinking unavailable`
+                          }
+                          title={
+                            available
+                              ? `${model.name}, ${thinkingLabel(item)}`
+                              : `${thinkingLabel(item)} unavailable for ${model.name}`
+                          }
+                          key={item}
+                        />
+                      );
+                    })}
+                  </div>
+                );
               })}
-            </div>;
-          })}
-          <span ref={thumbRef} className="model-matrix-thumb" aria-hidden="true" />
+              <span
+                ref={thumbRef}
+                className="model-matrix-thumb"
+                aria-hidden="true"
+              />
+            </div>
+          </div>
+          <div className="model-matrix-footer" aria-live="polite">
+            <span>
+              <strong>{selectedModel?.name ?? "No model"}</strong> with{" "}
+              <strong>{thinkingLabel(level)}</strong> thinking
+            </span>
+            <small>
+              {dragging
+                ? "Release to apply"
+                : busy
+                  ? "Applying"
+                  : controls?.pending
+                    ? "Applies after current response"
+                    : "Current session"}
+            </small>
+          </div>
+          <p className="model-matrix-help" id="model-matrix-help">
+            Drag across thinking and between models. Arrow keys move one option
+            at a time.
+          </p>
         </div>
-      </div>
-      <div className="model-matrix-footer" aria-live="polite">
-        <span><strong>{selectedModel?.name ?? "No model"}</strong> with <strong>{thinkingLabel(level)}</strong> thinking</span>
-        <small>{dragging ? "Release to apply" : busy ? "Applying" : controls?.pending ? "Applies after current response" : "Current session"}</small>
-      </div>
-      <p className="model-matrix-help" id="model-matrix-help">Drag across thinking and between models. Arrow keys move one option at a time.</p>
-    </div>}
-  </div>;
+      )}
+    </div>
+  );
 }
 
 function HistoryRail({
@@ -1391,55 +2289,113 @@ function HistoryRail({
     });
   };
   const hideTooltip = () => setTooltip(undefined);
-  return <>
-    <nav className="history-rail" aria-label="Conversation turns">
-    {page.earlierCursor && <button
-      className="history-tick is-loader"
-      type="button"
-      disabled={loading}
-      onClick={() => onPage("earlier", page.earlierCursor)}
-      onMouseEnter={(event) => showTooltip(event.currentTarget, loading ? "Loading earlier turns…" : "Show earlier turns", "Earlier conversation turns")}
-      onFocus={(event) => showTooltip(event.currentTarget, loading ? "Loading earlier turns…" : "Show earlier turns", "Earlier conversation turns")}
-      onMouseLeave={hideTooltip}
-      onBlur={hideTooltip}
-      aria-label="Show earlier conversation turns"
-    ><i /></button>}
-    {turns.map((turn) => {
-      const timestamp = formatMessageTime(turn.createdAt);
-      return <button
-        className={`history-tick${visibleIds.has(turn.promptId) ? " is-active" : ""}`}
-        type="button"
-        key={turn.promptId}
-        onClick={() => onSelect(turn)}
-        onMouseEnter={(event) => showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)}
-        onFocus={(event) => showTooltip(event.currentTarget, turn.preview, `Prompt: ${turn.preview}`, turn.createdAt)}
-        onMouseLeave={hideTooltip}
-        onBlur={hideTooltip}
-        aria-label={`Jump to prompt: ${turn.preview}${timestamp ? `, ${timestamp}` : ""}`}
-      ><i /></button>;
-    })}
-    {page.laterCursor && <button
-      className="history-tick is-loader"
-      type="button"
-      disabled={loading}
-      onClick={() => onPage("later", page.laterCursor)}
-      onMouseEnter={(event) => showTooltip(event.currentTarget, loading ? "Loading later turns…" : "Show later turns", "Later conversation turns")}
-      onFocus={(event) => showTooltip(event.currentTarget, loading ? "Loading later turns…" : "Show later turns", "Later conversation turns")}
-      onMouseLeave={hideTooltip}
-      onBlur={hideTooltip}
-      aria-label="Show later conversation turns"
-    ><i /></button>}
-    </nav>
-    {tooltip && <div
-      className="history-rail-tooltip"
-      role="tooltip"
-      aria-label={tooltip.label}
-      style={{ top: `${tooltip.top}px` }}
-    >
-      <strong>{tooltip.preview}</strong>
-      {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageTime(tooltip.createdAt)}</time>}
-    </div>}
-  </>;
+  return (
+    <>
+      <nav className="history-rail" aria-label="Conversation turns">
+        {page.earlierCursor && (
+          <button
+            className="history-tick is-loader"
+            type="button"
+            disabled={loading}
+            onClick={() => onPage("earlier", page.earlierCursor)}
+            onMouseEnter={(event) =>
+              showTooltip(
+                event.currentTarget,
+                loading ? "Loading earlier turns…" : "Show earlier turns",
+                "Earlier conversation turns",
+              )
+            }
+            onFocus={(event) =>
+              showTooltip(
+                event.currentTarget,
+                loading ? "Loading earlier turns…" : "Show earlier turns",
+                "Earlier conversation turns",
+              )
+            }
+            onMouseLeave={hideTooltip}
+            onBlur={hideTooltip}
+            aria-label="Show earlier conversation turns"
+          >
+            <i />
+          </button>
+        )}
+        {turns.map((turn) => {
+          const timestamp = formatMessageTime(turn.createdAt);
+          return (
+            <button
+              className={`history-tick${visibleIds.has(turn.promptId) ? " is-active" : ""}`}
+              type="button"
+              key={turn.promptId}
+              onClick={() => onSelect(turn)}
+              onMouseEnter={(event) =>
+                showTooltip(
+                  event.currentTarget,
+                  turn.preview,
+                  `Prompt: ${turn.preview}`,
+                  turn.createdAt,
+                )
+              }
+              onFocus={(event) =>
+                showTooltip(
+                  event.currentTarget,
+                  turn.preview,
+                  `Prompt: ${turn.preview}`,
+                  turn.createdAt,
+                )
+              }
+              onMouseLeave={hideTooltip}
+              onBlur={hideTooltip}
+              aria-label={`Jump to prompt: ${turn.preview}${timestamp ? `, ${timestamp}` : ""}`}
+            >
+              <i />
+            </button>
+          );
+        })}
+        {page.laterCursor && (
+          <button
+            className="history-tick is-loader"
+            type="button"
+            disabled={loading}
+            onClick={() => onPage("later", page.laterCursor)}
+            onMouseEnter={(event) =>
+              showTooltip(
+                event.currentTarget,
+                loading ? "Loading later turns…" : "Show later turns",
+                "Later conversation turns",
+              )
+            }
+            onFocus={(event) =>
+              showTooltip(
+                event.currentTarget,
+                loading ? "Loading later turns…" : "Show later turns",
+                "Later conversation turns",
+              )
+            }
+            onMouseLeave={hideTooltip}
+            onBlur={hideTooltip}
+            aria-label="Show later conversation turns"
+          >
+            <i />
+          </button>
+        )}
+      </nav>
+      {tooltip && (
+        <div
+          className="history-rail-tooltip"
+          role="tooltip"
+          aria-label={tooltip.label}
+          style={{ top: `${tooltip.top}px` }}
+        >
+          <strong>{tooltip.preview}</strong>
+          {tooltip.createdAt && (
+            <time dateTime={tooltip.createdAt}>
+              {formatMessageTime(tooltip.createdAt)}
+            </time>
+          )}
+        </div>
+      )}
+    </>
+  );
 }
 
 function PromptEditor({
@@ -1462,43 +2418,65 @@ function PromptEditor({
     } catch (error) {
       onChange({
         ...edit,
-        imageError: error instanceof Error ? error.message : "The pasted image could not be read.",
+        imageError:
+          error instanceof Error
+            ? error.message
+            : "The pasted image could not be read.",
       });
     }
   };
-  return <div className="prompt-editor">
-    {edit.images.length > 0 && <ImageStrip
-      images={edit.images}
-      label="Replacement images"
-      onRemove={(id) => onChange({ ...edit, images: edit.images.filter((image) => image.id !== id) })}
-    />}
-    <label className="sr-only" htmlFor={`edit-${edit.messageId}`}>Edit prompt</label>
-    <textarea
-      autoFocus
-      id={`edit-${edit.messageId}`}
-      value={edit.text}
-      rows={Math.min(12, Math.max(3, edit.text.split(/\r?\n/).length))}
-      disabled={disabled}
-      onChange={(event) => onChange({ ...edit, text: event.target.value })}
-      onPaste={(event) => void onPaste(event)}
-      onKeyDown={(event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-          event.preventDefault();
-          if (edit.text.trim() || edit.images.length) onSubmit();
-        }
-      }}
-    />
-    {edit.imageError && <p className="prompt-error" role="alert">{edit.imageError}</p>}
-    <div className="prompt-editor-actions">
-      <button type="button" disabled={disabled} onClick={onCancel}>Cancel</button>
-      <button
-        className="primary-button"
-        type="button"
-        disabled={disabled || (!edit.text.trim() && edit.images.length === 0)}
-        onClick={onSubmit}
-      >Send</button>
+  return (
+    <div className="prompt-editor">
+      {edit.images.length > 0 && (
+        <ImageStrip
+          images={edit.images}
+          label="Replacement images"
+          onRemove={(id) =>
+            onChange({
+              ...edit,
+              images: edit.images.filter((image) => image.id !== id),
+            })
+          }
+        />
+      )}
+      <label className="sr-only" htmlFor={`edit-${edit.messageId}`}>
+        Edit prompt
+      </label>
+      <textarea
+        autoFocus
+        id={`edit-${edit.messageId}`}
+        value={edit.text}
+        rows={Math.min(12, Math.max(3, edit.text.split(/\r?\n/).length))}
+        disabled={disabled}
+        onChange={(event) => onChange({ ...edit, text: event.target.value })}
+        onPaste={(event) => void onPaste(event)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            if (edit.text.trim() || edit.images.length) onSubmit();
+          }
+        }}
+      />
+      {edit.imageError && (
+        <p className="prompt-error" role="alert">
+          {edit.imageError}
+        </p>
+      )}
+      <div className="prompt-editor-actions">
+        <button type="button" disabled={disabled} onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={disabled || (!edit.text.trim() && edit.images.length === 0)}
+          onClick={onSubmit}
+        >
+          Send
+        </button>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 function UndoConfirmDialog({
@@ -1514,9 +2492,14 @@ function UndoConfirmDialog({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     dialogRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
   }, []);
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape" && !submitting) {
@@ -1525,7 +2508,9 @@ function UndoConfirmDialog({
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])");
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), input:not([disabled])",
+    );
     if (!focusable?.length) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -1537,26 +2522,64 @@ function UndoConfirmDialog({
       first.focus();
     }
   };
-  return <div className="edit-confirm-backdrop" onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget && !submitting) onCancel();
-  }}>
-    <div ref={dialogRef} className="edit-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-confirm-title" onKeyDown={onKeyDown}>
-      <header>
-        <strong id="edit-confirm-title">Undo to this prompt?</strong>
-        <button className="icon-button" type="button" onClick={onCancel} disabled={submitting} aria-label="Close"><IconX size={16} /></button>
-      </header>
-      <div>
-        <p>Files and conversation history will return to immediately before this prompt. The prompt text will be restored to the composer without sending.</p>
-        {undo.attachmentCount > 0 && <p className="edit-confirm-warning">Historical {undo.attachmentCount === 1 ? "image cannot" : "images cannot"} be restored. Paste replacement images before sending again.</p>}
+  return (
+    <div
+      className="edit-confirm-backdrop"
+      onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+        if (event.target === event.currentTarget && !submitting) onCancel();
+      }}
+    >
+      <div
+        ref={dialogRef}
+        className="edit-confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-confirm-title"
+        onKeyDown={onKeyDown}
+      >
+        <header>
+          <strong id="edit-confirm-title">Undo to this prompt?</strong>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onCancel}
+            disabled={submitting}
+            aria-label="Close"
+          >
+            <IconX size={16} />
+          </button>
+        </header>
+        <div>
+          <p>
+            Files and conversation history will return to immediately before
+            this prompt. The prompt text will be restored to the composer
+            without sending.
+          </p>
+          {undo.attachmentCount > 0 && (
+            <p className="edit-confirm-warning">
+              Historical{" "}
+              {undo.attachmentCount === 1 ? "image cannot" : "images cannot"} be
+              restored. Paste replacement images before sending again.
+            </p>
+          )}
+        </div>
+        <footer>
+          <button type="button" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            data-autofocus
+            className="primary-button"
+            type="button"
+            onClick={onConfirm}
+            disabled={submitting}
+          >
+            {submitting ? "Undoing…" : "Undo"}
+          </button>
+        </footer>
       </div>
-      <footer>
-        <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
-        <button data-autofocus className="primary-button" type="button" onClick={onConfirm} disabled={submitting}>
-          {submitting ? "Undoing…" : "Undo"}
-        </button>
-      </footer>
     </div>
-  </div>;
+  );
 }
 
 function ForkDialog({
@@ -1575,9 +2598,16 @@ function ForkDialog({
   const [withTimeline, setWithTimeline] = useState(fork.canUseTimeline);
   const validName = name.trim().length > 0 && name.trim().length <= 200;
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.querySelector<HTMLInputElement>("[data-autofocus]")?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    const previous =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    dialogRef.current
+      ?.querySelector<HTMLInputElement>("[data-autofocus]")
+      ?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
   }, []);
   const onKeyDown = (event: ReactKeyboardEvent<HTMLFormElement>) => {
     if (event.key === "Escape" && !submitting) {
@@ -1586,7 +2616,9 @@ function ForkDialog({
       return;
     }
     if (event.key !== "Tab") return;
-    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled])");
+    const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), input:not([disabled])",
+    );
     if (!focusable?.length) return;
     const first = focusable[0]!;
     const last = focusable[focusable.length - 1]!;
@@ -1598,95 +2630,182 @@ function ForkDialog({
       first.focus();
     }
   };
-  return <div className="edit-confirm-backdrop fork-dialog-backdrop" onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.target === event.currentTarget && !submitting) onCancel();
-  }}>
-    <form
-      ref={dialogRef}
-      className="edit-confirm-dialog fork-dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="fork-dialog-title"
-      aria-describedby="fork-dialog-description"
-      onKeyDown={onKeyDown}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (validName && !submitting) onConfirm(name.trim(), withTimeline ? "timeline" : "conversation");
+  return (
+    <div
+      className="edit-confirm-backdrop fork-dialog-backdrop"
+      onMouseDown={(event: ReactMouseEvent<HTMLDivElement>) => {
+        if (event.target === event.currentTarget && !submitting) onCancel();
       }}
     >
-      <header>
-        <strong id="fork-dialog-title">Fork from this prompt</strong>
-        <button className="icon-button" type="button" onClick={onCancel} disabled={submitting} aria-label="Close"><IconX size={16} /></button>
-      </header>
-      <div>
-        <p id="fork-dialog-description">Create a separate session from this point in the conversation.</p>
-        <label className="fork-name">Session name
-          <input
-            data-autofocus
-            value={name}
-            maxLength={200}
+      <form
+        ref={dialogRef}
+        className="edit-confirm-dialog fork-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fork-dialog-title"
+        aria-describedby="fork-dialog-description"
+        onKeyDown={onKeyDown}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (validName && !submitting)
+            onConfirm(name.trim(), withTimeline ? "timeline" : "conversation");
+        }}
+      >
+        <header>
+          <strong id="fork-dialog-title">Fork from this prompt</strong>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onCancel}
             disabled={submitting}
-            onChange={(event) => setName(event.target.value)}
+            aria-label="Close"
+          >
+            <IconX size={16} />
+          </button>
+        </header>
+        <div>
+          <p id="fork-dialog-description">
+            Create a separate session from this point in the conversation.
+          </p>
+          <label className="fork-name">
+            Session name
+            <input
+              data-autofocus
+              value={name}
+              maxLength={200}
+              disabled={submitting}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label
+            className={`fork-timeline ${fork.canUseTimeline ? "" : "is-disabled"}`}
+          >
+            <input
+              type="checkbox"
+              checked={withTimeline}
+              disabled={!fork.canUseTimeline || submitting}
+              onChange={(event) => setWithTimeline(event.target.checked)}
+            />
+            <span>Restore files from Timeline checkpoint</span>
+          </label>
+          {fork.timelineReason && (
+            <p className="fork-timeline-reason">{fork.timelineReason}</p>
+          )}
+        </div>
+        <footer>
+          <button type="button" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={!validName || submitting}
+          >
+            {submitting ? "Forking…" : "Fork session"}
+          </button>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
+function ImageStrip({
+  images,
+  label,
+  onRemove,
+}: {
+  images: PastedImage[];
+  label: string;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="prompt-images" aria-label={label}>
+      {images.map((image, index) => (
+        <div className="prompt-image" key={image.id}>
+          <img
+            src={`data:${image.mimeType};base64,${image.data}`}
+            alt={`Pasted image ${index + 1}`}
           />
-        </label>
-        <label className={`fork-timeline ${fork.canUseTimeline ? "" : "is-disabled"}`}>
-          <input
-            type="checkbox"
-            checked={withTimeline}
-            disabled={!fork.canUseTimeline || submitting}
-            onChange={(event) => setWithTimeline(event.target.checked)}
-          />
-          <span>Restore files from Timeline checkpoint</span>
-        </label>
-        {fork.timelineReason && <p className="fork-timeline-reason">{fork.timelineReason}</p>}
-      </div>
-      <footer>
-        <button type="button" onClick={onCancel} disabled={submitting}>Cancel</button>
-        <button className="primary-button" type="submit" disabled={!validName || submitting}>
-          {submitting ? "Forking…" : "Fork session"}
-        </button>
-      </footer>
-    </form>
-  </div>;
+          <button
+            type="button"
+            onClick={() => onRemove(image.id)}
+            aria-label={`Remove pasted image ${index + 1}`}
+          >
+            <IconX size={13} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function ImageStrip({ images, label, onRemove }: { images: PastedImage[]; label: string; onRemove: (id: string) => void }) {
-  return <div className="prompt-images" aria-label={label}>
-    {images.map((image, index) => <div className="prompt-image" key={image.id}>
-      <img src={`data:${image.mimeType};base64,${image.data}`} alt={`Pasted image ${index + 1}`} />
-      <button type="button" onClick={() => onRemove(image.id)} aria-label={`Remove pasted image ${index + 1}`}><IconX size={13} /></button>
-    </div>)}
-  </div>;
+function FileStrip({
+  files,
+  onRemove,
+}: {
+  files: DroppedTextFile[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="prompt-files" aria-label="Attached text files">
+      {files.map((file) => (
+        <span className="prompt-file" key={file.id}>
+          <IconFileText size={14} />
+          <span title={file.name}>{file.name}</span>
+          <small>{formatBytes(file.size)}</small>
+          <button
+            type="button"
+            onClick={() => onRemove(file.id)}
+            aria-label={`Remove ${file.name}`}
+          >
+            <IconX size={13} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
 }
 
-function FileStrip({ files, onRemove }: { files: DroppedTextFile[]; onRemove: (id: string) => void }) {
-  return <div className="prompt-files" aria-label="Attached text files">
-    {files.map((file) => <span className="prompt-file" key={file.id}>
-      <IconFileText size={14} />
-      <span title={file.name}>{file.name}</span>
-      <small>{formatBytes(file.size)}</small>
-      <button type="button" onClick={() => onRemove(file.id)} aria-label={`Remove ${file.name}`}><IconX size={13} /></button>
-    </span>)}
-  </div>;
-}
-
-export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(renderMarkdown(text), {
-    ALLOWED_ATTR: markdownAttributes,
-    ALLOWED_TAGS: markdownTags,
-  }), [text]);
+export const MarkdownContent = memo(function MarkdownContent({
+  text,
+}: {
+  text: string;
+}) {
+  const html = useMemo(
+    () =>
+      DOMPurify.sanitize(renderMarkdown(text), {
+        ALLOWED_ATTR: markdownAttributes,
+        ALLOWED_TAGS: markdownTags,
+      }),
+    [text],
+  );
 
   const onClick = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
     const anchor = (event.target as HTMLElement).closest("a");
     if (!anchor || !event.currentTarget.contains(anchor)) return;
     const reference = parseFileReference(anchor.getAttribute("href") ?? "");
     if (!reference) return;
     event.preventDefault();
-    window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: reference }));
+    window.dispatchEvent(
+      new CustomEvent("pylon:open-file", { detail: reference }),
+    );
   };
 
-  return <div className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div
+      className="markdown-content"
+      onClick={onClick}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 });
 
 function CopyMessageButton({ text, label }: { text: string; label: string }) {
@@ -1700,9 +2819,17 @@ function CopyMessageButton({ text, label }: { text: string; label: string }) {
       setState("error");
     }
   };
-  return <button className={`message-copy ${state !== "idle" ? `is-${state}` : ""}`} type="button" onClick={() => void copy()} aria-label={state === "error" ? `${label} failed` : label} title={state === "copied" ? "Copied" : label}>
-    {state === "copied" ? <IconCheck size={14} /> : <IconCopy size={14} />}
-  </button>;
+  return (
+    <button
+      className={`message-copy ${state !== "idle" ? `is-${state}` : ""}`}
+      type="button"
+      onClick={() => void copy()}
+      aria-label={state === "error" ? `${label} failed` : label}
+      title={state === "copied" ? "Copied" : label}
+    >
+      {state === "copied" ? <IconCheck size={14} /> : <IconCopy size={14} />}
+    </button>
+  );
 }
 
 function MessageFooter({
@@ -1721,37 +2848,78 @@ function MessageFooter({
   onFork?: () => void;
 }) {
   const timestamp = formatMessageTime(message.createdAt);
-  return <footer className="message-footer">
-    {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
-    {canCopy && <CopyMessageButton text={message.text} label={`Copy ${message.role === "user" ? "prompt" : "response"}`} />}
-    {message.role === "assistant" && message.workDurationMs !== undefined && <WorkTimer durationMs={message.workDurationMs} modelName={message.modelName} thinkingLevel={message.thinkingLevel} gitBranch={message.gitBranch} />}
-    {onEdit && <button type="button" disabled={disabled} onClick={onEdit} aria-label="Edit prompt" title="Edit prompt"><IconPencil size={14} /></button>}
-    {onUndo && <button
-      type="button"
-      disabled={disabled || !message.canUndo}
-      onClick={onUndo}
-      aria-label="Undo to this prompt"
-      title={message.canUndo ? "Undo to this prompt and restore files" : "No compatible Timeline checkpoint exists before this prompt"}
-    ><IconArrowBackUp size={14} /></button>}
-    {onFork && <button
-      type="button"
-      disabled={disabled}
-      onClick={onFork}
-      aria-label="Fork from this prompt"
-      title="Fork from this prompt"
-    ><IconGitFork size={14} /></button>}
-  </footer>;
+  return (
+    <footer className="message-footer">
+      {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
+      {canCopy && (
+        <CopyMessageButton
+          text={message.text}
+          label={`Copy ${message.role === "user" ? "prompt" : "response"}`}
+        />
+      )}
+      {message.role === "assistant" && message.workDurationMs !== undefined && (
+        <WorkTimer
+          durationMs={message.workDurationMs}
+          modelName={message.modelName}
+          thinkingLevel={message.thinkingLevel}
+          gitBranch={message.gitBranch}
+        />
+      )}
+      {onEdit && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onEdit}
+          aria-label="Edit prompt"
+          title="Edit prompt"
+        >
+          <IconPencil size={14} />
+        </button>
+      )}
+      {onUndo && (
+        <button
+          type="button"
+          disabled={disabled || !message.canUndo}
+          onClick={onUndo}
+          aria-label="Undo to this prompt"
+          title={
+            message.canUndo
+              ? "Undo to this prompt and restore files"
+              : "No compatible Timeline checkpoint exists before this prompt"
+          }
+        >
+          <IconArrowBackUp size={14} />
+        </button>
+      )}
+      {onFork && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onFork}
+          aria-label="Fork from this prompt"
+          title="Fork from this prompt"
+        >
+          <IconGitFork size={14} />
+        </button>
+      )}
+    </footer>
+  );
 }
 
 function formatMessageTime(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function sameStringSet(left: Set<string>, right: Set<string>): boolean {
-  return left.size === right.size && [...left].every((value) => right.has(value));
+  return (
+    left.size === right.size && [...left].every((value) => right.has(value))
+  );
 }
 
 function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
@@ -1770,61 +2938,148 @@ function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
 }
 
 function TurnDiffView({ entryId }: { entryId: string }) {
-  const [state, setState] = useState<{ loading: boolean; error?: string; text?: string; truncated?: boolean }>({ loading: true });
+  const [state, setState] = useState<{
+    loading: boolean;
+    error?: string;
+    text?: string;
+    truncated?: boolean;
+  }>({ loading: true });
   useEffect(() => {
     let active = true;
     setState({ loading: true });
-    runtimeStore.turnDiff(entryId).then((result) => {
-      if (!active) return;
-      if (result.state === "binary") setState({ loading: false, error: "Binary changes" });
-      else setState({ loading: false, text: result.text ?? "", truncated: result.truncated === true });
-    }).catch((error) => {
-      if (active) setState({ loading: false, error: error instanceof Error ? error.message : String(error) });
-    });
-    return () => { active = false; };
+    runtimeStore
+      .turnDiff(entryId)
+      .then((result) => {
+        if (!active) return;
+        if (result.state === "binary")
+          setState({ loading: false, error: "Binary changes" });
+        else
+          setState({
+            loading: false,
+            text: result.text ?? "",
+            truncated: result.truncated === true,
+          });
+      })
+      .catch((error) => {
+        if (active)
+          setState({
+            loading: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+      });
+    return () => {
+      active = false;
+    };
   }, [entryId]);
   if (state.loading) return <p role="status">Loading turn diff…</p>;
-  if (state.error) return <p className="changed-file-error" role="alert">{state.error}</p>;
-  return <>
-    {state.truncated && <p role="note">Turn diff is too large — showing the first portion.</p>}
-    <Suspense fallback={<p role="status">Rendering turn diff…</p>}>
-      <PierreCodeViewer
-        mode="diff"
-        path={`turn:${entryId}`}
-        text={state.text ?? ""}
-        revision={entryId}
-        unifiedDiff={state.text ?? ""}
-      />
-    </Suspense>
-  </>;
+  if (state.error)
+    return (
+      <p className="changed-file-error" role="alert">
+        {state.error}
+      </p>
+    );
+  return (
+    <>
+      {state.truncated && (
+        <p role="note">Turn diff is too large — showing the first portion.</p>
+      )}
+      <Suspense fallback={<p role="status">Rendering turn diff…</p>}>
+        <PierreCodeViewer
+          mode="diff"
+          path={`turn:${entryId}`}
+          text={state.text ?? ""}
+          revision={entryId}
+          unifiedDiff={state.text ?? ""}
+        />
+      </Suspense>
+    </>
+  );
 }
 
-function ChangedFiles({ files, entryId }: { files: NonNullable<MessageReadModel["changedFiles"]>; entryId?: string }) {
+function ChangedFiles({
+  files,
+  entryId,
+}: {
+  files: NonNullable<MessageReadModel["changedFiles"]>;
+  entryId?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const visible = expanded ? files : files.slice(0, 3);
   const remaining = files.length - 3;
-  return <section className="changed-files" aria-label="Files changed in this turn">
-    {visible.map((file) => <button className="changed-file" type="button" key={file.path} onClick={() =>
-      window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: { path: file.path, view: "diff" } }))}>
-      <code>{file.path}</code>
-      <span>{file.binary
-        ? <small>binary</small>
-        : <><ins>+{file.additions ?? 0}</ins><del>-{file.deletions ?? 0}</del></>}</span>
-    </button>)}
-    {files.length > 3 && <button type="button" onClick={() => setExpanded((current) => !current)}>
-      {expanded ? "Show less" : `Show ${remaining} more`}
-      <IconChevronDown className={expanded ? "is-expanded" : ""} size={14} />
-    </button>}
-    {entryId && <button type="button" aria-expanded={showDiff} onClick={() => setShowDiff((current) => !current)}>
-      {showDiff ? "Hide turn diff" : "Show turn diff"}
-      <IconChevronDown className={showDiff ? "is-expanded" : ""} size={14} />
-    </button>}
-    {showDiff && entryId && <TurnDiffView entryId={entryId} />}
-  </section>;
+  return (
+    <section className="changed-files" aria-label="Files changed in this turn">
+      {visible.map((file) => (
+        <button
+          className="changed-file"
+          type="button"
+          key={file.path}
+          onClick={() =>
+            window.dispatchEvent(
+              new CustomEvent("pylon:open-file", {
+                detail: { path: file.path, view: "diff" },
+              }),
+            )
+          }
+        >
+          <code>{file.path}</code>
+          <span>
+            {file.binary ? (
+              <small>binary</small>
+            ) : (
+              <>
+                <ins>+{file.additions ?? 0}</ins>
+                <del>-{file.deletions ?? 0}</del>
+              </>
+            )}
+          </span>
+        </button>
+      ))}
+      {files.length > 3 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show less" : `Show ${remaining} more`}
+          <IconChevronDown
+            className={expanded ? "is-expanded" : ""}
+            size={14}
+          />
+        </button>
+      )}
+      {entryId && (
+        <button
+          type="button"
+          aria-expanded={showDiff}
+          onClick={() => setShowDiff((current) => !current)}
+        >
+          {showDiff ? "Hide turn diff" : "Show turn diff"}
+          <IconChevronDown
+            className={showDiff ? "is-expanded" : ""}
+            size={14}
+          />
+        </button>
+      )}
+      {showDiff && entryId && <TurnDiffView entryId={entryId} />}
+    </section>
+  );
 }
 
-export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, gitBranch, stopped = false }: { startedAt?: string; durationMs?: number; modelName?: string; thinkingLevel?: MessageReadModel["thinkingLevel"]; gitBranch?: string; stopped?: boolean }) {
+export function WorkTimer({
+  startedAt,
+  durationMs,
+  modelName,
+  thinkingLevel,
+  gitBranch,
+  stopped = false,
+}: {
+  startedAt?: string;
+  durationMs?: number;
+  modelName?: string;
+  thinkingLevel?: MessageReadModel["thinkingLevel"];
+  gitBranch?: string;
+  stopped?: boolean;
+}) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!startedAt) return;
@@ -1833,16 +3088,31 @@ export function WorkTimer({ startedAt, durationMs, modelName, thinkingLevel, git
     return () => window.clearInterval(timer);
   }, [startedAt]);
   const started = startedAt ? Date.parse(startedAt) : Number.NaN;
-  const elapsed = durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
-  return <span className={`work-timer ${startedAt ? "is-active" : ""}`} role="status">
-    {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"} {formatWorkDuration(elapsed)}
-    {modelName && <> · {modelName}</>}
-    {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
-    {gitBranch && <> · {gitBranch}</>}
-  </span>;
+  const elapsed =
+    durationMs ?? (Number.isNaN(started) ? 0 : Math.max(0, now - started));
+  return (
+    <span
+      className={`work-timer ${startedAt ? "is-active" : ""}`}
+      role="status"
+    >
+      {stopped ? "Stopped after" : startedAt ? "Working for" : "Worked for"}{" "}
+      {formatWorkDuration(elapsed)}
+      {modelName && <> · {modelName}</>}
+      {thinkingLevel && <> · {thinkingLabel(thinkingLevel)}</>}
+      {gitBranch && <> · {gitBranch}</>}
+    </span>
+  );
 }
 
-function ActiveAgents({ runs, colors, onSelect }: { runs: DelegatedAgentRunReadModel[]; colors: AgentColorMap; onSelect?: (id: string) => void }) {
+function ActiveAgents({
+  runs,
+  colors,
+  onSelect,
+}: {
+  runs: DelegatedAgentRunReadModel[];
+  colors: AgentColorMap;
+  onSelect?: (id: string) => void;
+}) {
   const [now, setNow] = useState(Date.now());
   const [displayed, setDisplayed] = useState(runs);
   const [exiting, setExiting] = useState(false);
@@ -1866,19 +3136,48 @@ function ActiveAgents({ runs, colors, onSelect }: { runs: DelegatedAgentRunReadM
     return () => window.clearTimeout(timer);
   }, [runs]);
   if (!displayed.length) return null;
-  return <aside className={`active-agents${exiting ? " is-exiting" : ""}`} aria-label="Active delegated agents">
-    {displayed.slice(0, 3).map((run) => {
-      const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
-      const elapsed = Number.isNaN(started) ? run.durationMs ?? 0 : Math.max(0, now - started);
-      return <button type="button" key={run.id} style={agentColor(run, colors)} onClick={() => onSelect?.(run.id)}>
-        <span className="agent-state is-working" aria-hidden="true" />
-        <IconBotId size={14} />
-        <span><strong>{run.agentName ? <span className="agent-instance-name">{run.agentName}</span> : agentKindLabel(run.kind)}</strong><small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small></span>
-        <time>{formatWorkDuration(elapsed)}</time>
-      </button>;
-    })}
-    {displayed.length > 3 && <span className="active-agent-overflow">+{displayed.length - 3} more</span>}
-  </aside>;
+  return (
+    <aside
+      className={`active-agents${exiting ? " is-exiting" : ""}`}
+      aria-label="Active delegated agents"
+    >
+      {displayed.slice(0, 3).map((run) => {
+        const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+        const elapsed = Number.isNaN(started)
+          ? (run.durationMs ?? 0)
+          : Math.max(0, now - started);
+        return (
+          <button
+            type="button"
+            key={run.id}
+            style={agentColor(run, colors)}
+            onClick={() => onSelect?.(run.id)}
+          >
+            <span className="agent-state is-working" aria-hidden="true" />
+            <IconBotId size={14} />
+            <span>
+              <strong>
+                {run.agentName ? (
+                  <span className="agent-instance-name">{run.agentName}</span>
+                ) : (
+                  agentKindLabel(run.kind)
+                )}
+              </strong>
+              <small>
+                {run.agentName ? agentKindLabel(run.kind) : "Agent"}
+              </small>
+            </span>
+            <time>{formatWorkDuration(elapsed)}</time>
+          </button>
+        );
+      })}
+      {displayed.length > 3 && (
+        <span className="active-agent-overflow">
+          +{displayed.length - 3} more
+        </span>
+      )}
+    </aside>
+  );
 }
 
 function agentKindLabel(kind: DelegatedAgentKind): string {
@@ -1889,57 +3188,132 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 
-function ToolTurnGroup({ tools, running, now, onExpand }: { tools: MessageReadModel[]; running: boolean; now: number; onExpand?: () => void }) {
+function ToolTurnGroup({
+  tools,
+  running,
+  now,
+  onExpand,
+}: {
+  tools: MessageReadModel[];
+  running: boolean;
+  now: number;
+  onExpand?: () => void;
+}) {
   const names = latestUniqueToolNames(tools);
   const timing = aggregateToolTiming(tools, now);
-  const timingLabel = timing?.status === "running"
-    ? "Longest running tool duration"
-    : `Latest ${timing?.status ?? "completed"} tool duration`;
-  return <AnimatedDetails
-    className={`tool-turn-group${running ? " is-running" : ""}`}
-    summary={<>
-      <IconTool size={15} />
-      <strong>{tools.length} tool {tools.length === 1 ? "call" : "calls"}</strong>
-      <span>{names.join(", ")}</span>
-      {timing && <time className={`tool-group-duration is-${timing.status}`} dateTime={`PT${timing.durationMs / 1_000}S`} aria-label={`${timingLabel} ${formatToolDuration(timing.durationMs)}`}>{formatToolDuration(timing.durationMs)}</time>}
-    </>}
-    onExpand={onExpand}
-  >
-    <div className="tool-turn-items">
-      {tools.map((tool) => <ToolDisclosure key={tool.id} message={tool} now={now} />)}
-    </div>
-  </AnimatedDetails>;
+  const timingLabel =
+    timing?.status === "running"
+      ? "Longest running tool duration"
+      : `Latest ${timing?.status ?? "completed"} tool duration`;
+  return (
+    <AnimatedDetails
+      className={`tool-turn-group${running ? " is-running" : ""}`}
+      summary={
+        <>
+          <IconTool size={15} />
+          <strong>
+            {tools.length} tool {tools.length === 1 ? "call" : "calls"}
+          </strong>
+          <span>{names.join(", ")}</span>
+          {timing && (
+            <time
+              className={`tool-group-duration is-${timing.status}`}
+              dateTime={`PT${timing.durationMs / 1_000}S`}
+              aria-label={`${timingLabel} ${formatToolDuration(timing.durationMs)}`}
+            >
+              {formatToolDuration(timing.durationMs)}
+            </time>
+          )}
+        </>
+      }
+      onExpand={onExpand}
+    >
+      <div className="tool-turn-items">
+        {tools.map((tool) => (
+          <ToolDisclosure key={tool.id} message={tool} now={now} />
+        ))}
+      </div>
+    </AnimatedDetails>
+  );
 }
 
-function MessageAttachments({ message, onOpen }: {
+function MessageAttachments({
+  message,
+  onOpen,
+}: {
   message: MessageReadModel;
-  onOpen: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
+  onOpen: (
+    attachment: MessageAttachmentReadModel,
+    trigger: HTMLButtonElement,
+  ) => void;
 }) {
   const attachments = message.attachments ?? [];
-  const imageDescriptors = attachments.filter((attachment) => attachment.kind === "image").length;
-  const fileDescriptors = attachments.filter((attachment) => attachment.kind === "file").length;
-  const legacyImages = Math.max(0, (message.attachmentCount ?? 0) - imageDescriptors);
-  const legacyFiles = Math.max(0, (message.fileAttachmentCount ?? 0) - fileDescriptors);
-  return <>
-    {attachments.length > 0 && <div className="message-attachment-list" aria-label={`${attachments.length} viewable attachments`}>
-      {attachments.map((attachment) => <button
-        className="message-attachment-row"
-        type="button"
-        key={`${attachment.sourceEntryId}:${attachment.index}`}
-        onClick={(event) => onOpen(attachment, event.currentTarget)}
-        aria-label={`Open ${attachment.name}`}
-      >
-        <AttachmentThumbnail attachment={attachment} />
-        <span className="message-attachment-copy"><strong title={attachment.name}>{attachment.name}</strong><small>{attachment.mimeType} · {formatBytes(attachment.size)}</small></span>
-        <IconChevronRight className="message-attachment-chevron" size={15} aria-hidden="true" />
-      </button>)}
-    </div>}
-    {Boolean(legacyImages) && <span className="message-attachments"><IconPhoto size={14} />{legacyImages} historical {legacyImages === 1 ? "image" : "images"}</span>}
-    {Boolean(legacyFiles) && <span className="message-attachments"><IconFileText size={14} />{legacyFiles} historical {legacyFiles === 1 ? "file" : "files"}</span>}
-  </>;
+  const imageDescriptors = attachments.filter(
+    (attachment) => attachment.kind === "image",
+  ).length;
+  const fileDescriptors = attachments.filter(
+    (attachment) => attachment.kind === "file",
+  ).length;
+  const legacyImages = Math.max(
+    0,
+    (message.attachmentCount ?? 0) - imageDescriptors,
+  );
+  const legacyFiles = Math.max(
+    0,
+    (message.fileAttachmentCount ?? 0) - fileDescriptors,
+  );
+  return (
+    <>
+      {attachments.length > 0 && (
+        <div
+          className="message-attachment-list"
+          aria-label={`${attachments.length} viewable attachments`}
+        >
+          {attachments.map((attachment) => (
+            <button
+              className="message-attachment-row"
+              type="button"
+              key={`${attachment.sourceEntryId}:${attachment.index}`}
+              onClick={(event) => onOpen(attachment, event.currentTarget)}
+              aria-label={`Open ${attachment.name}`}
+            >
+              <AttachmentThumbnail attachment={attachment} />
+              <span className="message-attachment-copy">
+                <strong title={attachment.name}>{attachment.name}</strong>
+                <small>
+                  {attachment.mimeType} · {formatBytes(attachment.size)}
+                </small>
+              </span>
+              <IconChevronRight
+                className="message-attachment-chevron"
+                size={15}
+                aria-hidden="true"
+              />
+            </button>
+          ))}
+        </div>
+      )}
+      {Boolean(legacyImages) && (
+        <span className="message-attachments">
+          <IconPhoto size={14} />
+          {legacyImages} historical {legacyImages === 1 ? "image" : "images"}
+        </span>
+      )}
+      {Boolean(legacyFiles) && (
+        <span className="message-attachments">
+          <IconFileText size={14} />
+          {legacyFiles} historical {legacyFiles === 1 ? "file" : "files"}
+        </span>
+      )}
+    </>
+  );
 }
 
-function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentReadModel }) {
+function AttachmentThumbnail({
+  attachment,
+}: {
+  attachment: MessageAttachmentReadModel;
+}) {
   const elementRef = useRef<HTMLSpanElement>(null);
   const [source, setSource] = useState("");
 
@@ -1947,9 +3321,15 @@ function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentRead
     if (attachment.kind !== "image") return;
     const controller = new AbortController();
     const load = () => {
-      void runtimeStore.conversationAttachment(attachment.sourceEntryId, attachment.index, controller.signal)
+      void runtimeStore
+        .conversationAttachment(
+          attachment.sourceEntryId,
+          attachment.index,
+          controller.signal,
+        )
         .then((content) => {
-          if (content.kind === "image") setSource(`data:${content.mimeType};base64,${content.data}`);
+          if (content.kind === "image")
+            setSource(`data:${content.mimeType};base64,${content.data}`);
         })
         .catch(() => undefined);
     };
@@ -1958,11 +3338,14 @@ function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentRead
       load();
       return () => controller.abort();
     }
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      observer.disconnect();
-      load();
-    }, { rootMargin: "120px" });
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        observer.disconnect();
+        load();
+      },
+      { rootMargin: "120px" },
+    );
     observer.observe(element);
     return () => {
       observer.disconnect();
@@ -1970,11 +3353,21 @@ function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentRead
     };
   }, [attachment.kind, attachment.sourceEntryId, attachment.index]);
 
-  return <span ref={elementRef} className={`message-attachment-kind${source ? " has-preview" : ""}`}>
-    {source ? <img src={source} alt="" /> : attachment.kind === "image" ? <IconPhoto size={15} /> : <IconFileText size={15} />}
-  </span>;
+  return (
+    <span
+      ref={elementRef}
+      className={`message-attachment-kind${source ? " has-preview" : ""}`}
+    >
+      {source ? (
+        <img src={source} alt="" />
+      ) : attachment.kind === "image" ? (
+        <IconPhoto size={15} />
+      ) : (
+        <IconFileText size={15} />
+      )}
+    </span>
+  );
 }
-
 
 function TranscriptActivity({
   kind,
@@ -1989,42 +3382,78 @@ function TranscriptActivity({
   const attemptLabel = attempt
     ? `Attempt ${attempt}${maxAttempts ? ` of ${maxAttempts}` : ""}`
     : "Retrying";
-  return <section className={`transcript-activity is-${kind}`} role="status" aria-live="polite">
-    <span className="transcript-activity-glyph" aria-hidden="true"><IconLoader2 size={16} /></span>
-    <span className="transcript-activity-copy">
-      <strong>{retry ? "Retrying model request" : "Compacting context"}</strong>
-      <span>{retry
-        ? `${attempt ? `${attemptLabel}. ` : ""}The previous request failed temporarily.`
-        : "Summarizing earlier messages. The conversation will continue automatically."}</span>
-    </span>
-    <span className="transcript-activity-meta">{retry ? attemptLabel : "Working"}</span>
-    <span className="transcript-activity-progress" aria-hidden="true" />
-  </section>;
+  return (
+    <section
+      className={`transcript-activity is-${kind}`}
+      role="status"
+      aria-live="polite"
+    >
+      <span className="transcript-activity-glyph" aria-hidden="true">
+        <IconLoader2 size={16} />
+      </span>
+      <span className="transcript-activity-copy">
+        <strong>
+          {retry ? "Retrying model request" : "Compacting context"}
+        </strong>
+        <span>
+          {retry
+            ? `${attempt ? `${attemptLabel}. ` : ""}The previous request failed temporarily.`
+            : "Summarizing earlier messages. The conversation will continue automatically."}
+        </span>
+      </span>
+      <span className="transcript-activity-meta">
+        {retry ? attemptLabel : "Working"}
+      </span>
+      <span className="transcript-activity-progress" aria-hidden="true" />
+    </section>
+  );
 }
 
-function CompactionDisclosure({ message, onOpen }: { message: MessageReadModel; onOpen: (message: MessageReadModel) => void }) {
+function CompactionDisclosure({
+  message,
+  onOpen,
+}: {
+  message: MessageReadModel;
+  onOpen: (message: MessageReadModel) => void;
+}) {
   const compaction = message.compaction!;
   const timestamp = formatMessageTime(message.createdAt);
   const facts = [
     `~${formatCompactNumber(compaction.contextAfterTokens)} tokens after`,
-    compaction.sourceEntryCount !== undefined ? `${compaction.sourceEntryCount.toLocaleString()} source entries` : "",
-  ].filter(Boolean).join(" · ");
-  return <button className="compaction-disclosure" type="button" onClick={() => onOpen(message)}>
-    <span className="compaction-disclosure-chevron" aria-hidden="true"><IconChevronDown size={14} /></span>
-    <span className="compaction-disclosure-title">
-      <strong>Context compacted</strong>
-      <span>{facts} · View details</span>
-    </span>
-    {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
-  </button>;
+    compaction.sourceEntryCount !== undefined
+      ? `${compaction.sourceEntryCount.toLocaleString()} source entries`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <button
+      className="compaction-disclosure"
+      type="button"
+      onClick={() => onOpen(message)}
+    >
+      <span className="compaction-disclosure-chevron" aria-hidden="true">
+        <IconChevronDown size={14} />
+      </span>
+      <span className="compaction-disclosure-title">
+        <strong>Context compacted</strong>
+        <span>{facts} · View details</span>
+      </span>
+      {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
+    </button>
+  );
 }
 
-
 function SystemDisclosure({ message }: { message: MessageReadModel }) {
-  return <details className="system-disclosure">
-    <summary><strong>System context</strong>{message.systemSource && <span>{message.systemSource}</span>}</summary>
-    <p>{message.text}</p>
-  </details>;
+  return (
+    <details className="system-disclosure">
+      <summary>
+        <strong>System context</strong>
+        {message.systemSource && <span>{message.systemSource}</span>}
+      </summary>
+      <p>{message.text}</p>
+    </details>
+  );
 }
 
 async function readPastedImages(
@@ -2032,22 +3461,33 @@ async function readPastedImages(
   current: PastedImage[],
 ): Promise<PastedImage[] | undefined> {
   const files = [...event.clipboardData.items]
-    .filter((item) => item.kind === "file"
-      && ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(item.type))
+    .filter(
+      (item) =>
+        item.kind === "file" &&
+        ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
+          item.type,
+        ),
+    )
     .flatMap((item) => item.getAsFile() ?? []);
   if (!files.length) return undefined;
   event.preventDefault();
-  if (files.length > 4 - current.length) throw new Error("You can attach up to 4 images.");
-  if (files.some((file) => file.size > 5 * 1024 * 1024)
-    || files.reduce((total, file) => total + file.size, 0) + imageBytes(current) > 15 * 1024 * 1024) {
+  if (files.length > 4 - current.length)
+    throw new Error("You can attach up to 4 images.");
+  if (
+    files.some((file) => file.size > 5 * 1024 * 1024) ||
+    files.reduce((total, file) => total + file.size, 0) + imageBytes(current) >
+      15 * 1024 * 1024
+  ) {
     throw new Error("Images must be 5 MB each and 15 MB total.");
   }
   try {
-    const pasted = await Promise.all(files.map(async (file) => ({
-      id: crypto.randomUUID(),
-      mimeType: file.type as PromptImage["mimeType"],
-      data: await fileBase64(file),
-    })));
+    const pasted = await Promise.all(
+      files.map(async (file) => ({
+        id: crypto.randomUUID(),
+        mimeType: file.type as PromptImage["mimeType"],
+        data: await fileBase64(file),
+      })),
+    );
     return [...current, ...pasted];
   } catch {
     throw new Error("The pasted image could not be read.");
@@ -2059,55 +3499,84 @@ async function readDroppedFiles(
   currentImages: PastedImage[],
   currentFiles: DroppedTextFile[],
 ): Promise<{ images: PastedImage[]; files: DroppedTextFile[] }> {
-  const imageFiles = dropped.filter((file) => ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type));
+  const imageFiles = dropped.filter((file) =>
+    ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type),
+  );
   const textFiles = dropped.filter((file) => !imageFiles.includes(file));
   const images = imageFiles.length
     ? await readImageFiles(imageFiles, currentImages)
     : currentImages;
   if (!textFiles.length) return { images, files: currentFiles };
-  if (currentFiles.length + textFiles.length > 100) throw new Error("You can attach up to 100 text files.");
-  if (textFiles.some((file) => file.size === 0)) throw new Error("Empty files cannot be attached.");
-  const totalBytes = currentFiles.reduce((total, file) => total + file.size, 0)
-    + textFiles.reduce((total, file) => total + file.size, 0);
-  if (totalBytes > 10 * 1024 * 1024) throw new Error("Text files cannot exceed 10 MB total.");
-  if ((currentFiles.length + textFiles.length > 4 || totalBytes > 512 * 1024)
-    && !window.confirm("These files may use substantial model context. Attach them anyway?")) {
+  if (currentFiles.length + textFiles.length > 100)
+    throw new Error("You can attach up to 100 text files.");
+  if (textFiles.some((file) => file.size === 0))
+    throw new Error("Empty files cannot be attached.");
+  const totalBytes =
+    currentFiles.reduce((total, file) => total + file.size, 0) +
+    textFiles.reduce((total, file) => total + file.size, 0);
+  if (totalBytes > 10 * 1024 * 1024)
+    throw new Error("Text files cannot exceed 10 MB total.");
+  if (
+    (currentFiles.length + textFiles.length > 4 || totalBytes > 512 * 1024) &&
+    !window.confirm(
+      "These files may use substantial model context. Attach them anyway?",
+    )
+  ) {
     return { images: currentImages, files: currentFiles };
   }
-  const decoded = await Promise.all(textFiles.map(async (file): Promise<DroppedTextFile> => {
-    if (/[\/\\\0]/.test(file.name)) throw new Error(`${file.name || "This file"} has an unsupported name.`);
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    if (bytes.includes(0)) throw new Error(`${file.name} appears to be binary.`);
-    let text: string;
-    try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
-    catch { throw new Error(`${file.name} is not valid UTF-8 text.`); }
-    return {
-      id: crypto.randomUUID(),
-      name: file.name.slice(0, 255),
-      text,
-      size: bytes.byteLength,
-      ...(file.type ? { mimeType: file.type.slice(0, 120) } : {}),
-    };
-  }));
+  const decoded = await Promise.all(
+    textFiles.map(async (file): Promise<DroppedTextFile> => {
+      if (/[\/\\\0]/.test(file.name))
+        throw new Error(`${file.name || "This file"} has an unsupported name.`);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.includes(0))
+        throw new Error(`${file.name} appears to be binary.`);
+      let text: string;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        throw new Error(`${file.name} is not valid UTF-8 text.`);
+      }
+      return {
+        id: crypto.randomUUID(),
+        name: file.name.slice(0, 255),
+        text,
+        size: bytes.byteLength,
+        ...(file.type ? { mimeType: file.type.slice(0, 120) } : {}),
+      };
+    }),
+  );
   return { images, files: [...currentFiles, ...decoded] };
 }
 
-async function readImageFiles(files: File[], current: PastedImage[]): Promise<PastedImage[]> {
-  if (files.length > 4 - current.length) throw new Error("You can attach up to 4 images.");
-  if (files.some((file) => file.size > 5 * 1024 * 1024)
-    || files.reduce((total, file) => total + file.size, 0) + imageBytes(current) > 15 * 1024 * 1024) {
+async function readImageFiles(
+  files: File[],
+  current: PastedImage[],
+): Promise<PastedImage[]> {
+  if (files.length > 4 - current.length)
+    throw new Error("You can attach up to 4 images.");
+  if (
+    files.some((file) => file.size > 5 * 1024 * 1024) ||
+    files.reduce((total, file) => total + file.size, 0) + imageBytes(current) >
+      15 * 1024 * 1024
+  ) {
     throw new Error("Images must be 5 MB each and 15 MB total.");
   }
-  const added = await Promise.all(files.map(async (file) => ({
-    id: crypto.randomUUID(),
-    mimeType: file.type as PromptImage["mimeType"],
-    data: await fileBase64(file),
-  })));
+  const added = await Promise.all(
+    files.map(async (file) => ({
+      id: crypto.randomUUID(),
+      mimeType: file.type as PromptImage["mimeType"],
+      data: await fileBase64(file),
+    })),
+  );
   return [...current, ...added];
 }
 
 function imageBytes(images: PromptImage[]): number {
-  return images.reduce((total, image) => total + Math.floor(image.data.length * 3 / 4), 0);
+  return images.reduce(
+    (total, image) => total + Math.floor((image.data.length * 3) / 4),
+    0,
+  );
 }
 
 function formatBytes(bytes: number): string {
@@ -2125,7 +3594,13 @@ function fileBase64(file: File): Promise<string> {
   });
 }
 
-function ToolDisclosure({ message, now }: { message: MessageReadModel; now: number }) {
+function ToolDisclosure({
+  message,
+  now,
+}: {
+  message: MessageReadModel;
+  now: number;
+}) {
   const name = message.tool?.name || "Tool";
   const status = message.tool?.status || "completed";
   const input = message.tool?.input;
@@ -2133,30 +3608,66 @@ function ToolDisclosure({ message, now }: { message: MessageReadModel; now: numb
   const inputPreview = input?.replace(/\s+/g, " ").trim();
   const durationMs = toolElapsedDuration(message, now);
 
-  return <details className={`tool-disclosure is-${status}`}>
-    <summary>
-      <IconTool size={15} />
-      <span className="tool-summary-copy">
-        <strong>{name}</strong>
-        {inputPreview && <code>{inputPreview}</code>}
-      </span>
-      <span className="tool-status">
-        {durationMs === undefined
-          ? status
-          : <><span className="sr-only">{status}, </span><time dateTime={`PT${durationMs / 1_000}S`}>{formatToolDuration(durationMs)}</time></>}
-      </span>
-    </summary>
-    <div className="tool-details">
-      <section><small>Input</small><pre>{input || "No input"}</pre></section>
-      <section><small>Output</small><pre>{output || (status === "running" ? "Waiting for output…" : "No output")}</pre></section>
-    </div>
-  </details>;
+  return (
+    <details className={`tool-disclosure is-${status}`}>
+      <summary>
+        <IconTool size={15} />
+        <span className="tool-summary-copy">
+          <strong>{name}</strong>
+          {inputPreview && <code>{inputPreview}</code>}
+        </span>
+        <span className="tool-status">
+          {durationMs === undefined ? (
+            status
+          ) : (
+            <>
+              <span className="sr-only">{status}, </span>
+              <time dateTime={`PT${durationMs / 1_000}S`}>
+                {formatToolDuration(durationMs)}
+              </time>
+            </>
+          )}
+        </span>
+      </summary>
+      <div className="tool-details">
+        <section>
+          <small>Input</small>
+          <pre>{input || "No input"}</pre>
+        </section>
+        <section>
+          <small>Output</small>
+          <pre>
+            {output ||
+              (status === "running" ? "Waiting for output…" : "No output")}
+          </pre>
+        </section>
+      </div>
+    </details>
+  );
 }
 
-function ExtensionUiSurface({ runtime }: { runtime: NonNullable<RuntimeStoreSnapshot["runtime"]> }) {
-  const widgets = runtime.extensionUi.widgets.filter((widget) => (widget.placement ?? "aboveEditor") === "aboveEditor");
+function ExtensionUiSurface({
+  runtime,
+}: {
+  runtime: NonNullable<RuntimeStoreSnapshot["runtime"]>;
+}) {
+  const widgets = runtime.extensionUi.widgets.filter(
+    (widget) => (widget.placement ?? "aboveEditor") === "aboveEditor",
+  );
   if (widgets.length === 0) return null;
-  return <div className="extension-ui extension-ui-aboveEditor">
-    {widgets.map((widget) => <section className="extension-widget" key={widget.key} aria-label={widget.key}>{widget.lines.map((line, index) => <p key={index}>{line}</p>)}</section>)}
-  </div>;
+  return (
+    <div className="extension-ui extension-ui-aboveEditor">
+      {widgets.map((widget) => (
+        <section
+          className="extension-widget"
+          key={widget.key}
+          aria-label={widget.key}
+        >
+          {widget.lines.map((line, index) => (
+            <p key={index}>{line}</p>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
 }

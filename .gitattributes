@@ -1,0 +1,3 @@
+# The repository stores text with LF endings on every platform. Without this,
+# a Windows editor can rewrite whole files as CRLF and bury real edits in churn.
+* text=auto eol=lf

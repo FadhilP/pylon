@@ -11,7 +11,8 @@ export const RELEASES: Release[] = [
     version: "1.12.1",
     date: "Aug 25, 2026",
     title: "Provider sign-in reliability",
-    summary: "A maintenance release restores live OAuth sign-in links and device codes in provider settings.",
+    summary:
+      "A maintenance release restores live OAuth sign-in links and device codes in provider settings.",
     notes: [
       "Fixed provider authentication updates so browser sign-in links, device codes, status changes, and completion state reach the web client while login is in progress.",
     ],
@@ -21,7 +22,8 @@ export const RELEASES: Release[] = [
     version: "1.12.0",
     date: "Aug 25, 2026",
     title: "Attachment previews and richer code review",
-    summary: "Pylon makes conversation attachments directly inspectable, upgrades file and diff review, and preserves the Git branch associated with each completed turn.",
+    summary:
+      "Pylon makes conversation attachments directly inspectable, upgrades file and diff review, and preserves the Git branch associated with each completed turn.",
     notes: [
       "Made conversation image and text-file attachments inspectable from their original messages with lazy image thumbnails, metadata, full previews, retry handling, and downloads, while loading content only from the active session branch.",
       "Upgraded workspace files and Timeline checkpoint diffs with theme-aware code rendering, unified diffs, expandable context, line selection, and line-centered navigation, while retaining safe fallbacks for truncated or unsupported content.",
@@ -32,13 +34,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
-
   {
     version: "1.11.0",
     date: "Aug 19, 2026",
     title: "Live agents, durable drafts, and active policy controls",
-    summary: "Pylon makes delegated work easier to follow, preserves unfinished prompts across reloads, and lets runtime and tool policies change without waiting for active sessions to finish.",
+    summary:
+      "Pylon makes delegated work easier to follow, preserves unfinished prompts across reloads, and lets runtime and tool policies change without waiting for active sessions to finish.",
     notes: [
       "Streamed live partial responses, usage, activity, and terminal results from background spawned agents and sessions into their original delegated runs, with strict parent, child, tool-call, and run correlation.",
       "Recorded live and completed tool-call durations for Grunt, Scout, and Spawn, and redesigned the Agents drawer with status filters, aggregate counts and cost, clearer run rows, conversation-style spawned threads, and timed expandable tool details.",
@@ -49,13 +50,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
-
   {
     version: "1.10.0",
     date: "Aug 17, 2026",
     title: "General conversations and native extension management",
-    summary: "Pylon adds project-independent General sessions, Pi-native extension controls, persistent tool-call timing, and more compact StateQL output.",
+    summary:
+      "Pylon adds project-independent General sessions, Pi-native extension controls, persistent tool-call timing, and more compact StateQL output.",
     notes: [
       "Added a dedicated General area for conversations rooted in the configured home directory, keeping them separate from registered projects and their workspace context.",
       "Added an Extensions settings panel for discovering, enabling, disabling, installing, removing, and reloading global or trusted-project Pi extensions and npm or git packages, with explicit arbitrary-code warnings and idle-session safeguards.",
@@ -65,12 +65,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "1.9.0",
     date: "Aug 14, 2026",
     title: "Safer web research with tighter cost and context control",
-    summary: "Pylon expands Web Scout with optional search and sturdier isolated browsing, caps delegated research costs, and trims Advisor and always-on context overhead.",
+    summary:
+      "Pylon expands Web Scout with optional search and sturdier isolated browsing, caps delegated research costs, and trims Advisor and always-on context overhead.",
     notes: [
       "Added an optional OpenAI / Exa search setting for Web Scout, using an existing OpenAI/Codex subscription or API key when available and otherwise Exa, while requiring every discovered result page to be verified through the isolated Helios browser.",
       "Strengthened Web Scout with a randomized run-scoped loopback proxy, direct connections to validated public addresses, bounded plain-text fallback for snapshot failures, safer continuation handling, and tighter request, tunnel, action, and navigation budgets.",
@@ -82,12 +82,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "1.8.1",
     date: "Aug 13, 2026",
     title: "Smarter tool discovery and background-run tracking",
-    summary: "Pylon keeps the default tool surface leaner, makes deferred capabilities easier to find, adapts guarded editing to model pricing, and improves background-run and database visibility.",
+    summary:
+      "Pylon keeps the default tool surface leaner, makes deferred capabilities easier to find, adapts guarded editing to model pricing, and improves background-run and database visibility.",
     notes: [
       "Expanded tool-policy usage metadata across bundled packages so search_tools can match inactive capabilities from package guidance or registered descriptions, while deferring more specialist tools such as indexed search, durable memory, Papercuts, and Grunt until needed.",
       "Made revision-guarded numbered read and edit selection session-aware: models whose advertised output pricing stays below 3× input pricing use Pi's native tools, while higher-ratio or missing pricing retains numbered edits and model changes re-evaluate the choice.",
@@ -97,12 +97,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "1.8.0",
     date: "Aug 12, 2026",
     title: "Background agents and smoother compaction",
-    summary: "Pylon adds background Spawn runs, makes compaction handoffs more reliable, and improves guarded editing and session efficiency.",
+    summary:
+      "Pylon adds background Spawn runs, makes compaction handoffs more reliable, and improves guarded editing and session efficiency.",
     notes: [
       "Added optional background execution to spawn_agent and spawn_session, with immediate run references, later status or cancellation, bounded result collection, and safe rejection of interactive child prompts.",
       "Made automatic compaction handoffs survive provider-specific abort responses, resume cleanly after the hidden checkpoint, and settle interrupted web runs without stale continuation state or misleading activity.",
@@ -112,12 +112,12 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "1.7.0",
     date: "Aug 12, 2026",
     title: "Faster automation and richer workflow inspection",
-    summary: "Pylon makes Helios faster and easier to set up, brings Papercuts and compaction details into the web workspace, and sharpens editing, session feedback, and runtime reliability.",
+    summary:
+      "Pylon makes Helios faster and easier to set up, brings Papercuts and compaction details into the web workspace, and sharpens editing, session feedback, and runtime reliability.",
     notes: [
       "Added consent-gated Android tooling management to Pylon Settings, with repository-pinned Appium and UiAutomator2 installation, status, repair, removal, rollback, and session-aware locking in Pylon's own data directory, while retaining support for manually managed Appium.",
       "Added a confirmed Helios Android package-inventory action that verifies emulator identity and returns a bounded, validated list of package IDs without opening an Appium session.",
@@ -138,7 +138,8 @@ export const RELEASES: Release[] = [
     version: "1.6.0",
     date: "Aug 9, 2026",
     title: "Memory V6, Android automation, and deeper workflow control",
-    summary: "Pylon rebuilds continuity around structured compaction and activated durable memory, adds Android-emulator automation and a Papercut backlog, and substantially refines web sessions, safety policy, delegation, database work, storage, and editing.",
+    summary:
+      "Pylon rebuilds continuity around structured compaction and activated durable memory, adds Android-emulator automation and a Papercut backlog, and substantially refines web sessions, safety policy, delegation, database work, storage, and editing.",
     notes: [
       "Reworked deterministic Continuity compaction around structured V3 summaries that preserve the latest request, authoritative Work state, verification, failures, and observed file activity, with settings for when compaction begins and how much recent raw history is retained.",
       "Allowed eligible unfinished tool-using runs to compact between tool batches and continue automatically from the checkpoint without interrupting an active model response or tool.",
@@ -174,7 +175,8 @@ export const RELEASES: Release[] = [
     version: "1.5.0",
     date: "Aug 4, 2026",
     title: "Smarter continuity and faster sessions",
-    summary: "Pylon adds boundary-aware context compaction and historical recall, stronger durable memory controls, configurable delegated reasoning, and broad runtime performance improvements.",
+    summary:
+      "Pylon adds boundary-aware context compaction and historical recall, stronger durable memory controls, configurable delegated reasoning, and broad runtime performance improvements.",
     notes: [
       "Added deterministic Continuity compaction, bounded session recall across execution handoffs and validated lineage, owner reassociation, and clearer durable-memory inspection and management.",
       "Added package settings for globally enabling durable memory, selecting eligible Grunt thinking levels, and restricting Spawn child models and private-agent thinking.",
@@ -186,7 +188,8 @@ export const RELEASES: Release[] = [
     version: "1.4.0",
     date: "Aug 3, 2026",
     title: "Persistent agents and configurable tools",
-    summary: "Pylon adds resumable child conversations, deeper session diagnostics, and direct control over which tools stay active, deferred, or disabled.",
+    summary:
+      "Pylon adds resumable child conversations, deeper session diagnostics, and direct control over which tools stay active, deferred, or disabled.",
     notes: [
       "Added pi-spawn with private resumable agents plus inspectable child sessions that can be created, adopted, continued, and explicitly targeted at another trusted project.",
       "Integrated spawned work into the web workspace with parent links, stable agent identities and colors, live activity, conversation history, usage, and clearer completion state.",
@@ -198,7 +201,8 @@ export const RELEASES: Release[] = [
     version: "1.3.1",
     date: "Aug 2, 2026",
     title: "Web audio compatibility",
-    summary: "A maintenance release fixed web notification audio compatibility and refreshed the published package metadata.",
+    summary:
+      "A maintenance release fixed web notification audio compatibility and refreshed the published package metadata.",
     notes: [
       "Corrected closed AudioContext checks so web notification sounds remain compatible with the project's browser typings.",
       "Removed superseded internal Continuity design documents.",
@@ -208,7 +212,8 @@ export const RELEASES: Release[] = [
     version: "1.3.0",
     date: "Aug 2, 2026",
     title: "Cache-friendly context and unified policy controls",
-    summary: "Pylon reduces avoidable context churn, preserves session diagnostics, and makes runtime policy easier to manage across global, project, and session scopes.",
+    summary:
+      "Pylon reduces avoidable context churn, preserves session diagnostics, and makes runtime policy easier to manage across global, project, and session scopes.",
     notes: [
       "Made Sieve Standard V2 the default with steadier active-result projections, fixed shared-budget tiers, detailed churn attribution, and Standard V1 compatibility alongside experimental stable epochs.",
       "Persisted cumulative Sieve transformation, recall, per-tool, and stability statistics across reloads and branch navigation while rebuilding recall sources from the active raw session.",
@@ -221,7 +226,8 @@ export const RELEASES: Release[] = [
     version: "1.2.2",
     date: "Aug 2, 2026",
     title: "Session-search compatibility",
-    summary: "A maintenance release aligned package metadata and compatibility coverage with the new deferred historical-session search tool.",
+    summary:
+      "A maintenance release aligned package metadata and compatibility coverage with the new deferred historical-session search tool.",
     notes: [
       "Updated the published package version and lockfile metadata.",
       "Corrected Pylon's compatibility test to include search_sessions in Discover's deferred tool catalog.",
@@ -231,7 +237,8 @@ export const RELEASES: Release[] = [
     version: "1.2.1",
     date: "Aug 2, 2026",
     title: "Bounded session search and Sieve rollover",
-    summary: "Pylon adds safer access to historical Pi sessions and gives experimental stable Sieve projections a configurable context rollover boundary.",
+    summary:
+      "Pylon adds safer access to historical Pi sessions and gives experimental stable Sieve projections a configurable context rollover boundary.",
     notes: [
       "Added the deferred search_sessions tool to Discover with current-workspace defaults, bounded excerpts, best-effort credential redaction, and explicit interactive confirmation.",
       "Consolidated historical-session search in Discover and removed Scout's duplicate session-search path.",
@@ -243,7 +250,8 @@ export const RELEASES: Release[] = [
     version: "1.2.0",
     date: "Aug 1, 2026",
     title: "Stable context and database diagnostics",
-    summary: "Pylon keeps projected tool history cache-stable, coordinates package safety signals more reliably, and expands database and runtime inspection.",
+    summary:
+      "Pylon keeps projected tool history cache-stable, coordinates package safety signals more reliably, and expands database and runtime inspection.",
     notes: [
       "Added optional experimental stable Sieve projection epochs with safe recall, deduplication, configurable rollover controls, and detailed cache-health telemetry while keeping the standard policy as the default.",
       "Coordinated Guard decisions, Grunt and package mutations, Heartbeat jobs, Timeline checkpoints, and verification invalidation so blocked or in-flight work no longer produces stale completion state.",
@@ -256,7 +264,8 @@ export const RELEASES: Release[] = [
     version: "1.1.4",
     date: "Aug 1, 2026",
     title: "Safer reconnects and provider setup",
-    summary: "Pylon keeps browser and file views in sync across runtime replacements while making provider authentication easier to follow.",
+    summary:
+      "Pylon keeps browser and file views in sync across runtime replacements while making provider authentication easier to follow.",
     notes: [
       "Ignored stale browser and file responses after the runtime disconnects, reconnects, or changes session generation.",
       "Grouped providers by connection state and improved sign-in, device-code, retry, cancellation, and manual authentication flows.",
@@ -267,7 +276,8 @@ export const RELEASES: Release[] = [
     version: "1.1.3",
     date: "Aug 1, 2026",
     title: "Clearer web-first setup",
-    summary: "The project guide now leads with Pylon's web workspace, model recommendations, and runtime configuration.",
+    summary:
+      "The project guide now leads with Pylon's web workspace, model recommendations, and runtime configuration.",
     notes: [
       "Reworked setup guidance around the recommended web experience and cost-efficient specialist model workflow.",
       "Clarified project directory, port, update-check, and alternative terminal setup behavior.",
@@ -278,7 +288,8 @@ export const RELEASES: Release[] = [
     version: "1.1.2",
     date: "Aug 1, 2026",
     title: "Cross-platform verification checks",
-    summary: "A maintenance release aligned verification coverage with platform-specific shell behavior.",
+    summary:
+      "A maintenance release aligned verification coverage with platform-specific shell behavior.",
     notes: [
       "Corrected Verify's runtime-policy test expectation on non-Windows systems.",
       "Removed internal publishing and repository-layout notes from the user setup guide.",
@@ -288,7 +299,8 @@ export const RELEASES: Release[] = [
     version: "1.1.1",
     date: "Aug 1, 2026",
     title: "More reliable Timeline checks",
-    summary: "A maintenance release made Timeline safety checks more resilient during temporary-directory cleanup.",
+    summary:
+      "A maintenance release made Timeline safety checks more resilient during temporary-directory cleanup.",
     notes: [
       "Added bounded retries when Timeline safety tests remove temporary repositories.",
       "Refined the recommended Scout model configuration in the setup guide.",
@@ -298,7 +310,8 @@ export const RELEASES: Release[] = [
     version: "1.1.0",
     date: "Jul 31, 2026",
     title: "Safe database workflows",
-    summary: "Pylon adds guarded StateQL database access, a smoother install and update path, and more resilient web sessions.",
+    summary:
+      "Pylon adds guarded StateQL database access, a smoother install and update path, and more resilient web sessions.",
     notes: [
       "Added the deferred StateQL tool with connection profiles, read queries, materialized result handles, schema inspection, write plans, transactions, receipts, and bounded history.",
       "Added a Database inspector and masked credential prompts; submitted credentials stay scoped in server memory while connection changes and writes remain confirmation-gated.",
@@ -311,7 +324,8 @@ export const RELEASES: Release[] = [
     version: "1.0.2",
     date: "Jul 30, 2026",
     title: "Live subagent model settings",
-    summary: "Model changes made in the web app now reach active Advisor, Scout, and Grunt sessions without restarting the runtime.",
+    summary:
+      "Model changes made in the web app now reach active Advisor, Scout, and Grunt sessions without restarting the runtime.",
     notes: [
       "Hot-reloaded Advisor, Scout, and Grunt model settings without restarting the runtime.",
       "Kept the package settings view in sync after a successful update.",
@@ -322,14 +336,16 @@ export const RELEASES: Release[] = [
     version: "1.0.1",
     date: "Jul 30, 2026",
     title: "Release metadata refresh",
-    summary: "A small follow-up release aligning the published package and documentation with the 1.0 launch.",
+    summary:
+      "A small follow-up release aligning the published package and documentation with the 1.0 launch.",
     notes: ["Updated the package version and README release metadata."],
   },
   {
     version: "1.0.0",
     date: "Jul 30, 2026",
     title: "Pylon on the web",
-    summary: "Pylon gained a local web workspace while its Pi packages were adapted for shared browser and terminal use.",
+    summary:
+      "Pylon gained a local web workspace while its Pi packages were adapted for shared browser and terminal use.",
     notes: [
       "Added the local web app with conversations, projects, files, terminal, browser controls, settings, archives, and session history.",
       "Introduced a WebSocket runtime with persisted projections, project and session management, prompt attachments, and guarded workspace apply flows.",
@@ -341,7 +357,8 @@ export const RELEASES: Release[] = [
     version: "0.16.2",
     date: "Jul 23, 2026",
     title: "Safer subagent failures",
-    summary: "Subagent errors now use bounded failure messages in place of raw provider or process details.",
+    summary:
+      "Subagent errors now use bounded failure messages in place of raw provider or process details.",
     notes: [
       "Added bounded, sanitized failure messages for Advisor, Scout, and Grunt.",
       "Sanitized child-process error details before displaying or persisting them.",
@@ -352,7 +369,8 @@ export const RELEASES: Release[] = [
     version: "0.16.1",
     date: "Jul 22, 2026",
     title: "Broader code indexing",
-    summary: "The local source index learned another language and avoided unnecessary model work.",
+    summary:
+      "The local source index learned another language and avoided unnecessary model work.",
     notes: [
       "Added Dart files and symbols to the local code index.",
       "Reduced unnecessary index-tool exposure in model context.",
@@ -362,7 +380,8 @@ export const RELEASES: Release[] = [
     version: "0.16.0",
     date: "Jul 22, 2026",
     title: "Local code intelligence",
-    summary: "Pylon introduced a shared machine-local source index and made Timeline safer across repositories.",
+    summary:
+      "Pylon introduced a shared machine-local source index and made Timeline safer across repositories.",
     notes: [
       "Added SQLite-backed symbol_search and code_search with workspace-scoped, deduplicated repository indexing.",
       "Added index refresh, rebuild, and status commands while keeping rg, fd, and relationship search as live fallbacks.",
@@ -374,7 +393,8 @@ export const RELEASES: Release[] = [
     version: "0.15.0",
     date: "Jul 22, 2026",
     title: "Smarter tool discovery",
-    summary: "A broad workflow update reduced repeated context, deferred optional tools, and tightened subagent handoffs.",
+    summary:
+      "A broad workflow update reduced repeated context, deferred optional tools, and tightened subagent handoffs.",
     notes: [
       "Added pi-discover for bounded file, text, and relationship searches plus on-demand tool activation.",
       "Deferred optional browser and capture tools until search_tools selects them.",
@@ -387,13 +407,16 @@ export const RELEASES: Release[] = [
     date: "Jul 20, 2026",
     title: "Clearer Sieve markers",
     summary: "Pruned tool results now leave a more useful recovery marker.",
-    notes: ["Improved Sieve's omission marker while retaining exact sieve_recall recovery behavior."],
+    notes: [
+      "Improved Sieve's omission marker while retaining exact sieve_recall recovery behavior.",
+    ],
   },
   {
     version: "0.14.0",
     date: "Jul 19, 2026",
     title: "Session cleanup and active pruning",
-    summary: "Pylon began cleaning abandoned session work and could prune oversized results in the current turn.",
+    summary:
+      "Pylon began cleaning abandoned session work and could prune oversized results in the current turn.",
     notes: [
       "Added lease-aware garbage collection for Continuity work and Timeline checkpoint metadata.",
       "Added recoverable active-result pruning with sieve_recall for oversized current-turn tool output.",
@@ -404,7 +427,8 @@ export const RELEASES: Release[] = [
     version: "0.13.4",
     date: "Jul 19, 2026",
     title: "Configurable context pruning",
-    summary: "Sieve gained persistent policy controls and more robust output budgeting.",
+    summary:
+      "Sieve gained persistent policy controls and more robust output budgeting.",
     notes: [
       "Added saved Sieve mode, threshold, and configuration validation.",
       "Introduced age-based thresholds, retained-output budgets, and bounded giant-error tails.",
@@ -415,14 +439,18 @@ export const RELEASES: Release[] = [
     version: "0.13.3",
     date: "Jul 19, 2026",
     title: "Stable Advisor sessions",
-    summary: "Advisor no longer shared a child session in a way that could fail during an active turn.",
-    notes: ["Isolated Advisor calls from the session-sharing path that caused mid-turn errors."],
+    summary:
+      "Advisor no longer shared a child session in a way that could fail during an active turn.",
+    notes: [
+      "Isolated Advisor calls from the session-sharing path that caused mid-turn errors.",
+    ],
   },
   {
     version: "0.13.2",
     date: "Jul 19, 2026",
     title: "Token meter corrections",
-    summary: "A focused regression release corrected new token reporting and subagent guidance.",
+    summary:
+      "A focused regression release corrected new token reporting and subagent guidance.",
     notes: [
       "Fixed /tokens accounting and display edge cases.",
       "Corrected Continuity and Scout prompt regressions introduced by the cost-optimization work.",
@@ -442,7 +470,8 @@ export const RELEASES: Release[] = [
     version: "0.13.0",
     date: "Jul 19, 2026",
     title: "Lower-cost workflows",
-    summary: "Subagents and verification were tuned to spend less context while preserving bounded evidence.",
+    summary:
+      "Subagents and verification were tuned to spend less context while preserving bounded evidence.",
     notes: [
       "Reduced repeated parent context in Continuity, Grunt, and Scout handoffs.",
       "Improved bounded rg and fd search behavior used by Scout.",
@@ -453,7 +482,8 @@ export const RELEASES: Release[] = [
     version: "0.12.2",
     date: "Jul 18, 2026",
     title: "Sieve from turn one",
-    summary: "Tool-output filtering could now start immediately instead of waiting for an older conversation turn.",
+    summary:
+      "Tool-output filtering could now start immediately instead of waiting for an older conversation turn.",
     notes: [
       "Enabled Sieve classification on the first user turn.",
       "Kept fresh output protected while applying age-aware pruning as the session grows.",
@@ -463,7 +493,8 @@ export const RELEASES: Release[] = [
     version: "0.12.1",
     date: "Jul 18, 2026",
     title: "More precise output pruning",
-    summary: "Sieve moved from a simple size cutoff to age and budget-aware retention.",
+    summary:
+      "Sieve moved from a simple size cutoff to age and budget-aware retention.",
     notes: [
       "Added graduated thresholds based on tool-result age.",
       "Added a shared retained-output budget and bounded handling for giant error output.",
@@ -474,7 +505,8 @@ export const RELEASES: Release[] = [
     version: "0.12.0",
     date: "Jul 18, 2026",
     title: "Pi Conductor becomes Pylon",
-    summary: "The project was reorganized as a publishable workspace and introduced outbound tool-output pruning.",
+    summary:
+      "The project was reorganized as a publishable workspace and introduced outbound tool-output pruning.",
     notes: [
       "Renamed the bundle to Pylon and moved extensions into the packages workspace.",
       "Added pi-sieve to replace bulky old shell and search output only in outbound context.",
@@ -485,7 +517,8 @@ export const RELEASES: Release[] = [
     version: "0.11.1",
     date: "Jul 17, 2026",
     title: "Memory command polish",
-    summary: "A small follow-up made durable memory controls clearer and more consistent.",
+    summary:
+      "A small follow-up made durable memory controls clearer and more consistent.",
     notes: [
       "Improved memory enable, disable, and status behavior.",
       "Clarified memory guidance and result rendering.",
@@ -495,7 +528,8 @@ export const RELEASES: Release[] = [
     version: "0.11.0",
     date: "Jul 17, 2026",
     title: "Dedicated memory tools",
-    summary: "Continuity exposed durable memory as explicit, auditable actions instead of an indirect candidate flow.",
+    summary:
+      "Continuity exposed durable memory as explicit, auditable actions instead of an indirect candidate flow.",
     notes: [
       "Added memory list, add, replace, and remove actions with exact scope and key handling.",
       "Exposed current facts and pending candidates so duplicates can be avoided before a mutation.",
@@ -507,7 +541,8 @@ export const RELEASES: Release[] = [
     version: "0.10.9",
     date: "Jul 17, 2026",
     title: "Bounded Scout runs",
-    summary: "Scout's runner gained explicit ceilings and more reliable compact final findings.",
+    summary:
+      "Scout's runner gained explicit ceilings and more reliable compact final findings.",
     notes: [
       "Added a configurable per-call Scout cost ceiling and finalization pass.",
       "Added bounded tool-activity tracking and compact final report metadata.",
@@ -518,7 +553,8 @@ export const RELEASES: Release[] = [
     version: "0.10.8",
     date: "Jul 17, 2026",
     title: "Fresh Scout sessions",
-    summary: "Repository reconnaissance stopped accumulating stale child-session context.",
+    summary:
+      "Repository reconnaissance stopped accumulating stale child-session context.",
     notes: [
       "Started each Scout call in a fresh isolated child session.",
       "Required follow-ups to carry their relevant prior findings and unresolved gap explicitly.",
@@ -528,7 +564,8 @@ export const RELEASES: Release[] = [
     version: "0.10.7",
     date: "Jul 17, 2026",
     title: "Directory-scoped Guard approvals",
-    summary: "Remembered external-write decisions could cover a safe directory without approving an entire drive.",
+    summary:
+      "Remembered external-write decisions could cover a safe directory without approving an entire drive.",
     notes: [
       "Applied session and project approval to an external target's parent and descendants.",
       "Kept filesystem-root targets exact-path scoped and .env approvals file-specific.",
@@ -539,7 +576,8 @@ export const RELEASES: Release[] = [
     version: "0.10.6",
     date: "Jul 16, 2026",
     title: "Remembered safety decisions",
-    summary: "Guard gained durable, bounded approvals for repeated commands and external write locations.",
+    summary:
+      "Guard gained durable, bounded approvals for repeated commands and external write locations.",
     notes: [
       "Added per-session and per-project approval storage.",
       "Allowed directory-scoped approval for related external writes while keeping root targets exact.",
@@ -550,7 +588,8 @@ export const RELEASES: Release[] = [
     version: "0.10.5",
     date: "Jul 16, 2026",
     title: "Visible subagent failures",
-    summary: "Advisor and Scout failures now render as final failures instead of looking indefinitely active.",
+    summary:
+      "Advisor and Scout failures now render as final failures instead of looking indefinitely active.",
     notes: [
       "Added explicit failure state to Advisor and Scout tool rows.",
       "Kept failure output bounded and covered by extension rendering tests.",
@@ -560,7 +599,8 @@ export const RELEASES: Release[] = [
     version: "0.10.4",
     date: "Jul 16, 2026",
     title: "Reliable child cleanup",
-    summary: "Background and delegated processes were cleaned up more reliably at every lifecycle boundary.",
+    summary:
+      "Background and delegated processes were cleaned up more reliably at every lifecycle boundary.",
     notes: [
       "Fixed Grunt isolation cleanup after success, failure, cancellation, and timeout.",
       "Improved Heartbeat process-tree termination and job disposal on shutdown.",
@@ -571,7 +611,8 @@ export const RELEASES: Release[] = [
     version: "0.10.3",
     date: "Jul 16, 2026",
     title: "Lean repository search",
-    summary: "Scout's rg wrapper became more bounded and efficient for common repository searches.",
+    summary:
+      "Scout's rg wrapper became more bounded and efficient for common repository searches.",
     notes: [
       "Reduced unnecessary rg output and normalized bounded search arguments.",
       "Improved fallback guidance when external search tools are unavailable.",
@@ -581,7 +622,8 @@ export const RELEASES: Release[] = [
     version: "0.10.2",
     date: "Jul 15, 2026",
     title: "Lean Grunt handoffs",
-    summary: "Delegated implementation calls used a smaller, clearer parent handoff.",
+    summary:
+      "Delegated implementation calls used a smaller, clearer parent handoff.",
     notes: [
       "Reduced redundant instructions sent to Grunt workers.",
       "Kept worker constraints in the tool contract instead of repeating them in every prompt.",
@@ -591,7 +633,8 @@ export const RELEASES: Release[] = [
     version: "0.10.1",
     date: "Jul 15, 2026",
     title: "Better delegation and detection",
-    summary: "Grunt became easier to target and Verify learned more project layouts.",
+    summary:
+      "Grunt became easier to target and Verify learned more project layouts.",
     notes: [
       "Added suggested paths and clearer execution guidance for delegated workers.",
       "Improved Grunt model selection, status, and result handling.",
@@ -602,7 +645,8 @@ export const RELEASES: Release[] = [
     version: "0.10.0",
     date: "Jul 15, 2026",
     title: "Planning and memory reset",
-    summary: "Continuity's planning, clarification, and memory flows were consolidated into a more predictable model.",
+    summary:
+      "Continuity's planning, clarification, and memory flows were consolidated into a more predictable model.",
     notes: [
       "Rebuilt durable memory storage, validation, ownership, backups, and management commands.",
       "Standardized explicit plans as Goal, Approach, Constraints, and Steps while keeping ordinary task lists internal.",
@@ -614,7 +658,8 @@ export const RELEASES: Release[] = [
     version: "0.9.3",
     date: "Jul 15, 2026",
     title: "Simpler model setup",
-    summary: "Advisor, Scout, and Grunt configuration became consistent and easier to reset.",
+    summary:
+      "Advisor, Scout, and Grunt configuration became consistent and easier to reset.",
     notes: [
       "Kept optional subagent tools inactive until a model is selected or reset.",
       "Made reset consistently use the current main model and thinking level.",
@@ -625,7 +670,8 @@ export const RELEASES: Release[] = [
     version: "0.9.2",
     date: "Jul 15, 2026",
     title: "Safer Grunt isolation",
-    summary: "The experimental worker gained stronger worktree isolation and clearer operating limits.",
+    summary:
+      "The experimental worker gained stronger worktree isolation and clearer operating limits.",
     notes: [
       "Improved isolated worktree creation, application, and cleanup.",
       "Added stricter configuration and timeout handling for delegated runs.",
@@ -636,7 +682,8 @@ export const RELEASES: Release[] = [
     version: "0.9.1",
     date: "Jul 15, 2026",
     title: "Quieter workflow UI",
-    summary: "Long-running tools and task state became easier to scan in the terminal.",
+    summary:
+      "Long-running tools and task state became easier to scan in the terminal.",
     notes: [
       "Refined Advisor, Continuity, Focus, and Grunt tool rendering.",
       "Included subagent usage in Focus session totals.",
@@ -647,7 +694,8 @@ export const RELEASES: Release[] = [
     version: "0.9.0",
     date: "Jul 15, 2026",
     title: "Experimental Grunt workers",
-    summary: "Pylon gained an implementation worker for compact, self-contained delegated changes.",
+    summary:
+      "Pylon gained an implementation worker for compact, self-contained delegated changes.",
     notes: [
       "Added pi-grunt with direct and isolated execution modes.",
       "Added bounded worker context, model selection, time and turn limits, and structured results.",
@@ -658,14 +706,18 @@ export const RELEASES: Release[] = [
     version: "0.8.8",
     date: "Jul 14, 2026",
     title: "Sharper Scout requests",
-    summary: "Scout's tool contract better distinguished evidence gathering from design decisions.",
-    notes: ["Improved repository-scout prompt guidance for concrete scopes, anchors, citations, and stopping boundaries."],
+    summary:
+      "Scout's tool contract better distinguished evidence gathering from design decisions.",
+    notes: [
+      "Improved repository-scout prompt guidance for concrete scopes, anchors, citations, and stopping boundaries.",
+    ],
   },
   {
     version: "0.8.7",
     date: "Jul 14, 2026",
     title: "Shared worktree fingerprints",
-    summary: "Continuity and Timeline reused bounded Git state instead of repeatedly scanning the same worktree.",
+    summary:
+      "Continuity and Timeline reused bounded Git state instead of repeatedly scanning the same worktree.",
     notes: [
       "Added shared worktree identity and dirty-state tracking.",
       "Reduced repeated snapshot and completion checks across turns.",
@@ -676,7 +728,8 @@ export const RELEASES: Release[] = [
     version: "0.8.6",
     date: "Jul 14, 2026",
     title: "Smaller workflow context",
-    summary: "Core tools began returning less repeated state while preserving the information needed to continue work.",
+    summary:
+      "Core tools began returning less repeated state while preserving the information needed to continue work.",
     notes: [
       "Compacted Continuity context and todo updates.",
       "Reduced Scout and Verify result payloads.",
@@ -687,7 +740,8 @@ export const RELEASES: Release[] = [
     version: "0.8.5",
     date: "Jul 14, 2026",
     title: "Heartbeat lifecycle fix",
-    summary: "Background jobs no longer lost the context needed to report and settle correctly.",
+    summary:
+      "Background jobs no longer lost the context needed to report and settle correctly.",
     notes: [
       "Fixed Heartbeat context capture across asynchronous job updates.",
       "Added lifecycle coverage for completed, failed, and disposed background jobs.",
@@ -697,7 +751,8 @@ export const RELEASES: Release[] = [
     version: "0.8.4",
     date: "Jul 14, 2026",
     title: "Consistent plan mode",
-    summary: "Planning gates and Scout availability now agree across Pylon's coordinated packages.",
+    summary:
+      "Planning gates and Scout availability now agree across Pylon's coordinated packages.",
     notes: [
       "Fixed plan-mode state drifting between Continuity and the core tool coordinator.",
       "Kept approved read-only Scout capabilities available without reopening blocked mutation tools.",
@@ -708,7 +763,8 @@ export const RELEASES: Release[] = [
     version: "0.8.3",
     date: "Jul 14, 2026",
     title: "Parallel subagent stability",
-    summary: "Advisor and Scout calls stopped interfering when launched in the same turn.",
+    summary:
+      "Advisor and Scout calls stopped interfering when launched in the same turn.",
     notes: [
       "Separated per-call Advisor state used by concurrent consultations.",
       "Fixed Scout runner state and result handling for parallel calls.",
@@ -718,14 +774,18 @@ export const RELEASES: Release[] = [
     version: "0.8.2",
     date: "Jul 14, 2026",
     title: "Better Scout handoff context",
-    summary: "Continuity supplied clearer active-work context to repository reconnaissance.",
-    notes: ["Included the relevant Continuity goal and task state in Scout handoffs without exposing unrelated memory."],
+    summary:
+      "Continuity supplied clearer active-work context to repository reconnaissance.",
+    notes: [
+      "Included the relevant Continuity goal and task state in Scout handoffs without exposing unrelated memory.",
+    ],
   },
   {
     version: "0.8.1",
     date: "Jul 14, 2026",
     title: "Branch-aware Timeline",
-    summary: "Checkpoint compatibility became visible and safer around branches and detached commits.",
+    summary:
+      "Checkpoint compatibility became visible and safer around branches and detached commits.",
     notes: [
       "Recorded branch or detached-HEAD metadata with new checkpoints.",
       "Displayed compatible, unknown, and blocked restore states before mutation.",
@@ -737,7 +797,8 @@ export const RELEASES: Release[] = [
     version: "0.8.0",
     date: "Jul 14, 2026",
     title: "Faster browser workflows",
-    summary: "Helios browser sessions and Timeline checkpoints became more efficient and predictable.",
+    summary:
+      "Helios browser sessions and Timeline checkpoints became more efficient and predictable.",
     notes: [
       "Reduced repeated browser snapshots and Playwright process overhead.",
       "Improved browser session, tab, and capture lifecycle handling.",
@@ -749,7 +810,8 @@ export const RELEASES: Release[] = [
     version: "0.7.0",
     date: "Jul 14, 2026",
     title: "Consent-gated browser control",
-    summary: "Helios expanded from screenshots into a bounded browser session for Pylon and Scout.",
+    summary:
+      "Helios expanded from screenshots into a bounded browser session for Pylon and Scout.",
     notes: [
       "Added browser open, snapshot, click, type, select, scroll, screenshot, tab, and close actions through Playwright CLI.",
       "Added per-session consent, public-URL validation, element references, and a guarded public proxy.",
@@ -761,7 +823,8 @@ export const RELEASES: Release[] = [
     version: "0.6.1",
     date: "Jul 14, 2026",
     title: "Cleaner Scout and Focus state",
-    summary: "A small maintenance release reduced inactive tool noise and improved terminal context.",
+    summary:
+      "A small maintenance release reduced inactive tool noise and improved terminal context.",
     notes: [
       "Kept the Scout checkpoint helper inactive until needed.",
       "Added the current Git branch to the Focus footer.",
@@ -772,7 +835,8 @@ export const RELEASES: Release[] = [
     version: "0.6.0",
     date: "Jul 13, 2026",
     title: "Cheaper repository reconnaissance",
-    summary: "Scout became more selective while Timeline and package documentation were hardened.",
+    summary:
+      "Scout became more selective while Timeline and package documentation were hardened.",
     notes: [
       "Reduced Scout context and report overhead without dropping cited findings.",
       "Fixed automatic Timeline session naming and expanded checkpoint prompt coverage.",
@@ -784,7 +848,8 @@ export const RELEASES: Release[] = [
     version: "0.5.1",
     date: "Jul 13, 2026",
     title: "Continuity completion fixes",
-    summary: "Task completion and coordinated status updates became more reliable.",
+    summary:
+      "Task completion and coordinated status updates became more reliable.",
     notes: [
       "Fixed a Continuity update loop around settled work.",
       "Improved Pylon core tool-policy coordination and status cleanup.",
@@ -795,7 +860,8 @@ export const RELEASES: Release[] = [
     version: "0.5.0",
     date: "Jul 13, 2026",
     title: "Helios window capture",
-    summary: "Pylon added explicit, consented visual inspection of named Windows application windows.",
+    summary:
+      "Pylon added explicit, consented visual inspection of named Windows application windows.",
     notes: [
       "Added pi-helios with list-windows and capture-window tools.",
       "Required per-capture consent and bounded image size, format, and output location.",
@@ -806,7 +872,8 @@ export const RELEASES: Release[] = [
     version: "0.4.2",
     date: "Jul 13, 2026",
     title: "Faster verification",
-    summary: "Package checks reused shared discovery and avoided unnecessary repeated work.",
+    summary:
+      "Package checks reused shared discovery and avoided unnecessary repeated work.",
     notes: [
       "Split package discovery from package execution for faster root verification.",
       "Reduced duplicate Verify lifecycle updates.",
@@ -817,7 +884,8 @@ export const RELEASES: Release[] = [
     version: "0.4.1",
     date: "Jul 13, 2026",
     title: "Stable Continuity turns",
-    summary: "A focused bugfix stopped Continuity from repeatedly reopening settled work.",
+    summary:
+      "A focused bugfix stopped Continuity from repeatedly reopening settled work.",
     notes: [
       "Fixed the Continuity turn loop and expanded regression coverage.",
       "Improved running and settled status for Advisor and Scout.",
@@ -827,7 +895,8 @@ export const RELEASES: Release[] = [
     version: "0.4.0",
     date: "Jul 13, 2026",
     title: "Verification as a completion gate",
-    summary: "Verify became a coordinated, project-aware check runner instead of a thin command wrapper.",
+    summary:
+      "Verify became a coordinated, project-aware check runner instead of a thin command wrapper.",
     notes: [
       "Improved detection for package scripts and common project check commands.",
       "Added changed-worktree and whole-project verification modes with bounded results.",
@@ -839,7 +908,8 @@ export const RELEASES: Release[] = [
     version: "0.3.1",
     date: "Jul 13, 2026",
     title: "Consistent subagent rows",
-    summary: "Advisor and Scout now use the same compact terminal conventions while running and after completion.",
+    summary:
+      "Advisor and Scout now use the same compact terminal conventions while running and after completion.",
     notes: [
       "Aligned expanded and collapsed Advisor and Scout tool rendering.",
       "Removed duplicate report previews from collapsed rows.",
@@ -849,7 +919,8 @@ export const RELEASES: Release[] = [
     version: "0.3.0",
     date: "Jul 13, 2026",
     title: "Packages working together",
-    summary: "The original extensions gained shared lifecycle signals without losing standalone behavior.",
+    summary:
+      "The original extensions gained shared lifecycle signals without losing standalone behavior.",
     notes: [
       "Connected Verify results to Continuity completion and Timeline checkpoints.",
       "Added pre-approval Timeline checkpoints for destructive Guard decisions.",
@@ -861,7 +932,8 @@ export const RELEASES: Release[] = [
     version: "0.2.0",
     date: "Jul 13, 2026",
     title: "Plan handoffs and focused advice",
-    summary: "Planning, memory, Advisor context, and repository search became practical multi-session workflows.",
+    summary:
+      "Planning, memory, Advisor context, and repository search became practical multi-session workflows.",
     notes: [
       "Added planner-to-executor handoff with shared run metadata and approval choices.",
       "Introduced structured Continuity configuration and stronger durable-memory handling.",
@@ -873,7 +945,8 @@ export const RELEASES: Release[] = [
     version: "0.1.0",
     date: "Jul 12, 2026",
     title: "Initial Pi Conductor release",
-    summary: "The first release bundled a focused set of Pi workflow extensions and a low-noise terminal theme.",
+    summary:
+      "The first release bundled a focused set of Pi workflow extensions and a low-noise terminal theme.",
     notes: [
       "Shipped Advisor, Continuity, Focus, Guard, Heartbeat, Scout, Timeline, and Verify as one installable bundle.",
       "Added optional core coordination for tool policies while preserving standalone package behavior.",

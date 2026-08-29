@@ -19,24 +19,75 @@ import {
   IconTool,
   IconTrash,
   IconX,
-  IconThinkingMedium
+  IconThinkingMedium,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
-import { DEFAULT_GUARD_RULES, GUARD_ACTIONS, GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS, mergeGuardRules, resolveGuardRule, type GuardAction, type GuardRuleOverrides } from "../shared/guard-policy";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import {
+  formatCacheHitRate,
+  formatCompactNumber,
+  formatWorkDuration,
+} from "../shared/format";
+import {
+  DEFAULT_GUARD_RULES,
+  GUARD_ACTIONS,
+  GUARD_RISK_CATEGORIES,
+  GUARD_RULE_DESCRIPTIONS,
+  GUARD_RULE_LABELS,
+  mergeGuardRules,
+  resolveGuardRule,
+  type GuardAction,
+  type GuardRuleOverrides,
+} from "../shared/guard-policy";
 import { highlightSource } from "../shared/markdown";
-import type { ContinuityMemoryNoteReadModel, JobReadModel, SessionMetricsReadModel, VerificationReadModel } from "../shared/protocol/events";
-import type { DialogTimeoutSeconds, PapercutListPage, PapercutRecordReadModel, PapercutStatusReadModel, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, ToolExposureMode, VerifyPolicyReadModel, WorkspacePolicyMode } from "../shared/protocol/snapshots";
+import type {
+  ContinuityMemoryNoteReadModel,
+  JobReadModel,
+  SessionMetricsReadModel,
+  VerificationReadModel,
+} from "../shared/protocol/events";
+import type {
+  DialogTimeoutSeconds,
+  PapercutListPage,
+  PapercutRecordReadModel,
+  PapercutStatusReadModel,
+  StateQLRowsPage,
+  StateQLSnapshot,
+  TimelineCheckpointDiff,
+  TimelineCheckpointFiles,
+  ToolExposureMode,
+  VerifyPolicyReadModel,
+  WorkspacePolicyMode,
+} from "../shared/protocol/snapshots";
 import { displayTime, displayTimelineTime, formatDuration } from "./format";
 import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { buildStateQLActivity, filterStateQLActivity, stateqlActivityStatus, type StateQLActivityFilter, type StateQLActivityItem } from "../shared/stateql-notebook";
+import {
+  buildStateQLActivity,
+  filterStateQLActivity,
+  stateqlActivityStatus,
+  type StateQLActivityFilter,
+  type StateQLActivityItem,
+} from "../shared/stateql-notebook";
 
 export type ViewId = "overview" | "policy" | "timeline" | "memory" | "tools";
 type Tone = "success" | "warning" | "danger" | "neutral" | "active";
-type IconComponent = ComponentType<{ size?: number; stroke?: number; className?: string }>;
+type IconComponent = ComponentType<{
+  size?: number;
+  stroke?: number;
+  className?: string;
+}>;
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
 
 const navigation: Array<{ id: ViewId; label: string; icon: IconComponent }> = [
@@ -70,28 +121,82 @@ interface InspectorProps {
   onOpenMemoryReviewerSettings: () => void;
 }
 
-export function Inspector({ current, live, availableViews, timelineEnabled, memoryReviewerConfigured, memoryEnabled, papercutEnabled, overlay, onClose, onNavigate, onOpenGlobalPolicy, onOpenMemoryReviewerSettings }: InspectorProps) {
+export function Inspector({
+  current,
+  live,
+  availableViews,
+  timelineEnabled,
+  memoryReviewerConfigured,
+  memoryEnabled,
+  papercutEnabled,
+  overlay,
+  onClose,
+  onNavigate,
+  onOpenGlobalPolicy,
+  onOpenMemoryReviewerSettings,
+}: InspectorProps) {
   const items = navigation.filter((item) => availableViews.has(item.id));
   return (
-    <aside id="session-inspector" className="inspector" aria-label="Session inspector">
+    <aside
+      id="session-inspector"
+      className="inspector"
+      aria-label="Session inspector"
+    >
       <header className="inspector-header">
-        <div><span className="section-kicker">Inspector</span></div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label={overlay ? "Close inspector" : "Collapse inspector"}><IconX size={17} /></button>
+        <div>
+          <span className="section-kicker">Inspector</span>
+        </div>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label={overlay ? "Close inspector" : "Collapse inspector"}
+        >
+          <IconX size={17} />
+        </button>
       </header>
-      <div className="inspector-tabs" role="tablist" aria-label="Session details">
+      <div
+        className="inspector-tabs"
+        role="tablist"
+        aria-label="Session details"
+      >
         {items.map((item) => {
           const Icon = item.icon;
-          return <button type="button" role="tab" aria-label={item.label} aria-selected={current === item.id} className={current === item.id ? "is-active" : ""} data-view={item.id} key={item.id} onClick={() => onNavigate(item.id)}>
-            <Icon size={14} /><span>{item.label}</span>
-          </button>;
+          return (
+            <button
+              type="button"
+              role="tab"
+              aria-label={item.label}
+              aria-selected={current === item.id}
+              className={current === item.id ? "is-active" : ""}
+              data-view={item.id}
+              key={item.id}
+              onClick={() => onNavigate(item.id)}
+            >
+              <Icon size={14} />
+              <span>{item.label}</span>
+            </button>
+          );
         })}
       </div>
       <p className="inspector-description">{viewDescriptions[current]}</p>
       <div className="inspector-scroll" role="tabpanel">
         {current === "overview" && <Overview live={live} />}
-        {current === "policy" && live.runtime && <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />}
-        {current === "timeline" && <Timeline live={live} enabled={timelineEnabled} />}
-        {current === "memory" && <Memory live={live} memoryEnabled={memoryEnabled} papercutEnabled={papercutEnabled} reviewerConfigured={memoryReviewerConfigured} onOpenReviewerSettings={onOpenMemoryReviewerSettings} />}
+        {current === "policy" && live.runtime && (
+          <RuntimePolicy live={live} onOpenGlobalPolicy={onOpenGlobalPolicy} />
+        )}
+        {current === "timeline" && (
+          <Timeline live={live} enabled={timelineEnabled} />
+        )}
+        {current === "memory" && (
+          <Memory
+            live={live}
+            memoryEnabled={memoryEnabled}
+            papercutEnabled={papercutEnabled}
+            reviewerConfigured={memoryReviewerConfigured}
+            onOpenReviewerSettings={onOpenMemoryReviewerSettings}
+          />
+        )}
         {current === "tools" && <Tools live={live} />}
       </div>
     </aside>
@@ -102,77 +207,179 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const runtime = live.runtime;
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
-  const completedTodos = work?.todos.filter((todo) => todo.status === "done").length ?? 0;
-  const progress = work?.todos.length ? completedTodos / work.todos.length * 100 : 0;
-  const workState: OverviewState = work?.mode === "executing"
-    ? "running"
-    : work?.mode === "completed"
-      ? "done"
-      : work?.mode === "cancelled"
-        ? "failed"
-        : work ? "attention" : "neutral";
+  const completedTodos =
+    work?.todos.filter((todo) => todo.status === "done").length ?? 0;
+  const progress = work?.todos.length
+    ? (completedTodos / work.todos.length) * 100
+    : 0;
+  const workState: OverviewState =
+    work?.mode === "executing"
+      ? "running"
+      : work?.mode === "completed"
+        ? "done"
+        : work?.mode === "cancelled"
+          ? "failed"
+          : work
+            ? "attention"
+            : "neutral";
   return (
     <div className="page-grid">
-      <SessionUsage key={runtime?.sessionId ?? "empty"} metrics={runtime?.metrics} />
+      <SessionUsage
+        key={runtime?.sessionId ?? "empty"}
+        metrics={runtime?.metrics}
+      />
       <div className="overview-columns">
-        {operational?.continuity.availability === "available" && <InspectorSection title="Task list" meta={work ? `updated ${displayTime(work.updatedAt)}` : undefined} className="run-panel">
-          {work ? <>
-            <div className="overview-run-goal"><h2 title={work.goal}>{oneLine(work.goal)}</h2><p className="mono">{work.runId || "Current session"}</p></div>
-            <div className="overview-run-status">
-              <OverviewStateLabel state={workState}>{work.mode}</OverviewStateLabel>
-              {/* <LedBar a={progress} responsive tone={workState} running={workState === "running"} label={`${completedTodos} of ${work.todos.length} tasks complete`} /> */}
-              <small>{completedTodos} of {work.todos.length}</small>
-            </div>
-            {work.latestFailure && <div className="overview-run-callout" role="alert"><OverviewOrb state="failed" label="Latest failure" /><div><strong>Latest failure</strong><span>{work.latestFailure}</span></div></div>}
-            {work.nextAction && <div className="overview-run-callout" role="status"><OverviewOrb state="attention" label="Next up" /><div><strong>Next up</strong><span>{work.nextAction}</span></div></div>}
-            <TodoList work={work} />
-          </> : <div className="empty-state"><IconListCheck size={20} /><strong>No active work</strong><span>Continuity has no plan for this session.</span></div>}
-        </InspectorSection>}
+        {operational?.continuity.availability === "available" && (
+          <InspectorSection
+            title="Task list"
+            meta={work ? `updated ${displayTime(work.updatedAt)}` : undefined}
+            className="run-panel"
+          >
+            {work ? (
+              <>
+                <div className="overview-run-goal">
+                  <h2 title={work.goal}>{oneLine(work.goal)}</h2>
+                  <p className="mono">{work.runId || "Current turn"}</p>
+                </div>
+                <div className="overview-run-status">
+                  <OverviewStateLabel state={workState}>
+                    {work.mode}
+                  </OverviewStateLabel>
+                  {/* <LedBar a={progress} responsive tone={workState} running={workState === "running"} label={`${completedTodos} of ${work.todos.length} tasks complete`} /> */}
+                  <small>
+                    {completedTodos} of {work.todos.length}
+                  </small>
+                </div>
+                {work.latestFailure && (
+                  <div className="overview-run-callout" role="alert">
+                    <OverviewOrb state="failed" label="Latest failure" />
+                    <div>
+                      <strong>Latest failure</strong>
+                      <span>{work.latestFailure}</span>
+                    </div>
+                  </div>
+                )}
+                {work.nextAction && (
+                  <div className="overview-run-callout" role="status">
+                    <OverviewOrb state="attention" label="Next up" />
+                    <div>
+                      <strong>Next up</strong>
+                      <span>{work.nextAction}</span>
+                    </div>
+                  </div>
+                )}
+                <TodoList work={work} />
+              </>
+            ) : (
+              <div className="empty-state">
+                <IconListCheck size={20} />
+                <strong>No active work</strong>
+                <span>Continuity has no plan for this session.</span>
+              </div>
+            )}
+          </InspectorSection>
+        )}
       </div>
       <div className="overview-lower">
-        {operational && <InspectorSection title="Verification" meta={operational.verification.scope ? `${operational.verification.scope} scope` : "No run"} className="verification-panel">
-          <Verification verification={operational.verification} />
-        </InspectorSection>}
-        {operational?.jobs.availability === "available" && <HeartbeatJobs jobs={operational.jobs.items} />}
+        {operational && (
+          <InspectorSection
+            title="Verification"
+            meta={
+              operational.verification.scope
+                ? `${operational.verification.scope} scope`
+                : "No run"
+            }
+            className="verification-panel"
+          >
+            <Verification verification={operational.verification} />
+          </InspectorSection>
+        )}
+        {operational?.jobs.availability === "available" && (
+          <HeartbeatJobs jobs={operational.jobs.items} />
+        )}
       </div>
     </div>
   );
 }
 
-function Verification({ verification }: { verification: VerificationReadModel }) {
+function Verification({
+  verification,
+}: {
+  verification: VerificationReadModel;
+}) {
   const running = verification.state === "running";
-  const startedAt = verification.startedAt ? Date.parse(verification.startedAt) : Number.NaN;
+  const startedAt = verification.startedAt
+    ? Date.parse(verification.startedAt)
+    : Number.NaN;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (verification.availability !== "available" || !running || Number.isNaN(startedAt)) return;
+    if (
+      verification.availability !== "available" ||
+      !running ||
+      Number.isNaN(startedAt)
+    )
+      return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [running, startedAt, verification.availability]);
 
   if (verification.availability !== "available") {
-    return <div className="empty-state"><IconCheck size={20} /><strong>Verification unavailable</strong><span>Verify is unavailable for this runtime.</span></div>;
+    return (
+      <div className="empty-state">
+        <IconCheck size={20} />
+        <strong>Verification unavailable</strong>
+        <span>Verify is unavailable for this runtime.</span>
+      </div>
+    );
   }
 
-  const elapsed = Number.isNaN(startedAt) ? verification.durationMs ?? 0 : Math.max(0, now - startedAt);
-  return <div className="overview-list">
-    {running && <div className="overview-list-row">
-      <OverviewOrb state="running" label="Running" />
-      <div role="status"><strong>Verification</strong><small className="mono">{verification.scope ? `${verification.scope} scope` : "Checking project"}</small></div>
-      <OverviewStateLabel state="running">Running</OverviewStateLabel>
-      <time className="mono">{formatWorkDuration(elapsed)}</time>
-    </div>}
-    {verification.checks.map((check) => {
-      const state: OverviewState = check.status === "passed" ? "done" : "failed";
-      return <div className="overview-list-row" key={check.id}>
-        <OverviewOrb state={state} label={check.status} />
-        <div><strong>{check.label}</strong><small className="mono">{check.command || check.status}</small></div>
-        <OverviewStateLabel state={state}>{check.status}</OverviewStateLabel>
-        <time className="mono">{formatDuration(check.durationMs)}</time>
-      </div>;
-    })}
-    {!running && verification.checks.length === 0 && <div className="empty-state"><IconCheck size={20} /><strong>No verification run yet</strong><span>Results will appear after Verify runs.</span></div>}
-  </div>;
+  const elapsed = Number.isNaN(startedAt)
+    ? (verification.durationMs ?? 0)
+    : Math.max(0, now - startedAt);
+  return (
+    <div className="overview-list">
+      {running && (
+        <div className="overview-list-row">
+          <OverviewOrb state="running" label="Running" />
+          <div role="status">
+            <strong>Verification</strong>
+            <small className="mono">
+              {verification.scope
+                ? `${verification.scope} scope`
+                : "Checking project"}
+            </small>
+          </div>
+          <OverviewStateLabel state="running">Running</OverviewStateLabel>
+          <time className="mono">{formatWorkDuration(elapsed)}</time>
+        </div>
+      )}
+      {verification.checks.map((check) => {
+        const state: OverviewState =
+          check.status === "passed" ? "done" : "failed";
+        return (
+          <div className="overview-list-row" key={check.id}>
+            <OverviewOrb state={state} label={check.status} />
+            <div>
+              <strong>{check.label}</strong>
+              <small className="mono">{check.command || check.status}</small>
+            </div>
+            <OverviewStateLabel state={state}>
+              {check.status}
+            </OverviewStateLabel>
+            <time className="mono">{formatDuration(check.durationMs)}</time>
+          </div>
+        );
+      })}
+      {!running && verification.checks.length === 0 && (
+        <div className="empty-state">
+          <IconCheck size={20} />
+          <strong>No verification run yet</strong>
+          <span>Results will appear after Verify runs.</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 type EditablePolicyScope = "project" | "session";
@@ -186,7 +393,9 @@ const workspaceLabels: Record<WorkspacePolicyMode, string> = {
 };
 
 function verifyPolicyLabel(value: VerifyPolicyReadModel): string {
-  return value.mode === "auto" ? "Automatic detection" : `${value.checks.length} selected check${value.checks.length === 1 ? "" : "s"}`;
+  return value.mode === "auto"
+    ? "Automatic detection"
+    : `${value.checks.length} selected check${value.checks.length === 1 ? "" : "s"}`;
 }
 
 function togglePolicyLabel(value: boolean): string {
@@ -194,41 +403,101 @@ function togglePolicyLabel(value: boolean): string {
 }
 
 function guardActionLabel(value: GuardAction): string {
-  return value === "allow" ? "Allow" : value === "confirm" ? "Confirm" : "Block";
+  return value === "allow"
+    ? "Allow"
+    : value === "confirm"
+      ? "Confirm"
+      : "Block";
 }
 
-function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapshot; onOpenGlobalPolicy: () => void }) {
+function RuntimePolicy({
+  live,
+  onOpenGlobalPolicy,
+}: {
+  live: RuntimeStoreSnapshot;
+  onOpenGlobalPolicy: () => void;
+}) {
   const runtime = live.runtime!;
   const policy = runtime.runtimePolicy;
   const [scope, setScope] = useState<EditablePolicyScope>("project");
-  const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({ mode: "auto" });
+  const [verify, setVerify] = useState<VerifyPolicyReadModel | "inherit">({
+    mode: "auto",
+  });
   const [timeline, setTimeline] = useState<TogglePolicyDraft>("inherit");
   const [guard, setGuard] = useState<TogglePolicyDraft>("inherit");
   const [guardRules, setGuardRules] = useState<GuardRuleOverrides>({});
-  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">("inherit");
-  const [guardTimeout, setGuardTimeout] = useState<TimeoutPolicyDraft>("inherit");
-  const [clarifyTimeout, setClarifyTimeout] = useState<TimeoutPolicyDraft>("inherit");
+  const [workspace, setWorkspace] = useState<WorkspacePolicyMode | "inherit">(
+    "inherit",
+  );
+  const [guardTimeout, setGuardTimeout] =
+    useState<TimeoutPolicyDraft>("inherit");
+  const [clarifyTimeout, setClarifyTimeout] =
+    useState<TimeoutPolicyDraft>("inherit");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const saveInFlight = useRef(false);
   const saveRequest = useRef(0);
 
   const resetDraft = () => {
-    setVerify(scope === "project" ? policy.project.verify : policy.session.verify ?? "inherit");
-    setTimeline(scope === "project"
-      ? policy.project.timelineEnabled === undefined ? "inherit" : policy.project.timelineEnabled ? "enabled" : "disabled"
-      : policy.session.timelineEnabled === undefined ? "inherit" : policy.session.timelineEnabled ? "enabled" : "disabled");
-    setGuard(scope === "project"
-      ? policy.project.guardEnabled === undefined ? "inherit" : policy.project.guardEnabled ? "enabled" : "disabled"
-      : policy.session.guardEnabled === undefined ? "inherit" : policy.session.guardEnabled ? "enabled" : "disabled");
-    setGuardRules({ ...(scope === "project" ? policy.project.guardRules : policy.session.guardRules) });
-    setWorkspace(scope === "project" ? policy.project.workspace ?? "inherit" : policy.session.workspace ?? "inherit");
-    setGuardTimeout(scope === "project"
-      ? policy.project.guardTimeoutSeconds === undefined ? "inherit" : policy.project.guardTimeoutSeconds
-      : policy.session.guardTimeoutSeconds === undefined ? "inherit" : policy.session.guardTimeoutSeconds);
-    setClarifyTimeout(scope === "project"
-      ? policy.project.clarifyTimeoutSeconds === undefined ? "inherit" : policy.project.clarifyTimeoutSeconds
-      : policy.session.clarifyTimeoutSeconds === undefined ? "inherit" : policy.session.clarifyTimeoutSeconds);
+    setVerify(
+      scope === "project"
+        ? policy.project.verify
+        : (policy.session.verify ?? "inherit"),
+    );
+    setTimeline(
+      scope === "project"
+        ? policy.project.timelineEnabled === undefined
+          ? "inherit"
+          : policy.project.timelineEnabled
+            ? "enabled"
+            : "disabled"
+        : policy.session.timelineEnabled === undefined
+          ? "inherit"
+          : policy.session.timelineEnabled
+            ? "enabled"
+            : "disabled",
+    );
+    setGuard(
+      scope === "project"
+        ? policy.project.guardEnabled === undefined
+          ? "inherit"
+          : policy.project.guardEnabled
+            ? "enabled"
+            : "disabled"
+        : policy.session.guardEnabled === undefined
+          ? "inherit"
+          : policy.session.guardEnabled
+            ? "enabled"
+            : "disabled",
+    );
+    setGuardRules({
+      ...(scope === "project"
+        ? policy.project.guardRules
+        : policy.session.guardRules),
+    });
+    setWorkspace(
+      scope === "project"
+        ? (policy.project.workspace ?? "inherit")
+        : (policy.session.workspace ?? "inherit"),
+    );
+    setGuardTimeout(
+      scope === "project"
+        ? policy.project.guardTimeoutSeconds === undefined
+          ? "inherit"
+          : policy.project.guardTimeoutSeconds
+        : policy.session.guardTimeoutSeconds === undefined
+          ? "inherit"
+          : policy.session.guardTimeoutSeconds,
+    );
+    setClarifyTimeout(
+      scope === "project"
+        ? policy.project.clarifyTimeoutSeconds === undefined
+          ? "inherit"
+          : policy.project.clarifyTimeoutSeconds
+        : policy.session.clarifyTimeoutSeconds === undefined
+          ? "inherit"
+          : policy.session.clarifyTimeoutSeconds,
+    );
     setError("");
   };
 
@@ -236,23 +505,44 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
     resetDraft();
   }, [policy.revision, scope]);
 
-  const idle = live.connection === "connected"
-    && runtime.ready
-    && !live.pendingUi
-    && !busy;
+  const idle =
+    live.connection === "connected" &&
+    runtime.ready &&
+    !live.pendingUi &&
+    !busy;
   const inheritedFrom = scope === "project" ? "Global" : "Project";
-  const inheritedTimeline = scope === "project" ? policy.global.timelineEnabled : policy.project.timelineEnabled ?? policy.global.timelineEnabled;
-  const inheritedGuard = scope === "project" ? policy.global.guardEnabled : policy.project.guardEnabled ?? policy.global.guardEnabled;
-  const draftGuardEnabled = guard === "inherit" ? inheritedGuard : guard === "enabled";
+  const inheritedTimeline =
+    scope === "project"
+      ? policy.global.timelineEnabled
+      : (policy.project.timelineEnabled ?? policy.global.timelineEnabled);
+  const inheritedGuard =
+    scope === "project"
+      ? policy.global.guardEnabled
+      : (policy.project.guardEnabled ?? policy.global.guardEnabled);
+  const draftGuardEnabled =
+    guard === "inherit" ? inheritedGuard : guard === "enabled";
   const globalGuardRules = policy.global.guardRules ?? DEFAULT_GUARD_RULES;
-  const inheritedGuardRules = scope === "project"
-    ? mergeGuardRules(globalGuardRules)
-    : mergeGuardRules(globalGuardRules, policy.project.guardRules ?? {});
-  const inheritedWorkspace = scope === "project" ? policy.global.workspace : policy.project.workspace ?? policy.global.workspace;
-  const inheritedGuardTimeout = scope === "project" ? policy.global.guardTimeoutSeconds : policy.project.guardTimeoutSeconds ?? policy.global.guardTimeoutSeconds;
-  const inheritedClarifyTimeout = scope === "project" ? policy.global.clarifyTimeoutSeconds : policy.project.clarifyTimeoutSeconds ?? policy.global.clarifyTimeoutSeconds;
+  const inheritedGuardRules =
+    scope === "project"
+      ? mergeGuardRules(globalGuardRules)
+      : mergeGuardRules(globalGuardRules, policy.project.guardRules ?? {});
+  const inheritedWorkspace =
+    scope === "project"
+      ? policy.global.workspace
+      : (policy.project.workspace ?? policy.global.workspace);
+  const inheritedGuardTimeout =
+    scope === "project"
+      ? policy.global.guardTimeoutSeconds
+      : (policy.project.guardTimeoutSeconds ??
+        policy.global.guardTimeoutSeconds);
+  const inheritedClarifyTimeout =
+    scope === "project"
+      ? policy.global.clarifyTimeoutSeconds
+      : (policy.project.clarifyTimeoutSeconds ??
+        policy.global.clarifyTimeoutSeconds);
   const displayedVerify = verify === "inherit" ? policy.project.verify : verify;
-  const checks = displayedVerify.mode === "selected" ? displayedVerify.checks : [];
+  const checks =
+    displayedVerify.mode === "selected" ? displayedVerify.checks : [];
 
   const save = async (
     nextVerify: VerifyPolicyReadModel | "inherit",
@@ -290,7 +580,9 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
     } catch (cause) {
       if (request === saveRequest.current) {
         resetDraft();
-        setError(cause instanceof Error ? cause.message : "Policy could not be saved");
+        setError(
+          cause instanceof Error ? cause.message : "Policy could not be saved",
+        );
       }
       throw cause;
     } finally {
@@ -302,76 +594,375 @@ function RuntimePolicy({ live, onOpenGlobalPolicy }: { live: RuntimeStoreSnapsho
   };
 
   const changeVerifyMode = (mode: "inherit" | "auto" | "selected") => {
-    const next = mode === "inherit"
-      ? "inherit" as const
-      : mode === "auto"
-        ? { mode: "auto" } as const
-        : { mode: "selected", checks: displayedVerify.mode === "selected"
-          ? displayedVerify.checks
-          : policy.availableVerifyChecks.slice(0, 6).map((check) => check.id) } as const;
+    const next =
+      mode === "inherit"
+        ? ("inherit" as const)
+        : mode === "auto"
+          ? ({ mode: "auto" } as const)
+          : ({
+              mode: "selected",
+              checks:
+                displayedVerify.mode === "selected"
+                  ? displayedVerify.checks
+                  : policy.availableVerifyChecks
+                      .slice(0, 6)
+                      .map((check) => check.id),
+            } as const);
     void save(next, timeline, workspace).catch(() => undefined);
   };
 
   const toggleCheck = (id: string) => {
     const next = checks.includes(id)
       ? checks.filter((item) => item !== id)
-      : checks.length < 6 ? [...checks, id] : checks;
+      : checks.length < 6
+        ? [...checks, id]
+        : checks;
     if (next === checks) return;
-    void save({ mode: "selected", checks: next }, timeline, workspace).catch(() => undefined);
+    void save({ mode: "selected", checks: next }, timeline, workspace).catch(
+      () => undefined,
+    );
   };
-  const verifySetHere = scope === "project" ? verify !== "inherit" && verify.mode === "selected" : verify !== "inherit";
-  const setHereCount = [verifySetHere, guard !== "inherit", timeline !== "inherit", workspace !== "inherit", guardTimeout !== "inherit", clarifyTimeout !== "inherit"].filter(Boolean).length;
+  const verifySetHere =
+    scope === "project"
+      ? verify !== "inherit" && verify.mode === "selected"
+      : verify !== "inherit";
+  const setHereCount = [
+    verifySetHere,
+    guard !== "inherit",
+    timeline !== "inherit",
+    workspace !== "inherit",
+    guardTimeout !== "inherit",
+    clarifyTimeout !== "inherit",
+  ].filter(Boolean).length;
 
-  return <div className="runtime-policy">
-    <div className="policy-toolbar">
-      <div className="policy-scope" role="tablist" aria-label="Policy scope">
-        <button type="button" role="tab" disabled={busy} aria-selected={scope === "project"} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button>
-        <button type="button" role="tab" disabled={busy} aria-selected={scope === "session"} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button>
+  return (
+    <div className="runtime-policy">
+      <div className="policy-toolbar">
+        <div className="policy-scope" role="tablist" aria-label="Policy scope">
+          <button
+            type="button"
+            role="tab"
+            disabled={busy}
+            aria-selected={scope === "project"}
+            className={scope === "project" ? "is-active" : ""}
+            onClick={() => setScope("project")}
+          >
+            Project
+          </button>
+          <button
+            type="button"
+            role="tab"
+            disabled={busy}
+            aria-selected={scope === "session"}
+            className={scope === "session" ? "is-active" : ""}
+            onClick={() => setScope("session")}
+          >
+            This session
+          </button>
+        </div>
+        <span className="policy-set-count">{setHereCount} of 6 set here</span>
+        <button
+          className="policy-global-link"
+          type="button"
+          disabled={busy}
+          onClick={onOpenGlobalPolicy}
+        >
+          Global defaults <span aria-hidden="true">›</span>
+        </button>
       </div>
-      <span className="policy-set-count">{setHereCount} of 6 set here</span>
-      <button className="policy-global-link" type="button" disabled={busy} onClick={onOpenGlobalPolicy}>Global defaults <span aria-hidden="true">›</span></button>
+
+      <InspectorSection
+        title="Verification"
+        meta={
+          displayedVerify.mode === "selected"
+            ? `${checks.length} of ${policy.availableVerifyChecks.length} checks`
+            : "automatic detection"
+        }
+        className="policy-section"
+      >
+        <PolicySelectField
+          label="Verify checks"
+          description="Choose automatic detection or up to six declared checks."
+          value={verify === "inherit" ? "inherit" : verify.mode}
+          isOverride={verifySetHere}
+          inheritedLabel={
+            scope === "session"
+              ? `Inherit from Project (${verifyPolicyLabel(policy.project.verify)})`
+              : ""
+          }
+          disabled={!idle}
+          options={[
+            { value: "auto", label: "Automatic detection" },
+            { value: "selected", label: "Selected checks" },
+          ]}
+          onChange={(value) =>
+            changeVerifyMode(value as "inherit" | "auto" | "selected")
+          }
+        />
+        {verify !== "inherit" && verify.mode === "selected" && (
+          <details className="policy-disclosure">
+            <summary>
+              <span>
+                <strong>Declared checks</strong>
+                <small>Detected from this project's scripts.</small>
+              </span>
+              <small>
+                {checks.length} of {policy.availableVerifyChecks.length}
+              </small>
+              <IconChevronDown size={15} />
+            </summary>
+            <div className="policy-disclosure-body policy-checks">
+              {policy.availableVerifyChecks.map((check) => (
+                <label key={check.id} title={check.command}>
+                  <input
+                    type="checkbox"
+                    checked={checks.includes(check.id)}
+                    disabled={
+                      !idle ||
+                      (!checks.includes(check.id) && checks.length >= 6)
+                    }
+                    onChange={() => toggleCheck(check.id)}
+                  />
+                  <span className="mono">{check.label}</span>
+                </label>
+              ))}
+              {checks
+                .filter(
+                  (id) =>
+                    !policy.availableVerifyChecks.some(
+                      (check) => check.id === id,
+                    ),
+                )
+                .map((id) => (
+                  <label className="is-missing" key={id}>
+                    <input
+                      type="checkbox"
+                      checked
+                      disabled={!idle}
+                      onChange={() => toggleCheck(id)}
+                    />
+                    <span>Unknown: {id}</span>
+                  </label>
+                ))}
+              {policy.availableVerifyChecks.length === 0 && (
+                <small>
+                  No declared checks detected. Changed-set hygiene will still
+                  run.
+                </small>
+              )}
+            </div>
+          </details>
+        )}
+      </InspectorSection>
+
+      <InspectorSection
+        title="Safety and interaction"
+        meta={`${Object.keys(guardRules).length} category override${Object.keys(guardRules).length === 1 ? "" : "s"}`}
+        className="policy-section"
+      >
+        <PolicySelectField
+          label="Guard"
+          description="Confirm guarded commands and paths."
+          value={guard}
+          inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedGuard)})`}
+          disabled={!idle}
+          options={[
+            { value: "enabled", label: "Enabled" },
+            { value: "disabled", label: "Disabled" },
+          ]}
+          onChange={(value) =>
+            void save(
+              verify,
+              timeline,
+              workspace,
+              guardTimeout,
+              clarifyTimeout,
+              value as TogglePolicyDraft,
+            ).catch(() => undefined)
+          }
+        />
+        <details className="policy-disclosure">
+          <summary>
+            <span>
+              <strong>Guard categories</strong>
+              <small>
+                Choose which risks inherit, allow, confirm, or block.
+              </small>
+            </span>
+            <small className={Object.keys(guardRules).length ? "is-here" : ""}>
+              {Object.keys(guardRules).length} set here
+            </small>
+            <IconChevronDown size={15} />
+          </summary>
+          <div className="policy-disclosure-body">
+            {!draftGuardEnabled && (
+              <p className="policy-guard-disabled" role="status">
+                Guard is disabled by{" "}
+                {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}
+                . Saved category rules apply when Guard is enabled.
+              </p>
+            )}
+            {GUARD_RISK_CATEGORIES.map((category) => (
+              <PolicySelectField
+                key={category}
+                label={GUARD_RULE_LABELS[category]}
+                description={GUARD_RULE_DESCRIPTIONS[category]}
+                value={guardRules[category] ?? "inherit"}
+                inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`}
+                disabled={!idle || !draftGuardEnabled}
+                options={GUARD_ACTIONS.map((action) => ({
+                  value: action,
+                  label: guardActionLabel(action),
+                }))}
+                onChange={(value) => {
+                  const next = { ...guardRules };
+                  if (value === "inherit") delete next[category];
+                  else next[category] = value as GuardAction;
+                  void save(
+                    verify,
+                    timeline,
+                    workspace,
+                    guardTimeout,
+                    clarifyTimeout,
+                    guard,
+                    next,
+                  ).catch(() => undefined);
+                }}
+              />
+            ))}
+          </div>
+        </details>
+        <RuntimePolicyTimeoutControl
+          label="Guard timeout"
+          description="How long a guarded prompt waits for you."
+          value={
+            guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout
+          }
+          inherited={guardTimeout === "inherit"}
+          inheritedFrom={inheritedFrom}
+          disabled={!idle || !draftGuardEnabled}
+          onChange={(value) =>
+            void save(verify, timeline, workspace, value, clarifyTimeout).catch(
+              () => undefined,
+            )
+          }
+          onReset={
+            guardTimeout !== "inherit"
+              ? () =>
+                  void save(
+                    verify,
+                    timeline,
+                    workspace,
+                    "inherit",
+                    clarifyTimeout,
+                  ).catch(() => undefined)
+              : undefined
+          }
+        />
+        <RuntimePolicyTimeoutControl
+          label="Clarify timeout"
+          description="How long a clarifying question waits."
+          value={
+            clarifyTimeout === "inherit"
+              ? inheritedClarifyTimeout
+              : clarifyTimeout
+          }
+          inherited={clarifyTimeout === "inherit"}
+          inheritedFrom={inheritedFrom}
+          disabled={!idle}
+          onChange={(value) =>
+            void save(verify, timeline, workspace, guardTimeout, value).catch(
+              () => undefined,
+            )
+          }
+          onReset={
+            clarifyTimeout !== "inherit"
+              ? () =>
+                  void save(
+                    verify,
+                    timeline,
+                    workspace,
+                    guardTimeout,
+                    "inherit",
+                  ).catch(() => undefined)
+              : undefined
+          }
+        />
+        <PolicySelectField
+          label="Timeline"
+          description="Keep recoverable checkpoints for this run."
+          value={timeline}
+          inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedTimeline)})`}
+          disabled={!idle}
+          options={[
+            { value: "enabled", label: "Enabled" },
+            { value: "disabled", label: "Disabled" },
+          ]}
+          onChange={(value) =>
+            void save(verify, value as TogglePolicyDraft, workspace).catch(
+              () => undefined,
+            )
+          }
+        />
+      </InspectorSection>
+
+      <InspectorSection
+        title="Environment"
+        meta={
+          workspace === "inherit"
+            ? workspaceLabels[inheritedWorkspace]
+            : workspaceLabels[workspace]
+        }
+        className="policy-section"
+      >
+        <PolicySelectField
+          label="Workspace"
+          description="Choose where this scope works by default."
+          value={workspace}
+          inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`}
+          disabled={!idle}
+          options={Object.entries(workspaceLabels).map(([value, label]) => ({
+            value,
+            label,
+          }))}
+          onChange={(value) =>
+            void save(
+              verify,
+              timeline,
+              value as WorkspacePolicyMode | "inherit",
+            ).catch(() => undefined)
+          }
+        />
+        <p className="policy-note">
+          Session changes apply immediately when possible. Package capability
+          and safety gates remain authoritative.
+        </p>
+      </InspectorSection>
+      {error && (
+        <p className="policy-error" role="alert">
+          {error}
+        </p>
+      )}
+      {busy && (
+        <small className="policy-saving" role="status">
+          Saving…
+        </small>
+      )}
     </div>
-
-    <InspectorSection title="Verification" meta={displayedVerify.mode === "selected" ? `${checks.length} of ${policy.availableVerifyChecks.length} checks` : "automatic detection"} className="policy-section">
-      <PolicySelectField label="Verify checks" description="Choose automatic detection or up to six declared checks." value={verify === "inherit" ? "inherit" : verify.mode} isOverride={verifySetHere} inheritedLabel={scope === "session" ? `Inherit from Project (${verifyPolicyLabel(policy.project.verify)})` : ""} disabled={!idle}
-        options={[{ value: "auto", label: "Automatic detection" }, { value: "selected", label: "Selected checks" }]}
-        onChange={(value) => changeVerifyMode(value as "inherit" | "auto" | "selected")} />
-      {verify !== "inherit" && verify.mode === "selected" && <details className="policy-disclosure">
-        <summary><span><strong>Declared checks</strong><small>Detected from this project's scripts.</small></span><small>{checks.length} of {policy.availableVerifyChecks.length}</small><IconChevronDown size={15} /></summary>
-        <div className="policy-disclosure-body policy-checks">
-          {policy.availableVerifyChecks.map((check) => <label key={check.id} title={check.command}><input type="checkbox" checked={checks.includes(check.id)} disabled={!idle || !checks.includes(check.id) && checks.length >= 6} onChange={() => toggleCheck(check.id)} /><span className="mono">{check.label}</span></label>)}
-          {checks.filter((id) => !policy.availableVerifyChecks.some((check) => check.id === id)).map((id) => <label className="is-missing" key={id}><input type="checkbox" checked disabled={!idle} onChange={() => toggleCheck(id)} /><span>Unknown: {id}</span></label>)}
-          {policy.availableVerifyChecks.length === 0 && <small>No declared checks detected. Changed-set hygiene will still run.</small>}
-        </div>
-      </details>}
-    </InspectorSection>
-
-    <InspectorSection title="Safety and interaction" meta={`${Object.keys(guardRules).length} category override${Object.keys(guardRules).length === 1 ? "" : "s"}`} className="policy-section">
-      <PolicySelectField label="Guard" description="Confirm guarded commands and paths." value={guard} inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedGuard)})`} disabled={!idle} options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]} onChange={(value) => void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, value as TogglePolicyDraft).catch(() => undefined)} />
-      <details className="policy-disclosure">
-        <summary><span><strong>Guard categories</strong><small>Choose which risks inherit, allow, confirm, or block.</small></span><small className={Object.keys(guardRules).length ? "is-here" : ""}>{Object.keys(guardRules).length} set here</small><IconChevronDown size={15} /></summary>
-        <div className="policy-disclosure-body">
-          {!draftGuardEnabled && <p className="policy-guard-disabled" role="status">Guard is disabled by {guard === "inherit" ? `${inheritedFrom} policy` : "this scope"}. Saved category rules apply when Guard is enabled.</p>}
-          {GUARD_RISK_CATEGORIES.map((category) => <PolicySelectField key={category} label={GUARD_RULE_LABELS[category]} description={GUARD_RULE_DESCRIPTIONS[category]} value={guardRules[category] ?? "inherit"} inheritedLabel={`Use ${inheritedFrom} policy (${guardActionLabel(inheritedGuardRules[category])})`} disabled={!idle || !draftGuardEnabled} options={GUARD_ACTIONS.map((action) => ({ value: action, label: guardActionLabel(action) }))} onChange={(value) => {
-            const next = { ...guardRules }; if (value === "inherit") delete next[category]; else next[category] = value as GuardAction;
-            void save(verify, timeline, workspace, guardTimeout, clarifyTimeout, guard, next).catch(() => undefined);
-          }} />)}
-        </div>
-      </details>
-      <RuntimePolicyTimeoutControl label="Guard timeout" description="How long a guarded prompt waits for you." value={guardTimeout === "inherit" ? inheritedGuardTimeout : guardTimeout} inherited={guardTimeout === "inherit"} inheritedFrom={inheritedFrom} disabled={!idle || !draftGuardEnabled} onChange={(value) => void save(verify, timeline, workspace, value, clarifyTimeout).catch(() => undefined)} onReset={guardTimeout !== "inherit" ? () => void save(verify, timeline, workspace, "inherit", clarifyTimeout).catch(() => undefined) : undefined} />
-      <RuntimePolicyTimeoutControl label="Clarify timeout" description="How long a clarifying question waits." value={clarifyTimeout === "inherit" ? inheritedClarifyTimeout : clarifyTimeout} inherited={clarifyTimeout === "inherit"} inheritedFrom={inheritedFrom} disabled={!idle} onChange={(value) => void save(verify, timeline, workspace, guardTimeout, value).catch(() => undefined)} onReset={clarifyTimeout !== "inherit" ? () => void save(verify, timeline, workspace, guardTimeout, "inherit").catch(() => undefined) : undefined} />
-      <PolicySelectField label="Timeline" description="Keep recoverable checkpoints for this run." value={timeline} inheritedLabel={`Inherit from ${inheritedFrom} (${togglePolicyLabel(inheritedTimeline)})`} disabled={!idle} options={[{ value: "enabled", label: "Enabled" }, { value: "disabled", label: "Disabled" }]} onChange={(value) => void save(verify, value as TogglePolicyDraft, workspace).catch(() => undefined)} />
-    </InspectorSection>
-
-    <InspectorSection title="Environment" meta={workspace === "inherit" ? workspaceLabels[inheritedWorkspace] : workspaceLabels[workspace]} className="policy-section">
-      <PolicySelectField label="Workspace" description="Choose where this scope works by default." value={workspace} inheritedLabel={`Inherit from ${inheritedFrom} (${workspaceLabels[inheritedWorkspace]})`} disabled={!idle} options={Object.entries(workspaceLabels).map(([value, label]) => ({ value, label }))} onChange={(value) => void save(verify, timeline, value as WorkspacePolicyMode | "inherit").catch(() => undefined)} />
-      <p className="policy-note">Session changes apply immediately when possible. Package capability and safety gates remain authoritative.</p>
-    </InspectorSection>
-    {error && <p className="policy-error" role="alert">{error}</p>}{busy && <small className="policy-saving" role="status">Saving…</small>}
-  </div>;
+  );
 }
 
-function PolicySelectField({ label, description, value, inheritedLabel, stateLabel, isOverride = value !== "inherit", disabled, options, onChange }: {
+function PolicySelectField({
+  label,
+  description,
+  value,
+  inheritedLabel,
+  stateLabel,
+  isOverride = value !== "inherit",
+  disabled,
+  options,
+  onChange,
+}: {
   label: string;
   description: string;
   value: string;
@@ -384,39 +975,109 @@ function PolicySelectField({ label, description, value, inheritedLabel, stateLab
 }) {
   const descriptionId = useId();
   const stateId = useId();
-  return <div className="policy-field" data-override={isOverride}>
-    <OverviewOrb state={isOverride ? "done" : "neutral"} label={isOverride ? "Set here" : "Inherited or default"} />
-    <div className="policy-field-copy"><span><strong>{label}</strong><small className={isOverride ? "policy-source is-here" : "policy-source"}>{isOverride ? "set here" : inheritedLabel ? inheritedLabel.replace(/^.*from /, "from ") : "default"}</small></span><p id={descriptionId}>{description}</p></div>
-    <select value={value} disabled={disabled} aria-label={`${label} policy`} aria-describedby={descriptionId} onChange={(event) => onChange(event.target.value)}>
-      {inheritedLabel && <option value="inherit">{inheritedLabel}</option>}{options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-    </select>
-    {stateLabel && <small id={stateId} className="sr-only">{stateLabel}</small>}
-  </div>;
+  return (
+    <div className="policy-field" data-override={isOverride}>
+      <OverviewOrb
+        state={isOverride ? "done" : "neutral"}
+        label={isOverride ? "Set here" : "Inherited or default"}
+      />
+      <div className="policy-field-copy">
+        <span>
+          <strong>{label}</strong>
+          <small
+            className={isOverride ? "policy-source is-here" : "policy-source"}
+          >
+            {isOverride
+              ? "set here"
+              : inheritedLabel
+                ? inheritedLabel.replace(/^.*from /, "from ")
+                : "default"}
+          </small>
+        </span>
+        <p id={descriptionId}>{description}</p>
+      </div>
+      <select
+        value={value}
+        disabled={disabled}
+        aria-label={`${label} policy`}
+        aria-describedby={descriptionId}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {inheritedLabel && <option value="inherit">{inheritedLabel}</option>}
+        {options.map((option) => (
+          <option value={option.value} key={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {stateLabel && (
+        <small id={stateId} className="sr-only">
+          {stateLabel}
+        </small>
+      )}
+    </div>
+  );
 }
 
-function Memory({ live, memoryEnabled, papercutEnabled, reviewerConfigured, onOpenReviewerSettings }: {
+function Memory({
+  live,
+  memoryEnabled,
+  papercutEnabled,
+  reviewerConfigured,
+  onOpenReviewerSettings,
+}: {
   live: RuntimeStoreSnapshot;
   memoryEnabled: boolean;
   papercutEnabled: boolean;
   reviewerConfigured?: boolean;
   onOpenReviewerSettings: () => void;
 }) {
-  const [view, setView] = useState<"memory" | "papercuts">(memoryEnabled ? "memory" : "papercuts");
+  const [view, setView] = useState<"memory" | "papercuts">(
+    memoryEnabled ? "memory" : "papercuts",
+  );
   const continuity = live.runtime?.operational.continuity;
-  const memoryCount = continuity ? continuity.memory.length + continuity.globalMemory.length : undefined;
+  const memoryCount = continuity
+    ? continuity.memory.length + continuity.globalMemory.length
+    : undefined;
   const papercutCount = live.runtime?.operational.papercuts.counts.total;
   useEffect(() => {
-    if (view === "memory" && !memoryEnabled && papercutEnabled) setView("papercuts");
-    if (view === "papercuts" && !papercutEnabled && memoryEnabled) setView("memory");
+    if (view === "memory" && !memoryEnabled && papercutEnabled)
+      setView("papercuts");
+    if (view === "papercuts" && !papercutEnabled && memoryEnabled)
+      setView("memory");
   }, [memoryEnabled, papercutEnabled, view]);
-  return <div className="memory-page">
-    {memoryEnabled && papercutEnabled && <div className="memory-view-bar"><nav className="memory-archive-nav" aria-label="Memory view">
-      <button type="button" aria-pressed={view === "memory"} onClick={() => setView("memory")}>Memory <span className="mono">{memoryCount ?? "–"}</span></button>
-      <button type="button" aria-pressed={view === "papercuts"} onClick={() => setView("papercuts")}>Papercuts <span className="mono">{papercutCount ?? "–"}</span></button>
-    </nav></div>}
-    {view === "memory" && memoryEnabled && <ContinuityMemory live={live} reviewerConfigured={reviewerConfigured} onOpenReviewerSettings={onOpenReviewerSettings} />}
-    {view === "papercuts" && papercutEnabled && <Papercuts live={live} />}
-  </div>;
+  return (
+    <div className="memory-page">
+      {memoryEnabled && papercutEnabled && (
+        <div className="memory-view-bar">
+          <nav className="memory-archive-nav" aria-label="Memory view">
+            <button
+              type="button"
+              aria-pressed={view === "memory"}
+              onClick={() => setView("memory")}
+            >
+              Memory <span className="mono">{memoryCount ?? "–"}</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "papercuts"}
+              onClick={() => setView("papercuts")}
+            >
+              Papercuts <span className="mono">{papercutCount ?? "–"}</span>
+            </button>
+          </nav>
+        </div>
+      )}
+      {view === "memory" && memoryEnabled && (
+        <ContinuityMemory
+          live={live}
+          reviewerConfigured={reviewerConfigured}
+          onOpenReviewerSettings={onOpenReviewerSettings}
+        />
+      )}
+      {view === "papercuts" && papercutEnabled && <Papercuts live={live} />}
+    </div>
+  );
 }
 
 function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
@@ -443,107 +1104,391 @@ function Papercuts({ live }: { live: RuntimeStoreSnapshot }) {
   }, [search]);
   useEffect(() => {
     const request = ++requestVersion.current;
-    if (live.connection !== "connected" || !live.runtime?.ready) { setPage(undefined); setLoading(false); return; }
+    if (live.connection !== "connected" || !live.runtime?.ready) {
+      setPage(undefined);
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
-    setPage(undefined); setLoading(true); setLoadingMore(false); setError("");
-    void runtimeStore.papercuts(status, query, 0, 25, controller.signal)
-      .then((result) => { if (requestVersion.current === request) setPage(result); })
-      .catch((cause) => { if (!controller.signal.aborted && requestVersion.current === request) setError(cause instanceof Error ? cause.message : "Unable to load papercuts"); })
-      .finally(() => { if (!controller.signal.aborted && requestVersion.current === request) setLoading(false); });
+    setPage(undefined);
+    setLoading(true);
+    setLoadingMore(false);
+    setError("");
+    void runtimeStore
+      .papercuts(status, query, 0, 25, controller.signal)
+      .then((result) => {
+        if (requestVersion.current === request) setPage(result);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted && requestVersion.current === request)
+          setError(
+            cause instanceof Error ? cause.message : "Unable to load papercuts",
+          );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && requestVersion.current === request)
+          setLoading(false);
+      });
     return () => controller.abort();
-  }, [generation, live.connection, live.runtime?.ready, query, refresh, status, summary?.revision]);
+  }, [
+    generation,
+    live.connection,
+    live.runtime?.ready,
+    query,
+    refresh,
+    status,
+    summary?.revision,
+  ]);
 
   const loadMore = async () => {
-    if (page?.nextOffset === null || page?.nextOffset === undefined || loadingMore) return;
-    setLoadingMore(true); setError("");
+    if (
+      page?.nextOffset === null ||
+      page?.nextOffset === undefined ||
+      loadingMore
+    )
+      return;
+    setLoadingMore(true);
+    setError("");
     const request = requestVersion.current;
     try {
-      const next = await runtimeStore.papercuts(status, query, page.nextOffset, page.limit);
+      const next = await runtimeStore.papercuts(
+        status,
+        query,
+        page.nextOffset,
+        page.limit,
+      );
       if (requestVersion.current !== request) return;
-      if (next.revision !== page.revision) { setRefresh((value) => value + 1); return; }
-      setPage({ ...next, offset: 0, records: [...page.records, ...next.records] });
-    } catch (cause) { if (requestVersion.current === request) setError(cause instanceof Error ? cause.message : "Unable to load more papercuts"); }
-    finally { setLoadingMore(false); }
+      if (next.revision !== page.revision) {
+        setRefresh((value) => value + 1);
+        return;
+      }
+      setPage({
+        ...next,
+        offset: 0,
+        records: [...page.records, ...next.records],
+      });
+    } catch (cause) {
+      if (requestVersion.current === request)
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Unable to load more papercuts",
+        );
+    } finally {
+      setLoadingMore(false);
+    }
   };
-  const count = (value: PapercutStatusReadModel | "all") => value === "all" ? summary?.counts.total : summary?.counts[value];
-  const outcome = (record: PapercutRecordReadModel) => record.status === "resolved" ? record.resolution : record.status === "dismissed" ? record.dismissal : undefined;
-  const canMutate = live.connection === "connected" && live.runtime?.ready === true && !busy;
-  const beginEdit = (record: PapercutRecordReadModel) => { setEditing(record.id); setDraft(record.message); setMutationError(""); };
+  const count = (value: PapercutStatusReadModel | "all") =>
+    value === "all" ? summary?.counts.total : summary?.counts[value];
+  const outcome = (record: PapercutRecordReadModel) =>
+    record.status === "resolved"
+      ? record.resolution
+      : record.status === "dismissed"
+        ? record.dismissal
+        : undefined;
+  const canMutate =
+    live.connection === "connected" && live.runtime?.ready === true && !busy;
+  const beginEdit = (record: PapercutRecordReadModel) => {
+    setEditing(record.id);
+    setDraft(record.message);
+    setMutationError("");
+  };
   const save = async (record: PapercutRecordReadModel) => {
     if (!canMutate || !draft.trim()) return;
-    setBusy(record.id); setMutationError("");
+    setBusy(record.id);
+    setMutationError("");
     try {
       await runtimeStore.updatePapercut(record, draft.trim());
       setEditing("");
       setRefresh((value) => value + 1);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Unable to update papercut";
+      const message =
+        cause instanceof Error ? cause.message : "Unable to update papercut";
       setMutationError(message);
-      if (/changed or was removed/i.test(message)) setRefresh((value) => value + 1);
-    } finally { setBusy(""); }
+      if (/changed or was removed/i.test(message))
+        setRefresh((value) => value + 1);
+    } finally {
+      setBusy("");
+    }
   };
   const remove = async (record: PapercutRecordReadModel) => {
     if (!canMutate) return;
-    setBusy(record.id); setMutationError("");
+    setBusy(record.id);
+    setMutationError("");
     try {
       await runtimeStore.deletePapercut(record);
-      setEditing(""); setDeleting(undefined);
+      setEditing("");
+      setDeleting(undefined);
       setRefresh((value) => value + 1);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Unable to delete papercut";
-      setMutationError(message); setDeleting(undefined);
-      if (/changed or was removed/i.test(message)) setRefresh((value) => value + 1);
-    } finally { setBusy(""); }
+      const message =
+        cause instanceof Error ? cause.message : "Unable to delete papercut";
+      setMutationError(message);
+      setDeleting(undefined);
+      if (/changed or was removed/i.test(message))
+        setRefresh((value) => value + 1);
+    } finally {
+      setBusy("");
+    }
   };
 
-  return <div className="memory-ledger papercut-ledger">
-    <div className="memory-ledger-head">
-      <div className="papercut-toolbar">
-        <div className="papercut-status" role="group" aria-label="Papercut status">{(["open", "resolved", "dismissed", "all"] as const).map((value) => <button type="button" aria-pressed={status === value} className={status === value ? "is-active" : ""} key={value} onClick={() => setStatus(value)}>{value}<span className="mono">{count(value) ?? "–"}</span></button>)}</div>
-        <button className="icon-button" type="button" aria-label="Refresh papercuts" disabled={loading} onClick={() => setRefresh((value) => value + 1)}><IconRefresh size={14} /></button>
+  return (
+    <div className="memory-ledger papercut-ledger">
+      <div className="memory-ledger-head">
+        <div className="papercut-toolbar">
+          <div
+            className="papercut-status"
+            role="group"
+            aria-label="Papercut status"
+          >
+            {(["open", "resolved", "dismissed", "all"] as const).map(
+              (value) => (
+                <button
+                  type="button"
+                  aria-pressed={status === value}
+                  className={status === value ? "is-active" : ""}
+                  key={value}
+                  onClick={() => setStatus(value)}
+                >
+                  {value}
+                  <span className="mono">{count(value) ?? "–"}</span>
+                </button>
+              ),
+            )}
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Refresh papercuts"
+            disabled={loading}
+            onClick={() => setRefresh((value) => value + 1)}
+          >
+            <IconRefresh size={14} />
+          </button>
+        </div>
+        <label className="memory-ledger-search">
+          <IconSearch size={13} />
+          <span className="sr-only">Search papercuts</span>
+          <input
+            type="search"
+            value={search}
+            maxLength={200}
+            placeholder="Search papercuts"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <span className="mono">{page?.total ?? 0}</span>
+        </label>
       </div>
-      <label className="memory-ledger-search"><IconSearch size={13} /><span className="sr-only">Search papercuts</span><input type="search" value={search} maxLength={200} placeholder="Search papercuts" onChange={(event) => setSearch(event.target.value)} /><span className="mono">{page?.total ?? 0}</span></label>
+      {loading && !page && (
+        <div className="memory-ledger-no-results">
+          <IconLoader2 className="spin" size={18} />
+          <strong>Loading papercuts</strong>
+        </div>
+      )}
+      {!loading && error && !page && (
+        <div className="memory-ledger-no-results">
+          <IconAlertTriangle size={18} />
+          <strong>Papercuts unavailable</strong>
+          <span>{error}</span>
+        </div>
+      )}
+      {!loading && !error && page?.records.length === 0 && (
+        <div className="memory-ledger-empty">
+          <strong>
+            {query
+              ? "No matching papercuts"
+              : `No ${status === "all" ? "stored" : status} papercuts`}
+          </strong>
+          <span>
+            {query
+              ? "Try a different search."
+              : "Captured workflow friction will appear here."}
+          </span>
+        </div>
+      )}
+      {page && page.records.length > 0 && (
+        <div className="memory-ledger-list">
+          {page.records.map((record) => {
+            const isEditing = editing === record.id;
+            return (
+              <details
+                className="memory-ledger-row papercut-row"
+                key={record.id}
+                open={isEditing || undefined}
+              >
+                <summary>
+                  <OverviewOrb
+                    state={
+                      record.status === "open"
+                        ? "attention"
+                        : record.status === "resolved"
+                          ? "done"
+                          : "neutral"
+                    }
+                    label={record.status}
+                  />
+                  <div className="memory-archive-copy">
+                    <span>
+                      <strong>{record.message}</strong>
+                      <small className="policy-source">{record.status}</small>
+                    </span>
+                    <p>
+                      {outcome(record) ??
+                        `${record.occurrences} occurrence${record.occurrences === 1 ? "" : "s"} · last seen ${displayTime(record.lastSeenAt)}`}
+                    </p>
+                  </div>
+                  <IconChevronDown
+                    className="memory-ledger-chevron"
+                    size={13}
+                  />
+                </summary>
+                <div className="memory-ledger-detail">
+                  {isEditing ? (
+                    <div className="memory-editor">
+                      <label>
+                        Message
+                        <textarea
+                          value={draft}
+                          maxLength={500}
+                          rows={4}
+                          disabled={Boolean(busy)}
+                          onChange={(event) => setDraft(event.target.value)}
+                        />
+                      </label>
+                      <div>
+                        <button
+                          className="primary-button"
+                          type="button"
+                          disabled={!canMutate || !draft.trim()}
+                          onClick={() => void save(record)}
+                        >
+                          {busy === record.id ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={Boolean(busy)}
+                          onClick={() => setEditing("")}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <dl>
+                        <div>
+                          <dt>ID</dt>
+                          <dd title={record.id}>{record.id.slice(0, 8)}</dd>
+                        </div>
+                        <div>
+                          <dt>Created</dt>
+                          <dd>
+                            <time dateTime={record.createdAt}>
+                              {displayTime(record.createdAt)}
+                            </time>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Last seen</dt>
+                          <dd>
+                            <time dateTime={record.lastSeenAt}>
+                              {displayTime(record.lastSeenAt)}
+                            </time>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Occurrences</dt>
+                          <dd>{record.occurrences}</dd>
+                        </div>
+                        {outcome(record) && (
+                          <div>
+                            <dt>
+                              {record.status === "resolved"
+                                ? "Resolution"
+                                : "Dismissal"}
+                            </dt>
+                            <dd title={outcome(record)}>{outcome(record)}</dd>
+                          </div>
+                        )}
+                      </dl>
+                      <footer>
+                        <button
+                          className="text-button"
+                          type="button"
+                          disabled={!canMutate}
+                          onClick={() => beginEdit(record)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="text-button danger"
+                          type="button"
+                          disabled={!canMutate}
+                          onClick={() => {
+                            setMutationError("");
+                            setDeleting(record);
+                          }}
+                        >
+                          <IconTrash size={13} />
+                          Delete
+                        </button>
+                      </footer>
+                    </>
+                  )}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      )}
+      {page?.nextOffset !== null && page?.nextOffset !== undefined && (
+        <button
+          className="session-usage-expand"
+          type="button"
+          disabled={loadingMore}
+          onClick={() => void loadMore()}
+        >
+          {loadingMore
+            ? "Loading…"
+            : `Load more · ${page.records.length}/${page.total}`}
+        </button>
+      )}
+      {error && page && (
+        <p className="ui-request-error" role="alert">
+          {error}
+        </p>
+      )}
+      {mutationError && (
+        <p className="ui-request-error" role="alert">
+          {mutationError}
+        </p>
+      )}
+      {deleting && (
+        <ActionDialog
+          title="Delete papercut?"
+          description="This papercut will be permanently removed from the project backlog."
+          confirmLabel="Delete papercut"
+          busyLabel="Deleting…"
+          busy={busy === deleting.id}
+          danger
+          onCancel={() => setDeleting(undefined)}
+          onConfirm={() => void remove(deleting)}
+        />
+      )}
     </div>
-    {loading && !page && <div className="memory-ledger-no-results"><IconLoader2 className="spin" size={18} /><strong>Loading papercuts</strong></div>}
-    {!loading && error && !page && <div className="memory-ledger-no-results"><IconAlertTriangle size={18} /><strong>Papercuts unavailable</strong><span>{error}</span></div>}
-    {!loading && !error && page?.records.length === 0 && <div className="memory-ledger-empty"><strong>{query ? "No matching papercuts" : `No ${status === "all" ? "stored" : status} papercuts`}</strong><span>{query ? "Try a different search." : "Captured workflow friction will appear here."}</span></div>}
-    {page && page.records.length > 0 && <div className="memory-ledger-list">{page.records.map((record) => {
-      const isEditing = editing === record.id;
-      return <details className="memory-ledger-row papercut-row" key={record.id} open={isEditing || undefined}>
-        <summary>
-          <OverviewOrb state={record.status === "open" ? "attention" : record.status === "resolved" ? "done" : "neutral"} label={record.status} />
-          <div className="memory-archive-copy"><span><strong>{record.message}</strong><small className="policy-source">{record.status}</small></span><p>{outcome(record) ?? `${record.occurrences} occurrence${record.occurrences === 1 ? "" : "s"} · last seen ${displayTime(record.lastSeenAt)}`}</p></div>
-          <IconChevronDown className="memory-ledger-chevron" size={13} />
-        </summary>
-        <div className="memory-ledger-detail">{isEditing ? <div className="memory-editor">
-          <label>Message<textarea value={draft} maxLength={500} rows={4} disabled={Boolean(busy)} onChange={(event) => setDraft(event.target.value)} /></label>
-          <div><button className="primary-button" type="button" disabled={!canMutate || !draft.trim()} onClick={() => void save(record)}>{busy === record.id ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
-        </div> : <>
-          <dl>
-            <div><dt>ID</dt><dd title={record.id}>{record.id.slice(0, 8)}</dd></div>
-            <div><dt>Created</dt><dd><time dateTime={record.createdAt}>{displayTime(record.createdAt)}</time></dd></div>
-            <div><dt>Last seen</dt><dd><time dateTime={record.lastSeenAt}>{displayTime(record.lastSeenAt)}</time></dd></div>
-            <div><dt>Occurrences</dt><dd>{record.occurrences}</dd></div>
-            {outcome(record) && <div><dt>{record.status === "resolved" ? "Resolution" : "Dismissal"}</dt><dd title={outcome(record)}>{outcome(record)}</dd></div>}
-          </dl>
-          <footer><button className="text-button" type="button" disabled={!canMutate} onClick={() => beginEdit(record)}>Edit</button><button className="text-button danger" type="button" disabled={!canMutate} onClick={() => { setMutationError(""); setDeleting(record); }}><IconTrash size={13} />Delete</button></footer>
-        </>}</div>
-      </details>;
-    })}</div>}
-    {page?.nextOffset !== null && page?.nextOffset !== undefined && <button className="session-usage-expand" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : `Load more · ${page.records.length}/${page.total}`}</button>}
-    {error && page && <p className="ui-request-error" role="alert">{error}</p>}
-    {mutationError && <p className="ui-request-error" role="alert">{mutationError}</p>}
-    {deleting && <ActionDialog
-      title="Delete papercut?"
-      description="This papercut will be permanently removed from the project backlog."
-      confirmLabel="Delete papercut" busyLabel="Deleting…" busy={busy === deleting.id} danger
-      onCancel={() => setDeleting(undefined)} onConfirm={() => void remove(deleting)}
-    />}
-  </div>;
+  );
 }
 
-
-function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: { live: RuntimeStoreSnapshot; reviewerConfigured?: boolean; onOpenReviewerSettings: () => void }) {
+function ContinuityMemory({
+  live,
+  reviewerConfigured,
+  onOpenReviewerSettings,
+}: {
+  live: RuntimeStoreSnapshot;
+  reviewerConfigured?: boolean;
+  onOpenReviewerSettings: () => void;
+}) {
   const continuity = live.runtime?.operational.continuity;
   const memory = continuity?.memory ?? [];
   const globalMemory = live.runtime?.operational.continuity.globalMemory ?? [];
@@ -555,113 +1500,376 @@ function ContinuityMemory({ live, reviewerConfigured, onOpenReviewerSettings }: 
   const [confirmingMigration, setConfirmingMigration] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const noteKey = (note: ContinuityMemoryNoteReadModel) => `${note.scope}:${note.id}`;
+  const noteKey = (note: ContinuityMemoryNoteReadModel) =>
+    `${note.scope}:${note.id}`;
   const query = search.trim().toLowerCase();
-  const matches = (note: ContinuityMemoryNoteReadModel) => !query || [note.trigger, note.guidance, note.authority, note.origin, ...(note.relatedPaths ?? [])]
-    .some((value) => value.toLowerCase().includes(query));
+  const matches = (note: ContinuityMemoryNoteReadModel) =>
+    !query ||
+    [
+      note.trigger,
+      note.guidance,
+      note.authority,
+      note.origin,
+      ...(note.relatedPaths ?? []),
+    ].some((value) => value.toLowerCase().includes(query));
   const visibleGlobalMemory = globalMemory.filter(matches);
   const visibleMemory = memory.filter(matches);
   const total = globalMemory.length + memory.length;
   const shown = visibleGlobalMemory.length + visibleMemory.length;
-  const idle = live.connection === "connected" && live.runtime?.ready === true
-    && live.runtime.conversation.streaming === false && !live.pendingUi && !busy;
+  const idle =
+    live.connection === "connected" &&
+    live.runtime?.ready === true &&
+    live.runtime.conversation.streaming === false &&
+    !live.pendingUi &&
+    !busy;
   const edit = (note: ContinuityMemoryNoteReadModel) => {
-    setEditing(noteKey(note)); setTrigger(note.trigger); setGuidance(note.guidance); setError("");
+    setEditing(noteKey(note));
+    setTrigger(note.trigger);
+    setGuidance(note.guidance);
+    setError("");
   };
   const save = async (note: ContinuityMemoryNoteReadModel) => {
     if (!idle || !trigger.trim() || !guidance.trim()) return;
-    setBusy(noteKey(note)); setError("");
+    setBusy(noteKey(note));
+    setError("");
     try {
-      await runtimeStore.updateContinuityMemory(note, trigger.trim(), guidance.trim());
+      await runtimeStore.updateContinuityMemory(
+        note,
+        trigger.trim(),
+        guidance.trim(),
+      );
       setEditing("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update memory");
-      if (cause instanceof Error && /\b(?:stale|changed|revision)\b/i.test(cause.message)) setEditing("");
-    } finally { setBusy(""); }
+      setError(
+        cause instanceof Error ? cause.message : "Unable to update memory",
+      );
+      if (
+        cause instanceof Error &&
+        /\b(?:stale|changed|revision)\b/i.test(cause.message)
+      )
+        setEditing("");
+    } finally {
+      setBusy("");
+    }
   };
   const remove = async (note: ContinuityMemoryNoteReadModel) => {
     if (!idle) return;
-    setBusy(noteKey(note)); setError("");
+    setBusy(noteKey(note));
+    setError("");
     try {
       await runtimeStore.deleteContinuityMemory(note);
       setEditing("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to delete memory");
-    } finally { setBusy(""); setDeleting(undefined); }
+      setError(
+        cause instanceof Error ? cause.message : "Unable to delete memory",
+      );
+    } finally {
+      setBusy("");
+      setDeleting(undefined);
+    }
   };
   const migrate = async () => {
     if (!idle || reviewerConfigured !== true) return;
-    setBusy("migration"); setError("");
-    try { await runtimeStore.migrateContinuityMemory(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to migrate V4 memory"); }
-    finally { setBusy(""); setConfirmingMigration(false); }
+    setBusy("migration");
+    setError("");
+    try {
+      await runtimeStore.migrateContinuityMemory();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Unable to migrate V4 memory",
+      );
+    } finally {
+      setBusy("");
+      setConfirmingMigration(false);
+    }
   };
-  const rows = (notes: ContinuityMemoryNoteReadModel[]) => notes.map((note) => {
-    const key = noteKey(note);
-    const isEditing = editing === key;
-    return <details className="memory-ledger-row" key={key} open={isEditing || undefined}>
-      <summary>
-        <div className="memory-archive-copy"><span><strong>{note.trigger}</strong><small className={`policy-source${note.scope === "project" ? " is-here" : ""}`}>{note.scope === "user" ? "global" : "project"}</small></span><p>{note.guidance}</p></div>
-        <IconChevronDown className="memory-ledger-chevron" size={13} />
-      </summary>
-      <div className="memory-ledger-detail">
-        {isEditing ? <div className="memory-editor">
-          <label>Trigger<input value={trigger} maxLength={240} disabled={Boolean(busy)} onChange={(event) => setTrigger(event.target.value)} /></label>
-          <label>Guidance<textarea value={guidance} maxLength={800} rows={5} disabled={Boolean(busy)} onChange={(event) => setGuidance(event.target.value)} /></label>
-          <div><button className="primary-button" type="button" disabled={!idle || !trigger.trim() || !guidance.trim() || trigger.trim().length + guidance.trim().length > 1_000} onClick={() => void save(note)}>{busy === key ? "Saving…" : "Save"}</button><button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => setEditing("")}>Cancel</button></div>
-        </div> : <>
-          <dl>
-            <div><dt>Authority</dt><dd>{note.authority.replaceAll("_", " ")}</dd></div>
-            <div><dt>Origin</dt><dd>{note.origin}</dd></div>
-            <div><dt>Updated</dt><dd><time dateTime={note.updatedAt}>{displayTime(note.updatedAt)}</time></dd></div>
-            <div><dt>Source summary</dt><dd title={note.sourceSummary}>{note.sourceSummary}</dd></div>
-            <div><dt>Related paths</dt><dd title={(note.relatedPaths ?? []).join("\n")}>{note.relatedPaths?.length ? note.relatedPaths.join(", ") : "None"}</dd></div>
-          </dl>
-          <footer><button className="text-button" type="button" disabled={!idle} onClick={() => edit(note)}>Edit</button><button className="text-button danger" type="button" disabled={!idle} onClick={() => { setError(""); setDeleting(note); }}><IconTrash size={13} />Delete</button></footer>
-        </>}
+  const rows = (notes: ContinuityMemoryNoteReadModel[]) =>
+    notes.map((note) => {
+      const key = noteKey(note);
+      const isEditing = editing === key;
+      return (
+        <details
+          className="memory-ledger-row"
+          key={key}
+          open={isEditing || undefined}
+        >
+          <summary>
+            <div className="memory-archive-copy">
+              <span>
+                <strong>{note.trigger}</strong>
+                <small
+                  className={`policy-source${note.scope === "project" ? " is-here" : ""}`}
+                >
+                  {note.scope === "user" ? "global" : "project"}
+                </small>
+              </span>
+              <p>{note.guidance}</p>
+            </div>
+            <IconChevronDown className="memory-ledger-chevron" size={13} />
+          </summary>
+          <div className="memory-ledger-detail">
+            {isEditing ? (
+              <div className="memory-editor">
+                <label>
+                  Trigger
+                  <input
+                    value={trigger}
+                    maxLength={240}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => setTrigger(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Guidance
+                  <textarea
+                    value={guidance}
+                    maxLength={800}
+                    rows={5}
+                    disabled={Boolean(busy)}
+                    onChange={(event) => setGuidance(event.target.value)}
+                  />
+                </label>
+                <div>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={
+                      !idle ||
+                      !trigger.trim() ||
+                      !guidance.trim() ||
+                      trigger.trim().length + guidance.trim().length > 1_000
+                    }
+                    onClick={() => void save(note)}
+                  >
+                    {busy === key ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => setEditing("")}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <dl>
+                  <div>
+                    <dt>Authority</dt>
+                    <dd>{note.authority.replaceAll("_", " ")}</dd>
+                  </div>
+                  <div>
+                    <dt>Origin</dt>
+                    <dd>{note.origin}</dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>
+                      <time dateTime={note.updatedAt}>
+                        {displayTime(note.updatedAt)}
+                      </time>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Source summary</dt>
+                    <dd title={note.sourceSummary}>{note.sourceSummary}</dd>
+                  </div>
+                  <div>
+                    <dt>Related paths</dt>
+                    <dd title={(note.relatedPaths ?? []).join("\n")}>
+                      {note.relatedPaths?.length
+                        ? note.relatedPaths.join(", ")
+                        : "None"}
+                    </dd>
+                  </div>
+                </dl>
+                <footer>
+                  <button
+                    className="text-button"
+                    type="button"
+                    disabled={!idle}
+                    onClick={() => edit(note)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="text-button danger"
+                    type="button"
+                    disabled={!idle}
+                    onClick={() => {
+                      setError("");
+                      setDeleting(note);
+                    }}
+                  >
+                    <IconTrash size={13} />
+                    Delete
+                  </button>
+                </footer>
+              </>
+            )}
+          </div>
+        </details>
+      );
+    });
+  if (live.runtime?.operational.continuity.availability === "unavailable")
+    return <FeatureUnavailable name="Continuity memory" />;
+  return (
+    <div className="memory-ledger memory-notes-ledger">
+      <div className="memory-ledger-head">
+        {reviewerConfigured === false && (
+          <div className="memory-reviewer-warning" role="status">
+            <OverviewOrb state="attention" label="Attention" />
+            <div>
+              <strong>Memory Reviewer is not configured</strong>
+              <span>
+                New memories proposed by the model will not be stored.
+              </span>
+              <button
+                className="text-button"
+                type="button"
+                onClick={onOpenReviewerSettings}
+              >
+                Select a reviewer ›
+              </button>
+            </div>
+          </div>
+        )}
+        {continuity?.v4MigrationAvailable && (
+          <div className="memory-migration-banner" role="status">
+            <div>
+              <IconRestore size={16} />
+              <span>
+                <strong>Previous memory found</strong>
+                <small>
+                  Review and migrate preserved V4 notes into the V5 notebook.
+                </small>
+              </span>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!idle || reviewerConfigured === undefined}
+              onClick={() =>
+                reviewerConfigured === false
+                  ? onOpenReviewerSettings()
+                  : setConfirmingMigration(true)
+              }
+            >
+              {reviewerConfigured === false
+                ? "Select Memory Reviewer"
+                : reviewerConfigured === undefined
+                  ? "Loading settings…"
+                  : "Migrate memory"}
+            </button>
+          </div>
+        )}
+        <label className="memory-ledger-search">
+          <IconSearch size={13} />
+          <span className="sr-only">Search memory</span>
+          <input
+            type="search"
+            value={search}
+            placeholder={`Search ${total} note${total === 1 ? "" : "s"}`}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+          <span className="mono">{query ? `${shown}/${total}` : total}</span>
+        </label>
       </div>
-    </details>;
-  });
-  if (live.runtime?.operational.continuity.availability === "unavailable") return <FeatureUnavailable name="Continuity memory" />;
-  return <div className="memory-ledger memory-notes-ledger">
-    <div className="memory-ledger-head">
-      {reviewerConfigured === false && <div className="memory-reviewer-warning" role="status"><OverviewOrb state="attention" label="Attention" /><div><strong>Memory Reviewer is not configured</strong><span>New memories proposed by the model will not be stored.</span><button className="text-button" type="button" onClick={onOpenReviewerSettings}>Select a reviewer ›</button></div></div>}
-      {continuity?.v4MigrationAvailable && <div className="memory-migration-banner" role="status"><div><IconRestore size={16} /><span><strong>Previous memory found</strong><small>Review and migrate preserved V4 notes into the V5 notebook.</small></span></div><button className="secondary-button" type="button" disabled={!idle || reviewerConfigured === undefined} onClick={() => reviewerConfigured === false ? onOpenReviewerSettings() : setConfirmingMigration(true)}>{reviewerConfigured === false ? "Select Memory Reviewer" : reviewerConfigured === undefined ? "Loading settings…" : "Migrate memory"}</button></div>}
-      <label className="memory-ledger-search"><IconSearch size={13} /><span className="sr-only">Search memory</span><input type="search" value={search} placeholder={`Search ${total} note${total === 1 ? "" : "s"}`} onChange={(event) => setSearch(event.target.value)} /><span className="mono">{query ? `${shown}/${total}` : total}</span></label>
+      {shown > 0 && (
+        <section className="memory-ledger-list" aria-label="Memory archive">
+          {rows([...visibleMemory, ...visibleGlobalMemory])}
+        </section>
+      )}
+      {!query && total === 0 && (
+        <div className="memory-ledger-empty">
+          <strong>No saved memory</strong>
+          <span>
+            Continuity has not saved durable guidance for this project or user.
+          </span>
+        </div>
+      )}
+      {query && shown === 0 && (
+        <div className="memory-ledger-no-results">
+          <IconSearch size={18} />
+          <strong>No matching memory</strong>
+          <span>
+            Try a trigger, guidance, authority, origin, or related path.
+          </span>
+        </div>
+      )}
+      {!idle && total > 0 && (
+        <p className="settings-note" role="status">
+          Memory changes are available when the session is idle.
+        </p>
+      )}
+      {error && (
+        <p className="ui-request-error" role="alert">
+          {error}
+        </p>
+      )}
+      {deleting && (
+        <ActionDialog
+          title={`Delete ${deleting.scope === "user" ? "global" : "project"} memory?`}
+          description={
+            deleting.scope === "user"
+              ? "This rule will be removed from every project."
+              : "This rule will be removed from this project."
+          }
+          confirmLabel="Delete memory"
+          busyLabel="Deleting…"
+          busy={busy === noteKey(deleting)}
+          danger
+          onCancel={() => setDeleting(undefined)}
+          onConfirm={() => void remove(deleting)}
+        />
+      )}
+      {confirmingMigration && (
+        <ActionDialog
+          title="Migrate previous memory?"
+          description="The configured Memory Reviewer will keep, revise, or reject each V4 note. Backups remain available for rollback until the next V5 write."
+          confirmLabel="Migrate memory"
+          busyLabel="Migrating…"
+          busy={busy === "migration"}
+          onCancel={() => setConfirmingMigration(false)}
+          onConfirm={() => void migrate()}
+        />
+      )}
     </div>
-    {shown > 0 && <section className="memory-ledger-list" aria-label="Memory archive">{rows([...visibleMemory, ...visibleGlobalMemory])}</section>}
-    {!query && total === 0 && <div className="memory-ledger-empty"><strong>No saved memory</strong><span>Continuity has not saved durable guidance for this project or user.</span></div>}
-    {query && shown === 0 && <div className="memory-ledger-no-results"><IconSearch size={18} /><strong>No matching memory</strong><span>Try a trigger, guidance, authority, origin, or related path.</span></div>}
-    {!idle && total > 0 && <p className="settings-note" role="status">Memory changes are available when the session is idle.</p>}
-    {error && <p className="ui-request-error" role="alert">{error}</p>}
-    {deleting && <ActionDialog
-      title={`Delete ${deleting.scope === "user" ? "global" : "project"} memory?`}
-      description={deleting.scope === "user" ? "This rule will be removed from every project." : "This rule will be removed from this project."}
-      confirmLabel="Delete memory" busyLabel="Deleting…" busy={busy === noteKey(deleting)} danger
-      onCancel={() => setDeleting(undefined)} onConfirm={() => void remove(deleting)}
-    />}
-    {confirmingMigration && <ActionDialog
-      title="Migrate previous memory?"
-      description="The configured Memory Reviewer will keep, revise, or reject each V4 note. Backups remain available for rollback until the next V5 write."
-      confirmLabel="Migrate memory" busyLabel="Migrating…" busy={busy === "migration"}
-      onCancel={() => setConfirmingMigration(false)} onConfirm={() => void migrate()}
-    />}
-  </div>;
+  );
 }
 
-export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
+export function StateQLWorkspace({
+  live,
+  onClose,
+}: {
+  live: RuntimeStoreSnapshot;
+  onClose: () => void;
+}) {
   const snapshotScope = `${live.connection}:${live.runtime?.ready ?? false}:${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
-  const [snapshotState, setSnapshotState] = useState<{ scope: string; value: StateQLSnapshot }>();
-  const snapshot = snapshotState?.scope === snapshotScope ? snapshotState.value : undefined;
+  const [snapshotState, setSnapshotState] = useState<{
+    scope: string;
+    value: StateQLSnapshot;
+  }>();
+  const snapshot =
+    snapshotState?.scope === snapshotScope ? snapshotState.value : undefined;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
-  const [activityFilter, setActivityFilter] = useState<StateQLActivityFilter>("all");
-  const [expandedActivity, setExpandedActivity] = useState<Set<string>>(new Set());
-  const toolRevision = useMemo(() => (live.runtime?.conversation.tools ?? [])
-    .filter((tool) => tool.name === "stateql" && tool.status !== "running")
-    .map((tool) => `${tool.id}:${tool.status}`)
-    .join("|"), [live.runtime?.conversation.tools]);
+  const [activityFilter, setActivityFilter] =
+    useState<StateQLActivityFilter>("all");
+  const [expandedActivity, setExpandedActivity] = useState<Set<string>>(
+    new Set(),
+  );
+  const toolRevision = useMemo(
+    () =>
+      (live.runtime?.conversation.tools ?? [])
+        .filter((tool) => tool.name === "stateql" && tool.status !== "running")
+        .map((tool) => `${tool.id}:${tool.status}`)
+        .join("|"),
+    [live.runtime?.conversation.tools],
+  );
 
   useEffect(() => {
     setLoading(true);
@@ -672,7 +1880,8 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
     }
     const controller = new AbortController();
     let active = true;
-    void runtimeStore.stateqlSnapshot(50, controller.signal)
+    void runtimeStore
+      .stateqlSnapshot(50, controller.signal)
       .then((value) => {
         if (!active) return;
         setSnapshotState({ scope: snapshotScope, value });
@@ -680,145 +1889,491 @@ export function StateQLWorkspace({ live, onClose }: { live: RuntimeStoreSnapshot
         setExpandedActivity(first ? new Set([first.id]) : new Set());
       })
       .catch((cause) => {
-        if (active && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "StateQL status failed to load");
+        if (active && !controller.signal.aborted)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "StateQL status failed to load",
+          );
       })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; controller.abort(); };
-  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration, refresh, toolRevision]);
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [
+    live.connection,
+    live.runtime?.ready,
+    live.runtime?.sessionId,
+    live.runtime?.sessionGeneration,
+    refresh,
+    toolRevision,
+  ]);
 
-  const activity = useMemo(() => snapshot ? buildStateQLActivity(snapshot) : [], [snapshot]);
-  const visibleActivity = useMemo(() => filterStateQLActivity(activity, activityFilter), [activity, activityFilter]);
-  const visibleHistory = visibleActivity.filter((item) => item.source === "history");
-  const visibleMetadata = visibleActivity.filter((item) => item.source === "metadata");
-  const historyCount = activity.filter((item) => item.source === "history").length;
+  const activity = useMemo(
+    () => (snapshot ? buildStateQLActivity(snapshot) : []),
+    [snapshot],
+  );
+  const visibleActivity = useMemo(
+    () => filterStateQLActivity(activity, activityFilter),
+    [activity, activityFilter],
+  );
+  const visibleHistory = visibleActivity.filter(
+    (item) => item.source === "history",
+  );
+  const visibleMetadata = visibleActivity.filter(
+    (item) => item.source === "metadata",
+  );
+  const historyCount = activity.filter(
+    (item) => item.source === "history",
+  ).length;
   const metadataCount = activity.length - historyCount;
-  const allVisibleExpanded = visibleActivity.length > 0 && visibleActivity.every((item) => expandedActivity.has(item.id));
+  const allVisibleExpanded =
+    visibleActivity.length > 0 &&
+    visibleActivity.every((item) => expandedActivity.has(item.id));
   const rowsScope = `${live.runtime?.sessionGeneration ?? "none"}:${live.runtime?.sessionId ?? "none"}`;
-  const header = <header className="stateql-ledger-header">
-    <div><h1 id="database-panel-title">Database</h1><span>{snapshot?.session.name ?? "Command ledger"}</span></div>
-    <span className="stateql-ledger-header-spacer" />
-    <button className="text-button" type="button" disabled={loading || !snapshot} aria-live="polite" onClick={() => setRefresh((value) => value + 1)}>
-      {loading ? <IconLoader2 className="spin" size={14} /> : <IconRefresh size={14} />}{loading ? "Refreshing" : "Refresh"}
-    </button>
-    <button className="icon-button" type="button" onClick={onClose} aria-label="Close database"><IconX size={17} /></button>
-  </header>;
+  const header = (
+    <header className="stateql-ledger-header">
+      <div>
+        <h1 id="database-panel-title">Database</h1>
+        <span>{snapshot?.session.name ?? "Command ledger"}</span>
+      </div>
+      <span className="stateql-ledger-header-spacer" />
+      <button
+        className="text-button"
+        type="button"
+        disabled={loading || !snapshot}
+        aria-live="polite"
+        onClick={() => setRefresh((value) => value + 1)}
+      >
+        {loading ? (
+          <IconLoader2 className="spin" size={14} />
+        ) : (
+          <IconRefresh size={14} />
+        )}
+        {loading ? "Refreshing" : "Refresh"}
+      </button>
+      <button
+        className="icon-button"
+        type="button"
+        onClick={onClose}
+        aria-label="Close database"
+      >
+        <IconX size={17} />
+      </button>
+    </header>
+  );
 
-  if (!snapshot) return <div className="stateql-workspace">
-    {header}
-    <div className="stateql-ledger-empty">
-      {loading ? <IconLoader2 className="spin" size={20} /> : <IconDatabase size={20} />}
-      <strong>{loading ? "Loading StateQL" : "StateQL unavailable"}</strong>
-      <span>{loading ? "Reading bounded local status and history." : error || "No StateQL snapshot is available for this actor."}</span>
-    </div>
-  </div>;
+  if (!snapshot)
+    return (
+      <div className="stateql-workspace">
+        {header}
+        <div className="stateql-ledger-empty">
+          {loading ? (
+            <IconLoader2 className="spin" size={20} />
+          ) : (
+            <IconDatabase size={20} />
+          )}
+          <strong>{loading ? "Loading StateQL" : "StateQL unavailable"}</strong>
+          <span>
+            {loading
+              ? "Reading bounded local status and history."
+              : error || "No StateQL snapshot is available for this actor."}
+          </span>
+        </div>
+      </div>
+    );
 
   const connection = snapshot.connection;
-  const mode = connection ? `${connection.driver} / ${connection.read_only ? "read-only" : "read-write"}` : "disconnected";
-  const toggleAll = () => setExpandedActivity((current) => {
-    if (allVisibleExpanded) return new Set([...current].filter((id) => !visibleActivity.some((item) => item.id === id)));
-    return new Set([...current, ...visibleActivity.map((item) => item.id)]);
-  });
-  const setExpanded = (item: StateQLActivityItem, open: boolean) => setExpandedActivity((current) => {
-    const next = new Set(current);
-    if (open) next.add(item.id); else next.delete(item.id);
-    return next;
-  });
+  const mode = connection
+    ? `${connection.driver} / ${connection.read_only ? "read-only" : "read-write"}`
+    : "disconnected";
+  const toggleAll = () =>
+    setExpandedActivity((current) => {
+      if (allVisibleExpanded)
+        return new Set(
+          [...current].filter(
+            (id) => !visibleActivity.some((item) => item.id === id),
+          ),
+        );
+      return new Set([...current, ...visibleActivity.map((item) => item.id)]);
+    });
+  const setExpanded = (item: StateQLActivityItem, open: boolean) =>
+    setExpandedActivity((current) => {
+      const next = new Set(current);
+      if (open) next.add(item.id);
+      else next.delete(item.id);
+      return next;
+    });
 
-  return <div className="stateql-workspace">
-    {header}
-    <section className="stateql-connection-strip" aria-label="Database context">
-      <div className="stateql-connection-primary">
-        <strong className="mono" title={connection?.name}>{connection?.name ?? "No active connection"}</strong>
-        <span className={connection ? "is-connected" : ""}>{mode}</span>
-      </div>
-      <dl>
-        <div><dt>Database</dt><dd className="mono" title={connection?.database}>{connection?.database ?? "Unavailable"}</dd></div>
-        <div><dt>Transaction</dt><dd>{snapshot.transaction?.state ?? "None"}</dd></div>
-        <div><dt>State</dt><dd className="mono">{snapshot.state_version ?? "Unavailable"}</dd></div>
-        <div><dt>Confidence</dt><dd>{snapshot.state_confidence ?? "Unavailable"}</dd></div>
-      </dl>
-      <span className="stateql-ledger-actor mono" title={snapshot.actor_id}>Actor {snapshot.actor_id}</span>
-    </section>
-    {error && <p className="stateql-ledger-error" role="alert">Refresh failed. Showing the last available snapshot. {error}</p>}
-    <section className="stateql-ledger-body" aria-labelledby="stateql-activity-title">
-      <header className="stateql-ledger-toolbar">
-        <h2 id="stateql-activity-title">Session activity</h2>
-        <span className="mono">{historyCount} / {metadataCount} history / retained</span>
-        <div className="stateql-ledger-filters" role="group" aria-label="Filter database activity">
-          {(["all", "read", "write", "error"] as const).map((filter) => {
-            const count = filterStateQLActivity(activity, filter).length;
-            return <button type="button" aria-pressed={activityFilter === filter} key={filter} onClick={() => setActivityFilter(filter)}>
-              {filter === "all" ? "All" : filter === "read" ? "Reads" : filter === "write" ? "Writes" : "Errors"}<span>{count}</span>
-            </button>;
-          })}
+  return (
+    <div className="stateql-workspace">
+      {header}
+      <section
+        className="stateql-connection-strip"
+        aria-label="Database context"
+      >
+        <div className="stateql-connection-primary">
+          <strong className="mono" title={connection?.name}>
+            {connection?.name ?? "No active connection"}
+          </strong>
+          <span className={connection ? "is-connected" : ""}>{mode}</span>
         </div>
-        <button className="text-button stateql-expand-all" type="button" disabled={visibleActivity.length === 0} onClick={toggleAll}>{allVisibleExpanded ? "Collapse all" : "Expand all"}</button>
-      </header>
-      {visibleActivity.length > 0 ? <div className="stateql-ledger-scroll" role="region" aria-label="Scrollable database activity ledger" tabIndex={0}>
-        <table className="stateql-ledger-table">
-          <caption className="sr-only">Bounded StateQL session history and retained metadata</caption>
-          <colgroup><col className="toggle" /><col className="command" /><col className="handle" /><col className="actor" /><col className="status" /><col className="time" /></colgroup>
-          <thead><tr><th aria-label="Expand activity" /><th>Command</th><th>Handle</th><th>Actor</th><th>Status</th><th>Time</th></tr></thead>
-          <tbody>
-            {visibleHistory.map((item) => <StateQLLedgerItem item={item} expanded={expandedActivity.has(item.id)} key={item.id} rowsScope={rowsScope} onExpandedChange={(open) => setExpanded(item, open)} />)}
-            {visibleMetadata.length > 0 && <tr className="stateql-ledger-metadata"><td colSpan={6}>Recent metadata without timestamp</td></tr>}
-            {visibleMetadata.map((item) => <StateQLLedgerItem item={item} expanded={expandedActivity.has(item.id)} key={item.id} rowsScope={rowsScope} onExpandedChange={(open) => setExpanded(item, open)} />)}
-          </tbody>
-        </table>
-      </div> : <div className="stateql-ledger-empty">
-        <IconClock size={20} /><strong>No matching activity</strong><span>{activity.length === 0 ? "Commands run in this shared workspace will appear here." : `No ${activityFilter} activity is available in the bounded snapshot.`}</span>
-      </div>}
-    </section>
-  </div>;
+        <dl>
+          <div>
+            <dt>Database</dt>
+            <dd className="mono" title={connection?.database}>
+              {connection?.database ?? "Unavailable"}
+            </dd>
+          </div>
+          <div>
+            <dt>Transaction</dt>
+            <dd>{snapshot.transaction?.state ?? "None"}</dd>
+          </div>
+          <div>
+            <dt>State</dt>
+            <dd className="mono">{snapshot.state_version ?? "Unavailable"}</dd>
+          </div>
+          <div>
+            <dt>Confidence</dt>
+            <dd>{snapshot.state_confidence ?? "Unavailable"}</dd>
+          </div>
+        </dl>
+        <span className="stateql-ledger-actor mono" title={snapshot.actor_id}>
+          Actor {snapshot.actor_id}
+        </span>
+      </section>
+      {error && (
+        <p className="stateql-ledger-error" role="alert">
+          Refresh failed. Showing the last available snapshot. {error}
+        </p>
+      )}
+      <section
+        className="stateql-ledger-body"
+        aria-labelledby="stateql-activity-title"
+      >
+        <header className="stateql-ledger-toolbar">
+          <h2 id="stateql-activity-title">Session activity</h2>
+          <span className="mono">
+            {historyCount} / {metadataCount} history / retained
+          </span>
+          <div
+            className="stateql-ledger-filters"
+            role="group"
+            aria-label="Filter database activity"
+          >
+            {(["all", "read", "write", "error"] as const).map((filter) => {
+              const count = filterStateQLActivity(activity, filter).length;
+              return (
+                <button
+                  type="button"
+                  aria-pressed={activityFilter === filter}
+                  key={filter}
+                  onClick={() => setActivityFilter(filter)}
+                >
+                  {filter === "all"
+                    ? "All"
+                    : filter === "read"
+                      ? "Reads"
+                      : filter === "write"
+                        ? "Writes"
+                        : "Errors"}
+                  <span>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="text-button stateql-expand-all"
+            type="button"
+            disabled={visibleActivity.length === 0}
+            onClick={toggleAll}
+          >
+            {allVisibleExpanded ? "Collapse all" : "Expand all"}
+          </button>
+        </header>
+        {visibleActivity.length > 0 ? (
+          <div
+            className="stateql-ledger-scroll"
+            role="region"
+            aria-label="Scrollable database activity ledger"
+            tabIndex={0}
+          >
+            <table className="stateql-ledger-table">
+              <caption className="sr-only">
+                Bounded StateQL session history and retained metadata
+              </caption>
+              <colgroup>
+                <col className="toggle" />
+                <col className="command" />
+                <col className="handle" />
+                <col className="actor" />
+                <col className="status" />
+                <col className="time" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th aria-label="Expand activity" />
+                  <th>Command</th>
+                  <th>Handle</th>
+                  <th>Actor</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleHistory.map((item) => (
+                  <StateQLLedgerItem
+                    item={item}
+                    expanded={expandedActivity.has(item.id)}
+                    key={item.id}
+                    rowsScope={rowsScope}
+                    onExpandedChange={(open) => setExpanded(item, open)}
+                  />
+                ))}
+                {visibleMetadata.length > 0 && (
+                  <tr className="stateql-ledger-metadata">
+                    <td colSpan={6}>Recent metadata without timestamp</td>
+                  </tr>
+                )}
+                {visibleMetadata.map((item) => (
+                  <StateQLLedgerItem
+                    item={item}
+                    expanded={expandedActivity.has(item.id)}
+                    key={item.id}
+                    rowsScope={rowsScope}
+                    onExpandedChange={(open) => setExpanded(item, open)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="stateql-ledger-empty">
+            <IconClock size={20} />
+            <strong>No matching activity</strong>
+            <span>
+              {activity.length === 0
+                ? "Commands run in this shared workspace will appear here."
+                : `No ${activityFilter} activity is available in the bounded snapshot.`}
+            </span>
+          </div>
+        )}
+      </section>
+    </div>
+  );
 }
 
 function stateqlExecution(item: StateQLActivityItem): string {
-  return item.source === "metadata" ? "History unavailable" : item.cached ? "cache hit" : item.executed ? "database executed" : item.success ? "completed" : "failed";
+  return item.source === "metadata"
+    ? "History unavailable"
+    : item.cached
+      ? "cache hit"
+      : item.executed
+        ? "database executed"
+        : item.success
+          ? "completed"
+          : "failed";
 }
 
-function StateQLLedgerItem({ item, expanded, rowsScope, onExpandedChange }: { item: StateQLActivityItem; expanded: boolean; rowsScope: string; onExpandedChange: (open: boolean) => void }) {
+function StateQLLedgerItem({
+  item,
+  expanded,
+  rowsScope,
+  onExpandedChange,
+}: {
+  item: StateQLActivityItem;
+  expanded: boolean;
+  rowsScope: string;
+  onExpandedChange: (open: boolean) => void;
+}) {
   const status = stateqlActivityStatus(item);
-  const kind = item.tags.includes("error") ? "error" : item.tags.includes("write") ? "write" : item.tags.includes("read") ? "read" : "other";
-  const marker = kind === "error" ? "!" : kind === "write" ? "W" : kind === "read" ? "Q" : "M";
+  const kind = item.tags.includes("error")
+    ? "error"
+    : item.tags.includes("write")
+      ? "write"
+      : item.tags.includes("read")
+        ? "read"
+        : "other";
+  const marker =
+    kind === "error"
+      ? "!"
+      : kind === "write"
+        ? "W"
+        : kind === "read"
+          ? "Q"
+          : "M";
   const detailId = `stateql-detail-${encodeURIComponent(item.id)}`;
-  return <>
-    <tr className={`stateql-ledger-row is-${kind} ${expanded ? "is-expanded" : ""}`} onClick={() => onExpandedChange(!expanded)}>
-      <td><button type="button" aria-expanded={expanded} aria-controls={detailId} aria-label={`${expanded ? "Collapse" : "Expand"} ${item.command}`} onClick={(event) => { event.stopPropagation(); onExpandedChange(!expanded); }}><IconChevronDown size={15} /></button></td>
-      <th scope="row"><span className="stateql-ledger-command"><span className="stateql-ledger-marker" aria-hidden="true">{marker}</span><span>{item.command}</span></span></th>
-      <td className="mono" title={item.result?.alias ?? item.handle}>{item.result?.alias ?? item.handle ?? "N/A"}</td>
-      <td className="mono" title={item.actorId}>{item.actorId ?? "N/A"}</td>
-      <td><Status tone={status.tone}>{status.label}</Status></td>
-      <td className="mono">{item.timestamp ? <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time> : "No time"}</td>
-    </tr>
-    {expanded && <tr className="stateql-ledger-detail" id={detailId}><td colSpan={6}><StateQLLedgerDetail item={item} rowsScope={rowsScope} /></td></tr>}
-  </>;
+  return (
+    <>
+      <tr
+        className={`stateql-ledger-row is-${kind} ${expanded ? "is-expanded" : ""}`}
+        onClick={() => onExpandedChange(!expanded)}
+      >
+        <td>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={detailId}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${item.command}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onExpandedChange(!expanded);
+            }}
+          >
+            <IconChevronDown size={15} />
+          </button>
+        </td>
+        <th scope="row">
+          <span className="stateql-ledger-command">
+            <span className="stateql-ledger-marker" aria-hidden="true">
+              {marker}
+            </span>
+            <span>{item.command}</span>
+          </span>
+        </th>
+        <td className="mono" title={item.result?.alias ?? item.handle}>
+          {item.result?.alias ?? item.handle ?? "N/A"}
+        </td>
+        <td className="mono" title={item.actorId}>
+          {item.actorId ?? "N/A"}
+        </td>
+        <td>
+          <Status tone={status.tone}>{status.label}</Status>
+        </td>
+        <td className="mono">
+          {item.timestamp ? (
+            <time dateTime={item.timestamp}>{displayTime(item.timestamp)}</time>
+          ) : (
+            "No time"
+          )}
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="stateql-ledger-detail" id={detailId}>
+          <td colSpan={6}>
+            <StateQLLedgerDetail item={item} rowsScope={rowsScope} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
 }
 
-function StateQLLedgerDetail({ item, rowsScope }: { item: StateQLActivityItem; rowsScope: string }) {
-  return <div className="stateql-ledger-detail-grid">
-    <section className="stateql-ledger-sql" aria-label="SQL statement">
-      <header><strong>SQL statement</strong><span>{stateqlExecution(item)}</span></header>
-      <p>SQL may contain inline literals or comments. Parameters are not included in activity history.</p>
-      {item.sql !== undefined ? <pre dir="ltr"><code>{item.sql}</code></pre> : <span className="stateql-ledger-unavailable">SQL was not retained for this activity.</span>}
-    </section>
-    <section className="stateql-ledger-receipts" aria-label="Database receipt">
-      <header><strong>{item.result ? "Result receipt" : item.operation ? "Operation receipt" : "Activity receipt"}</strong><span>{item.source === "metadata" ? "retained metadata" : "session history"}</span></header>
-      {item.result && <div className="stateql-ledger-receipt">
-        <div><small>Result handle</small><strong className="mono" title={item.result.handle}>{item.result.handle}</strong></div>
-        <div><small>Alias</small><strong>{item.result.alias ?? "No alias"}</strong></div>
-        <div><small>Rows</small><strong className="mono">{item.result.rows}</strong></div>
-      </div>}
-      {item.operation && <div className="stateql-ledger-receipt">
-        <div><small>Operation handle</small><strong className="mono" title={item.operation.handle}>{item.operation.handle}</strong></div>
-        <div><small>Affected</small><strong>{item.operation.affected_rows === null ? "Unavailable" : `${item.operation.affected_rows} rows`}</strong></div>
-        <div><small>State</small><strong>{item.operation.status}</strong></div>
-      </div>}
-      {!item.result && !item.operation && <span className="stateql-ledger-unavailable">No retained receipt is available.</span>}
-      {item.handle && <p className="mono" title={item.handle}>{item.handle}</p>}
-      {item.result && item.operation && <p className="stateql-ledger-warning">This handle matches both result and operation metadata.</p>}
-    </section>
-    {item.result && <StateQLMaterializedRows active handle={item.result.handle} key={`${rowsScope}:${item.result.handle}`} total={item.result.rows} />}
-  </div>;
+function StateQLLedgerDetail({
+  item,
+  rowsScope,
+}: {
+  item: StateQLActivityItem;
+  rowsScope: string;
+}) {
+  return (
+    <div className="stateql-ledger-detail-grid">
+      <section className="stateql-ledger-sql" aria-label="SQL statement">
+        <header>
+          <strong>SQL statement</strong>
+          <span>{stateqlExecution(item)}</span>
+        </header>
+        <p>
+          SQL may contain inline literals or comments. Parameters are not
+          included in activity history.
+        </p>
+        {item.sql !== undefined ? (
+          <pre dir="ltr">
+            <code>{item.sql}</code>
+          </pre>
+        ) : (
+          <span className="stateql-ledger-unavailable">
+            SQL was not retained for this activity.
+          </span>
+        )}
+      </section>
+      <section
+        className="stateql-ledger-receipts"
+        aria-label="Database receipt"
+      >
+        <header>
+          <strong>
+            {item.result
+              ? "Result receipt"
+              : item.operation
+                ? "Operation receipt"
+                : "Activity receipt"}
+          </strong>
+          <span>
+            {item.source === "metadata"
+              ? "retained metadata"
+              : "session history"}
+          </span>
+        </header>
+        {item.result && (
+          <div className="stateql-ledger-receipt">
+            <div>
+              <small>Result handle</small>
+              <strong className="mono" title={item.result.handle}>
+                {item.result.handle}
+              </strong>
+            </div>
+            <div>
+              <small>Alias</small>
+              <strong>{item.result.alias ?? "No alias"}</strong>
+            </div>
+            <div>
+              <small>Rows</small>
+              <strong className="mono">{item.result.rows}</strong>
+            </div>
+          </div>
+        )}
+        {item.operation && (
+          <div className="stateql-ledger-receipt">
+            <div>
+              <small>Operation handle</small>
+              <strong className="mono" title={item.operation.handle}>
+                {item.operation.handle}
+              </strong>
+            </div>
+            <div>
+              <small>Affected</small>
+              <strong>
+                {item.operation.affected_rows === null
+                  ? "Unavailable"
+                  : `${item.operation.affected_rows} rows`}
+              </strong>
+            </div>
+            <div>
+              <small>State</small>
+              <strong>{item.operation.status}</strong>
+            </div>
+          </div>
+        )}
+        {!item.result && !item.operation && (
+          <span className="stateql-ledger-unavailable">
+            No retained receipt is available.
+          </span>
+        )}
+        {item.handle && (
+          <p className="mono" title={item.handle}>
+            {item.handle}
+          </p>
+        )}
+        {item.result && item.operation && (
+          <p className="stateql-ledger-warning">
+            This handle matches both result and operation metadata.
+          </p>
+        )}
+      </section>
+      {item.result && (
+        <StateQLMaterializedRows
+          active
+          handle={item.result.handle}
+          key={`${rowsScope}:${item.result.handle}`}
+          total={item.result.rows}
+        />
+      )}
+    </div>
+  );
 }
 
 const STATEQL_ROWS_PAGE_SIZE = 25;
@@ -826,17 +2381,27 @@ const STATEQL_ROWS_PAGE_SIZE = 25;
 function stateqlCellText(value: unknown): string {
   if (value === null) return "NULL";
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value);
   return JSON.stringify(value);
 }
 
 function stateqlColumns(page: StateQLRowsPage | undefined): string[] {
   const columns = new Set<string>();
-  for (const row of page?.rows ?? []) for (const key of Object.keys(row)) columns.add(key);
+  for (const row of page?.rows ?? [])
+    for (const key of Object.keys(row)) columns.add(key);
   return [...columns];
 }
 
-function StateQLMaterializedRows({ active, handle, total }: { active: boolean; handle: string; total: number }) {
+function StateQLMaterializedRows({
+  active,
+  handle,
+  total,
+}: {
+  active: boolean;
+  handle: string;
+  total: number;
+}) {
   const [open, setOpen] = useState(false);
   const [offset, setOffset] = useState(0);
   const [page, setPage] = useState<StateQLRowsPage>();
@@ -851,13 +2416,26 @@ function StateQLMaterializedRows({ active, handle, total }: { active: boolean; h
     let current = true;
     setLoading(true);
     setError("");
-    void runtimeStore.stateqlRows(handle, offset, STATEQL_ROWS_PAGE_SIZE, controller.signal)
-      .then((value) => { if (current) setPage(value); })
-      .catch((cause) => {
-        if (current && !controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Materialized rows failed to load");
+    void runtimeStore
+      .stateqlRows(handle, offset, STATEQL_ROWS_PAGE_SIZE, controller.signal)
+      .then((value) => {
+        if (current) setPage(value);
       })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; controller.abort(); };
+      .catch((cause) => {
+        if (current && !controller.signal.aborted)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Materialized rows failed to load",
+          );
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
   }, [active, handle, offset, open, retry]);
 
   const move = (nextOffset: number) => {
@@ -868,40 +2446,122 @@ function StateQLMaterializedRows({ active, handle, total }: { active: boolean; h
   const start = page && page.returned > 0 ? page.offset + 1 : 0;
   const end = page && page.returned > 0 ? page.offset + page.returned : 0;
 
-  return <details className="stateql-rows" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>
-      <span><strong>Materialized rows</strong><small>Loaded on demand from this result handle.</small></span>
-      <span className="mono">{total.toLocaleString()} rows</span>
-      <IconChevronDown size={15} aria-hidden="true" />
-    </summary>
-    <div className="stateql-rows-content">
-      <p className="stateql-rows-note">Rows can contain sensitive database content. Only this bounded page is loaded.</p>
-      {loading && !page && <div className="stateql-rows-state" role="status"><IconLoader2 className="spin" size={15} />Loading rows</div>}
-      {error && <div className="stateql-rows-state is-error" role="alert"><span>{error}</span><button className="text-button" type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>}
-      {page && page.rows.length === 0 && <div className="stateql-rows-state"><span>No rows are available on this page.</span></div>}
-      {page && page.rows.length > 0 && <div className="stateql-rows-scroll" role="region" aria-label={`Rows for ${handle}`} tabIndex={0}>
-        <table>
-          <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
-          <tbody>{page.rows.map((row, rowIndex) => <tr key={`${page.offset}:${rowIndex}`}>
-            {columns.map((column) => {
-              const text = Object.hasOwn(row, column) ? stateqlCellText(row[column]) : "N/A";
-              return <td className="mono" title={text} key={column}>{text}</td>;
-            })}
-          </tr>)}</tbody>
-        </table>
-      </div>}
-      {page && <footer className="stateql-rows-footer">
-        <span className="mono">{start}-{end} of {page.total.toLocaleString()}</span>
-        <div>
-          <button className="text-button" type="button" disabled={loading || page.offset === 0} onClick={() => move(Math.max(0, page.offset - page.limit))}>Previous</button>
-          <button className="text-button" type="button" disabled={loading || page.next_offset === null} onClick={() => page.next_offset !== null && move(page.next_offset)}>Next</button>
-        </div>
-      </footer>}
-    </div>
-  </details>;
+  return (
+    <details
+      className="stateql-rows"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>
+          <strong>Materialized rows</strong>
+          <small>Loaded on demand from this result handle.</small>
+        </span>
+        <span className="mono">{total.toLocaleString()} rows</span>
+        <IconChevronDown size={15} aria-hidden="true" />
+      </summary>
+      <div className="stateql-rows-content">
+        <p className="stateql-rows-note">
+          Rows can contain sensitive database content. Only this bounded page is
+          loaded.
+        </p>
+        {loading && !page && (
+          <div className="stateql-rows-state" role="status">
+            <IconLoader2 className="spin" size={15} />
+            Loading rows
+          </div>
+        )}
+        {error && (
+          <div className="stateql-rows-state is-error" role="alert">
+            <span>{error}</span>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => setRetry((value) => value + 1)}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {page && page.rows.length === 0 && (
+          <div className="stateql-rows-state">
+            <span>No rows are available on this page.</span>
+          </div>
+        )}
+        {page && page.rows.length > 0 && (
+          <div
+            className="stateql-rows-scroll"
+            role="region"
+            aria-label={`Rows for ${handle}`}
+            tabIndex={0}
+          >
+            <table>
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th scope="col" key={column}>
+                      {column}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {page.rows.map((row, rowIndex) => (
+                  <tr key={`${page.offset}:${rowIndex}`}>
+                    {columns.map((column) => {
+                      const text = Object.hasOwn(row, column)
+                        ? stateqlCellText(row[column])
+                        : "N/A";
+                      return (
+                        <td className="mono" title={text} key={column}>
+                          {text}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {page && (
+          <footer className="stateql-rows-footer">
+            <span className="mono">
+              {start}-{end} of {page.total.toLocaleString()}
+            </span>
+            <div>
+              <button
+                className="text-button"
+                type="button"
+                disabled={loading || page.offset === 0}
+                onClick={() => move(Math.max(0, page.offset - page.limit))}
+              >
+                Previous
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                disabled={loading || page.next_offset === null}
+                onClick={() =>
+                  page.next_offset !== null && move(page.next_offset)
+                }
+              >
+                Next
+              </button>
+            </div>
+          </footer>
+        )}
+      </div>
+    </details>
+  );
 }
 
-function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapshot; enabled: boolean }) {
+function Timeline({
+  live,
+  enabled: packageEnabled,
+}: {
+  live: RuntimeStoreSnapshot;
+  enabled: boolean;
+}) {
   const timeline = live.runtime?.operational.timeline;
   const checkpoints = timeline?.checkpoints ?? [];
   const [selected, setSelected] = useState<string>();
@@ -911,14 +2571,25 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
   const [selectedPath, setSelectedPath] = useState<string>();
   const [diff, setDiff] = useState<TimelineCheckpointDiff>();
   const active = checkpoints.find((checkpoint) => checkpoint.id === selected);
-  const enabled = live.connection === "connected" && live.runtime?.ready === true && !busy;
-  const act = async (action: "restore" | "fork" | "clear", checkpointId?: string) => {
+  const enabled =
+    live.connection === "connected" && live.runtime?.ready === true && !busy;
+  const act = async (
+    action: "restore" | "fork" | "clear",
+    checkpointId?: string,
+  ) => {
     if (!enabled) return;
     const operation = checkpointId ? `${action}:${checkpointId}` : action;
-    setBusy(operation); setError("");
-    try { await runtimeStore.timeline(action, checkpointId); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline action failed"); }
-    finally { setBusy(""); }
+    setBusy(operation);
+    setError("");
+    try {
+      await runtimeStore.timeline(action, checkpointId);
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Timeline action failed",
+      );
+    } finally {
+      setBusy("");
+    }
   };
   useEffect(() => {
     let cancelled = false;
@@ -926,51 +2597,179 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
     setSelectedPath(undefined);
     setDiff(undefined);
     if (!active) return;
-    void runtimeStore.timelineCheckpointFiles(active.id)
-      .then((value) => { if (!cancelled) setFiles(value); })
-      .catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Timeline files failed to load"); });
-    return () => { cancelled = true; };
+    void runtimeStore
+      .timelineCheckpointFiles(active.id)
+      .then((value) => {
+        if (!cancelled) setFiles(value);
+      })
+      .catch((cause) => {
+        if (!cancelled)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "Timeline files failed to load",
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [active?.id, live.runtime?.sessionGeneration]);
   const openDiff = async (path: string) => {
     if (!active) return;
     setSelectedPath(path);
     setDiff(undefined);
-    try { setDiff(await runtimeStore.timelineCheckpointDiff(active.id, path)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Timeline diff failed to load"); }
+    try {
+      setDiff(await runtimeStore.timelineCheckpointDiff(active.id, path));
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Timeline diff failed to load",
+      );
+    }
   };
   if (timeline?.availability !== "available") {
-    return packageEnabled
-      ? <div className="empty-state"><IconTimeline size={20} /><strong>Initializing Timeline</strong><span>Waiting for the first Timeline state.</span></div>
-      : <FeatureUnavailable name="Timeline" />;
+    return packageEnabled ? (
+      <div className="empty-state">
+        <IconTimeline size={20} />
+        <strong>Initializing Timeline</strong>
+        <span>Waiting for the first Timeline state.</span>
+      </div>
+    ) : (
+      <FeatureUnavailable name="Timeline" />
+    );
   }
+  const verifiedCount = checkpoints.filter(
+    (checkpoint) => checkpoint.verified,
+  ).length;
   return (
     <div className="timeline-layout">
-      <InspectorSection title="Checkpoints" meta={`${checkpoints.length}`} className="timeline-list">
-        <div className="timeline-toolbar"><span>{checkpoints.length} checkpoints</span><button className="text-button danger" type="button" disabled={!enabled || checkpoints.length === 0} onClick={() => void act("clear")}><IconTrash size={13} />{busy === "clear" ? "Clearing…" : "Clear timeline"}</button></div>
-        {checkpoints.map((checkpoint) => (
+      <div className="timeline-toolbar">
+        <span>
+          {checkpoints.length} checkpoint{checkpoints.length === 1 ? "" : "s"} ·{" "}
+          {verifiedCount} verified
+        </span>
+        <button
+          className="text-button danger"
+          type="button"
+          disabled={!enabled || checkpoints.length === 0}
+          onClick={() => void act("clear")}
+        >
+          <IconTrash size={13} />
+          {busy === "clear" ? "Clearing…" : "Clear timeline"}
+        </button>
+      </div>
+      {checkpoints.map((checkpoint) => {
+        const expanded = active?.id === checkpoint.id;
+        return (
           <div
-            className={`checkpoint-item ${active?.id === checkpoint.id ? "is-expanded" : ""}`}
+            className={`checkpoint-item ${expanded ? "is-expanded" : ""}`}
             key={checkpoint.id}
           >
             <div className="checkpoint-row">
-            <button className="checkpoint-copy" type="button" aria-expanded={active?.id === checkpoint.id} onClick={() => setSelected((current) => current === checkpoint.id ? undefined : checkpoint.id)}>
-              <span><strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong></span>
-              <span className="checkpoint-meta">{checkpoint.branch && <span><IconGitBranch size={12} />{checkpoint.branch}</span>}{checkpoint.verified && <span className="verified"><IconCheck size={12} />Verified</span>}{checkpoint.changes && <span>{checkpoint.changes.fileCount} files</span>}{checkpoint.changes && <span className="checkpoint-diff-count"><ins>+{checkpoint.changes.additions}</ins><del>−{checkpoint.changes.deletions}</del></span>}<time dateTime={checkpoint.createdAt}>{displayTimelineTime(checkpoint.createdAt)}</time></span>
-            </button>
-            <span className="checkpoint-row-actions">
-              <button type="button" title="Fork from checkpoint" aria-label="Fork from checkpoint" aria-busy={busy === `fork:${checkpoint.id}`} disabled={!enabled} onClick={() => void act("fork", checkpoint.id)}>
-                {busy === `fork:${checkpoint.id}` ? <IconLoader2 className="spin" size={15} /> : <IconGitFork size={15} />}
+              <OverviewOrb
+                state={checkpoint.verified ? "done" : "neutral"}
+                label={checkpoint.verified ? "Verified" : "Unverified"}
+              />
+              <button
+                className="checkpoint-copy"
+                type="button"
+                aria-expanded={expanded}
+                onClick={() =>
+                  setSelected((current) =>
+                    current === checkpoint.id ? undefined : checkpoint.id,
+                  )
+                }
+              >
+                <span className="checkpoint-title">
+                  <strong title={checkpoint.title}>
+                    {oneLine(checkpoint.title)}
+                  </strong>
+                </span>
+                <span className="checkpoint-meta">
+                  {checkpoint.branch && (
+                    <span className="checkpoint-branch">
+                      <IconGitBranch size={12} />
+                      <span>{checkpoint.branch}</span>
+                    </span>
+                  )}
+                  {checkpoint.changes ? (
+                    <>
+                      <span>
+                        {checkpoint.changes.fileCount} file
+                        {checkpoint.changes.fileCount === 1 ? "" : "s"}
+                      </span>
+                      <span className="checkpoint-diff-count">
+                        <ins>+{checkpoint.changes.additions}</ins>
+                        <del>−{checkpoint.changes.deletions}</del>
+                      </span>
+                    </>
+                  ) : (
+                    <span>No file changes</span>
+                  )}
+                  <time dateTime={checkpoint.createdAt}>
+                    {displayTimelineTime(checkpoint.createdAt)}
+                  </time>
+                </span>
               </button>
-              <button type="button" title="Restore checkpoint" aria-label="Restore checkpoint" aria-busy={busy === `restore:${checkpoint.id}`} disabled={!enabled} onClick={() => void act("restore", checkpoint.id)}>
-                {busy === `restore:${checkpoint.id}` ? <IconLoader2 className="spin" size={15} /> : <IconRestore size={15} />}
-              </button>
-            </span>
+              <OverviewStateLabel
+                state={checkpoint.verified ? "done" : "neutral"}
+              >
+                {checkpoint.verified ? "Verified" : "Unverified"}
+              </OverviewStateLabel>
+              <span className="checkpoint-row-actions">
+                <button
+                  type="button"
+                  title="Fork from checkpoint"
+                  aria-label="Fork from checkpoint"
+                  aria-busy={busy === `fork:${checkpoint.id}`}
+                  disabled={!enabled}
+                  onClick={() => void act("fork", checkpoint.id)}
+                >
+                  {busy === `fork:${checkpoint.id}` ? (
+                    <IconLoader2 className="spin" size={15} />
+                  ) : (
+                    <IconGitFork size={15} />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  title="Restore checkpoint"
+                  aria-label="Restore checkpoint"
+                  aria-busy={busy === `restore:${checkpoint.id}`}
+                  disabled={!enabled}
+                  onClick={() => void act("restore", checkpoint.id)}
+                >
+                  {busy === `restore:${checkpoint.id}` ? (
+                    <IconLoader2 className="spin" size={15} />
+                  ) : (
+                    <IconRestore size={15} />
+                  )}
+                </button>
+              </span>
             </div>
-            {active?.id === checkpoint.id && <CheckpointDetail files={files} selectedPath={selectedPath} diff={diff} error={error} onOpenDiff={openDiff} />}
+            {expanded && (
+              <CheckpointDetail
+                files={files}
+                selectedPath={selectedPath}
+                diff={diff}
+                error={error}
+                onOpenDiff={openDiff}
+              />
+            )}
           </div>
-        ))}
-        {checkpoints.length === 0 && <div className="empty-state"><IconTimeline size={20} /><strong>No checkpoints</strong><span>Timeline has not captured this run.</span></div>}
-      </InspectorSection>
+        );
+      })}
+      {checkpoints.length === 0 && (
+        <div className="empty-state">
+          <IconTimeline size={20} />
+          <strong>No checkpoints</strong>
+          <span>Timeline has not captured this run.</span>
+        </div>
+      )}
+      {error && !active && (
+        <p className="ui-request-error timeline-error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -988,42 +2787,108 @@ function CheckpointDetail({
   error: string;
   onOpenDiff(path: string): void;
 }) {
-  return <div className="checkpoint-inline-detail">
-    <div className="checkpoint-files" aria-label="Checkpoint changed files">
-      {files?.files.map((file) => <button type="button" className={selectedPath === file.path ? "is-active" : ""} key={file.path} onClick={() => onOpenDiff(file.path)}>
-        <IconFile size={13} />
-        <span title={file.path}>{file.path}</span>
-        {file.binary ? <small>binary</small> : <small><ins>+{file.additions}</ins><del>−{file.deletions}</del></small>}
-      </button>)}
-      {!files && <span className="settings-note">Loading changes…</span>}
-      {files && files.files.length === 0 && <span className="settings-note">No file changes</span>}
+  return (
+    <div className="checkpoint-inline-detail">
+      <div className="checkpoint-files" aria-label="Checkpoint changed files">
+        {files?.files.map((file) => (
+          <button
+            type="button"
+            className={selectedPath === file.path ? "is-active" : ""}
+            key={file.path}
+            onClick={() => onOpenDiff(file.path)}
+          >
+            <IconFile size={13} />
+            <span title={file.path}>{file.path}</span>
+            {file.binary ? (
+              <small>binary</small>
+            ) : (
+              <small>
+                <ins>+{file.additions}</ins>
+                <del>−{file.deletions}</del>
+              </small>
+            )}
+          </button>
+        ))}
+        {!files && <span className="settings-note">Loading changes…</span>}
+        {files && files.files.length === 0 && (
+          <span className="settings-note">No file changes</span>
+        )}
+      </div>
+      {selectedPath && <TimelineDiff value={diff} />}
+      {error && (
+        <p className="ui-request-error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
-    {selectedPath && <TimelineDiff value={diff} />}
-    {error && <p className="ui-request-error" role="alert">{error}</p>}
-  </div>;
+  );
 }
 
 function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
   if (!value) return <div className="timeline-diff-empty">Loading diff…</div>;
   if (value.state !== "text" || !value.text)
-    return <div className="timeline-diff-empty">{value.state === "binary" ? "Binary file" : value.state === "oversized" ? "Diff is too large to display" : "Diff unavailable"}</div>;
+    return (
+      <div className="timeline-diff-empty">
+        {value.state === "binary"
+          ? "Binary file"
+          : value.state === "oversized"
+            ? "Diff is too large to display"
+            : "Diff unavailable"}
+      </div>
+    );
   if (value.truncated) {
-    const highlighted = DOMPurify.sanitize(highlightSource(value.text, value.path, true));
-    return <pre className="file-code timeline-diff"><code dangerouslySetInnerHTML={{ __html: highlighted }} /><small>Output truncated</small></pre>;
+    const highlighted = DOMPurify.sanitize(
+      highlightSource(value.text, value.path, true),
+    );
+    return (
+      <pre className="file-code timeline-diff">
+        <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+        <small>Output truncated</small>
+      </pre>
+    );
   }
-  return <Suspense fallback={<div className="timeline-diff-empty">Rendering diff…</div>}>
-    <PierreCodeViewer mode="diff" path={value.path} text={value.text} revision={value.checkpointId} />
-  </Suspense>;
+  return (
+    <Suspense
+      fallback={<div className="timeline-diff-empty">Rendering diff…</div>}
+    >
+      <PierreCodeViewer
+        mode="diff"
+        path={value.path}
+        text={value.text}
+        revision={value.checkpointId}
+      />
+    </Suspense>
+  );
 }
 
 function oneLine(value: string, max = 120): string {
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
+  return normalized.length > max
+    ? `${normalized.slice(0, max - 1).trimEnd()}…`
+    : normalized;
 }
 
 type OverviewState = "neutral" | "done" | "running" | "failed" | "attention";
 
-function LedBar({ a, b = 0, cells = 24, thin = false, responsive = false, tone, running = false, label }: { a: number; b?: number; cells?: number; thin?: boolean; responsive?: boolean; tone?: OverviewState; running?: boolean; label?: string }) {
+function LedBar({
+  a,
+  b = 0,
+  cells = 24,
+  thin = false,
+  responsive = false,
+  tone,
+  running = false,
+  label,
+}: {
+  a: number;
+  b?: number;
+  cells?: number;
+  thin?: boolean;
+  responsive?: boolean;
+  tone?: OverviewState;
+  running?: boolean;
+  label?: string;
+}) {
   const barRef = useRef<HTMLSpanElement>(null);
   const [responsiveCells, setResponsiveCells] = useState(cells);
   useEffect(() => {
@@ -1032,28 +2897,79 @@ function LedBar({ a, b = 0, cells = 24, thin = false, responsive = false, tone, 
     const update = (width: number) => {
       if (width <= 0) return;
       const next = Math.max(12, Math.min(40, Math.floor((width + 2) / 12)));
-      setResponsiveCells((current) => current === next ? current : next);
+      setResponsiveCells((current) => (current === next ? current : next));
     };
     update(bar.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
+    const observer = new ResizeObserver(([entry]) =>
+      update(entry.contentRect.width),
+    );
     observer.observe(bar);
     return () => observer.disconnect();
   }, [responsive]);
   const renderedCells = responsive ? responsiveCells : cells;
-  const clamp = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
-  const onA = Math.round(clamp(a) / 100 * renderedCells);
-  const onB = Math.round(clamp(b) / 100 * renderedCells);
+  const clamp = (value: number) =>
+    Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
+  const onA = Math.round((clamp(a) / 100) * renderedCells);
+  const onB = Math.round((clamp(b) / 100) * renderedCells);
   const filled = Math.min(renderedCells, onA + onB);
-  const classes = ["overview-led-bar", thin && "is-thin", tone && `tone-${tone}`, running && "is-running"].filter(Boolean).join(" ");
-  return <span ref={barRef} className={classes} aria-label={label} aria-hidden={label ? undefined : true}>
-    {Array.from({ length: renderedCells }, (_, index) => <i className={index < onA ? "is-on" : index < filled ? "is-on is-b" : running ? "is-pending" : ""} style={running && index >= filled ? { animationDelay: `${(index - filled) * 50}ms` } : undefined} key={index} />)}
-  </span>;
+  const classes = [
+    "overview-led-bar",
+    thin && "is-thin",
+    tone && `tone-${tone}`,
+    running && "is-running",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <span
+      ref={barRef}
+      className={classes}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+    >
+      {Array.from({ length: renderedCells }, (_, index) => (
+        <i
+          className={
+            index < onA
+              ? "is-on"
+              : index < filled
+                ? "is-on is-b"
+                : running
+                  ? "is-pending"
+                  : ""
+          }
+          style={
+            running && index >= filled
+              ? { animationDelay: `${(index - filled) * 50}ms` }
+              : undefined
+          }
+          key={index}
+        />
+      ))}
+    </span>
+  );
 }
-function OverviewOrb({ state, label }: { state: OverviewState; label: string }) {
-  return <span className="overview-orb-cell"><i className={`overview-orb is-${state}`} aria-label={label} /></span>;
+function OverviewOrb({
+  state,
+  label,
+}: {
+  state: OverviewState;
+  label: string;
+}) {
+  return (
+    <span className="overview-orb-cell">
+      <i className={`overview-orb is-${state}`} aria-label={label} />
+    </span>
+  );
 }
 
-function OverviewStateLabel({ state, children }: { state: OverviewState; children: ReactNode }) {
+function OverviewStateLabel({
+  state,
+  children,
+}: {
+  state: OverviewState;
+  children: ReactNode;
+}) {
   return <span className={`overview-state-label is-${state}`}>{children}</span>;
 }
 
@@ -1066,55 +2982,155 @@ function useResponsiveUsageLedCells() {
     const update = (width: number) => {
       if (width <= 0) return;
       const next = Math.max(12, Math.min(40, Math.round((width - 164) / 12)));
-      setCells((current) => current === next ? current : next);
+      setCells((current) => (current === next ? current : next));
     };
     update(list.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) => update(entry.contentRect.width));
+    const observer = new ResizeObserver(([entry]) =>
+      update(entry.contentRect.width),
+    );
     observer.observe(list);
     return () => observer.disconnect();
   }, []);
   return [listRef, cells] as const;
 }
 
-
-
 function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
   const [expanded, setExpanded] = useState(false);
   const [usageListRef, ledCells] = useResponsiveUsageLedCells();
-  const toolUsage = [...(metrics?.toolUsage ?? [])]
-    .sort((left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name));
+  const toolUsage = [...(metrics?.toolUsage ?? [])].sort(
+    (left, right) =>
+      right.tokens - left.tokens ||
+      right.calls - left.calls ||
+      left.name.localeCompare(right.name),
+  );
   const inputTokens = metrics?.inputTokens ?? 0;
   const outputTokens = metrics?.outputTokens ?? 0;
   const cacheReadTokens = metrics?.cacheReadTokens ?? 0;
   const cacheWriteTokens = metrics?.cacheWriteTokens ?? 0;
   const inputOutputTokens = inputTokens + outputTokens;
-  const inputPercent = inputOutputTokens > 0 ? inputTokens / inputOutputTokens * 100 : 50;
-  const outputPercent = inputOutputTokens > 0 ? outputTokens / inputOutputTokens * 100 : 50;
-  const cacheHitRate = formatCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
+  const inputPercent =
+    inputOutputTokens > 0 ? (inputTokens / inputOutputTokens) * 100 : 50;
+  const outputPercent =
+    inputOutputTokens > 0 ? (outputTokens / inputOutputTokens) * 100 : 50;
+  const cacheHitRate = formatCacheHitRate(
+    inputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+  );
   const visibleUsage = expanded ? toolUsage : toolUsage.slice(0, 5);
   const maxToolTokens = toolUsage[0]?.tokens ?? 0;
-  return <InspectorSection title="Session usage" meta={`${metrics?.userMessages ?? 0} turns`} className="session-tool-usage">
-    <div className="session-tool-summary">
-      <div className="session-tool-call-total"><small>Tool calls</small><strong className="mono">{formatCompactNumber(metrics?.toolCalls ?? 0)}</strong><span>{toolUsage.length === 200 ? "200 tools shown" : `${toolUsage.length} tools used`}</span></div>
-      <div className="session-token-composition">
-        <div><small>Input + output</small><strong className="mono">{formatCompactNumber(inputOutputTokens)}</strong></div>
-        <LedBar a={inputPercent} b={outputPercent} cells={ledCells} label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`} />
-        <div className="session-token-key"><span><strong>Input</strong> {formatCompactNumber(inputTokens)}</span><span><strong>Output</strong> {formatCompactNumber(outputTokens)}</span></div>
-        <div className="session-token-key"><span title="Share of prompt tokens served from cache" aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}><strong>Cache input</strong> {cacheHitRate}</span><span><strong>Context</strong> {Math.round(metrics?.contextPercent ?? 0)}%</span></div>
+  return (
+    <InspectorSection
+      title="Session usage"
+      meta={`${metrics?.userMessages ?? 0} turns`}
+      className="session-tool-usage"
+    >
+      <div className="session-tool-summary">
+        <div className="session-tool-call-total">
+          <small>Tool calls</small>
+          <strong className="mono">
+            {formatCompactNumber(metrics?.toolCalls ?? 0)}
+          </strong>
+          <span>
+            {toolUsage.length === 200
+              ? "200 tools shown"
+              : `${toolUsage.length} tools used`}
+          </span>
+        </div>
+        <div className="session-token-composition">
+          <div>
+            <small>Input + output</small>
+            <strong className="mono">
+              {formatCompactNumber(inputOutputTokens)}
+            </strong>
+          </div>
+          <LedBar
+            a={inputPercent}
+            b={outputPercent}
+            cells={ledCells}
+            label={`${formatCompactNumber(inputTokens)} input tokens and ${formatCompactNumber(outputTokens)} output tokens`}
+          />
+          <div className="session-token-key">
+            <span>
+              <strong>Input</strong> {formatCompactNumber(inputTokens)}
+            </span>
+            <span>
+              <strong>Output</strong> {formatCompactNumber(outputTokens)}
+            </span>
+          </div>
+          <div className="session-token-key">
+            <span
+              title="Share of prompt tokens served from cache"
+              aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}
+            >
+              <strong>Cache input</strong> {cacheHitRate}
+            </span>
+            <span>
+              <strong>Context</strong>{" "}
+              {Math.round(metrics?.contextPercent ?? 0)}%
+            </span>
+          </div>
+        </div>
       </div>
-    </div>
-    <div className="session-tool-usage-heading"><strong>Usage by tool</strong><span title="Token volume is logarithmically scaled relative to the busiest tool; LED count adapts to panel width">Tokens / calls</span></div>
-    {visibleUsage.length ? <div className="session-tool-usage-list" ref={usageListRef}>{visibleUsage.map((usage) => {
-      const scaledTotal = maxToolTokens > 0 ? Math.log1p(usage.tokens) / Math.log1p(maxToolTokens) * 100 : 0;
-      const inputShare = usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
-      const outputShare = usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
-      return <div className="session-tool-usage-row" key={usage.name}>
-        <div><strong>{usage.name}</strong><LedBar a={scaledTotal * inputShare} b={scaledTotal * outputShare} cells={ledCells} thin label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens; log-scaled relative volume`} /></div>
-        <span className="mono">~{formatCompactNumber(usage.tokens)}<small>tok</small></span><span className="mono">{formatCompactNumber(usage.calls)}<small>calls</small></span>
-      </div>;
-    })}</div> : <div className="session-tool-usage-empty">No completed tool calls in this session.</div>}
-    {toolUsage.length > 5 && <button className="session-usage-expand" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} /></button>}
-  </InspectorSection>;
+      <div className="session-tool-usage-heading">
+        <strong>Usage by tool</strong>
+        <span title="Token volume is logarithmically scaled relative to the busiest tool; LED count adapts to panel width">
+          Tokens / calls
+        </span>
+      </div>
+      {visibleUsage.length ? (
+        <div className="session-tool-usage-list" ref={usageListRef}>
+          {visibleUsage.map((usage) => {
+            const scaledTotal =
+              maxToolTokens > 0
+                ? (Math.log1p(usage.tokens) / Math.log1p(maxToolTokens)) * 100
+                : 0;
+            const inputShare =
+              usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
+            const outputShare =
+              usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
+            return (
+              <div className="session-tool-usage-row" key={usage.name}>
+                <div>
+                  <strong>{usage.name}</strong>
+                  <LedBar
+                    a={scaledTotal * inputShare}
+                    b={scaledTotal * outputShare}
+                    cells={ledCells}
+                    thin
+                    label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens; log-scaled relative volume`}
+                  />
+                </div>
+                <span className="mono">
+                  ~{formatCompactNumber(usage.tokens)}
+                  <small>tok</small>
+                </span>
+                <span className="mono">
+                  {formatCompactNumber(usage.calls)}
+                  <small>calls</small>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="session-tool-usage-empty">
+          No completed tool calls in this session.
+        </div>
+      )}
+      {toolUsage.length > 5 && (
+        <button
+          className="session-usage-expand"
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Show less" : `Show ${toolUsage.length - 5} more`}{" "}
+          <IconChevronDown size={14} />
+        </button>
+      )}
+    </InspectorSection>
+  );
 }
 
 function Tools({ live }: { live: RuntimeStoreSnapshot }) {
@@ -1137,156 +3153,454 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
   }));
   const groups = [
     ...policyGroups,
-    { owner: "Pi built-ins", policy: undefined, tools: (runtime?.availableTools ?? []).filter((tool) => !claimed.has(tool)) },
-  ].map((group) => ({ ...group, tools: group.tools.filter((tool) => !normalized || tool.toLowerCase().includes(normalized)) }))
+    {
+      owner: "Pi built-ins",
+      policy: undefined,
+      tools: (runtime?.availableTools ?? []).filter(
+        (tool) => !claimed.has(tool),
+      ),
+    },
+  ]
+    .map((group) => ({
+      ...group,
+      tools: group.tools.filter(
+        (tool) => !normalized || tool.toLowerCase().includes(normalized),
+      ),
+    }))
     .filter((group) => group.tools.length);
-  const directOverrides = scope === "project" ? runtime?.runtimePolicy.project.toolOverrides : runtime?.runtimePolicy.session.toolOverrides;
-  const effectiveOverrides = runtime?.runtimePolicy.effective.toolOverrides ?? {};
-  const disabled = live.connection !== "connected" || !runtime?.ready || Boolean(live.pendingUi);
-  return <div className="tools-page">
-    <InspectorSection title="Tool Overrides" meta={`${runtime?.availableTools.length ?? 0}`} className="tool-overrides-panel">
-      <div className="tool-override-toolbar">
-        <div className="policy-scope" role="tablist" aria-label="Tool override scope"><button type="button" role="tab" aria-selected={scope === "project"} className={scope === "project" ? "is-active" : ""} onClick={() => setScope("project")}>Project</button><button type="button" role="tab" aria-selected={scope === "session"} className={scope === "session" ? "is-active" : ""} onClick={() => setScope("session")}>This session</button></div>
-        <label className="table-search"><IconSearch size={15} /><span className="sr-only">Filter tools</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter tools" /></label>
+  const directOverrides =
+    scope === "project"
+      ? runtime?.runtimePolicy.project.toolOverrides
+      : runtime?.runtimePolicy.session.toolOverrides;
+  const effectiveOverrides =
+    runtime?.runtimePolicy.effective.toolOverrides ?? {};
+  const disabled =
+    live.connection !== "connected" ||
+    !runtime?.ready ||
+    Boolean(live.pendingUi);
+  const visibleCount = groups.reduce(
+    (total, group) => total + group.tools.length,
+    0,
+  );
+  const setHere = Object.keys(directOverrides ?? {}).length;
+  return (
+    <div className="tools-page">
+      <div className="tool-scope-bar">
+        <div
+          className="policy-scope"
+          role="tablist"
+          aria-label="Tool override scope"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === "project"}
+            className={scope === "project" ? "is-active" : ""}
+            onClick={() => setScope("project")}
+          >
+            Project
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === "session"}
+            className={scope === "session" ? "is-active" : ""}
+            onClick={() => setScope("session")}
+          >
+            This session
+          </button>
+        </div>
       </div>
-      <p className="tool-override-note">Inherited tools follow global Settings. Package capability and safety gates remain authoritative.</p>
-      <div className="tool-override-groups">{groups.map((group) => <section className="tool-override-group" key={group.owner}>
-        <header><strong>{group.owner}</strong><span>{group.tools.length}</span></header>
-        {group.tools.map((tool) => {
-          const capable = group.policy ? group.policy.enabledTools.includes(tool) : true;
-          const packageDefault: ToolExposureMode = group.policy?.deferredTools.includes(tool)
-            ? "deferred"
-            : group.policy ? capable ? "active" : "disabled" : runtime?.activeTools.includes(tool) ? "active" : "disabled";
-          const effective = capable ? effectiveOverrides[tool] ?? packageDefault : "disabled";
-          const locked = tool === "search_tools";
-          const directOverride = directOverrides?.[tool];
-          return <label className="tool-override-row" data-effective={effective} key={tool}>
-            <span className="tool-override-name"><strong>{tool}</strong></span>
-            <span className="tool-override-effective" aria-label={`Current setting: ${effective}`}><i aria-hidden="true" /><strong>{effective}</strong></span>
-            <select aria-label={`${scope === "project" ? "Project" : "Session"} override for ${tool}`} value={directOverride ?? "inherit"} disabled={disabled || locked || busy === tool || (!capable && !directOverride)} onChange={(event) => {
-              if (!runtime) return;
-              const mode = event.target.value as ToolExposureMode | "inherit";
-              setBusy(tool); setError("");
-              void runtimeStore.updateToolPolicy(scope, tool, mode, runtime.runtimePolicy.revision).catch((cause) => setError(cause instanceof Error ? cause.message : "Tool policy could not be saved")).finally(() => setBusy(""));
-            }}><option value="inherit">Inherit</option><option value="active" disabled={!capable}>Active</option><option value="deferred" disabled={!capable}>Deferred</option><option value="disabled" disabled={!capable}>Disabled</option></select>
-          </label>;
-        })}
-      </section>)}</div>
-      {!groups.length && <div className="empty-state"><IconSearch size={20} /><strong>No matching tools</strong><span>Try another tool name.</span></div>}
-      {error && <p className="policy-error" role="alert">{error}</p>}
-    </InspectorSection>
-    <SieveStatus live={live} />
-  </div>;
+      <div className="tool-ledger-head">
+        <label className="memory-ledger-search">
+          <IconSearch size={13} />
+          <span className="sr-only">Filter tools</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={`Filter ${runtime?.availableTools.length ?? 0} tools`}
+          />
+          <span className="mono">{visibleCount}</span>
+        </label>
+        <p className="tool-override-note">
+          Inherited tools follow global Settings. Package capability and safety
+          gates remain authoritative.
+        </p>
+      </div>
+      <InspectorSection
+        title="Tool overrides"
+        meta={`${setHere} set here`}
+        className="tool-overrides-panel"
+      >
+        <div className="tool-override-groups">
+          {groups.map((group) => (
+            <section className="tool-override-group" key={group.owner}>
+              <header>
+                <strong>{group.owner}</strong>
+                <span>{group.tools.length}</span>
+              </header>
+              {group.tools.map((tool) => {
+                const capable = group.policy
+                  ? group.policy.enabledTools.includes(tool)
+                  : true;
+                const packageDefault: ToolExposureMode =
+                  group.policy?.deferredTools.includes(tool)
+                    ? "deferred"
+                    : group.policy
+                      ? capable
+                        ? "active"
+                        : "disabled"
+                      : runtime?.activeTools.includes(tool)
+                        ? "active"
+                        : "disabled";
+                const effective = capable
+                  ? (effectiveOverrides[tool] ?? packageDefault)
+                  : "disabled";
+                const locked = tool === "search_tools";
+                const directOverride = directOverrides?.[tool];
+                const state: OverviewState =
+                  effective === "active"
+                    ? "done"
+                    : effective === "deferred"
+                      ? "attention"
+                      : "neutral";
+                return (
+                  <label
+                    className={`tool-override-row ${directOverride ? "is-override" : ""} ${locked ? "is-locked" : ""}`}
+                    data-effective={effective}
+                    key={tool}
+                  >
+                    <OverviewOrb
+                      state={state}
+                      label={`Current setting: ${effective}`}
+                    />
+                    <span className="tool-override-name">
+                      <strong>{tool}</strong>
+                      <small className="policy-source">
+                        {locked ? "always on" : effective}
+                      </small>
+                    </span>
+                    <select
+                      aria-label={`${scope === "project" ? "Project" : "Session"} override for ${tool}`}
+                      value={directOverride ?? "inherit"}
+                      disabled={
+                        disabled ||
+                        locked ||
+                        busy === tool ||
+                        (!capable && !directOverride)
+                      }
+                      onChange={(event) => {
+                        if (!runtime) return;
+                        const mode = event.target.value as
+                          ToolExposureMode | "inherit";
+                        setBusy(tool);
+                        setError("");
+                        void runtimeStore
+                          .updateToolPolicy(
+                            scope,
+                            tool,
+                            mode,
+                            runtime.runtimePolicy.revision,
+                          )
+                          .catch((cause) =>
+                            setError(
+                              cause instanceof Error
+                                ? cause.message
+                                : "Tool policy could not be saved",
+                            ),
+                          )
+                          .finally(() => setBusy(""));
+                      }}
+                    >
+                      <option value="inherit">Inherit</option>
+                      <option value="active" disabled={!capable}>
+                        Active
+                      </option>
+                      <option value="deferred" disabled={!capable}>
+                        Deferred
+                      </option>
+                      <option value="disabled" disabled={!capable}>
+                        Disabled
+                      </option>
+                    </select>
+                  </label>
+                );
+              })}
+            </section>
+          ))}
+        </div>
+        {!groups.length && (
+          <div className="empty-state">
+            <IconSearch size={20} />
+            <strong>No matching tools</strong>
+            <span>Try another tool name.</span>
+          </div>
+        )}
+        {error && (
+          <p className="policy-error" role="alert">
+            {error}
+          </p>
+        )}
+      </InspectorSection>
+      <SieveStatus live={live} />
+    </div>
+  );
 }
 
 function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
   const sieve = live.runtime?.operational.sieve;
-  if (!sieve || sieve.availability !== "available" || !sieve.latest
-    || !sieve.cumulativeActual || !sieve.cumulativeProjected) {
-    return <InspectorSection title="Context Pruning">
-      <FeatureUnavailable name="Pi Sieve" />
-    </InspectorSection>;
+  if (
+    !sieve ||
+    sieve.availability !== "available" ||
+    !sieve.latest ||
+    !sieve.cumulativeActual ||
+    !sieve.cumulativeProjected
+  ) {
+    return (
+      <InspectorSection title="Context Pruning">
+        <FeatureUnavailable name="Pi Sieve" />
+      </InspectorSection>
+    );
   }
   const saved = sieve.cumulativeActual.netCharsSaved;
   const projected = sieve.cumulativeProjected.netCharsSaved;
   const observing = sieve.mode === "observe";
   const latestProjected = sieve.latestMode === "observe";
-  const topTools = Object.entries(observing ? sieve.cumulativeProjected.byTool : sieve.cumulativeActual.byTool)
+  const savings = Object.entries(
+    observing
+      ? sieve.cumulativeProjected.byTool
+      : sieve.cumulativeActual.byTool,
+  )
     .filter(([, usage]) => usage.netCharsSaved > 0)
     .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
-    .slice(0, 3)
-    .map(([name, usage]) => `${name} ${formatCompactNumber(usage.netCharsSaved)}`)
-    .join(", ") || "None yet";
+    .slice(0, 3);
+  const largestSaving = savings[0]?.[1].netCharsSaved ?? 1;
   const prefixChurn = sieve.stability?.prefixChurnViolations ?? 0;
   const softExceedances = sieve.stability?.softBudgetExceedances ?? 0;
   const healthy = prefixChurn === 0 && softExceedances === 0;
-  const epochReason = sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
+  const epochReason =
+    sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
+  const contextPercent = sieve.contextUsagePercent;
 
-  return <InspectorSection title="Context Pruning" meta={sieve.mode}>
-    <div className="sieve-summary" aria-label="Context pruning summary">
-      <div><small>{observing ? "Would save" : "Saved"}</small><strong>{formatCompactNumber(observing ? projected : saved)}</strong><span>characters</span></div>
-      <div><small>Threshold</small><strong>{formatCompactNumber(sieve.threshold ?? 0)}</strong><span>characters</span></div>
-      <div><small>Recalls</small><strong>{formatCompactNumber(sieve.recalls ?? 0)}</strong><span>{formatCompactNumber(sieve.recalledChars ?? 0)} restored</span></div>
-    </div>
-
-    <section className="sieve-group" aria-labelledby="sieve-latest-heading">
-      <header className="sieve-group-heading"><h3 id="sieve-latest-heading">Latest activity</h3></header>
-      <div className="sieve-activity-stats">
-        <div><strong>{formatCompactNumber(sieve.latest.scanned)}</strong><span>scanned</span></div>
-        <div><strong>{formatCompactNumber(sieve.latest.transformed)}</strong><span>pruned</span></div>
-        <div><strong>{formatCompactNumber(sieve.latest.netCharsSaved)}</strong><span>{latestProjected ? "potential chars" : "chars saved"}</span></div>
-      </div>
-    </section>
-
-    {sieve.projectionMode === "stable" && <>
-      <section className="sieve-group" aria-labelledby="sieve-projection-heading">
-        <header className="sieve-group-heading">
-          <h3 id="sieve-projection-heading">Projection</h3>
-          <span>Stable projection (experimental)</span>
-        </header>
-        <p className="sieve-pruning-state">Active pruning {sieve.activePruning ? "enabled" : "disabled"}</p>
-        <div className="sieve-inline-metrics">
-          <span><strong>{formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}</strong> frozen</span>
-          <span><strong>{formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}</strong> chars retained</span>
-          <span><strong>{formatCompactNumber(sieve.epoch?.rolloverEligibleRetainedChars ?? 0)}</strong> rollover eligible</span>
+  return (
+    <InspectorSection
+      title="Context Pruning"
+      meta={sieve.projectionMode === "stable" ? "stable" : sieve.projectionMode}
+    >
+      <div className="sieve-gauge">
+        <div>
+          <strong>Context in use</strong>
+          <b>
+            {contextPercent === undefined
+              ? "—"
+              : `${Math.round(contextPercent)}%`}
+          </b>
         </div>
-        <p className="sieve-epoch-reason">Epoch started: {epochReason}</p>
-      </section>
-
-      <section className="sieve-group" aria-labelledby="sieve-health-heading">
-        <header className="sieve-group-heading"><h3 id="sieve-health-heading">Health</h3></header>
-        <p className="sieve-health-count"><strong>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}</strong> projection reuses</p>
-        <p className={`sieve-health-note ${healthy ? "is-healthy" : "has-warning"}`}>
-          {healthy && <IconCheck size={13} aria-hidden="true" />}
-          {healthy ? "No prefix churn or budget exceedances" : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
+        <LedBar
+          a={contextPercent ?? 0}
+          responsive
+          label={
+            contextPercent === undefined
+              ? "Context usage unavailable"
+              : `${Math.round(contextPercent)} percent of context in use`
+          }
+        />
+        <p>
+          <span>
+            Pruning starts at {formatCompactNumber(sieve.threshold ?? 0)}{" "}
+            characters
+          </span>
+          <span>
+            {sieve.updatedAt
+              ? `Updated ${displayTime(sieve.updatedAt)}`
+              : "Update unavailable"}
+          </span>
         </p>
-      </section>
-    </>}
+      </div>
 
-    {sieve.projectionMode === "standard-v2" && <>
-      <section className="sieve-group" aria-labelledby="sieve-standard-v2-heading">
-        <header className="sieve-group-heading"><h3 id="sieve-standard-v2-heading">Standard V2</h3></header>
-        <div className="sieve-inline-metrics">
-          <span><strong>{formatCompactNumber(sieve.stability?.standardComparisons ?? 0)}</strong> comparisons</span>
-          <span><strong>{formatCompactNumber(sieve.stability?.standardPrefixChurn ?? 0)}</strong> prefix changes</span>
-          <span><strong>{formatCompactNumber(sieve.stability?.standardEstimatedInvalidatedChars ?? 0)}</strong> chars invalidated</span>
+      <div className="sieve-summary" aria-label="Context pruning summary">
+        <div>
+          <small>{observing ? "Would remove" : "Removed"}</small>
+          <strong>{formatCompactNumber(observing ? projected : saved)}</strong>
+          <span>characters</span>
         </div>
-        {sieve.stability?.standardEarliestChangedPriorMessageIndex !== undefined
-          && <p className="sieve-epoch-reason">Earliest changed prior message: {sieve.stability.standardEarliestChangedPriorMessageIndex}</p>}
-      </section>
-      <section className="sieve-group" aria-labelledby="sieve-standard-v2-churn-heading">
-        <header className="sieve-group-heading"><h3 id="sieve-standard-v2-churn-heading">Churn causes</h3></header>
-        <div className="sieve-inline-metrics">
-          {([
-            ["activeThreshold", "active threshold"], ["ageThreshold", "age threshold"], ["budget", "budget"],
-            ["staleRead", "stale read"], ["duplicate", "duplicate"], ["errorCap", "error cap"], ["history", "history"],
-          ] as const).map(([kind, label]) => <span key={kind}><strong>{formatCompactNumber(sieve.stability?.standardChangesByKind?.[kind] ?? 0)}</strong> {label}</span>)}
+        <div>
+          <small>Recalled</small>
+          <strong>{formatCompactNumber(sieve.recalledChars ?? 0)}</strong>
+          <span>over {formatCompactNumber(sieve.recalls ?? 0)} recalls</span>
         </div>
-      </section>
-    </>}
+        <div>
+          <small>Last pass</small>
+          <strong>{formatCompactNumber(sieve.latest.netCharsSaved)}</strong>
+          <span>
+            {formatCompactNumber(sieve.latest.transformed)} of{" "}
+            {formatCompactNumber(sieve.latest.scanned)} pruned
+            {latestProjected ? " · projected" : ""}
+          </span>
+        </div>
+      </div>
 
-    <details className="sieve-more">
-      <summary>
-        <span>Context <strong>{sieve.contextUsagePercent === undefined ? "unavailable" : `${Math.round(sieve.contextUsagePercent)}%`}</strong></span>
-        <span>More details <IconChevronDown size={13} aria-hidden="true" /></span>
-      </summary>
-      <dl>
-        <div><dt>Top savings</dt><dd>{topTools}</dd></div>
-        <div><dt>Epoch ID</dt><dd className="mono" title={sieve.epoch?.id}>{sieve.epoch?.id ?? "Unavailable"}</dd></div>
-        <div><dt>Updated</dt><dd>{sieve.updatedAt ? displayTime(sieve.updatedAt) : "Unavailable"}</dd></div>
-      </dl>
-    </details>
-    {sieve.error && <p className="inline-alert" role="alert">{sieve.error}</p>}
-  </InspectorSection>;
+      <div className="sieve-savings-heading">
+        <strong>Where savings come from</strong>
+        <span>Characters removed</span>
+      </div>
+      <div className="sieve-savings-list">
+        {savings.map(([name, usage]) => (
+          <div className="sieve-saving-row" key={name}>
+            <div>
+              <strong>{name}</strong>
+              <LedBar a={(usage.netCharsSaved / largestSaving) * 100} thin />
+            </div>
+            <span className="mono">
+              {formatCompactNumber(usage.netCharsSaved)}
+            </span>
+          </div>
+        ))}
+        {savings.length === 0 && (
+          <p className="sieve-no-savings">No savings recorded yet.</p>
+        )}
+      </div>
+
+      <div className="sieve-health-row">
+        <OverviewOrb
+          state={healthy ? "done" : "attention"}
+          label={healthy ? "Healthy" : "Needs attention"}
+        />
+        <div>
+          <strong>
+            {healthy
+              ? "No prefix churn or budget exceedances"
+              : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
+          </strong>
+          <small>
+            {formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)}{" "}
+            projection reuses
+          </small>
+        </div>
+      </div>
+
+      <details className="sieve-projection">
+        <summary>
+          <span>
+            <strong>
+              {sieve.projectionMode === "standard-v2"
+                ? "Standard V2"
+                : "Projection"}
+            </strong>
+            <small>
+              {sieve.projectionMode === "standard-v2"
+                ? "Comparison and churn diagnostics."
+                : "Frozen results carried between epochs."}
+            </small>
+          </span>
+          <small>{sieve.projectionMode}</small>
+          <IconChevronDown className="chev" size={15} aria-hidden="true" />
+        </summary>
+        <div className="sieve-projection-body">
+          {sieve.projectionMode === "stable" ? (
+            <dl>
+              <div>
+                <dt>Active pruning</dt>
+                <dd>{sieve.activePruning ? "Enabled" : "Disabled"}</dd>
+              </div>
+              <div>
+                <dt>Frozen results</dt>
+                <dd>
+                  {formatCompactNumber(sieve.epoch?.frozenResultCount ?? 0)}
+                </dd>
+              </div>
+              <div>
+                <dt>Chars retained</dt>
+                <dd>
+                  {formatCompactNumber(sieve.epoch?.frozenRetainedChars ?? 0)}
+                </dd>
+              </div>
+              <div>
+                <dt>Rollover eligible</dt>
+                <dd>
+                  {formatCompactNumber(
+                    sieve.epoch?.rolloverEligibleRetainedChars ?? 0,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Epoch started</dt>
+                <dd>{epochReason}</dd>
+              </div>
+              <div>
+                <dt>Epoch ID</dt>
+                <dd className="mono" title={sieve.epoch?.id}>
+                  {sieve.epoch?.id ?? "Unavailable"}
+                </dd>
+              </div>
+            </dl>
+          ) : (
+            <dl>
+              <div>
+                <dt>Comparisons</dt>
+                <dd>
+                  {formatCompactNumber(
+                    sieve.stability?.standardComparisons ?? 0,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Prefix changes</dt>
+                <dd>
+                  {formatCompactNumber(
+                    sieve.stability?.standardPrefixChurn ?? 0,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Chars invalidated</dt>
+                <dd>
+                  {formatCompactNumber(
+                    sieve.stability?.standardEstimatedInvalidatedChars ?? 0,
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Earliest change</dt>
+                <dd>
+                  {sieve.stability?.standardEarliestChangedPriorMessageIndex ??
+                    "None"}
+                </dd>
+              </div>
+              {Object.entries(sieve.stability?.standardChangesByKind ?? {}).map(
+                ([kind, count]) => (
+                  <div key={kind}>
+                    <dt>{kind.replace(/([A-Z])/g, " $1").toLowerCase()}</dt>
+                    <dd>{formatCompactNumber(count)}</dd>
+                  </div>
+                ),
+              )}
+            </dl>
+          )}
+        </div>
+      </details>
+      {sieve.error && (
+        <p className="inline-alert" role="alert">
+          {sieve.error}
+        </p>
+      )}
+    </InspectorSection>
+  );
 }
 
 function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
   const active = jobs
     .filter((job) => job.state === "running" || job.state === "cancelling")
-    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt));
+    .sort(
+      (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
+    );
   const settled = jobs
     .filter((job) => job.state !== "running" && job.state !== "cancelling")
-    .sort((left, right) => Date.parse(right.finishedAt ?? right.startedAt) - Date.parse(left.finishedAt ?? left.startedAt))
+    .sort(
+      (left, right) =>
+        Date.parse(right.finishedAt ?? right.startedAt) -
+        Date.parse(left.finishedAt ?? left.startedAt),
+    )
     .slice(0, 6);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -1295,32 +3609,56 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
     return () => window.clearInterval(timer);
   }, [active.length]);
   const visible = [...active, ...settled];
-  return <InspectorSection title="Heartbeat jobs" meta={`${active.length} running`} className="heartbeat-panel">
-    <div className="overview-list">
-      {visible.map((job) => {
-        const startedAt = Date.parse(job.startedAt);
-        const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : now;
-        const duration = Math.max(0, finishedAt - startedAt);
-        const state: OverviewState = job.state === "completed"
-          ? "done"
-          : job.state === "failed" || job.state === "timed_out"
-            ? "failed"
-            : job.state === "running" || job.state === "cancelling"
-              ? "running"
-              : "neutral";
-        const timestamp = job.finishedAt ?? job.startedAt;
-        const timingLabel = job.finishedAt ? "Finished" : "Started";
-        const label = job.state === "completed" ? "Done" : job.state.replace("_", " ");
-        return <article className="overview-list-row" key={job.id}>
-          <OverviewOrb state={state} label={label} />
-          <div><strong title={job.label}>{job.label}</strong><small>{timingLabel} {displayTime(timestamp)}{job.exitCode !== undefined ? ` · exit ${job.exitCode ?? "signal"}` : ""}</small></div>
-          <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
-          <time className="mono">{formatDuration(duration)}</time>
-        </article>;
-      })}
-      {visible.length === 0 && <div className="empty-state"><IconActivityHeartbeat size={20} /><strong>No background jobs</strong><span>Heartbeat has not started work in this session.</span></div>}
-    </div>
-  </InspectorSection>;
+  return (
+    <InspectorSection
+      title="Heartbeat jobs"
+      meta={`${active.length} running`}
+      className="heartbeat-panel"
+    >
+      <div className="overview-list">
+        {visible.map((job) => {
+          const startedAt = Date.parse(job.startedAt);
+          const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : now;
+          const duration = Math.max(0, finishedAt - startedAt);
+          const state: OverviewState =
+            job.state === "completed"
+              ? "done"
+              : job.state === "failed" || job.state === "timed_out"
+                ? "failed"
+                : job.state === "running" || job.state === "cancelling"
+                  ? "running"
+                  : "neutral";
+          const timestamp = job.finishedAt ?? job.startedAt;
+          const timingLabel = job.finishedAt ? "Finished" : "Started";
+          const label =
+            job.state === "completed" ? "Done" : job.state.replace("_", " ");
+          return (
+            <article className="overview-list-row" key={job.id}>
+              <OverviewOrb state={state} label={label} />
+              <div>
+                <strong title={job.label}>{job.label}</strong>
+                <small>
+                  {timingLabel} {displayTime(timestamp)}
+                  {job.exitCode !== undefined
+                    ? ` · exit ${job.exitCode ?? "signal"}`
+                    : ""}
+                </small>
+              </div>
+              <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
+              <time className="mono">{formatDuration(duration)}</time>
+            </article>
+          );
+        })}
+        {visible.length === 0 && (
+          <div className="empty-state">
+            <IconActivityHeartbeat size={20} />
+            <strong>No background jobs</strong>
+            <span>Heartbeat has not started work in this session.</span>
+          </div>
+        )}
+      </div>
+    </InspectorSection>
+  );
 }
 
 function InspectorSection({
@@ -1337,37 +3675,72 @@ function InspectorSection({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <details
-    className={`inspector-section ${className}`}
-    open={open}
-    onToggle={(event) => setOpen(event.currentTarget.open)}
-  >
-    <summary>
-      <span><strong>{title}</strong>{meta && <small>{meta}</small>}</span>
-      <IconChevronDown size={15} aria-hidden="true" />
-    </summary>
-    <div className="inspector-section-content">{children}</div>
-  </details>;
+  return (
+    <details
+      className={`inspector-section ${className}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span>
+          <strong>{title}</strong>
+          {meta && <small>{meta}</small>}
+        </span>
+        <IconChevronDown size={15} aria-hidden="true" />
+      </summary>
+      <div className="inspector-section-content">{children}</div>
+    </details>
+  );
 }
 
-function TodoList({ work }: { work: NonNullable<NonNullable<RuntimeStoreSnapshot["runtime"]>["operational"]["continuity"]["work"]> }) {
-  return <ol className="todo-list">
-    {work.todos.map((todo) => {
-      const state: OverviewState = todo.status === "done" ? "done" : todo.status === "in_progress" ? "running" : todo.status === "blocked" ? "failed" : "neutral";
-      const label = todo.status === "in_progress" ? "Running" : todo.status;
-      return <li className={`todo-item is-${todo.status}`} key={todo.id}>
-        <OverviewOrb state={state} label={label} />
-        <span className="todo-label">{todo.text}</span>
-        <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
-      </li>;
-    })}
-  </ol>;
+function TodoList({
+  work,
+}: {
+  work: NonNullable<
+    NonNullable<
+      RuntimeStoreSnapshot["runtime"]
+    >["operational"]["continuity"]["work"]
+  >;
+}) {
+  return (
+    <ol className="todo-list">
+      {work.todos.map((todo) => {
+        const state: OverviewState =
+          todo.status === "done"
+            ? "done"
+            : todo.status === "in_progress"
+              ? "running"
+              : todo.status === "blocked"
+                ? "failed"
+                : "neutral";
+        const label = todo.status === "in_progress" ? "Running" : todo.status;
+        return (
+          <li className={`todo-item is-${todo.status}`} key={todo.id}>
+            <OverviewOrb state={state} label={label} />
+            <span className="todo-label">{todo.text}</span>
+            <OverviewStateLabel state={state}>{label}</OverviewStateLabel>
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 function FeatureUnavailable({ name }: { name: string }) {
-  return <div className="empty-state" role="status"><IconX size={20} /><strong>{name} unavailable</strong><span>Installed package version does not expose compatible state.</span></div>;
+  return (
+    <div className="empty-state" role="status">
+      <IconX size={20} />
+      <strong>{name} unavailable</strong>
+      <span>Installed package version does not expose compatible state.</span>
+    </div>
+  );
 }
 
 function Status({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span className={`status status-${tone}`}><span aria-hidden="true" />{children}</span>;
+  return (
+    <span className={`status status-${tone}`}>
+      <span aria-hidden="true" />
+      {children}
+    </span>
+  );
 }

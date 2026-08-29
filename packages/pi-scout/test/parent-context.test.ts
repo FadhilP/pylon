@@ -39,8 +39,24 @@ test("parent context carries current request and bounded plan intent safely", ()
 
 test("parent context includes bounded verification and checkpoint archaeology", () => {
   const context = buildParentContext([
-    { type: "custom", customType: "pi-verify-result", data: { state: "failed", scope: "changed", results: [{ command: "npm test" }] } },
-    { type: "custom", customType: "pi-prompt-checkpoint", data: { createdAt: "2026-01-01", worktreeRef: "secret-ref", indexRef: "secret-index" } },
+    {
+      type: "custom",
+      customType: "pi-verify-result",
+      data: {
+        state: "failed",
+        scope: "changed",
+        results: [{ command: "npm test" }],
+      },
+    },
+    {
+      type: "custom",
+      customType: "pi-prompt-checkpoint",
+      data: {
+        createdAt: "2026-01-01",
+        worktreeRef: "secret-ref",
+        indexRef: "secret-index",
+      },
+    },
   ]);
   assert.match(context, /pi-verify-result/);
   assert.match(context, /npm test/);
@@ -49,12 +65,28 @@ test("parent context includes bounded verification and checkpoint archaeology", 
 });
 
 test("parent context deduplicates clipped items and keeps roles distinct", () => {
-  const context = buildParentContext([
-    { type: "message", message: { role: "user", content: "older constraint" } },
-    { type: "message", message: { role: "user", content: "same\r\nevidence" } },
-    { type: "message", message: { role: "user", content: "same\nevidence" } },
-    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "same\nevidence" }] } },
-  ], 6000, 3);
+  const context = buildParentContext(
+    [
+      {
+        type: "message",
+        message: { role: "user", content: "older constraint" },
+      },
+      {
+        type: "message",
+        message: { role: "user", content: "same\r\nevidence" },
+      },
+      { type: "message", message: { role: "user", content: "same\nevidence" } },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "same\nevidence" }],
+        },
+      },
+    ],
+    6000,
+    3,
+  );
   assert.match(context, /older constraint/);
   assert.equal(context.match(/same/g)?.length, 2);
   assert.match(context, /User:/);
@@ -62,10 +94,20 @@ test("parent context deduplicates clipped items and keeps roles distinct", () =>
 });
 
 test("parent context keeps complete newest items within its total cap", () => {
-  const context = buildParentContext([
-    { type: "message", message: { role: "user", content: `older ${"alpha ".repeat(150)}` } },
-    { type: "message", message: { role: "user", content: `newest ${"bravo ".repeat(150)}` } },
-  ], 1000, 2);
+  const context = buildParentContext(
+    [
+      {
+        type: "message",
+        message: { role: "user", content: `older ${"alpha ".repeat(150)}` },
+      },
+      {
+        type: "message",
+        message: { role: "user", content: `newest ${"bravo ".repeat(150)}` },
+      },
+    ],
+    1000,
+    2,
+  );
   assert.match(context, /newest/);
   assert.doesNotMatch(context, /older/);
   assert.ok(context.length <= 1000);
@@ -89,7 +131,11 @@ test("parent context omits recursive scout calls and caps output", () => {
         role: "assistant",
         content: [
           { type: "text", text: `${i} ${"x".repeat(2000)}` },
-          { type: "toolCall", name: "repo_scout", arguments: { task: "repeat" } },
+          {
+            type: "toolCall",
+            name: "repo_scout",
+            arguments: { task: "repeat" },
+          },
         ],
       },
     })),

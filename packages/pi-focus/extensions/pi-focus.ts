@@ -4,11 +4,7 @@ import {
   type ExtensionAPI,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Text,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   composeStatuses,
   footerRows,
@@ -67,7 +63,10 @@ function usageTotals(ctx: any): UsageTotals {
       input += message.usage.input;
       output += message.usage.output;
       cost += message.usage.cost.total;
-    } else if (entry.message.role === "toolResult" && childTools.has(entry.message.toolName)) {
+    } else if (
+      entry.message.role === "toolResult" &&
+      childTools.has(entry.message.toolName)
+    ) {
       const childCost = entry.message.details?.usage?.cost;
       if (typeof childCost === "number") cost += childCost;
     }
@@ -112,7 +111,10 @@ export default function focusExtension(pi: ExtensionAPI) {
       (_tui: any, theme: Theme) =>
         new Text(
           theme.fg("customMessageLabel", theme.bold(label)) +
-            theme.fg("muted", " · child model active · expand tool row for activity"),
+            theme.fg(
+              "muted",
+              " · child model active · expand tool row for activity",
+            ),
           0,
           0,
         ),
@@ -160,7 +162,8 @@ export default function focusExtension(pi: ExtensionAPI) {
           const statuses = [...footerData.getExtensionStatuses().values()]
             .filter(Boolean)
             .map(plainText);
-          const currentState = activeChildLabel() ?? composeStatuses(statuses, state);
+          const currentState =
+            activeChildLabel() ?? composeStatuses(statuses, state);
           return footerRows(
             width,
             density,
@@ -213,11 +216,14 @@ export default function focusExtension(pi: ExtensionAPI) {
   });
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled || !childTools.has(event.toolName)) return;
-    const label: ChildLabel = event.toolName === "repo_scout"
-      ? "SCOUT"
-      : event.toolName === "web_scout"
-        ? "WEB"
-        : event.toolName === "advisor" ? "ADVISOR" : "GRUNT";
+    const label: ChildLabel =
+      event.toolName === "repo_scout"
+        ? "SCOUT"
+        : event.toolName === "web_scout"
+          ? "WEB"
+          : event.toolName === "advisor"
+            ? "ADVISOR"
+            : "GRUNT";
     activeChildren.set(event.toolCallId, label);
     showChildren(ctx);
   });
@@ -253,7 +259,10 @@ export default function focusExtension(pi: ExtensionAPI) {
       }
       if (action === "bell on" || action === "bell off") {
         completionBell = action === "bell on";
-        ctx.ui.notify(`Completion bell: ${completionBell ? "enabled" : "disabled"}`, "info");
+        ctx.ui.notify(
+          `Completion bell: ${completionBell ? "enabled" : "disabled"}`,
+          "info",
+        );
         return;
       }
       if (action === "theme") {

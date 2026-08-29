@@ -1,33 +1,22 @@
-const secretPatterns = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi,
-  /\b(?:sk|pk)-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g,
-  /\b(?:ghp|github_pat|glpat)-[A-Za-z0-9_-]{20,}\b/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
-  /\b(?:authorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|(?:api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+)/gi,
-];
+import { packRecentRecords } from "pylon-core/context-packing";
+import {
+  redact as redactText,
+  sanitizeFailureMessage,
+} from "pylon-core/redact";
 
-const FAILURE_MESSAGE_MAX_LENGTH = 500;
+export { sanitizeFailureMessage };
 
-function redact(text: string): string {
-  return secretPatterns.reduce((value, pattern) => value.replace(pattern, "[REDACTED]"), text);
-}
-
-export function sanitizeFailureMessage(value: unknown, fallback: string): string {
-  const message = value instanceof Error
-    ? value.message
-    : typeof value === "string"
-      ? value
-      : fallback;
-  const clean = redact(message).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim() || fallback;
-  return clean.length > FAILURE_MESSAGE_MAX_LENGTH
-    ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
-    : clean;
-}
+// Parent context is prose the worker must reason about, so long identifiers — commit
+// hashes, digests, base64 blobs — are left intact; only provider-shaped secrets go.
+const redact = (text: string) => redactText(text, { broadTokens: false }).text;
 
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("\n");
+  return content
+    .filter((part: any) => part?.type === "text")
+    .map((part: any) => part.text)
+    .join("\n");
 }
 
 export function buildWorkerContext(
@@ -37,7 +26,8 @@ export function buildWorkerContext(
   pinnedTexts: readonly string[] = [],
 ): string {
   if (maxChars <= 0 || maxItems <= 0) return "";
-  const normalize = (text: string) => redact(text).replace(/\r\n/g, "\n").trim();
+  const normalize = (text: string) =>
+    redact(text).replace(/\r\n/g, "\n").trim();
   const pinned = new Set(pinnedTexts.map(normalize).filter(Boolean));
   const records: string[] = [];
   for (const entry of entries) {
@@ -52,26 +42,21 @@ export function buildWorkerContext(
         label = "Main assistant";
         content = contentText(message.content);
       }
-    } else if ((entry?.type === "compaction" || entry?.type === "branch_summary") && entry.summary) {
+    } else if (
+      (entry?.type === "compaction" || entry?.type === "branch_summary") &&
+      entry.summary
+    ) {
       label = "Earlier context summary";
       content = entry.summary;
     }
     content = redact(content).trim();
-    if (label && content && !pinned.has(normalize(content))) records.push(`${label}: ${content}`);
+    if (label && content && !pinned.has(normalize(content)))
+      records.push(`${label}: ${content}`);
   }
 
-  const selected: string[] = [];
-  const seen = new Set<string>();
-  let length = 0;
-  for (let index = records.length - 1; index >= 0 && selected.length < maxItems; index--) {
-    const record = records[index];
-    const identity = normalize(record);
-    if (seen.has(identity)) continue;
-    seen.add(identity);
-    const separatorLength = selected.length ? 2 : 0;
-    if (length + separatorLength + record.length > maxChars) continue;
-    selected.push(record);
-    length += separatorLength + record.length;
-  }
-  return selected.reverse().join("\n\n");
+  return packRecentRecords(records, {
+    maxChars,
+    maxItems,
+    identity: normalize,
+  });
 }

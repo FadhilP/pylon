@@ -20,9 +20,8 @@ export type Snapshot = Omit<RepositorySnapshot, "prefix"> & {
   snapshotId: string;
   nested?: RepositorySnapshot[];
 };
-const canonical = (path: string) => process.platform === "win32"
-  ? path.toLowerCase()
-  : path;
+const canonical = (path: string) =>
+  process.platform === "win32" ? path.toLowerCase() : path;
 const ident = {
   GIT_AUTHOR_NAME: "pi-timeline",
   GIT_AUTHOR_EMAIL: "pi-timeline@local",
@@ -32,52 +31,98 @@ const ident = {
 
 async function trees(repository: RepositoryState) {
   const dir = await mkdtemp(join(tmpdir(), "pi-timeline-")),
-    index = join(dir, "index"), env = { GIT_INDEX_FILE: index };
+    index = join(dir, "index"),
+    env = { GIT_INDEX_FILE: index };
   try {
     const indexTree = await git(repository.root, ["write-tree"]);
     await git(repository.root, ["read-tree", "HEAD"], env);
     await git(repository.root, ["add", "-A", "--", "."], env);
-    return { indexTree, worktreeTree: await git(repository.root, ["write-tree"], env) };
+    return {
+      indexTree,
+      worktreeTree: await git(repository.root, ["write-tree"], env),
+    };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
-export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
+export async function worktreeFingerprint(
+  cwd: string,
+): Promise<string | undefined> {
   try {
     const { repositories } = await preflight(cwd),
-      statuses = await Promise.all(repositories.map((repository) =>
-        git(repository.root, ["status", "--porcelain=v1", "--untracked-files=all"])));
+      statuses = await Promise.all(
+        repositories.map((repository) =>
+          git(repository.root, [
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+          ]),
+        ),
+      );
     if (statuses.every((status) => !status))
-      return repositories.map(({ prefix, root, head }) => `${prefix}\n${root}\n${head}\nclean`).join("\n");
-    const values = await Promise.all(repositories.map(async (repository) => ({
-      repository,
-      ...await trees(repository),
-    })));
-    return values.map(({ repository, indexTree, worktreeTree }) =>
-      `${repository.prefix}\n${repository.root}\n${repository.head}\n${indexTree}\n${worktreeTree}`).join("\n");
+      return repositories
+        .map(({ prefix, root, head }) => `${prefix}\n${root}\n${head}\nclean`)
+        .join("\n");
+    const values = await Promise.all(
+      repositories.map(async (repository) => ({
+        repository,
+        ...(await trees(repository)),
+      })),
+    );
+    return values
+      .map(
+        ({ repository, indexTree, worktreeTree }) =>
+          `${repository.prefix}\n${repository.root}\n${repository.head}\n${indexTree}\n${worktreeTree}`,
+      )
+      .join("\n");
   } catch {
     return undefined;
   }
 }
 
-async function captureRepository(repository: RepositoryState, sessionId: string, id: string) {
+async function captureRepository(
+  repository: RepositoryState,
+  sessionId: string,
+  id: string,
+) {
   const { indexTree, worktreeTree } = await trees(repository),
     headRef = await symbolicHead(repository.root),
-    wc = await git(repository.root, [
-      "commit-tree", worktreeTree, "-p", repository.head, "-m", "pi-timeline worktree checkpoint",
-    ], ident),
-    ic = await git(repository.root, [
-      "commit-tree", indexTree, "-p", repository.head, "-m", "pi-timeline index checkpoint",
-    ], ident),
+    wc = await git(
+      repository.root,
+      [
+        "commit-tree",
+        worktreeTree,
+        "-p",
+        repository.head,
+        "-m",
+        "pi-timeline worktree checkpoint",
+      ],
+      ident,
+    ),
+    ic = await git(
+      repository.root,
+      [
+        "commit-tree",
+        indexTree,
+        "-p",
+        repository.head,
+        "-m",
+        "pi-timeline index checkpoint",
+      ],
+      ident,
+    ),
     owner = createHash("sha256").update(sessionId).digest("hex").slice(0, 16),
     base = `refs/pi-timeline/${owner}/${id}`,
-    worktreeRef = `${base}/worktree`, indexRef = `${base}/index`;
+    worktreeRef = `${base}/worktree`,
+    indexRef = `${base}/index`;
   await git(repository.root, ["update-ref", worktreeRef, wc]);
   try {
     await git(repository.root, ["update-ref", indexRef, ic]);
   } catch (error) {
-    await git(repository.root, ["update-ref", "-d", worktreeRef]).catch(() => {});
+    await git(repository.root, ["update-ref", "-d", worktreeRef]).catch(
+      () => {},
+    );
     throw error;
   }
   return {
@@ -93,81 +138,14 @@ async function captureRepository(repository: RepositoryState, sessionId: string,
   } satisfies RepositorySnapshot;
 }
 
-async function deleteRefs(repository: RepositorySnapshot) {
-  await git(repository.gitRoot, ["update-ref", "-d", repository.worktreeRef]).catch(() => {});
-  await git(repository.gitRoot, ["update-ref", "-d", repository.indexRef]).catch(() => {});
-}
-
-export async function capture(
-  cwd: string,
-  sessionId: string,
-  beforeRepository?: (root: string) => Promise<void>,
-): Promise<Snapshot> {
-  const initial = await preflight(cwd), id = randomBytes(6).toString("hex"),
-    captured: RepositorySnapshot[] = [];
-  try {
-    for (const repository of initial.repositories) {
-      await beforeRepository?.(repository.root);
-      captured.push(await captureRepository(repository, sessionId, id));
-    }
-    const final = await preflight(cwd);
-    if (final.repositories.length !== initial.repositories.length || final.repositories.some((repository, index) =>
-      repository.root !== initial.repositories[index].root ||
-      repository.prefix !== initial.repositories[index].prefix ||
-      repository.head !== initial.repositories[index].head))
-      throw Error("Repository graph changed during checkpoint.");
-    const [root, ...nested] = captured;
-    return {
-      snapshotId: id,
-      gitRoot: root.gitRoot,
-      commonDir: root.commonDir,
-      head: root.head,
-      headRef: root.headRef,
-      worktreeRef: root.worktreeRef,
-      indexRef: root.indexRef,
-      worktreeTree: root.worktreeTree,
-      indexTree: root.indexTree,
-      ...(nested.length ? { nested } : {}),
-    };
-  } catch (error) {
-    await Promise.all(captured.map(deleteRefs));
-    throw error;
-  }
-}
-
-export async function makePortable(snapshot: Snapshot, cwd: string): Promise<Snapshot> {
-  const current = await preflight(cwd);
-  const expected: RepositorySnapshot[] = [{
-    prefix: "",
-    gitRoot: snapshot.gitRoot,
-    commonDir: snapshot.commonDir,
-    head: snapshot.head,
-    headRef: snapshot.headRef,
-    worktreeRef: snapshot.worktreeRef,
-    indexRef: snapshot.indexRef,
-    worktreeTree: snapshot.worktreeTree,
-    indexTree: snapshot.indexTree,
-  }, ...(snapshot.nested ?? [])];
-  if (current.repositories.length !== expected.length) {
-    throw Error("Nested repository graph changed since checkpoint.");
-  }
-  const portable = expected.map((repository, index) => {
-    const actual = current.repositories[index];
-    if (repository.prefix !== actual.prefix || repository.head !== actual.head) {
-      throw Error("Checkpoint repository graph or HEAD changed.");
-    }
-    if (repository.commonDir) {
-      if (canonical(repository.commonDir) !== canonical(actual.commonDir)) {
-        throw Error("Checkpoint belongs to a different Git repository.");
-      }
-    } else if (canonical(repository.gitRoot) !== canonical(actual.root)) {
-      throw Error("Version 3 checkpoint must be migrated from its original checkout.");
-    }
-    return { ...repository, gitRoot: actual.root, commonDir: actual.commonDir };
-  });
-  const [root, ...nested] = portable;
+/** Assembles a Snapshot from the captured repositories, root first. */
+function toSnapshot(
+  snapshotId: string,
+  repositories: RepositorySnapshot[],
+): Snapshot {
+  const [root, ...nested] = repositories;
   return {
-    snapshotId: snapshot.snapshotId,
+    snapshotId,
     gitRoot: root.gitRoot,
     commonDir: root.commonDir,
     head: root.head,
@@ -178,4 +156,93 @@ export async function makePortable(snapshot: Snapshot, cwd: string): Promise<Sna
     indexTree: root.indexTree,
     ...(nested.length ? { nested } : {}),
   };
+}
+
+/** Best-effort cleanup for a partial capture; failures are ignored deliberately. */
+async function discardRepositoryRefs(repository: RepositorySnapshot) {
+  await git(repository.gitRoot, [
+    "update-ref",
+    "-d",
+    repository.worktreeRef,
+  ]).catch(() => {});
+  await git(repository.gitRoot, [
+    "update-ref",
+    "-d",
+    repository.indexRef,
+  ]).catch(() => {});
+}
+
+export async function capture(
+  cwd: string,
+  sessionId: string,
+  beforeRepository?: (root: string) => Promise<void>,
+): Promise<Snapshot> {
+  const initial = await preflight(cwd),
+    id = randomBytes(6).toString("hex"),
+    captured: RepositorySnapshot[] = [];
+  try {
+    for (const repository of initial.repositories) {
+      await beforeRepository?.(repository.root);
+      captured.push(await captureRepository(repository, sessionId, id));
+    }
+    const final = await preflight(cwd);
+    if (
+      final.repositories.length !== initial.repositories.length ||
+      final.repositories.some(
+        (repository, index) =>
+          repository.root !== initial.repositories[index].root ||
+          repository.prefix !== initial.repositories[index].prefix ||
+          repository.head !== initial.repositories[index].head,
+      )
+    )
+      throw Error("Repository graph changed during checkpoint.");
+    return toSnapshot(id, captured);
+  } catch (error) {
+    await Promise.all(captured.map(discardRepositoryRefs));
+    throw error;
+  }
+}
+
+export async function makePortable(
+  snapshot: Snapshot,
+  cwd: string,
+): Promise<Snapshot> {
+  const current = await preflight(cwd);
+  const expected: RepositorySnapshot[] = [
+    {
+      prefix: "",
+      gitRoot: snapshot.gitRoot,
+      commonDir: snapshot.commonDir,
+      head: snapshot.head,
+      headRef: snapshot.headRef,
+      worktreeRef: snapshot.worktreeRef,
+      indexRef: snapshot.indexRef,
+      worktreeTree: snapshot.worktreeTree,
+      indexTree: snapshot.indexTree,
+    },
+    ...(snapshot.nested ?? []),
+  ];
+  if (current.repositories.length !== expected.length) {
+    throw Error("Nested repository graph changed since checkpoint.");
+  }
+  const portable = expected.map((repository, index) => {
+    const actual = current.repositories[index];
+    if (
+      repository.prefix !== actual.prefix ||
+      repository.head !== actual.head
+    ) {
+      throw Error("Checkpoint repository graph or HEAD changed.");
+    }
+    if (repository.commonDir) {
+      if (canonical(repository.commonDir) !== canonical(actual.commonDir)) {
+        throw Error("Checkpoint belongs to a different Git repository.");
+      }
+    } else if (canonical(repository.gitRoot) !== canonical(actual.root)) {
+      throw Error(
+        "Version 3 checkpoint must be migrated from its original checkout.",
+      );
+    }
+    return { ...repository, gitRoot: actual.root, commonDir: actual.commonDir };
+  });
+  return toSnapshot(snapshot.snapshotId, portable);
 }

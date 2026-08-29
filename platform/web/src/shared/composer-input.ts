@@ -11,7 +11,10 @@ export interface FileMention {
   query: string;
 }
 
-export function fileMentionAtCaret(value: string, caret: number): FileMention | undefined {
+export function fileMentionAtCaret(
+  value: string,
+  caret: number,
+): FileMention | undefined {
   const beforeCaret = value.slice(0, Math.max(0, caret));
   const match = /(^|[^A-Za-z0-9_])@(?:"([^"]*)|([^\s"]*))$/.exec(beforeCaret);
   if (!match) return undefined;
@@ -58,5 +61,8 @@ export function isNearTranscriptBottom(
   scroller: Pick<HTMLElement, "scrollHeight" | "scrollTop" | "clientHeight">,
   threshold = 48,
 ): boolean {
-  return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= threshold;
+  return (
+    scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <=
+    threshold
+  );
 }

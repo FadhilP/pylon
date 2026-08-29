@@ -11,14 +11,33 @@ export interface FileWorkspaceState {
   view: FileWorkspaceView;
 }
 
-export function workspaceStateForSession(states: Map<string, FileWorkspaceState>, sessionId: string): FileWorkspaceState {
-  return states.get(sessionId) ?? { sessionId, tab: "files", query: "", openPaths: [], views: {}, view: "current" };
+export function workspaceStateForSession(
+  states: Map<string, FileWorkspaceState>,
+  sessionId: string,
+): FileWorkspaceState {
+  return (
+    states.get(sessionId) ?? {
+      sessionId,
+      tab: "files",
+      query: "",
+      openPaths: [],
+      views: {},
+      view: "current",
+    }
+  );
 }
 
-export function openFileTab(state: FileWorkspaceState, path: string, view: FileWorkspaceView, selectedLine?: number): FileWorkspaceState {
+export function openFileTab(
+  state: FileWorkspaceState,
+  path: string,
+  view: FileWorkspaceView,
+  selectedLine?: number,
+): FileWorkspaceState {
   return {
     ...state,
-    openPaths: state.openPaths.includes(path) ? state.openPaths : [...state.openPaths, path],
+    openPaths: state.openPaths.includes(path)
+      ? state.openPaths
+      : [...state.openPaths, path],
     views: { ...state.views, [path]: view },
     selectedPath: path,
     selectedLine,
@@ -26,28 +45,44 @@ export function openFileTab(state: FileWorkspaceState, path: string, view: FileW
   };
 }
 
-export function selectFileTab(state: FileWorkspaceState, path: string): FileWorkspaceState {
-  return { ...state, selectedPath: path, selectedLine: undefined, view: state.views[path] ?? "current" };
+export function selectFileTab(
+  state: FileWorkspaceState,
+  path: string,
+): FileWorkspaceState {
+  return {
+    ...state,
+    selectedPath: path,
+    selectedLine: undefined,
+    view: state.views[path] ?? "current",
+  };
 }
 
-export function setFileTabView(state: FileWorkspaceState, path: string, view: FileWorkspaceView): FileWorkspaceState {
+export function setFileTabView(
+  state: FileWorkspaceState,
+  path: string,
+  view: FileWorkspaceView,
+): FileWorkspaceState {
   return { ...state, views: { ...state.views, [path]: view }, view };
 }
 
-export function closeFileTab(state: FileWorkspaceState, path: string): FileWorkspaceState {
+export function closeFileTab(
+  state: FileWorkspaceState,
+  path: string,
+): FileWorkspaceState {
   const index = state.openPaths.indexOf(path);
   const openPaths = state.openPaths.filter((candidate) => candidate !== path);
   const views = { ...state.views };
   delete views[path];
-  const selectedPath = state.selectedPath === path
-    ? openPaths[Math.max(0, Math.min(index, openPaths.length - 1))]
-    : state.selectedPath;
+  const selectedPath =
+    state.selectedPath === path
+      ? openPaths[Math.max(0, Math.min(index, openPaths.length - 1))]
+      : state.selectedPath;
   return {
     ...state,
     openPaths,
     views,
     selectedPath,
     selectedLine: undefined,
-    view: selectedPath ? views[selectedPath] ?? "current" : "current",
+    view: selectedPath ? (views[selectedPath] ?? "current") : "current",
   };
 }

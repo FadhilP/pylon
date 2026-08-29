@@ -23,17 +23,35 @@ export function reconcilePendingQueue(
   sessionId: string,
   sessionGeneration: number,
 ): PendingMessageReadModel[] {
-  const previousByCommand = new Map(previousQueue.map((item) => [item.commandId, item]));
-  const nextByCommand = new Map(nextQueue.map((item) => [item.commandId, item]));
+  const previousByCommand = new Map(
+    previousQueue.map((item) => [item.commandId, item]),
+  );
+  const nextByCommand = new Map(
+    nextQueue.map((item) => [item.commandId, item]),
+  );
   const reconciled = pending.flatMap((item) => {
-    if (item.sessionId !== sessionId || item.sessionGeneration !== sessionGeneration) return [item];
+    if (
+      item.sessionId !== sessionId ||
+      item.sessionGeneration !== sessionGeneration
+    )
+      return [item];
     const queued = nextByCommand.get(item.commandId);
-    if (queued) return [{ ...item, state: queued.state === "queued" ? "queued" as const : "sending" as const }];
+    if (queued)
+      return [
+        {
+          ...item,
+          state:
+            queued.state === "queued"
+              ? ("queued" as const)
+              : ("sending" as const),
+        },
+      ];
     if (previousByCommand.get(item.commandId)?.state === "queued") return [];
     return [item];
   });
   for (const queued of nextQueue) {
-    if (reconciled.some((item) => item.commandId === queued.commandId)) continue;
+    if (reconciled.some((item) => item.commandId === queued.commandId))
+      continue;
     reconciled.push({
       id: pendingMessageId(queued.commandId),
       commandId: queued.commandId,

@@ -26,15 +26,24 @@ async function repository() {
 test("preflight refuses common untracked credential files", async () => {
   const { root } = await repository();
   try {
-    await writeFile(join(root, ".npmrc"), "//registry.example/:_authToken=secret\n");
+    await writeFile(
+      join(root, ".npmrc"),
+      "//registry.example/:_authToken=secret\n",
+    );
     await assert.rejects(preflight(root), /Unsafe untracked path: \.npmrc/);
   } finally {
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 });
 
 test("preflight scans initialized gitlinks without .gitmodules", async () => {
-  const { root, git } = await repository(), child = join(root, "child");
+  const { root, git } = await repository(),
+    child = join(root, "child");
   const childGit = async (...args: string[]) =>
     (await exec("git", args, { cwd: child, windowsHide: true })).stdout.trim();
   try {
@@ -47,8 +56,16 @@ test("preflight scans initialized gitlinks without .gitmodules", async () => {
     await childGit("commit", "-qm", "child");
     await assert.rejects(access(join(root, ".gitmodules")));
     await writeFile(join(child, ".npmrc"), "token=secret\n");
-    await assert.rejects(preflight(root), /Unsafe untracked path: child\/\.npmrc/);
+    await assert.rejects(
+      preflight(root),
+      /Unsafe untracked path: child\/\.npmrc/,
+    );
   } finally {
-    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 100,
+    });
   }
 });

@@ -1,9 +1,57 @@
-import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
-import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
-import type { HeliosAndroidToolingCommand, HeliosAndroidToolingResult } from "../../shared/protocol/helios-android-tooling.ts";
-import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { ProviderAuthReadModel, QueueReadModel, SessionRuntimeState, SlashCommandResultReadModel } from "../../shared/protocol/events.ts";
-import type { ArchiveListQuery, ArchiveListSnapshot, ConversationAttachmentContent, ConversationAttachmentQuery, ConversationHistoryPage, ConversationHistoryQuery, ConversationTurnIndexPage, ConversationTurnIndexQuery, ExtensionListSnapshot, FileSuggestionList, HookSettingsReadModel, HookSettingsSnapshot, PackageListSnapshot, PackageSettingsReadModel, PapercutListPage, PapercutMutationResult, PapercutStatusReadModel, RuntimeSnapshot, SessionListQuery, SessionListSnapshot, StateQLRowsPage, StateQLSnapshot, TimelineCheckpointDiff, TimelineCheckpointFiles, TurnDiffQuery, TurnDiffResult, WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFilePage } from "../../shared/protocol/snapshots.ts";
+import type {
+  AcceptedCommand,
+  WebCommand,
+} from "../../shared/protocol/commands.ts";
+import type {
+  HeliosBrowserInput,
+  HeliosBrowserResult,
+} from "../../shared/protocol/helios.ts";
+import type {
+  HeliosAndroidToolingCommand,
+  HeliosAndroidToolingResult,
+} from "../../shared/protocol/helios-android-tooling.ts";
+import type {
+  PromptImage,
+  PromptTextFile,
+  QueuedPromptPayload,
+} from "../../shared/protocol/commands.ts";
+import type {
+  ProviderAuthReadModel,
+  QueueReadModel,
+  SessionRuntimeState,
+  SlashCommandResultReadModel,
+} from "../../shared/protocol/events.ts";
+import type {
+  ArchiveListQuery,
+  ArchiveListSnapshot,
+  ConversationAttachmentContent,
+  ConversationAttachmentQuery,
+  ConversationHistoryPage,
+  ConversationHistoryQuery,
+  ConversationTurnIndexPage,
+  ConversationTurnIndexQuery,
+  ExtensionListSnapshot,
+  FileSuggestionList,
+  HookSettingsReadModel,
+  HookSettingsSnapshot,
+  PackageListSnapshot,
+  PackageSettingsReadModel,
+  PapercutListPage,
+  PapercutMutationResult,
+  PapercutStatusReadModel,
+  RuntimeSnapshot,
+  SessionListQuery,
+  SessionListSnapshot,
+  StateQLRowsPage,
+  StateQLSnapshot,
+  TimelineCheckpointDiff,
+  TimelineCheckpointFiles,
+  TurnDiffQuery,
+  TurnDiffResult,
+  WorkspaceFileContent,
+  WorkspaceFileDiff,
+  WorkspaceFilePage,
+} from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
 
 export interface RuntimeTarget {
@@ -154,8 +202,14 @@ export interface ForkInput {
   mode?: "conversation" | "timeline";
 }
 
-export type UpdateRuntimePolicyInput = Extract<WebCommand, { type: "updateRuntimePolicy" }>;
-export type UpdateToolPolicyInput = Extract<WebCommand, { type: "updateToolPolicy" }>;
+export type UpdateRuntimePolicyInput = Extract<
+  WebCommand,
+  { type: "updateRuntimePolicy" }
+>;
+export type UpdateToolPolicyInput = Extract<
+  WebCommand,
+  { type: "updateToolPolicy" }
+>;
 
 export interface EditPromptInput extends PromptInput {
   entryId: string;
@@ -182,9 +236,17 @@ export interface UpdateHookSettingsInput {
   settings: HookSettingsReadModel;
 }
 
-export interface SetExtensionEnabledInput { extensionId: string; enabled: boolean; }
-export interface ExtensionPackageInput { source: string; scope: "user" | "project"; }
-export interface SetProjectTrustInput { trusted: boolean; }
+export interface SetExtensionEnabledInput {
+  extensionId: string;
+  enabled: boolean;
+}
+export interface ExtensionPackageInput {
+  source: string;
+  scope: "user" | "project";
+}
+export interface SetProjectTrustInput {
+  trusted: boolean;
+}
 
 export interface SetModelInput {
   provider: string;
@@ -317,22 +379,45 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   terminalTarget?(): TerminalTarget;
-  conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
-  conversationAttachment?(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent>;
+  conversationHistory(
+    input: ConversationHistoryQuery,
+  ): Promise<ConversationHistoryPage>;
+  conversationAttachment?(
+    input: ConversationAttachmentQuery,
+  ): Promise<ConversationAttachmentContent>;
   turnDiff?(input: TurnDiffQuery): Promise<TurnDiffResult>;
-  conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
+  conversationTurnIndex?(
+    input: ConversationTurnIndexQuery,
+  ): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;
   workspaceFile?(input: WorkspaceFileInput): Promise<WorkspaceFileContent>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
-  timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
-  timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
+  timelineCheckpointFiles?(
+    input: TimelineCheckpointInput,
+  ): Promise<TimelineCheckpointFiles>;
+  timelineCheckpointDiff?(
+    input: TimelineCheckpointDiffInput,
+  ): Promise<TimelineCheckpointDiff>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
-  stateqlRows?(handle: string, offset: number, limit: number): Promise<StateQLRowsPage>;
-  papercutList?(status: PapercutStatusReadModel | "all", query: string, offset: number, limit: number): Promise<PapercutListPage>;
-  papercutMutation?(input: PapercutMutationInput): Promise<PapercutMutationResult>;
+  stateqlRows?(
+    handle: string,
+    offset: number,
+    limit: number,
+  ): Promise<StateQLRowsPage>;
+  papercutList?(
+    status: PapercutStatusReadModel | "all",
+    query: string,
+    offset: number,
+    limit: number,
+  ): Promise<PapercutListPage>;
+  papercutMutation?(
+    input: PapercutMutationInput,
+  ): Promise<PapercutMutationResult>;
   heliosBrowser?(input: HeliosBrowserInput): Promise<HeliosBrowserResult>;
-  heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
+  heliosAndroidTooling?(
+    input: HeliosAndroidToolingCommand,
+  ): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
@@ -353,9 +438,13 @@ export interface PiDriver {
   reorderProject(input: ReorderProjectInput): Promise<void>;
   archiveProject(input: ProjectArchiveInput): Promise<ReplacementResult>;
   restoreProject(input: ProjectArchiveInput): Promise<void>;
-  updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
+  updateProjectWorktreeSettings?(
+    input: ProjectWorktreeSettingsInput,
+  ): Promise<void>;
   handoffSession?(input: HandoffSessionInput): Promise<ReplacementResult>;
-  applySessionChanges?(input: ApplySessionChangesInput): Promise<ReplacementResult>;
+  applySessionChanges?(
+    input: ApplySessionChangesInput,
+  ): Promise<ReplacementResult>;
   switchSession(input: SwitchSessionInput): Promise<ReplacementResult>;
   deleteSession(input: DeleteSessionInput): Promise<void>;
   archiveSession(input: SessionArchiveInput): Promise<ReplacementResult>;
@@ -370,10 +459,18 @@ export interface PiDriver {
   updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
   updateToolPolicy?(input: UpdateToolPolicyInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
-  updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
-  setExtensionEnabled?(input: SetExtensionEnabledInput): Promise<ReplacementResult>;
-  installExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
-  removeExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
+  updatePackageSettings(
+    input: UpdatePackageSettingsInput,
+  ): Promise<ReplacementResult>;
+  setExtensionEnabled?(
+    input: SetExtensionEnabledInput,
+  ): Promise<ReplacementResult>;
+  installExtensionPackage?(
+    input: ExtensionPackageInput,
+  ): Promise<ReplacementResult>;
+  removeExtensionPackage?(
+    input: ExtensionPackageInput,
+  ): Promise<ReplacementResult>;
   setProjectTrust?(input: SetProjectTrustInput): Promise<ReplacementResult>;
   reloadExtensions?(): Promise<ReplacementResult>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
@@ -389,7 +486,10 @@ export interface PiDriver {
   migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void>;
   continuityPlanAction(input: ContinuityPlanActionInput): Promise<void>;
   answerUiRequest(input: UiResponse): Promise<void>;
-  keepUiRequestAlive(requestId: string, sessionGeneration: number): string | undefined | void;
+  keepUiRequestAlive(
+    requestId: string,
+    sessionGeneration: number,
+  ): string | undefined | void;
   dismissCommandResult?(resultId: string, sessionGeneration: number): void;
   subscribe(listener: DriverEventListener): () => void;
   dispose(): Promise<void>;

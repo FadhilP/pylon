@@ -14,16 +14,17 @@ export type RunEntry = {
 export function isRunEntry(value: any): value is RunEntry {
   return Boolean(
     value?.version === 1 &&
-      typeof value.runId === "string" &&
-      value.runId.length > 0 &&
-      typeof value.timelineId === "string" &&
-      value.timelineId.length > 0 &&
-      ["planner", "executor", "reviewer"].includes(value.role) &&
-      (value.parentSessionId === undefined ||
-        typeof value.parentSessionId === "string") &&
-      (value.approvalToken === undefined ||
-        (typeof value.approvalToken === "string" && value.approvalToken.length > 0)) &&
-      typeof value.createdAt === "string",
+    typeof value.runId === "string" &&
+    value.runId.length > 0 &&
+    typeof value.timelineId === "string" &&
+    value.timelineId.length > 0 &&
+    ["planner", "executor", "reviewer"].includes(value.role) &&
+    (value.parentSessionId === undefined ||
+      typeof value.parentSessionId === "string") &&
+    (value.approvalToken === undefined ||
+      (typeof value.approvalToken === "string" &&
+        value.approvalToken.length > 0)) &&
+    typeof value.createdAt === "string",
   );
 }
 

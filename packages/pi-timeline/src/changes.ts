@@ -26,17 +26,20 @@ export interface TimelineFileDiff {
   truncated?: boolean;
 }
 
-const repositories = (snapshot: Snapshot): RepositorySnapshot[] => [{
-  prefix: "",
-  gitRoot: snapshot.gitRoot,
-  commonDir: snapshot.commonDir,
-  head: snapshot.head,
-  headRef: snapshot.headRef,
-  worktreeRef: snapshot.worktreeRef,
-  indexRef: snapshot.indexRef,
-  worktreeTree: snapshot.worktreeTree,
-  indexTree: snapshot.indexTree,
-}, ...(snapshot.nested ?? [])];
+const repositories = (snapshot: Snapshot): RepositorySnapshot[] => [
+  {
+    prefix: "",
+    gitRoot: snapshot.gitRoot,
+    commonDir: snapshot.commonDir,
+    head: snapshot.head,
+    headRef: snapshot.headRef,
+    worktreeRef: snapshot.worktreeRef,
+    indexRef: snapshot.indexRef,
+    worktreeTree: snapshot.worktreeTree,
+    indexTree: snapshot.indexTree,
+  },
+  ...(snapshot.nested ?? []),
+];
 
 const canonical = (value: string) =>
   process.platform === "win32" ? value.toLowerCase() : value;
@@ -62,16 +65,21 @@ const compatibleRepositories = (
     const earlier = previousRepositories[index];
     const currentIdentity = item.commonDir ?? item.gitRoot;
     const earlierIdentity = earlier.commonDir ?? earlier.gitRoot;
-    if (item.prefix !== earlier.prefix
-      || item.head !== earlier.head
-      || canonical(currentIdentity) !== canonical(earlierIdentity))
+    if (
+      item.prefix !== earlier.prefix ||
+      item.head !== earlier.head ||
+      canonical(currentIdentity) !== canonical(earlierIdentity)
+    )
       throw Error("Checkpoint repository graph is incompatible.");
     return { current: item, previous: earlier };
   });
 };
 
 const parseNumstat = (value: string) => {
-  const rows = new Map<string, Pick<TimelineFileChange, "additions" | "deletions" | "binary">>();
+  const rows = new Map<
+    string,
+    Pick<TimelineFileChange, "additions" | "deletions" | "binary">
+  >();
   for (const row of value.split("\0")) {
     if (!row) continue;
     const [added, deleted, rawPath] = row.split("\t");
@@ -93,11 +101,14 @@ const parseStatuses = (value: string) => {
   for (let index = 0; index + 1 < parts.length; index += 2) {
     const path = safePath(parts[index + 1]);
     if (!path) continue;
-    statuses.set(path, parts[index].startsWith("A")
-      ? "added"
-      : parts[index].startsWith("D")
-        ? "deleted"
-        : "modified");
+    statuses.set(
+      path,
+      parts[index].startsWith("A")
+        ? "added"
+        : parts[index].startsWith("D")
+          ? "deleted"
+          : "modified",
+    );
   }
   return statuses;
 };
@@ -111,8 +122,22 @@ export async function checkpointChanges(
     const before = pair.previous?.worktreeTree ?? pair.current.head;
     const after = pair.current.worktreeTree;
     const [numstat, nameStatus] = await Promise.all([
-      git(pair.current.gitRoot, ["diff", "--numstat", "-z", "--no-renames", before, after]),
-      git(pair.current.gitRoot, ["diff", "--name-status", "-z", "--no-renames", before, after]),
+      git(pair.current.gitRoot, [
+        "diff",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        before,
+        after,
+      ]),
+      git(pair.current.gitRoot, [
+        "diff",
+        "--name-status",
+        "-z",
+        "--no-renames",
+        before,
+        after,
+      ]),
     ]);
     const stats = parseNumstat(numstat);
     const statuses = parseStatuses(nameStatus);
@@ -145,7 +170,9 @@ export async function checkpointFileDiff(
   const path = safePath(requestedPath);
   if (!path) return { path: requestedPath.slice(0, 500), state: "unavailable" };
   const pair = compatibleRepositories(current, previous)
-    .sort((left, right) => right.current.prefix.length - left.current.prefix.length)
+    .sort(
+      (left, right) => right.current.prefix.length - left.current.prefix.length,
+    )
     .find(({ current: item }) => !item.prefix || path.startsWith(item.prefix));
   if (!pair) return { path, state: "unavailable" };
   const relativePath = pair.current.prefix
@@ -154,8 +181,14 @@ export async function checkpointFileDiff(
   const before = pair.previous?.worktreeTree ?? pair.current.head;
   const after = pair.current.worktreeTree;
   const text = await git(pair.current.gitRoot, [
-    "diff", "--no-ext-diff", "--no-renames", "--unified=3",
-    before, after, "--", relativePath,
+    "diff",
+    "--no-ext-diff",
+    "--no-renames",
+    "--unified=3",
+    before,
+    after,
+    "--",
+    relativePath,
   ]).catch(() => "");
   if (!text) return { path, state: "unavailable" };
   if (/^Binary files /m.test(text)) return { path, state: "binary" };

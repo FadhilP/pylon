@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findRunEntry, hasTimeline, isRunEntry, runTimelineId } from "../src/run.ts";
+import {
+  findRunEntry,
+  hasTimeline,
+  isRunEntry,
+  runTimelineId,
+} from "../src/run.ts";
 import { classifyCompatibility } from "../src/compatibility.ts";
 
 test("checkpoint compatibility keeps refs informational", () => {
@@ -12,7 +17,10 @@ test("checkpoint compatibility keeps refs informational", () => {
     headRef: "refs/heads/main",
   };
   assert.deepEqual(
-    classifyCompatibility({ ...current, headRef: null }, { ...current, headRef: null }),
+    classifyCompatibility(
+      { ...current, headRef: null },
+      { ...current, headRef: null },
+    ),
     { allowed: true, refState: "same" },
   );
   assert.deepEqual(
@@ -32,7 +40,10 @@ test("checkpoint compatibility keeps refs informational", () => {
     { allowed: false, reason: "head-mismatch" },
   );
   assert.deepEqual(
-    classifyCompatibility(current, { ...current, gitRoot: join(tmpdir(), "other") }),
+    classifyCompatibility(current, {
+      ...current,
+      gitRoot: join(tmpdir(), "other"),
+    }),
     { allowed: false, reason: "repository-mismatch" },
   );
 });
@@ -70,12 +81,22 @@ test("latest valid run metadata preserves explicit timeline lineage", () => {
   assert.equal(hasTimeline(entries, "run-1"), true);
   assert.equal(hasTimeline(entries, "unrelated"), false);
   assert.deepEqual(findRunEntry(entries), nextPlan);
-  assert.equal(hasTimeline([
-    ...entries,
-    { type: "custom", customType: "pylon-run", data: {
-      ...planner,
-      runId: "unrelated",
-      timelineId: "unrelated",
-    } },
-  ], "run-1"), true);
+  assert.equal(
+    hasTimeline(
+      [
+        ...entries,
+        {
+          type: "custom",
+          customType: "pylon-run",
+          data: {
+            ...planner,
+            runId: "unrelated",
+            timelineId: "unrelated",
+          },
+        },
+      ],
+      "run-1",
+    ),
+    true,
+  );
 });

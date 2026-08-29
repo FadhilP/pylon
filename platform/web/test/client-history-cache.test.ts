@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasCompleteHistory, mergeHistoryMessages, mergeHistorySegments, restoreCachedHistory } from "../src/shared/history-cache.ts";
+import {
+  hasCompleteHistory,
+  mergeHistoryMessages,
+  mergeHistorySegments,
+  restoreCachedHistory,
+} from "../src/shared/history-cache.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
@@ -15,7 +20,11 @@ function messages(start: number, end: number): MessageReadModel[] {
   }));
 }
 
-function runtime(history: MessageReadModel[], cursor?: string, remaining?: number): RuntimeSnapshot {
+function runtime(
+  history: MessageReadModel[],
+  cursor?: string,
+  remaining?: number,
+): RuntimeSnapshot {
   return {
     protocolVersion: PROTOCOL_VERSION,
     sessionId: "session-one",
@@ -37,32 +46,86 @@ function runtime(history: MessageReadModel[], cursor?: string, remaining?: numbe
       compaction: { active: false },
     },
     sessionControls: { models: [], thinkingLevels: [], commands: [] },
-  runtimePolicy: { revision: 1, global: { timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, project: { verify: { mode: "auto" }, timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, session: {}, effective: { verify: { mode: "auto" }, timelineEnabled: true, guardEnabled: true, workspace: "local", guardTimeoutSeconds: 60, clarifyTimeoutSeconds: 60 }, availableVerifyChecks: [] },
+    runtimePolicy: {
+      revision: 1,
+      global: {
+        timelineEnabled: true,
+        guardEnabled: true,
+        workspace: "local",
+        guardTimeoutSeconds: 60,
+        clarifyTimeoutSeconds: 60,
+      },
+      project: {
+        verify: { mode: "auto" },
+        timelineEnabled: true,
+        guardEnabled: true,
+        workspace: "local",
+        guardTimeoutSeconds: 60,
+        clarifyTimeoutSeconds: 60,
+      },
+      session: {},
+      effective: {
+        verify: { mode: "auto" },
+        timelineEnabled: true,
+        guardEnabled: true,
+        workspace: "local",
+        guardTimeoutSeconds: 60,
+        clarifyTimeoutSeconds: 60,
+      },
+      availableVerifyChecks: [],
+    },
     metrics: {
-      model: "none", provider: "none", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
-      contextTokens: 0, contextLimit: 0, contextPercent: 0, cost: 0,
-      userMessages: 0, assistantMessages: 0, toolCalls: 0,
+      model: "none",
+      provider: "none",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      contextTokens: 0,
+      contextLimit: 0,
+      contextPercent: 0,
+      cost: 0,
+      userMessages: 0,
+      assistantMessages: 0,
+      toolCalls: 0,
     },
     operational: initialOperational([], []),
-    extensionUi: { notifications: [], statuses: [], widgets: [], editorRevision: 0, editorText: "" },
+    extensionUi: {
+      notifications: [],
+      statuses: [],
+      widgets: [],
+      editorRevision: 0,
+      editorText: "",
+    },
   };
 }
 
 test("active history merge retains every loaded page", () => {
-  const merged = mergeHistorySegments([0, 100, 200, 300, 400].map((start) => messages(start, start + 100)));
+  const merged = mergeHistorySegments(
+    [0, 100, 200, 300, 400].map((start) => messages(start, start + 100)),
+  );
   assert.equal(merged.length, 500);
   assert.equal(merged[0]?.id, "history-0");
   assert.equal(merged.at(-1)?.id, "history-499");
 });
 
 test("cached session history survives replacement and preserves safe paging", () => {
-  const restored = restoreCachedHistory(runtime(messages(100, 200), "fresh", 100), {
-    messages: [...messages(0, 200), { id: "stream-1", role: "assistant", text: "stale", streaming: false }],
-    historyCursor: undefined,
-    historyRemaining: undefined,
-  });
+  const restored = restoreCachedHistory(
+    runtime(messages(100, 200), "fresh", 100),
+    {
+      messages: [
+        ...messages(0, 200),
+        { id: "stream-1", role: "assistant", text: "stale", streaming: false },
+      ],
+      historyCursor: undefined,
+      historyRemaining: undefined,
+    },
+  );
   assert.equal(restored.conversation.messages.length, 200);
-  assert.equal(restored.conversation.messages.some((message) => message.id === "stream-1"), false);
+  assert.equal(
+    restored.conversation.messages.some((message) => message.id === "stream-1"),
+    false,
+  );
   assert.equal(restored.conversation.historyCursor, undefined);
   assert.equal(restored.conversation.historyRemaining, undefined);
 
@@ -71,20 +134,30 @@ test("cached session history survives replacement and preserves safe paging", ()
     historyCursor: undefined,
     historyRemaining: undefined,
   });
-  assert.deepEqual(gap.conversation.messages.map((message) => message.id).slice(-2), ["history-398", "history-399"]);
+  assert.deepEqual(
+    gap.conversation.messages.map((message) => message.id).slice(-2),
+    ["history-398", "history-399"],
+  );
   assert.equal(gap.conversation.historyCursor, "fresh");
   assert.equal(gap.conversation.historyRemaining, 300);
-  const filled = mergeHistoryMessages(gap.conversation.messages, messages(200, 300));
+  const filled = mergeHistoryMessages(
+    gap.conversation.messages,
+    messages(200, 300),
+  );
   assert.equal(hasCompleteHistory(filled), true);
-  assert.deepEqual(filled.slice(198, 202).map((message) => message.id), [
-    "history-198", "history-199", "history-200", "history-201",
-  ]);
+  assert.deepEqual(
+    filled.slice(198, 202).map((message) => message.id),
+    ["history-198", "history-199", "history-200", "history-201"],
+  );
 
-  const internalGap = restoreCachedHistory(runtime(messages(186, 286), "fresh", 186), {
-    messages: [...messages(0, 100), ...messages(200, 250)],
-    historyCursor: undefined,
-    historyRemaining: undefined,
-  });
+  const internalGap = restoreCachedHistory(
+    runtime(messages(186, 286), "fresh", 186),
+    {
+      messages: [...messages(0, 100), ...messages(200, 250)],
+      historyCursor: undefined,
+      historyRemaining: undefined,
+    },
+  );
   assert.equal(hasCompleteHistory(internalGap.conversation.messages), false);
   assert.equal(internalGap.conversation.historyCursor, "fresh");
   assert.equal(internalGap.conversation.historyRemaining, 186);

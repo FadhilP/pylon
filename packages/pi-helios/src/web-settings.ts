@@ -5,7 +5,10 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   return { kind: "helios", headed: config.headed ?? false };
 }
 
-export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
+export async function updateSettings(
+  value: any,
+  { agentDir }: { agentDir: string },
+): Promise<void> {
   if (value?.kind !== "helios" || typeof value.headed !== "boolean") {
     throw new Error("invalid Helios settings");
   }

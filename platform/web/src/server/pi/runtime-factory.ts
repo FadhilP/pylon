@@ -13,7 +13,9 @@ import {
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
 
-export function createPylonModelRuntime(agentDir: string): Promise<ModelRuntime> {
+export function createPylonModelRuntime(
+  agentDir: string,
+): Promise<ModelRuntime> {
   const fixedAgentDir = resolve(agentDir);
   return ModelRuntime.create({
     authPath: resolve(fixedAgentDir, "auth.json"),
@@ -30,18 +32,24 @@ export async function createPylonRuntimeFactory(options: {
 }): Promise<CreateAgentSessionRuntimeFactory> {
   const eventBus = options.eventBus ?? createEventBus();
   const fixedAgentDir = resolve(options.agentDir);
-  const modelRuntime = options.modelRuntime ?? await createPylonModelRuntime(fixedAgentDir);
+  const modelRuntime =
+    options.modelRuntime ?? (await createPylonModelRuntime(fixedAgentDir));
 
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     if (resolve(agentDir) !== fixedAgentDir) {
-      throw new Error("runtime replacement cannot change the configured agent directory");
+      throw new Error(
+        "runtime replacement cannot change the configured agent directory",
+      );
     }
     // Do not let Pi infer trust from its default agent directory. Pylon owns
     // the configured trust store and deliberately starts untrusted projects
     // with project resources disabled; user resources still remain available.
     const trustStore = new ProjectTrustStore(fixedAgentDir);
-    const projectTrusted = !hasTrustRequiringProjectResources(cwd) || trustStore.get(cwd) === true;
-    const settingsManager = SettingsManager.create(cwd, fixedAgentDir, { projectTrusted });
+    const projectTrusted =
+      !hasTrustRequiringProjectResources(cwd) || trustStore.get(cwd) === true;
+    const settingsManager = SettingsManager.create(cwd, fixedAgentDir, {
+      projectTrusted,
+    });
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
@@ -53,11 +61,13 @@ export async function createPylonRuntimeFactory(options: {
         extensionFactories: options.extensionFactories,
       },
     });
-    const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent });
-    const extensionDiagnostics: AgentSessionRuntimeDiagnostic[] = services.resourceLoader
-      .getExtensions()
-      .errors
-      .map(({ path }) => ({
+    const created = await createAgentSessionFromServices({
+      services,
+      sessionManager,
+      sessionStartEvent,
+    });
+    const extensionDiagnostics: AgentSessionRuntimeDiagnostic[] =
+      services.resourceLoader.getExtensions().errors.map(({ path }) => ({
         type: "error" as const,
         message: `Extension ${basename(path)} failed to load`,
       }));

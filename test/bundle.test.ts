@@ -47,7 +47,10 @@ class Bus {
     for (const handler of this.handlers.get(channel) ?? []) handler(value);
   }
   count() {
-    return [...this.handlers.values()].reduce((sum, handlers) => sum + handlers.size, 0);
+    return [...this.handlers.values()].reduce(
+      (sum, handlers) => sum + handlers.size,
+      0,
+    );
   }
 }
 
@@ -67,13 +70,20 @@ test("root bundle discovery integrations run and shut down", async () => {
     let active: string[] = ["read", "edit", "write", "bash"];
     const pi: any = {
       events,
-      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-      registerTool: (tool: any) => { tools.set(tool.name, tool); active.push(tool.name); },
-      registerCommand: (name: string, command: any) => commands.set(name, command),
+      on: (name: string, handler: Function) =>
+        handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerTool: (tool: any) => {
+        tools.set(tool.name, tool);
+        active.push(tool.name);
+      },
+      registerCommand: (name: string, command: any) =>
+        commands.set(name, command),
       registerEntryRenderer: () => {},
       getActiveTools: () => [...new Set(active)],
       getAllTools: () => [...tools.values()],
-      setActiveTools: (tools: string[]) => { active = [...tools]; },
+      setActiveTools: (tools: string[]) => {
+        active = [...tools];
+      },
       getThinkingLevel: () => "low",
       setThinkingLevel: () => {},
       getSessionName: () => undefined,
@@ -83,63 +93,111 @@ test("root bundle discovery integrations run and shut down", async () => {
       sendUserMessage: () => {},
       exec: async () => ({ code: 0, stdout: "", stderr: "" }),
     };
-    for (const extension of [advisor, pylon, continuity, papercut, focus, guard, grunt, heartbeat, helios, stateql, discover, scout, spawn, sieve, timeline, verify]) {
+    for (const extension of [
+      advisor,
+      pylon,
+      continuity,
+      papercut,
+      focus,
+      guard,
+      grunt,
+      heartbeat,
+      helios,
+      stateql,
+      discover,
+      scout,
+      spawn,
+      sieve,
+      timeline,
+      verify,
+    ]) {
       await extension(pi);
     }
 
-
     let notification = "";
-    const ui = new Proxy({ confirm: async () => false, notify: (text: string) => { notification = text; } }, { get: (target, property) => (target as any)[property] ?? (() => {}) });
+    const ui = new Proxy(
+      {
+        confirm: async () => false,
+        notify: (text: string) => {
+          notification = text;
+        },
+      },
+      { get: (target, property) => (target as any)[property] ?? (() => {}) },
+    );
     const ctx: any = {
-      cwd, hasUI: false, mode: "json", model: undefined, scopedModels: [], ui,
-      modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false, getAvailable: () => [] },
+      cwd,
+      hasUI: false,
+      mode: "json",
+      model: undefined,
+      scopedModels: [],
+      ui,
+      modelRegistry: {
+        find: () => undefined,
+        hasConfiguredAuth: () => false,
+        getAvailable: () => [],
+      },
       sessionManager: {
-        getEntries: () => [], getBranch: () => [], getSessionId: () => "bundle-session",
-        getSessionFile: () => join(root, "session.jsonl"), getLeafId: () => undefined,
+        getEntries: () => [],
+        getBranch: () => [],
+        getSessionId: () => "bundle-session",
+        getSessionFile: () => join(root, "session.jsonl"),
+        getLeafId: () => undefined,
       },
     };
-    for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+    for (const handler of handlers.get("session_start") ?? [])
+      await handler({ reason: "startup" }, ctx);
 
-    const agentDiscovery = await tools.get("search_tools").execute(
-      "discover-spawn-agent",
-      { query: "delegate to a private agent", limit: 1 },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const agentDiscovery = await tools
+      .get("search_tools")
+      .execute(
+        "discover-spawn-agent",
+        { query: "delegate to a private agent", limit: 1 },
+        undefined,
+        undefined,
+        ctx,
+      );
     assert.match(agentDiscovery.content[0].text, /Selected: spawn_agent/);
     assert.ok(active.includes("spawn_agent"));
     assert.ok(!active.includes("spawn_session"));
 
-    const sessionDiscovery = await tools.get("search_tools").execute(
-      "discover-spawn-session",
-      { query: "open an inspectable child session", limit: 1 },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const sessionDiscovery = await tools
+      .get("search_tools")
+      .execute(
+        "discover-spawn-session",
+        { query: "open an inspectable child session", limit: 1 },
+        undefined,
+        undefined,
+        ctx,
+      );
     assert.match(sessionDiscovery.content[0].text, /Selected: spawn_session/);
     assert.ok(!active.includes("spawn_agent"));
     assert.ok(active.includes("spawn_session"));
 
-    const discoveryResult = await tools.get("search_tools").execute(
-      "discover-browser",
-      { query: "browser navigation" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const discoveryResult = await tools
+      .get("search_tools")
+      .execute(
+        "discover-browser",
+        { query: "browser navigation" },
+        undefined,
+        undefined,
+        ctx,
+      );
     assert.match(discoveryResult.content[0].text, /Selected: helios_browser/);
-    assert.match(discoveryResult.content[0].text, /Callable definitions update next model turn/);
+    assert.match(
+      discoveryResult.content[0].text,
+      /Callable definitions update next model turn/,
+    );
     assert.ok(active.includes("helios_browser"));
 
-    const androidDiscovery = await tools.get("search_tools").execute(
-      "discover-android",
-      { query: "start an Android emulator and navigate an app" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    const androidDiscovery = await tools
+      .get("search_tools")
+      .execute(
+        "discover-android",
+        { query: "start an Android emulator and navigate an app" },
+        undefined,
+        undefined,
+        ctx,
+      );
     assert.match(androidDiscovery.content[0].text, /Selected: helios_android/);
     assert.ok(active.includes("helios_android"));
     await commands.get("pylon").handler("doctor", ctx);
@@ -149,7 +207,8 @@ test("root bundle discovery integrations run and shut down", async () => {
     assert.match(notification, /Scout:/);
     assert.match(notification, /Web Scout: Helios broker ready/);
 
-    for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+    for (const handler of handlers.get("session_shutdown") ?? [])
+      await handler({ reason: "quit" }, ctx);
     assert.equal(events.count(), 0);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

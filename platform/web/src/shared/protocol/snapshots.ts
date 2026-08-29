@@ -1,6 +1,21 @@
-import type { EffectiveGuardRules, GuardRuleOverrides } from "../guard-policy.ts";
+import type {
+  EffectiveGuardRules,
+  GuardRuleOverrides,
+} from "../guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
-import type { ConversationReadModel, ExtensionUiReadModel, MessageReadModel, OperationalReadModel, ProviderAuthReadModel, SessionControlsReadModel, SessionMetricsReadModel, SessionRuntimeState, SlashCommandResultReadModel, UiRequestReadModel, VerifyOptionReadModel } from "./events.ts";
+import type {
+  ConversationReadModel,
+  ExtensionUiReadModel,
+  MessageReadModel,
+  OperationalReadModel,
+  ProviderAuthReadModel,
+  SessionControlsReadModel,
+  SessionMetricsReadModel,
+  SessionRuntimeState,
+  SlashCommandResultReadModel,
+  UiRequestReadModel,
+  VerifyOptionReadModel,
+} from "./events.ts";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -35,8 +50,7 @@ export interface RuntimeSnapshot {
 }
 
 export type VerifyPolicyReadModel =
-  | { mode: "auto" }
-  | { mode: "selected"; checks: string[] };
+  { mode: "auto" } | { mode: "selected"; checks: string[] };
 
 export type WorkspacePolicyMode = "checkout" | "worktree" | "local";
 export type DialogTimeoutSeconds = number | null;
@@ -235,7 +249,6 @@ export interface PapercutMutationResult {
   revision: number;
 }
 
-
 export interface StateQLSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
@@ -259,7 +272,14 @@ export interface StateQLSnapshot {
     state: string;
   } | null;
   state_version: string | null;
-  state_confidence: "authoritative" | "transaction_snapshot" | "database_reported" | "local" | "ttl_based" | "unknown" | null;
+  state_confidence:
+    | "authoritative"
+    | "transaction_snapshot"
+    | "database_reported"
+    | "local"
+    | "ttl_based"
+    | "unknown"
+    | null;
   recent_results: Array<{
     alias: string | null;
     handle: string;
@@ -338,7 +358,6 @@ export type TurnDiffResult =
       text: string;
       truncated?: boolean;
     };
-
 
 export interface ConversationHistoryQuery {
   cursor: string;

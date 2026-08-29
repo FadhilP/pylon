@@ -43,7 +43,13 @@ function fileCitationHref(text: string): string | undefined {
   if (!range) return;
   const start = parseFileReference(`${range[1]}:${range[2]}`);
   const end = parseFileReference(`${range[1]}:${range[3]}`);
-  if (start?.line === undefined || end?.line === undefined || start.path !== end.path || end.line < start.line) return;
+  if (
+    start?.line === undefined ||
+    end?.line === undefined ||
+    start.path !== end.path ||
+    end.line < start.line
+  )
+    return;
   return fileReferenceHref(start);
 }
 
@@ -52,8 +58,11 @@ class MarkdownRenderer extends Renderer {
 
   override link(token: Parameters<Renderer["link"]>[0]): string {
     this.linkDepth++;
-    try { return super.link(token); }
-    finally { this.linkDepth--; }
+    try {
+      return super.link(token);
+    } finally {
+      this.linkDepth--;
+    }
   }
 
   override codespan(token: Parameters<Renderer["codespan"]>[0]): string {
@@ -64,9 +73,10 @@ class MarkdownRenderer extends Renderer {
 
   override code({ text, lang }: Parameters<Renderer["code"]>[0]): string {
     const language = lang?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-    const code = language && hljs.getLanguage(language)
-      ? hljs.highlight(text, { language, ignoreIllegals: true }).value
-      : escapeHtml(text);
+    const code =
+      language && hljs.getLanguage(language)
+        ? hljs.highlight(text, { language, ignoreIllegals: true }).value
+        : escapeHtml(text);
     const attributes = language
       ? ` class="language-${escapeHtml(language)}" data-language="${escapeHtml(language)}"`
       : "";
@@ -113,7 +123,11 @@ const sourceLanguages: Record<string, string> = {
   zsh: "bash",
 };
 
-export function highlightSource(text: string, path: string, diffView = false): string {
+export function highlightSource(
+  text: string,
+  path: string,
+  diffView = false,
+): string {
   const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
   const language = diffView ? "diff" : sourceLanguages[extension];
   return language
@@ -126,6 +140,6 @@ export function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll("\"", "&quot;")
+    .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 }

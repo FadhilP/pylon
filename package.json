@@ -42,7 +42,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "verify": "npm run test:bundle && npm run test:update && npm run test:storage && node scripts/run-packages.mjs verify && npm run verify --workspace @pylon/web",

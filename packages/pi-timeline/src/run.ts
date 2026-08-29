@@ -12,20 +12,23 @@ export type RunEntry = {
 export function isRunEntry(value: any): value is RunEntry {
   return Boolean(
     value?.version === 1 &&
-      typeof value.runId === "string" &&
-      value.runId.length > 0 &&
-      typeof value.timelineId === "string" &&
-      value.timelineId.length > 0 &&
-      ["planner", "executor", "reviewer"].includes(value.role) &&
-      (value.parentSessionId === undefined ||
-        typeof value.parentSessionId === "string") &&
-      typeof value.createdAt === "string",
+    typeof value.runId === "string" &&
+    value.runId.length > 0 &&
+    typeof value.timelineId === "string" &&
+    value.timelineId.length > 0 &&
+    ["planner", "executor", "reviewer"].includes(value.role) &&
+    (value.parentSessionId === undefined ||
+      typeof value.parentSessionId === "string") &&
+    typeof value.createdAt === "string",
   );
 }
 
 export const runTimelineId = (run: RunEntry) => run.timelineId;
 
-export function hasTimeline(entries: readonly any[], timelineId: string): boolean {
+export function hasTimeline(
+  entries: readonly any[],
+  timelineId: string,
+): boolean {
   return entries.some(
     (item) =>
       item.type === "custom" &&

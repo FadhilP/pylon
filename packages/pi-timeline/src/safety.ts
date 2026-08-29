@@ -34,7 +34,9 @@ async function inspect(repository: Repository): Promise<RepositoryState> {
       ),
     );
   if (unsafe.length)
-    throw Error(`Unsafe untracked path: ${repository.prefix ? `${repository.prefix}/` : ""}${unsafe[0]}`);
+    throw Error(
+      `Unsafe untracked path: ${repository.prefix ? `${repository.prefix}/` : ""}${unsafe[0]}`,
+    );
   return { ...repository, head };
 }
 

@@ -1,4 +1,7 @@
-import type { WorkspaceFilePage, WorkspaceFileReadModel } from "./protocol/snapshots.ts";
+import type {
+  WorkspaceFilePage,
+  WorkspaceFileReadModel,
+} from "./protocol/snapshots.ts";
 
 export function workspaceInventoryCacheIsFresh(
   cachedRevision: string | undefined,

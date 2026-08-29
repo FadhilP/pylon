@@ -12,23 +12,35 @@ test("production asset host serves SPA safely and rejects missing assets", async
   const root = await mkdtemp(join(tmpdir(), "pylon-static-"));
   const dist = join(root, "dist");
   await mkdir(join(dist, "assets"), { recursive: true });
-  await writeFile(join(dist, "index.html"), "<!doctype html><title>Pylon</title>");
+  await writeFile(
+    join(dist, "index.html"),
+    "<!doctype html><title>Pylon</title>",
+  );
   await writeFile(join(dist, "assets", "app.js"), "export {};");
   const assets = await createAssetHost(root, false);
-  const server = createServer((request, response) => void assets.handle(request, response));
+  const server = createServer(
+    (request, response) => void assets.handle(request, response),
+  );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     const page = await fetch(`${origin}/workspace/overview`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /Pylon/);
-    const contentSecurityPolicy = page.headers.get("content-security-policy") ?? "";
+    const contentSecurityPolicy =
+      page.headers.get("content-security-policy") ?? "";
     assert.match(contentSecurityPolicy, /default-src 'self'/);
     assert.match(contentSecurityPolicy, /style-src 'self' 'unsafe-inline'/);
-    assert.doesNotMatch(contentSecurityPolicy, /script-src[^;]*'unsafe-inline'/);
+    assert.doesNotMatch(
+      contentSecurityPolicy,
+      /script-src[^;]*'unsafe-inline'/,
+    );
     assert.match(contentSecurityPolicy, /img-src 'self' data:/);
     const script = await fetch(`${origin}/assets/app.js`);
-    assert.equal(script.headers.get("content-type"), "text/javascript; charset=utf-8");
+    assert.equal(
+      script.headers.get("content-type"),
+      "text/javascript; charset=utf-8",
+    );
     assert.match(script.headers.get("cache-control") ?? "", /immutable/);
     assert.equal((await fetch(`${origin}/assets/missing.js`)).status, 404);
     assert.equal((await fetch(`${origin}/..%2Fsecret.txt`)).status, 404);
@@ -41,7 +53,12 @@ test("production asset host serves SPA safely and rejects missing assets", async
 
 test("development CSP permits Vite bootstrap scripts without weakening production", () => {
   const headers = new Map<string, string>();
-  applySecurityHeaders({ setHeader: (name: string, value: string) => headers.set(name, value) } as any, true);
+  applySecurityHeaders(
+    {
+      setHeader: (name: string, value: string) => headers.set(name, value),
+    } as any,
+    true,
+  );
   const policy = headers.get("content-security-policy") ?? "";
   assert.match(policy, /script-src 'self' 'unsafe-inline'/);
   assert.match(policy, /object-src 'none'/);

@@ -44,7 +44,6 @@ export interface MessageAttachmentReadModel {
   size: number;
 }
 
-
 export interface MessageReadModel {
   id: string;
   entryId?: string;
@@ -93,7 +92,13 @@ export interface ToolActivityReadModel {
   durationMs?: number;
 }
 
-export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout" | "spawn_agent" | "spawn_session";
+export type DelegatedAgentKind =
+  | "advisor"
+  | "grunt"
+  | "repo_scout"
+  | "web_scout"
+  | "spawn_agent"
+  | "spawn_session";
 export type SpawnExecutionActionReadModel = "create" | "continue" | "adopt";
 
 export interface DelegatedAgentActivityReadModel {
@@ -216,7 +221,8 @@ export interface SessionMetricsReadModel {
   toolUsage?: ToolUsageReadModel[];
 }
 
-export type ThinkingLevelReadModel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevelReadModel =
+  "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelOptionReadModel {
   provider: string;
@@ -301,8 +307,15 @@ export interface UiNotificationReadModel {
   occurredAt: string;
 }
 
-export interface UiStatusReadModel { key: string; text: string; }
-export interface UiWidgetReadModel { key: string; lines: string[]; placement?: "aboveEditor" | "belowEditor"; }
+export interface UiStatusReadModel {
+  key: string;
+  text: string;
+}
+export interface UiWidgetReadModel {
+  key: string;
+  lines: string[];
+  placement?: "aboveEditor" | "belowEditor";
+}
 
 export interface ExtensionUiReadModel {
   notifications: UiNotificationReadModel[];
@@ -327,7 +340,15 @@ export interface VerificationCheckReadModel {
 
 export interface VerificationReadModel {
   availability: FeatureState;
-  state?: "running" | "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
+  state?:
+    | "running"
+    | "passed"
+    | "failed"
+    | "cancelled"
+    | "stale"
+    | "error"
+    | "no_checks"
+    | "clean";
   runId?: string;
   scope?: "changed" | "project";
   startedAt?: string;
@@ -346,7 +367,13 @@ export interface VerifyOptionReadModel {
 export interface JobReadModel {
   id: string;
   label: string;
-  state: "running" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out";
+  state:
+    | "running"
+    | "cancelling"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "timed_out";
   startedAt: string;
   finishedAt?: string;
   exitCode?: number | null;
@@ -354,7 +381,10 @@ export interface JobReadModel {
   todoId?: string;
 }
 
-export interface JobsReadModel { availability: FeatureState; items: JobReadModel[]; }
+export interface JobsReadModel {
+  availability: FeatureState;
+  items: JobReadModel[];
+}
 
 export interface GuardReadModel {
   availability: FeatureState;
@@ -400,7 +430,6 @@ export interface PapercutSummaryReadModel {
   counts: { open: number; resolved: number; dismissed: number; total: number };
 }
 
-
 export interface ContinuityMemoryNoteReadModel {
   id: string;
   scope: "user" | "project";
@@ -408,8 +437,15 @@ export interface ContinuityMemoryNoteReadModel {
   guidance: string;
   authority: "user_instruction" | "project_contract" | "imported";
   origin: "user" | "agent" | "migration";
-  disposition?: "archival" | "eligible_advisory" | "eligible_enforced" | "quarantined" | "superseded" | "revoked";
-  enforcementAuthority?: "context_only" | "warning" | "validation" | "blocking_guard";
+  disposition?:
+    | "archival"
+    | "eligible_advisory"
+    | "eligible_enforced"
+    | "quarantined"
+    | "superseded"
+    | "revoked";
+  enforcementAuthority?:
+    "context_only" | "warning" | "validation" | "blocking_guard";
   relatedPaths?: string[];
   revision: number;
   updatedAt: string;
@@ -440,7 +476,11 @@ export interface TimelineCheckpointReadModel {
   };
 }
 
-export interface TimelineReadModel { availability: FeatureState; revision: number; checkpoints: TimelineCheckpointReadModel[]; }
+export interface TimelineReadModel {
+  availability: FeatureState;
+  revision: number;
+  checkpoints: TimelineCheckpointReadModel[];
+}
 
 export interface ToolPolicyReadModel {
   owner: string;
@@ -450,7 +490,10 @@ export interface ToolPolicyReadModel {
   allowOnly?: string[];
 }
 
-export interface ToolsReadModel { availability: FeatureState; policies: ToolPolicyReadModel[]; }
+export interface ToolsReadModel {
+  availability: FeatureState;
+  policies: ToolPolicyReadModel[];
+}
 
 export interface SieveToolTransformStatsReadModel {
   scanned: number;
@@ -468,7 +511,6 @@ export interface SieveTransformStatsReadModel {
   transformedBy: {
     ageThreshold: number;
     budget: number;
-    giantError: number;
     activeThreshold: number;
     staleRead: number;
     duplicate: number;
@@ -530,7 +572,10 @@ export interface SieveReadModel {
   error?: string;
 }
 
-export interface RuntimeHealthReadModel { status: "healthy" | "degraded" | "unavailable"; issues: string[]; }
+export interface RuntimeHealthReadModel {
+  status: "healthy" | "degraded" | "unavailable";
+  issues: string[];
+}
 
 export interface OperationalReadModel {
   verification: VerificationReadModel;

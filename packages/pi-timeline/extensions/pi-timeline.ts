@@ -13,22 +13,15 @@ import {
   type Snapshot,
 } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
-import {
-  classifyCompatibility,
-  type Compatibility,
-  type GitState,
-} from "../src/compatibility.ts";
+import { classifyCompatibility, type GitState } from "../src/compatibility.ts";
 import {
   normalizeGeneratedTitle,
   promptText,
   promptTitle,
   SESSION_TITLE_PROMPT,
 } from "../src/prompts.ts";
-import { git, symbolicHead } from "../src/git.ts";
-import {
-  recordTimelineOwner,
-  startSessionGc,
-} from "../src/session-gc.ts";
+import { git } from "../src/git.ts";
+import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import {
   findRunEntry,
   isRunEntry,
@@ -42,145 +35,138 @@ import {
   checkpointFileDiff,
   type TimelineChangeSet,
 } from "../src/changes.ts";
-type CheckpointRecord = Snapshot & {
-  version: 3 | 4 | 5;
-  kind: "pi-prompt-checkpoint";
-  promptEntryId: string;
-  ownerSessionId: string;
-  continuationEntryId: string;
-  createdAt: string;
-  changes?: Pick<TimelineChangeSet, "fileCount" | "additions" | "deletions" | "binaryCount">;
-  verification?: {
-    runId: string;
-    state: "passed";
-    scope: "changed" | "project";
-    worktreeId: string;
-    checks: string[];
-  };
-};
-type Bound = {
-  record: CheckpointRecord;
-  checkpointEntryId: string;
-  preview: string;
-  sessionId: string;
-  sessionPath?: string;
-};
-type ClearV1 = {
-  version: 1;
-  ownerSessionId: string;
-  checkpointEntryIds: string[];
-};
-const inspectGitState = async (cwd: string): Promise<GitState> => {
-  const [gitRoot, commonDir, head, headRef] = await Promise.all([
-    git(cwd, ["rev-parse", "--show-toplevel"]),
-    git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
-    git(cwd, ["rev-parse", "HEAD"]),
-    symbolicHead(cwd),
-  ]);
-  return { gitRoot, commonDir, head, headRef };
-};
-const shortRef = (ref: string) => ref.replace(/^refs\/heads\//, "");
-const compatibilityLabel = (
-  target: Snapshot,
-  current: GitState,
-  result = classifyCompatibility(target, current),
-) => {
-  if (!result.allowed)
-    return result.reason === "repository-mismatch"
-      ? "[blocked:repository]"
-      : "[blocked:HEAD]";
-  if (result.refState === "target-detached") return "[checkpoint:detached]";
-  if (result.refState === "current-detached") return "[current:detached]";
-  if (result.refState === "ref-mismatch")
-    return `[branch:${shortRef(target.headRef!)}; current:${shortRef(current.headRef!)}]`;
-  return target.headRef === null
-    ? "[detached]"
-    : `[branch:${shortRef(target.headRef!)}]`;
-};
-const checkpointRow = (bound: Bound, current: GitState) =>
-  `${compatibilityLabel(bound.record, current)} ${bound.record.createdAt.replace(/\.\d{3}Z$/, "Z")} ${bound.preview}`;
+import {
+  CHECKPOINT_VERSIONS,
+  customEntryData,
+  PORTABLE_CHECKPOINT_VERSIONS,
+  type Bound,
+  type CheckpointRecord,
+  type ClearV1,
+} from "../src/records.ts";
+import {
+  checkpointRow,
+  compatibilityDetail,
+  inspectGitState,
+  shortRef,
+} from "../src/describe.ts";
 
-const compatibilityDetail = (
-  target: Snapshot,
-  current: GitState,
-  result: Compatibility,
-) => {
-  if (!result.allowed)
-    return result.reason === "repository-mismatch"
-      ? "Checkpoint belongs to a different repository."
-      : "Checkpoint HEAD commit differs from current HEAD.";
-  if (result.refState === "same")
-    return target.headRef === null
-      ? "Checkpoint and current state use detached HEAD at the same commit."
-      : `Checkpoint branch: ${shortRef(target.headRef!)}. HEAD commit matches.`;
-  const checkpoint = target.headRef === null ? "detached HEAD" : shortRef(target.headRef!),
-    now = current.headRef === null ? "detached HEAD" : shortRef(current.headRef!);
-  return `HEAD commit matches, but checkpoint used ${checkpoint} and current state uses ${now}. Restore updates index and working tree only; it does not switch branches.`;
-};
+const hash = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+
 export default function timelineExtension(
   pi: ExtensionAPI,
   completeTitle: typeof complete = complete,
   options: { artifactRoot?: string } = {},
 ) {
   const emitTelemetry = (value: unknown) => {
-    try { pi.events.emit?.("pylon:telemetry", value); }
-    catch { /* Telemetry must never affect session naming. */ }
+    try {
+      pi.events.emit?.("pylon:telemetry", value);
+    } catch {
+      /* Telemetry must never affect session naming. */
+    }
   };
-  let records = new Map<string, Bound>(),
-    paired = false,
-    namingDecided = false,
-    namingGeneration = 0,
-    stateRevision = 0,
-    namingInFlight: number | undefined,
+  /** Loaded checkpoints and everything derived from them. */
+  const checkpoints = {
+    records: new Map<string, Bound>(),
+    /** Whether the working tree currently matches the newest prompt's checkpoint. */
+    paired: false,
+    changeCache: new Map<string, TimelineChangeSet>(),
+    changeBases: new Map<string, CheckpointRecord | null>(),
+    /** Checkpoint ids the UI already confirmed a fork for. */
+    confirmedForks: new Set<string>(),
+  };
+
+  /** Session-title generation; `generation` invalidates a naming call that outlived its session. */
+  const naming = {
+    decided: false,
+    generation: 0,
+    inFlight: undefined as number | undefined,
+  };
+
+  /** Tracks worktree mutations that should trigger an automatic checkpoint. */
+  const mutations = {
+    automatic: false,
+    /** Bumped on every observed mutation, so a capture can tell if the tree moved under it. */
+    generation: 0,
+    /** Worktree fingerprints taken before a tool call, keyed by toolCallId. */
+    pending: new Map<string, string | undefined>(),
+    denied: new Set<string>(),
+    heartbeatJobs: new Set<string>(),
+    checkpoint: undefined as Promise<void> | undefined,
+  };
+
+  /** Identity and lifecycle of the session this extension instance is attached to. */
+  const session = {
+    id: "",
+    ephemeral: false,
+    agentRunning: false,
+    shuttingDown: false,
+    releaseLease: undefined as
+      ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
+  };
+
+  let stateRevision = 0,
     pendingContext = "",
     suppressNextTreeWarning = false,
     activeRun: RunEntry | undefined,
     latestVerification: any,
-    pendingMutations = new Map<string, string | undefined>(),
-    deniedToolCalls = new Set<string>(),
-    runningHeartbeatJobs = new Set<string>(),
     sharedWorktreeObserver = false,
-    automaticMutation = false,
-    automaticMutationGeneration = 0,
-    agentRunning = false,
-    shuttingDown = false,
-    automaticCheckpoint: Promise<void> | undefined,
-    releaseSessionLease: ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
-    ephemeralSession = false,
-    currentSessionId = "",
     currentGit: any,
     lastCtx: any,
     enabled = true;
-  const changeCache = new Map<string, TimelineChangeSet>();
-  const changeBases = new Map<string, CheckpointRecord | null>();
-  const confirmedForks = new Set<string>();
   pi.events.emit?.("pylon:worktree-observer-request", {
     version: 1,
     respond: (value: any) => {
-      if (value?.version === 1 && value.owner === "pylon-core") sharedWorktreeObserver = true;
+      if (value?.version === 1 && value.owner === "pylon-core")
+        sharedWorktreeObserver = true;
     },
   });
   const markAutomaticMutation = () => {
-    automaticMutation = true;
-    automaticMutationGeneration++;
+    mutations.automatic = true;
+    mutations.generation++;
   };
-  const disposeWorktreeChange = pi.events.on("pylon:worktree-change", (event: any) => {
-    if (sharedWorktreeObserver && event?.version === 1 && event.cwd === lastCtx?.cwd && event.changed === true)
-      markAutomaticMutation();
-  });
-  const disposeGuardDecision = pi.events.on("pi-guard:decision", (event: any) => {
-    if (event?.version === 1 && event.cwd === lastCtx?.cwd && event.decision === "blocked" && typeof event.toolCallId === "string")
-      deniedToolCalls.add(event.toolCallId);
-  });
-  const artifactRoot = options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
+  const disposeWorktreeChange = pi.events.on(
+    "pylon:worktree-change",
+    (event: any) => {
+      if (
+        sharedWorktreeObserver &&
+        event?.version === 1 &&
+        event.cwd === lastCtx?.cwd &&
+        event.changed === true
+      )
+        markAutomaticMutation();
+    },
+  );
+  const disposeGuardDecision = pi.events.on(
+    "pi-guard:decision",
+    (event: any) => {
+      if (
+        event?.version === 1 &&
+        event.cwd === lastCtx?.cwd &&
+        event.decision === "blocked" &&
+        typeof event.toolCallId === "string"
+      )
+        mutations.denied.add(event.toolCallId);
+    },
+  );
+  const artifactRoot =
+    options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
   const mutationDetails = (cwd: string, operation: string) => ({
-    version: 1, cwd, changed: true, source: "pi-timeline", operation,
+    version: 1,
+    cwd,
+    changed: true,
+    source: "pi-timeline",
+    operation,
     mutationId: randomUUID(),
   });
   const publishMutation = (cwd: string, operation: string) =>
     pi.events.emit("pi-worktree:mutation", mutationDetails(cwd, operation));
-  const mutationMessage = (cwd: string, operation: string, content: string) => ({
+  const mutationMessage = (
+    cwd: string,
+    operation: string,
+    content: string,
+  ) => ({
     customType: "pi-worktree-mutation",
     content,
     display: false,
@@ -192,37 +178,48 @@ export default function timelineExtension(
       branch.map((entry: any, index: number) => [entry.id, index] as const),
     );
     const compatibleCheckpoints = currentGit
-      ? [...records.values()].filter((bound) =>
-          bound.sessionId === currentSessionId
-          && positions.has(bound.record.promptEntryId)
-          && classifyCompatibility(bound.record, currentGit).allowed)
+      ? [...checkpoints.records.values()].filter(
+          (bound) =>
+            bound.sessionId === session.id &&
+            positions.has(bound.record.promptEntryId) &&
+            classifyCompatibility(bound.record, currentGit).allowed,
+        )
       : [];
     const undoPromptEntryIds = branch
-      .filter((entry: any, index: number) =>
-        entry.type === "message"
-        && entry.message.role === "user"
-        && compatibleCheckpoints.some((bound) =>
-          (positions.get(bound.record.promptEntryId) ?? Number.POSITIVE_INFINITY) < index))
+      .filter(
+        (entry: any, index: number) =>
+          entry.type === "message" &&
+          entry.message.role === "user" &&
+          compatibleCheckpoints.some(
+            (bound) =>
+              (positions.get(bound.record.promptEntryId) ??
+                Number.POSITIVE_INFINITY) < index,
+          ),
+      )
       .map((entry: any) => entry.id);
-    const forkPromptEntryIds = compatibleCheckpoints.map((bound) => bound.record.promptEntryId);
-    const forkPromptCheckpoints = [...records]
+    const forkPromptEntryIds = compatibleCheckpoints.map(
+      (bound) => bound.record.promptEntryId,
+    );
+    const forkPromptCheckpoints = [...checkpoints.records]
       .filter(([, bound]) => compatibleCheckpoints.includes(bound))
       .map(([checkpointId, bound]) => ({
         promptEntryId: bound.record.promptEntryId,
         checkpointId,
       }));
     return timelineStateSnapshot(
-      currentSessionId,
+      session.id,
       stateRevision,
-      [...records].map(([id, bound]) => ({
+      [...checkpoints.records].map(([id, bound]) => ({
         id,
         title: bound.preview.split(/\r?\n/, 1)[0] || "Checkpoint",
         createdAt: bound.record.createdAt,
-        ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
+        ...(bound.record.headRef
+          ? { branch: shortRef(bound.record.headRef) }
+          : {}),
         verified: bound.record.verification?.state === "passed",
         ownerSessionId: bound.record.ownerSessionId,
-        ...(bound.record.changes ?? changeCache.get(id)
-          ? { changes: bound.record.changes ?? changeCache.get(id) }
+        ...((bound.record.changes ?? checkpoints.changeCache.get(id))
+          ? { changes: bound.record.changes ?? checkpoints.changeCache.get(id) }
           : {}),
       })),
       available && enabled,
@@ -235,109 +232,174 @@ export default function timelineExtension(
     stateRevision++;
     pi.events.emit?.("pi-timeline:state-change", stateSnapshot(available));
   };
-  const disposeStateRequest = pi.events.on("pi-timeline:state-request", (request: any) => {
-    if (request?.version !== TIMELINE_STATE_VERSION || request.sessionId !== currentSessionId || typeof request.respond !== "function") return;
-    try { request.respond(stateSnapshot()); } catch { /* State observers cannot affect Timeline. */ }
-  });
-  const disposeRuntimePolicy = pi.events.on("pylon:runtime-policy", (value: any) => {
-    if (![1, 2].includes(value?.version)
-      || value.sessionId !== currentSessionId
-      || typeof value.timelineEnabled !== "boolean") return;
-    enabled = value.timelineEnabled;
-    if (!enabled) {
-      automaticMutation = false;
-      pendingMutations.clear();
-      runningHeartbeatJobs.clear();
-    }
-    publishState();
-  });
-  const disposeEditNavigation = pi.events.on("pi-timeline:edit-navigation", (request: any) => {
-    if (request?.version !== 1
-      || request.sessionId !== currentSessionId
-      || typeof request.targetEntryId !== "string"
-      || typeof request.rollbackFiles !== "boolean"
-      || typeof request.respond !== "function"
-      || !lastCtx) return;
-    request.respond((async () => {
-      if (request.rollbackFiles && !enabled) throw new Error("Pi Timeline is disabled for this session");
-      const previousPaired = paired;
-      if (!request.rollbackFiles) {
-        suppressNextTreeWarning = true;
-        return {
-          apply: async () => { paired = false; refresh(lastCtx); },
-          rollback: async () => { suppressNextTreeWarning = true; paired = previousPaired; refresh(lastCtx); },
-          commit: async () => { suppressNextTreeWarning = false; },
-          cancel: async () => { suppressNextTreeWarning = false; },
-        };
+  const disposeStateRequest = pi.events.on(
+    "pi-timeline:state-request",
+    (request: any) => {
+      if (
+        request?.version !== TIMELINE_STATE_VERSION ||
+        request.sessionId !== session.id ||
+        typeof request.respond !== "function"
+      )
+        return;
+      try {
+        request.respond(stateSnapshot());
+      } catch {
+        /* State observers cannot affect Timeline. */
       }
-
-      const branch = lastCtx.sessionManager.getBranch();
-      const positions = new Map<string, number>(
-        branch.map((entry: any, index: number) => [entry.id, index] as const),
-      );
-      const targetPosition = positions.get(request.targetEntryId);
-      const target = targetPosition === undefined ? undefined : [...records.values()]
-        .filter((bound) => bound.sessionId === currentSessionId
-          && (positions.get(bound.record.promptEntryId) ?? Number.POSITIVE_INFINITY) < targetPosition)
-        .sort((left, right) =>
-          (positions.get(right.record.promptEntryId) ?? -1) - (positions.get(left.record.promptEntryId) ?? -1))[0];
-      if (!target) throw new Error("No Timeline checkpoint exists before this prompt");
-
-      const current = await inspectGitState(lastCtx.cwd);
-      const compatibility = classifyCompatibility(target.record, current);
-      if (!compatibility.allowed) {
-        throw new Error(compatibilityDetail(target.record, current, compatibility));
+    },
+  );
+  const disposeRuntimePolicy = pi.events.on(
+    "pylon:runtime-policy",
+    (value: any) => {
+      if (
+        ![1, 2].includes(value?.version) ||
+        value.sessionId !== session.id ||
+        typeof value.timelineEnabled !== "boolean"
+      )
+        return;
+      enabled = value.timelineEnabled;
+      if (!enabled) {
+        mutations.automatic = false;
+        mutations.pending.clear();
+        mutations.heartbeatJobs.clear();
       }
+      publishState();
+    },
+  );
+  const disposeEditNavigation = pi.events.on(
+    "pi-timeline:edit-navigation",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.sessionId !== session.id ||
+        typeof request.targetEntryId !== "string" ||
+        typeof request.rollbackFiles !== "boolean" ||
+        typeof request.respond !== "function" ||
+        !lastCtx
+      )
+        return;
+      request.respond(
+        (async () => {
+          if (request.rollbackFiles && !enabled)
+            throw new Error("Pi Timeline is disabled for this session");
+          const previousPaired = checkpoints.paired;
+          if (!request.rollbackFiles) {
+            suppressNextTreeWarning = true;
+            return {
+              apply: async () => {
+                checkpoints.paired = false;
+                refresh(lastCtx);
+              },
+              rollback: async () => {
+                suppressNextTreeWarning = true;
+                checkpoints.paired = previousPaired;
+                refresh(lastCtx);
+              },
+              commit: async () => {
+                suppressNextTreeWarning = false;
+              },
+              cancel: async () => {
+                suppressNextTreeWarning = false;
+              },
+            };
+          }
 
-      const source = await capture(lastCtx.cwd, currentSessionId, (root) =>
-        recordTimelineOwner(artifactRoot, currentSessionId, root));
-      let closed = false;
-      suppressNextTreeWarning = true;
-      const close = async () => {
-        if (closed) return;
-        closed = true;
-        await deleteRefs(source);
-      };
-      return {
-        apply: async () => {
-          await restore(target.record, lastCtx.cwd);
-          publishMutation(lastCtx.cwd, "edit-navigation-restore");
-          paired = true;
-          pendingContext = `Filesystem restored to before edited prompt ${request.targetEntryId}.`;
-          refresh(lastCtx);
-        },
-        rollback: async () => {
-          if (!closed) await restore(source, lastCtx.cwd);
+          const branch = lastCtx.sessionManager.getBranch();
+          const positions = new Map<string, number>(
+            branch.map(
+              (entry: any, index: number) => [entry.id, index] as const,
+            ),
+          );
+          const targetPosition = positions.get(request.targetEntryId);
+          const target =
+            targetPosition === undefined
+              ? undefined
+              : [...checkpoints.records.values()]
+                  .filter(
+                    (bound) =>
+                      bound.sessionId === session.id &&
+                      (positions.get(bound.record.promptEntryId) ??
+                        Number.POSITIVE_INFINITY) < targetPosition,
+                  )
+                  .sort(
+                    (left, right) =>
+                      (positions.get(right.record.promptEntryId) ?? -1) -
+                      (positions.get(left.record.promptEntryId) ?? -1),
+                  )[0];
+          if (!target)
+            throw new Error("No Timeline checkpoint exists before this prompt");
+
+          const current = await inspectGitState(lastCtx.cwd);
+          const compatibility = classifyCompatibility(target.record, current);
+          if (!compatibility.allowed) {
+            throw new Error(
+              compatibilityDetail(target.record, current, compatibility),
+            );
+          }
+
+          const source = await capture(lastCtx.cwd, session.id, (root) =>
+            recordTimelineOwner(artifactRoot, session.id, root),
+          );
+          let closed = false;
           suppressNextTreeWarning = true;
-          paired = previousPaired;
-          pendingContext = "";
-          refresh(lastCtx);
-          await close();
-        },
-        commit: close,
-        cancel: async () => {
-          suppressNextTreeWarning = false;
-          await close();
-        },
-      };
-    })());
-  });
-  const disposePromptFork = pi.events.on("pi-timeline:prompt-fork", (request: any) => {
-    if (request?.version !== 1
-      || request.sessionId !== currentSessionId
-      || typeof request.checkpointId !== "string"
-      || typeof request.respond !== "function") return;
-    const available = enabled && records.has(request.checkpointId);
-    if (available) confirmedForks.add(request.checkpointId);
-    request.respond({ version: 1, available });
-  });
+          const close = async () => {
+            if (closed) return;
+            closed = true;
+            await deleteRefs(source);
+          };
+          return {
+            apply: async () => {
+              await restore(target.record, lastCtx.cwd);
+              publishMutation(lastCtx.cwd, "edit-navigation-restore");
+              checkpoints.paired = true;
+              pendingContext = `Filesystem restored to before edited prompt ${request.targetEntryId}.`;
+              refresh(lastCtx);
+            },
+            rollback: async () => {
+              if (!closed) await restore(source, lastCtx.cwd);
+              suppressNextTreeWarning = true;
+              checkpoints.paired = previousPaired;
+              pendingContext = "";
+              refresh(lastCtx);
+              await close();
+            },
+            commit: close,
+            cancel: async () => {
+              suppressNextTreeWarning = false;
+              await close();
+            },
+          };
+        })(),
+      );
+    },
+  );
+  const disposePromptFork = pi.events.on(
+    "pi-timeline:prompt-fork",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.sessionId !== session.id ||
+        typeof request.checkpointId !== "string" ||
+        typeof request.respond !== "function"
+      )
+        return;
+      const available =
+        enabled && checkpoints.records.has(request.checkpointId);
+      if (available) checkpoints.confirmedForks.add(request.checkpointId);
+      request.respond({ version: 1, available });
+    },
+  );
   const calculateChanges = async (id: string, bound: Bound) => {
-    const candidates = [...records.entries()]
-      .filter(([candidateId, candidate]) =>
-        candidateId !== id
-        && candidate.sessionId === bound.sessionId
-        && candidate.record.createdAt < bound.record.createdAt)
-      .sort((left, right) => right[1].record.createdAt.localeCompare(left[1].record.createdAt));
+    const candidates = [...checkpoints.records.entries()]
+      .filter(
+        ([candidateId, candidate]) =>
+          candidateId !== id &&
+          candidate.sessionId === bound.sessionId &&
+          candidate.record.createdAt < bound.record.createdAt,
+      )
+      .sort((left, right) =>
+        right[1].record.createdAt.localeCompare(left[1].record.createdAt),
+      );
     for (const [, candidate] of candidates) {
       try {
         return {
@@ -346,66 +408,193 @@ export default function timelineExtension(
         };
       } catch {}
     }
-    return { changes: await checkpointChanges(bound.record), previous: undefined };
+    return {
+      changes: await checkpointChanges(bound.record),
+      previous: undefined,
+    };
   };
   const changesFor = async (id: string, bound: Bound) => {
-    const cached = changeCache.get(id);
+    const cached = checkpoints.changeCache.get(id);
     if (cached) return cached;
     const result = await calculateChanges(id, bound);
-    changeCache.set(id, result.changes);
-    changeBases.set(id, result.previous ?? null);
+    checkpoints.changeCache.set(id, result.changes);
+    checkpoints.changeBases.set(id, result.previous ?? null);
     return result.changes;
   };
   const previousCompatible = async (id: string, bound: Bound) => {
     await changesFor(id, bound);
-    return changeBases.get(id) ?? undefined;
+    return checkpoints.changeBases.get(id) ?? undefined;
   };
-  const disposeFilesRequest = pi.events.on("pi-timeline:files-request", (request: any) => {
-    if (request?.version !== 1
-      || request.sessionId !== currentSessionId
-      || typeof request.checkpointId !== "string"
-      || typeof request.respond !== "function") return;
-    const bound = records.get(request.checkpointId);
-    request.respond((async () => {
-      if (!enabled) throw Error("Pi Timeline is disabled for this session");
-      if (!bound || bound.sessionId !== currentSessionId)
-        throw Error("Timeline checkpoint is unavailable");
-      const changes = await changesFor(request.checkpointId, bound);
-      return {
-        version: 1,
-        checkpointId: request.checkpointId,
-        files: changes.files,
-        totalCount: changes.fileCount,
-        truncated: changes.truncated,
+  const disposeFilesRequest = pi.events.on(
+    "pi-timeline:files-request",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.sessionId !== session.id ||
+        typeof request.checkpointId !== "string" ||
+        typeof request.respond !== "function"
+      )
+        return;
+      const bound = checkpoints.records.get(request.checkpointId);
+      request.respond(
+        (async () => {
+          if (!enabled) throw Error("Pi Timeline is disabled for this session");
+          if (!bound || bound.sessionId !== session.id)
+            throw Error("Timeline checkpoint is unavailable");
+          const changes = await changesFor(request.checkpointId, bound);
+          return {
+            version: 1,
+            checkpointId: request.checkpointId,
+            files: changes.files,
+            totalCount: changes.fileCount,
+            truncated: changes.truncated,
+          };
+        })(),
+      );
+    },
+  );
+  const disposeDiffRequest = pi.events.on(
+    "pi-timeline:diff-request",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.sessionId !== session.id ||
+        typeof request.checkpointId !== "string" ||
+        typeof request.path !== "string" ||
+        typeof request.respond !== "function"
+      )
+        return;
+      const bound = checkpoints.records.get(request.checkpointId);
+      request.respond(
+        (async () => {
+          if (!enabled) throw Error("Pi Timeline is disabled for this session");
+          if (!bound || bound.sessionId !== session.id)
+            throw Error("Timeline checkpoint is unavailable");
+          return {
+            version: 1,
+            checkpointId: request.checkpointId,
+            ...(await checkpointFileDiff(
+              bound.record,
+              await previousCompatible(request.checkpointId, bound),
+              request.path,
+            )),
+          };
+        })(),
+      );
+    },
+  );
+  type ModelCall = {
+    eventId: string;
+    started: number;
+    request: string;
+    result: string;
+  };
+  type ModelUsage = {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: { total?: number };
+  };
+
+  /** One telemetry payload shape for both the completed and failed naming calls. */
+  const emitModelCall = (
+    call: ModelCall,
+    status: "completed" | "failed",
+    usage: ModelUsage = {},
+  ) =>
+    emitTelemetry({
+      version: 1,
+      eventId: call.eventId,
+      package: "pi-timeline",
+      kind: "model_call",
+      status,
+      durationMs: Date.now() - call.started,
+      usage: {
+        turns: 1,
+        input: usage.input ?? 0,
+        output: usage.output ?? 0,
+        cacheRead: usage.cacheRead ?? 0,
+        cacheWrite: usage.cacheWrite ?? 0,
+        cost: usage.cost?.total ?? 0,
+      },
+      context: {
+        request: {
+          characters: call.request.length,
+          hash: hash(`${call.eventId}:request:${call.request}`),
+        },
+        result: {
+          characters: call.result.length,
+          hash: hash(`${call.eventId}:result:${call.result}`),
+        },
+      },
+    });
+
+  /** Asks the model for a session title, falling back to the first prompt's own text. */
+  const generateTitle = async (
+    ctx: any,
+    generation: number,
+    firstUser: any,
+    finalAssistant: any,
+  ) => {
+    const model = ctx.model;
+    if (!model) return undefined;
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok || !auth.apiKey) return undefined;
+    const request = promptText(firstUser.message);
+    const result = finalAssistant ? promptText(finalAssistant.message) : "";
+    const sessionId = ctx.sessionManager.getSessionId();
+    const call: ModelCall = {
+      eventId: hash(`${sessionId}:${generation}`),
+      started: Date.now(),
+      request,
+      result,
+    };
+    try {
+      const message: Message = {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
+          },
+        ],
+        timestamp: Date.now(),
       };
-    })());
-  });
-  const disposeDiffRequest = pi.events.on("pi-timeline:diff-request", (request: any) => {
-    if (request?.version !== 1
-      || request.sessionId !== currentSessionId
-      || typeof request.checkpointId !== "string"
-      || typeof request.path !== "string"
-      || typeof request.respond !== "function") return;
-    const bound = records.get(request.checkpointId);
-    request.respond((async () => {
-      if (!enabled) throw Error("Pi Timeline is disabled for this session");
-      if (!bound || bound.sessionId !== currentSessionId)
-        throw Error("Timeline checkpoint is unavailable");
-      return {
-        version: 1,
-        checkpointId: request.checkpointId,
-        ...await checkpointFileDiff(
-          bound.record,
-          await previousCompatible(request.checkpointId, bound),
-          request.path,
-        ),
-      };
-    })());
-  });
+      const response = await completeTitle(
+        model,
+        { systemPrompt: SESSION_TITLE_PROMPT, messages: [message] },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          env: auth.env,
+          maxTokens: 32,
+          timeoutMs: 30_000,
+          sessionId,
+        },
+      );
+      const failed =
+        response.stopReason === "error" || response.stopReason === "aborted";
+      emitModelCall(
+        call,
+        failed ? "failed" : "completed",
+        response.usage ?? {},
+      );
+      const raw = response.content
+        .filter((part: any) => part.type === "text")
+        .map((part: any) => part.text)
+        .join("\n");
+      return normalizeGeneratedTitle(raw) ?? undefined;
+    } catch (error) {
+      emitModelCall(call, "failed");
+      throw error;
+    }
+  };
+
   const nameSession = async (ctx: any) => {
-    if (namingDecided || namingInFlight !== undefined) return;
-    const generation = namingGeneration;
-    namingInFlight = generation;
+    if (naming.decided || naming.inFlight !== undefined) return;
+    const generation = naming.generation;
+    naming.inFlight = generation;
     const branch = ctx.sessionManager.getBranch(),
       firstUser = branch.find(
         (entry: any) =>
@@ -417,78 +606,20 @@ export default function timelineExtension(
       ),
       fallback = firstUser && promptTitle(firstUser.message);
     let name = fallback;
-    let modelCall: { eventId: string; started: number; request: string; result: string } | undefined;
     try {
-      const model = ctx.model;
-      if (firstUser && model) {
-        const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-        if (auth.ok && auth.apiKey) {
-          const request = promptText(firstUser.message);
-          const result = finalAssistant ? promptText(finalAssistant.message) : "";
-          const sessionId = ctx.sessionManager.getSessionId();
-          modelCall = {
-            eventId: createHash("sha256").update(`${sessionId}:${generation}`).digest("hex"),
-            started: Date.now(), request, result,
-          };
-          const message: Message = {
-            role: "user",
-            content: [{
-              type: "text",
-              text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
-            }],
-            timestamp: Date.now(),
-          };
-          const response = await completeTitle(
-            model,
-            {
-              systemPrompt: SESSION_TITLE_PROMPT,
-              messages: [message],
-            },
-            {
-              apiKey: auth.apiKey,
-              headers: auth.headers,
-              env: auth.env,
-              maxTokens: 32,
-              timeoutMs: 30_000,
-              sessionId,
-            },
-          );
-          const usage = response.usage ?? {};
-          emitTelemetry({
-            version: 1, eventId: modelCall.eventId, package: "pi-timeline", kind: "model_call",
-            status: response.stopReason === "error" || response.stopReason === "aborted" ? "failed" : "completed",
-            durationMs: Date.now() - modelCall.started,
-            usage: { turns: 1, input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0, cost: usage.cost?.total ?? 0 },
-            context: {
-              request: { characters: request.length, hash: createHash("sha256").update(`${modelCall.eventId}:request:${request}`).digest("hex") },
-              result: { characters: result.length, hash: createHash("sha256").update(`${modelCall.eventId}:result:${result}`).digest("hex") },
-            },
-          });
-          const raw = response.content
-            .filter((part: any) => part.type === "text")
-            .map((part: any) => part.text)
-            .join("\n");
-          name = normalizeGeneratedTitle(raw) ?? fallback;
-        }
-      }
+      if (firstUser)
+        name =
+          (await generateTitle(ctx, generation, firstUser, finalAssistant)) ??
+          fallback;
     } catch {
-      if (modelCall)
-        emitTelemetry({
-          version: 1, eventId: modelCall.eventId, package: "pi-timeline", kind: "model_call", status: "failed",
-          durationMs: Date.now() - modelCall.started,
-          usage: { turns: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-          context: {
-            request: { characters: modelCall.request.length, hash: createHash("sha256").update(`${modelCall.eventId}:request:${modelCall.request}`).digest("hex") },
-            result: { characters: modelCall.result.length, hash: createHash("sha256").update(`${modelCall.eventId}:result:${modelCall.result}`).digest("hex") },
-          },
-        });
       name = fallback;
     } finally {
-      if (namingInFlight === generation) namingInFlight = undefined;
+      if (naming.inFlight === generation) naming.inFlight = undefined;
     }
-    if (generation !== namingGeneration) return;
-    if (!namingDecided && name) {
-      namingDecided = true;
+    // A newer session replaced ours while the model call was in flight.
+    if (generation !== naming.generation) return;
+    if (!naming.decided && name) {
+      naming.decided = true;
       pi.setSessionName(name);
     }
   };
@@ -497,10 +628,7 @@ export default function timelineExtension(
       git(cwd, ["rev-parse", "HEAD"]),
       git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]),
     ]);
-    return createHash("sha256")
-      .update(`${head}\n${status}`)
-      .digest("hex")
-      .slice(0, 16);
+    return hash(`${head}\n${status}`).slice(0, 16);
   };
   const loadEntries = (
     entries: readonly any[],
@@ -509,53 +637,64 @@ export default function timelineExtension(
     timelineId?: string,
   ) => {
     const byId = new Map(entries.map((entry: any) => [entry.id, entry]));
-    const portable = new Set(entries.flatMap((entry: any) =>
-      entry.type === "custom"
-        && entry.customType === "pi-prompt-checkpoint"
-        && (entry.data?.version === 4 || entry.data?.version === 5)
-        && typeof entry.data.promptEntryId === "string"
-        && typeof entry.data.snapshotId === "string"
-        ? [`${entry.data.promptEntryId}:${entry.data.snapshotId}`]
-        : []));
+    // A version-3 record superseded by a portable rewrite of the same snapshot is skipped.
+    const portable = new Set(
+      entries.flatMap((entry: any) => {
+        const data = customEntryData(
+          entry,
+          "pi-prompt-checkpoint",
+          PORTABLE_CHECKPOINT_VERSIONS,
+        );
+        return data &&
+          typeof data.promptEntryId === "string" &&
+          typeof data.snapshotId === "string"
+          ? [`${data.promptEntryId}:${data.snapshotId}`]
+          : [];
+      }),
+    );
+
     let checkpointTimelineId: string | undefined;
     for (const entry of entries) {
+      const run = customEntryData(entry, RUN_ENTRY_TYPE);
+      if (run && isRunEntry(run)) {
+        checkpointTimelineId = runTimelineId(run);
+        continue;
+      }
+      const cleared = customEntryData(entry, "pi-timeline-clear", [1]);
+      if (cleared) {
+        for (const id of cleared.checkpointEntryIds ?? [])
+          checkpoints.records.delete(key(sessionId, id));
+        continue;
+      }
+      const checkpoint = customEntryData(
+        entry,
+        "pi-prompt-checkpoint",
+        CHECKPOINT_VERSIONS,
+      );
+      if (!checkpoint) continue;
       if (
-        entry.type === "custom" &&
-        entry.customType === RUN_ENTRY_TYPE &&
-        isRunEntry(entry.data)
-      ) {
-        checkpointTimelineId = runTimelineId(entry.data);
-      } else if (
-        entry.type === "custom" &&
-        entry.customType === "pi-prompt-checkpoint" &&
-        (entry.data?.version === 3 || entry.data?.version === 4 || entry.data?.version === 5)
-      ) {
-        if (entry.data.version === 3
-          && portable.has(`${entry.data.promptEntryId}:${entry.data.snapshotId}`)) continue;
-        if (entry.data.headRef !== null && typeof entry.data.headRef !== "string") continue;
-        if (timelineId && checkpointTimelineId !== timelineId) continue;
-        const user = byId.get(entry.data.promptEntryId) as any;
-        if (user?.type === "message" && user.message.role === "user")
-          records.set(key(sessionId, entry.id), {
-            record: entry.data,
-            checkpointEntryId: entry.id,
-            preview: promptText(user.message),
-            sessionId,
-            sessionPath,
-          });
-      } else if (
-        entry.type === "custom" &&
-        entry.customType === "pi-timeline-clear" &&
-        entry.data?.version === 1
+        checkpoint.version === 3 &&
+        portable.has(`${checkpoint.promptEntryId}:${checkpoint.snapshotId}`)
       )
-        for (const id of entry.data.checkpointEntryIds ?? [])
-          records.delete(key(sessionId, id));
+        continue;
+      if (checkpoint.headRef !== null && typeof checkpoint.headRef !== "string")
+        continue;
+      if (timelineId && checkpointTimelineId !== timelineId) continue;
+      const user = byId.get(checkpoint.promptEntryId) as any;
+      if (user?.type === "message" && user.message.role === "user")
+        checkpoints.records.set(key(sessionId, entry.id), {
+          record: checkpoint as CheckpointRecord,
+          checkpointEntryId: entry.id,
+          preview: promptText(user.message),
+          sessionId,
+          sessionPath,
+        });
     }
   };
   const load = async (ctx: any) => {
-    records = new Map();
-    changeCache.clear();
-    changeBases.clear();
+    checkpoints.records = new Map();
+    checkpoints.changeCache.clear();
+    checkpoints.changeBases.clear();
     currentGit = await inspectGitState(ctx.cwd).catch(() => undefined);
     const currentEntries = ctx.sessionManager.getEntries();
     activeRun = findRunEntry(currentEntries);
@@ -575,7 +714,11 @@ export default function timelineExtension(
         loadEntries(manager.getEntries(), session.id, session.path, timelineId);
       } catch {}
     }
-    if (!sessions.some((session) => session.id === ctx.sessionManager.getSessionId()))
+    if (
+      !sessions.some(
+        (session) => session.id === ctx.sessionManager.getSessionId(),
+      )
+    )
       loadEntries(
         currentEntries,
         ctx.sessionManager.getSessionId(),
@@ -585,33 +728,40 @@ export default function timelineExtension(
   };
   const hydrateLegacyChanges = async (sessionId: string) => {
     let changed = false;
-    for (const [id, bound] of records) {
-      if (currentSessionId !== sessionId || bound.sessionId !== sessionId) continue;
-      if (bound.record.changes || changeCache.has(id)) continue;
+    for (const [id, bound] of checkpoints.records) {
+      if (session.id !== sessionId || bound.sessionId !== sessionId) continue;
+      if (bound.record.changes || checkpoints.changeCache.has(id)) continue;
       try {
         await changesFor(id, bound);
         changed = true;
       } catch {}
     }
-    if (changed && currentSessionId === sessionId) publishState();
+    if (changed && session.id === sessionId) publishState();
   };
   const refresh = (ctx: any) => {
     if (ctx.hasUI)
       ctx.ui.setStatus(
         "pi-timeline",
-        records.size
-          ? `Checkpoints: ${records.size} · Session: ${paired ? "Paired" : "Unpaired"}`
+        checkpoints.records.size
+          ? `Checkpoints: ${checkpoints.records.size} · Session: ${checkpoints.paired ? "Paired" : "Unpaired"}`
           : undefined,
       );
   };
   const deleteRefs = async (snapshot: Snapshot) => {
-    const repositories = [{
-      gitRoot: snapshot.gitRoot,
-      worktreeRef: snapshot.worktreeRef,
-      indexRef: snapshot.indexRef,
-    }, ...(snapshot.nested ?? [])];
+    const repositories = [
+      {
+        gitRoot: snapshot.gitRoot,
+        worktreeRef: snapshot.worktreeRef,
+        indexRef: snapshot.indexRef,
+      },
+      ...(snapshot.nested ?? []),
+    ];
     for (const repository of repositories) {
-      await git(repository.gitRoot, ["update-ref", "-d", repository.worktreeRef]);
+      await git(repository.gitRoot, [
+        "update-ref",
+        "-d",
+        repository.worktreeRef,
+      ]);
       await git(repository.gitRoot, ["update-ref", "-d", repository.indexRef]);
     }
   };
@@ -625,30 +775,35 @@ export default function timelineExtension(
         ) as any;
     if (!user) return;
     const sessionId = ctx.sessionManager.getSessionId();
-    const existing = [...records.values()]
+    const existing = [...checkpoints.records.values()]
       .reverse()
       .find(
         (bound) =>
           bound.sessionId === sessionId &&
           bound.record.promptEntryId === user.id,
       );
-    if (paired && existing) return existing.record;
+    if (checkpoints.paired && existing) return existing.record;
     const continuation = ctx.sessionManager.getLeafId();
     let snap: Snapshot | undefined;
     try {
       snap = await capture(ctx.cwd, sessionId, (root) =>
-        recordTimelineOwner(artifactRoot, sessionId, root));
+        recordTimelineOwner(artifactRoot, sessionId, root),
+      );
       currentGit = snap;
       const identity = await worktreeId(ctx.cwd),
-        verification = latestVerification?.worktreeId === identity && latestVerification.state === "passed"
-          ? {
-              runId: latestVerification.runId,
-              state: latestVerification.state,
-              scope: latestVerification.scope,
-              worktreeId: identity,
-              checks: (latestVerification.results ?? []).map((item: any) => item.label).slice(0, 6),
-            }
-          : undefined,
+        verification =
+          latestVerification?.worktreeId === identity &&
+          latestVerification.state === "passed"
+            ? {
+                runId: latestVerification.runId,
+                state: latestVerification.state,
+                scope: latestVerification.scope,
+                worktreeId: identity,
+                checks: (latestVerification.results ?? [])
+                  .map((item: any) => item.label)
+                  .slice(0, 6),
+              }
+            : undefined,
         record: CheckpointRecord = {
           version: 5,
           kind: "pi-prompt-checkpoint",
@@ -676,16 +831,19 @@ export default function timelineExtension(
       };
       pi.appendEntry("pi-prompt-checkpoint", record);
       const checkpointEntryId = ctx.sessionManager.getLeafId()!;
-      changeCache.set(key(sessionId, checkpointEntryId), changes);
-      changeBases.set(key(sessionId, checkpointEntryId), calculated.previous ?? null);
-      records.set(key(sessionId, checkpointEntryId), {
+      checkpoints.changeCache.set(key(sessionId, checkpointEntryId), changes);
+      checkpoints.changeBases.set(
+        key(sessionId, checkpointEntryId),
+        calculated.previous ?? null,
+      );
+      checkpoints.records.set(key(sessionId, checkpointEntryId), {
         record,
         checkpointEntryId,
         preview: promptText(user.message),
         sessionId,
         sessionPath: ctx.sessionManager.getSessionFile(),
       });
-      paired = true;
+      checkpoints.paired = true;
       refresh(ctx);
       publishState();
       return record;
@@ -696,81 +854,108 @@ export default function timelineExtension(
     }
   }
   const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
-    if (event?.version === 1 && event.cwd === lastCtx?.cwd) latestVerification = event;
+    if (event?.version === 1 && event.cwd === lastCtx?.cwd)
+      latestVerification = event;
   });
-  const disposeCheckpoint = pi.events.on("pi-timeline:checkpoint-request", (event: any) => {
-    if (event?.version === 1 && lastCtx && typeof event.respond === "function")
-      event.respond(enabled ? checkpoint(lastCtx) : undefined);
-  });
-  const disposeRelocation = pi.events.on("pi-timeline:relocation-readiness", (request: any) => {
-    if (request?.version !== 1
-      || request.sessionId !== currentSessionId
-      || typeof request.respond !== "function"
-      || !lastCtx) return;
-    request.respond((async () => {
-      const migrating = [...records.entries()].filter(([, bound]) =>
-        bound.sessionId === currentSessionId && bound.record.version === 3);
-      for (const [recordKey, bound] of migrating) {
-        const portable = await makePortable(bound.record, lastCtx.cwd);
-        const record: CheckpointRecord = { ...bound.record, ...portable, version: 4 };
-        pi.appendEntry("pi-prompt-checkpoint", record);
-        const checkpointEntryId = lastCtx.sessionManager.getLeafId()!;
-        records.delete(recordKey);
-        records.set(key(currentSessionId, checkpointEntryId), {
-          ...bound,
-          record,
-          checkpointEntryId,
-        });
-      }
-      if (migrating.length) {
-        refresh(lastCtx);
-        publishState();
-      }
-      return { version: 1, ready: true };
-    })());
-  });
-  const disposeWorkspaceApplied = pi.events.on("pylon:workspace-applied", (event: any) => {
-    if (event?.version !== 1 || event.sessionId !== currentSessionId || !lastCtx) return;
-    confirmedForks.clear();
-    refresh(lastCtx);
-    publishState();
-  });
+  const disposeCheckpoint = pi.events.on(
+    "pi-timeline:checkpoint-request",
+    (event: any) => {
+      if (
+        event?.version === 1 &&
+        lastCtx &&
+        typeof event.respond === "function"
+      )
+        event.respond(enabled ? checkpoint(lastCtx) : undefined);
+    },
+  );
+  const disposeRelocation = pi.events.on(
+    "pi-timeline:relocation-readiness",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.sessionId !== session.id ||
+        typeof request.respond !== "function" ||
+        !lastCtx
+      )
+        return;
+      request.respond(
+        (async () => {
+          const migrating = [...checkpoints.records.entries()].filter(
+            ([, bound]) =>
+              bound.sessionId === session.id && bound.record.version === 3,
+          );
+          for (const [recordKey, bound] of migrating) {
+            const portable = await makePortable(bound.record, lastCtx.cwd);
+            const record: CheckpointRecord = {
+              ...bound.record,
+              ...portable,
+              version: 4,
+            };
+            pi.appendEntry("pi-prompt-checkpoint", record);
+            const checkpointEntryId = lastCtx.sessionManager.getLeafId()!;
+            checkpoints.records.delete(recordKey);
+            checkpoints.records.set(key(session.id, checkpointEntryId), {
+              ...bound,
+              record,
+              checkpointEntryId,
+            });
+          }
+          if (migrating.length) {
+            refresh(lastCtx);
+            publishState();
+          }
+          return { version: 1, ready: true };
+        })(),
+      );
+    },
+  );
+  const disposeWorkspaceApplied = pi.events.on(
+    "pylon:workspace-applied",
+    (event: any) => {
+      if (event?.version !== 1 || event.sessionId !== session.id || !lastCtx)
+        return;
+      checkpoints.confirmedForks.clear();
+      refresh(lastCtx);
+      publishState();
+    },
+  );
   pi.on("session_start", async (_e, ctx) => {
     lastCtx = ctx;
     latestVerification = undefined;
-    pendingMutations.clear();
-    deniedToolCalls.clear();
-    runningHeartbeatJobs.clear();
-    confirmedForks.clear();
-    automaticMutation = false;
-    automaticMutationGeneration = 0;
-    agentRunning = false;
-    shuttingDown = false;
-    automaticCheckpoint = undefined;
+    mutations.pending.clear();
+    mutations.denied.clear();
+    mutations.heartbeatJobs.clear();
+    checkpoints.confirmedForks.clear();
+    mutations.automatic = false;
+    mutations.generation = 0;
+    session.agentRunning = false;
+    session.shuttingDown = false;
+    mutations.checkpoint = undefined;
     const nextSessionId = ctx.sessionManager.getSessionId();
-    const reuseSessionLease = !!releaseSessionLease && currentSessionId === nextSessionId;
-    if (releaseSessionLease && !reuseSessionLease)
-      await releaseSessionLease(ephemeralSession);
-    currentSessionId = nextSessionId;
+    const reuseSessionLease =
+      !!session.releaseLease && session.id === nextSessionId;
+    if (session.releaseLease && !reuseSessionLease)
+      await session.releaseLease(session.ephemeral);
+    session.id = nextSessionId;
     if (!reuseSessionLease)
-      releaseSessionLease = await startSessionGc(artifactRoot, currentSessionId);
-    ephemeralSession = !ctx.sessionManager.getSessionFile?.();
+      session.releaseLease = await startSessionGc(artifactRoot, session.id);
+    session.ephemeral = !ctx.sessionManager.getSessionFile?.();
     await load(ctx);
-    paired = false;
-    namingGeneration++;
-    namingInFlight = undefined;
-    namingDecided = ctx.sessionManager
+    checkpoints.paired = false;
+    naming.generation++;
+    naming.inFlight = undefined;
+    naming.decided = ctx.sessionManager
       .getEntries()
       .some((entry: any) => entry.type === "session_info");
     refresh(ctx);
     publishState();
-    void hydrateLegacyChanges(currentSessionId);
+    void hydrateLegacyChanges(session.id);
   });
   pi.on("session_shutdown", async () => {
-    shuttingDown = true;
-    namingGeneration++;
-    namingInFlight = undefined;
-    confirmedForks.clear();
+    session.shuttingDown = true;
+    naming.generation++;
+    naming.inFlight = undefined;
+    checkpoints.confirmedForks.clear();
     publishState(false);
     disposeStateRequest();
     disposeEditNavigation();
@@ -785,63 +970,96 @@ export default function timelineExtension(
     disposeFilesRequest();
     disposeDiffRequest();
     disposeRuntimePolicy();
-    await automaticCheckpoint?.catch(() => {});
-    automaticCheckpoint = undefined;
-    await releaseSessionLease?.(ephemeralSession);
-    releaseSessionLease = undefined;
-    currentSessionId = "";
+    await mutations.checkpoint?.catch(() => {});
+    mutations.checkpoint = undefined;
+    await session.releaseLease?.(session.ephemeral);
+    session.releaseLease = undefined;
+    session.id = "";
   });
   pi.on("session_info_changed", () => {
-    namingDecided = true;
+    naming.decided = true;
   });
   pi.on("input", (event) => {
-    if (event.source !== "extension") paired = false;
+    if (event.source !== "extension") checkpoints.paired = false;
   });
   const flushAutomaticCheckpoint = (ctx = lastCtx) => {
-    if (!ctx || !enabled || shuttingDown || agentRunning || runningHeartbeatJobs.size || !automaticMutation) return automaticCheckpoint;
-    if (!automaticCheckpoint) {
+    if (
+      !ctx ||
+      !enabled ||
+      session.shuttingDown ||
+      session.agentRunning ||
+      mutations.heartbeatJobs.size ||
+      !mutations.automatic
+    )
+      return mutations.checkpoint;
+    if (!mutations.checkpoint) {
+      // Capturing is slow enough that the tree can change under us. Each pass compares the
+      // mutation generation across the capture and retries while it moved, so the checkpoint
+      // we keep always reflects a tree that held still for one full capture. The loop also
+      // exits when the agent or a heartbeat job starts up again, since they will re-trigger it.
       const run = (async () => {
-        while (true) {
-          const generation = automaticMutationGeneration;
+        for (;;) {
+          const generation = mutations.generation;
           const captured = await checkpoint(ctx);
-          const changedDuringCheckpoint = generation !== automaticMutationGeneration;
-          if (captured && !changedDuringCheckpoint) automaticMutation = false;
-          if (!changedDuringCheckpoint) return;
-          paired = false;
-          if (agentRunning || runningHeartbeatJobs.size) return;
+          const treeMovedDuringCapture = generation !== mutations.generation;
+          if (captured && !treeMovedDuringCapture) mutations.automatic = false;
+          if (!treeMovedDuringCapture) return;
+          checkpoints.paired = false;
+          const busy = session.agentRunning || mutations.heartbeatJobs.size > 0;
+          if (busy) return;
         }
       })();
       const tracked = run.finally(() => {
-        if (automaticCheckpoint === tracked) automaticCheckpoint = undefined;
+        if (mutations.checkpoint === tracked) mutations.checkpoint = undefined;
       });
-      automaticCheckpoint = tracked;
+      mutations.checkpoint = tracked;
     }
-    return automaticCheckpoint;
+    return mutations.checkpoint;
   };
-  const disposeHeartbeatJobs = pi.events.on("pi-heartbeat:job", (event: any) => {
-    if (event?.version !== 1 || event.cwd !== lastCtx?.cwd
-      || event.sessionId !== currentSessionId
-      || typeof event.id !== "string") return;
-    if (["running", "cancelling"].includes(event.state)) runningHeartbeatJobs.add(event.id);
-    else {
-      runningHeartbeatJobs.delete(event.id);
-      return flushAutomaticCheckpoint();
-    }
+  const disposeHeartbeatJobs = pi.events.on(
+    "pi-heartbeat:job",
+    (event: any) => {
+      if (
+        event?.version !== 1 ||
+        event.cwd !== lastCtx?.cwd ||
+        event.sessionId !== session.id ||
+        typeof event.id !== "string"
+      )
+        return;
+      if (["running", "cancelling"].includes(event.state))
+        mutations.heartbeatJobs.add(event.id);
+      else {
+        mutations.heartbeatJobs.delete(event.id);
+        return flushAutomaticCheckpoint();
+      }
+    },
+  );
+  pi.on("agent_start", () => {
+    session.agentRunning = true;
   });
-  pi.on("agent_start", () => { agentRunning = true; });
   pi.on("tool_call", async (event, ctx) => {
-    if (enabled && ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt"))
-      pendingMutations.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
+    if (
+      enabled &&
+      ((event.toolName === "bash" && !sharedWorktreeObserver) ||
+        event.toolName === "grunt")
+    )
+      mutations.pending.set(
+        event.toolCallId,
+        await worktreeFingerprint(ctx.cwd),
+      );
   });
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled) return;
-    if (deniedToolCalls.delete(event.toolCallId)) {
-      pendingMutations.delete(event.toolCallId);
+    if (mutations.denied.delete(event.toolCallId)) {
+      mutations.pending.delete(event.toolCallId);
       return;
     }
-    if ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt") {
-      const before = pendingMutations.get(event.toolCallId);
-      pendingMutations.delete(event.toolCallId);
+    if (
+      (event.toolName === "bash" && !sharedWorktreeObserver) ||
+      event.toolName === "grunt"
+    ) {
+      const before = mutations.pending.get(event.toolCallId);
+      mutations.pending.delete(event.toolCallId);
       const after = await worktreeFingerprint(ctx.cwd);
       if (!before || !after || before !== after) markAutomaticMutation();
     } else if (["write", "edit", "heartbeat_start"].includes(event.toolName)) {
@@ -849,7 +1067,7 @@ export default function timelineExtension(
     }
   });
   pi.on("agent_settled", async (_e, ctx) => {
-    agentRunning = false;
+    session.agentRunning = false;
     void nameSession(ctx).catch(() => {});
     await flushAutomaticCheckpoint(ctx);
   });
@@ -858,7 +1076,7 @@ export default function timelineExtension(
       suppressNextTreeWarning = false;
       return;
     }
-    paired = false;
+    checkpoints.paired = false;
     refresh(ctx);
     ctx.ui.notify(
       "Conversation changed with /tree; files were not restored. Use /timeline.",
@@ -883,6 +1101,219 @@ export default function timelineExtension(
       };
     }
   });
+  const listCheckpoints = async (ctx: any) => {
+    const current = await inspectGitState(ctx.cwd);
+    ctx.ui.notify(
+      [...checkpoints.records]
+        .map(([, bound]) => checkpointRow(bound, current))
+        .join("\n") || "No checkpoints.",
+      "info",
+    );
+  };
+
+  const clearCheckpoints = async (ctx: any) => {
+    if (
+      !ctx.hasUI ||
+      !(await ctx.ui.confirm(
+        "Clear timeline refs?",
+        "Delete refs owned by current session? Git objects are not garbage-collected.",
+      ))
+    )
+      return;
+    const owned = [...checkpoints.records].filter(
+      ([, bound]) =>
+        bound.record.ownerSessionId === ctx.sessionManager.getSessionId(),
+    );
+    const deletionFailures: string[] = [];
+    for (const [, bound] of owned) {
+      try {
+        await deleteRefs(bound.record);
+      } catch (error) {
+        deletionFailures.push(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    // Leaving the checkpoints.records in place lets the user retry rather than losing the checkpoints.
+    if (deletionFailures.length) {
+      ctx.ui.notify(
+        `Timeline clear failed; checkpoints remain available for retry. ${deletionFailures[0]}`,
+        "error",
+      );
+      return;
+    }
+    const cleared: ClearV1 = {
+      version: 1,
+      ownerSessionId: ctx.sessionManager.getSessionId(),
+      checkpointEntryIds: owned.map(([, bound]) => bound.checkpointEntryId),
+    };
+    pi.appendEntry("pi-timeline-clear", cleared);
+    for (const [id] of owned) checkpoints.records.delete(id);
+    refresh(ctx);
+    publishState();
+  };
+
+  /** Prompts for a checkpoint and what to do with it. */
+  const promptForCheckpoint = async (ctx: any) => {
+    const current = await inspectGitState(ctx.cwd);
+    const choices = [...checkpoints.records].map(([checkpointId, bound]) => ({
+      id: checkpointId,
+      label: checkpointRow(bound, current),
+    }));
+    const selected = await ctx.ui.select(
+      "Checkpoint",
+      choices.map((choice) => choice.label),
+    );
+    const id = choices.find((choice) => choice.label === selected)?.id;
+    if (!id) return undefined;
+    const action = await ctx.ui.select("Action", ["View", "Fork & continue"]);
+    return { id, mode: action === "View" ? "jump" : "fork" };
+  };
+
+  type RestorePlan = {
+    operation: string;
+    content: string;
+    failure: string;
+    navigateTo?: string;
+    notify?: string;
+  };
+
+  /**
+   * Restores a checkpoint into a session Pi just opened for us. On any failure the
+   * source snapshot is put back so the user never lands on a half-restored tree.
+   */
+  const restoreIntoSession = async (
+    session: any,
+    target: CheckpointRecord,
+    source: Snapshot,
+    plan: RestorePlan,
+  ) => {
+    try {
+      if (plan.navigateTo)
+        await session.navigateTree(plan.navigateTo, { summarize: false });
+      await restore(target, session.cwd);
+      await session.sendMessage(
+        mutationMessage(session.cwd, plan.operation, plan.content),
+        { deliverAs: "nextTurn" },
+      );
+      if (plan.notify) session.ui.notify(plan.notify, "info");
+    } catch (e: any) {
+      await restore(source, session.cwd).catch(() => {});
+      session.ui.notify(`${plan.failure}: ${e.message}`, "error");
+    }
+  };
+
+  /** Restores in place, rewinding both the files and the conversation position on failure. */
+  const restoreInCurrentSession = async (
+    ctx: any,
+    target: CheckpointRecord,
+    source: Snapshot,
+    id: string,
+  ) => {
+    const old = ctx.sessionManager.getLeafId();
+    try {
+      await ctx.navigateTree(target.continuationEntryId, { summarize: false });
+      await restore(target, ctx.cwd);
+      publishMutation(ctx.cwd, "jump-restore");
+      checkpoints.paired = true;
+      pendingContext = `Filesystem restored from user prompt ${id}. Later changes may not exist.`;
+      refresh(ctx);
+    } catch (e: any) {
+      await restore(source, ctx.cwd).catch(() => {});
+      if (old)
+        await ctx.navigateTree(old, { summarize: false }).catch(() => {});
+      ctx.ui.notify(
+        `Timeline restore failed and rollback attempted: ${e.message}`,
+        "error",
+      );
+    }
+  };
+
+  /** Checkpoints the current tree, confirms, then routes to the matching restore path. */
+  const restoreCheckpoint = async (ctx: any, id: string, mode: string) => {
+    const target = checkpoints.records.get(id);
+    if (!target) {
+      ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
+      return;
+    }
+    const preconfirmed =
+      mode === "fork" && checkpoints.confirmedForks.delete(id);
+    let current: GitState = await inspectGitState(ctx.cwd);
+    let compatibility = classifyCompatibility(target.record, current);
+    if (!compatibility.allowed) {
+      ctx.ui.notify(
+        compatibilityDetail(target.record, current, compatibility),
+        "error",
+      );
+      return;
+    }
+    const source = await checkpoint(ctx);
+    if (!source) {
+      ctx.ui.notify("Unable to checkpoint current state.", "error");
+      return;
+    }
+    // Re-check against the state the rollback checkpoint actually captured.
+    current = source;
+    compatibility = classifyCompatibility(target.record, current);
+    if (!compatibility.allowed) {
+      ctx.ui.notify(
+        `Git state changed while creating rollback checkpoint. ${compatibilityDetail(target.record, current, compatibility)}`,
+        "error",
+      );
+      return;
+    }
+    const ok =
+      preconfirmed ||
+      (await ctx.ui.confirm(
+        mode === "fork" ? "Fork and restore?" : "View and restore?",
+        `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
+      ));
+    if (!ok) return;
+
+    const foreign =
+      target.sessionId !== ctx.sessionManager.getSessionId() &&
+      target.sessionPath;
+    if (foreign) {
+      await ctx.switchSession(target.sessionPath!, {
+        withSession: async (fresh: any) => {
+          if (mode === "jump") {
+            await restoreIntoSession(fresh, target.record, source, {
+              operation: "linked-jump-restore",
+              content: `Filesystem restored from linked run checkpoint ${id}.`,
+              failure: "Timeline restore failed; source files restored",
+              navigateTo: target.record.continuationEntryId,
+            });
+            return;
+          }
+          await fresh.fork(target.checkpointEntryId, {
+            position: "at",
+            withSession: (child: any) =>
+              restoreIntoSession(child, target.record, source, {
+                operation: "linked-fork-restore",
+                content: `Filesystem restored in forked Pi session from linked run checkpoint ${id}.`,
+                failure: "Child restore failed; source files restored",
+              }),
+          });
+        },
+      });
+      return;
+    }
+    if (mode === "jump") {
+      await restoreInCurrentSession(ctx, target.record, source, id);
+      return;
+    }
+    await ctx.fork(target.checkpointEntryId, {
+      position: "at",
+      withSession: (fresh: any) =>
+        restoreIntoSession(fresh, target.record, source, {
+          operation: "fork-restore",
+          content: `Filesystem restored in forked Pi session from user prompt ${id}.`,
+          failure: "Child restore failed; source files restored",
+          notify: "Timeline fork restored.",
+        }),
+    });
+  };
+
   pi.registerCommand("timeline", {
     description: "List, view, fork, or clear Git-backed prompt checkpoints",
     handler: async (args, ctx) => {
@@ -892,52 +1323,10 @@ export default function timelineExtension(
         return;
       }
       await load(ctx);
-      const [actionRaw, idRaw] = args.trim().split(/\s+/, 2),
-        action = actionRaw || "select";
-      if (action === "list") {
-        const current = await inspectGitState(ctx.cwd);
-        ctx.ui.notify(
-          [...records]
-            .map(([, bound]) => checkpointRow(bound, current))
-            .join("\n") ||
-            "No checkpoints.",
-          "info",
-        );
-        return;
-      }
-      if (action === "clear") {
-        if (
-          !ctx.hasUI ||
-          !(await ctx.ui.confirm(
-            "Clear timeline refs?",
-            "Delete refs owned by current session? Git objects are not garbage-collected.",
-          ))
-        )
-          return;
-        const owned = [...records].filter(
-          ([, bound]) =>
-            bound.record.ownerSessionId === ctx.sessionManager.getSessionId(),
-        );
-        const deletionFailures: string[] = [];
-        for (const [, bound] of owned) {
-          try { await deleteRefs(bound.record); }
-          catch (error) { deletionFailures.push(error instanceof Error ? error.message : String(error)); }
-        }
-        if (deletionFailures.length) {
-          ctx.ui.notify(`Timeline clear failed; checkpoints remain available for retry. ${deletionFailures[0]}`, "error");
-          return;
-        }
-        const cleared: ClearV1 = {
-          version: 1,
-          ownerSessionId: ctx.sessionManager.getSessionId(),
-          checkpointEntryIds: owned.map(([, bound]) => bound.checkpointEntryId),
-        };
-        pi.appendEntry("pi-timeline-clear", cleared);
-        for (const [id] of owned) records.delete(id);
-        refresh(ctx);
-        publishState();
-        return;
-      }
+      const [actionRaw, idRaw] = args.trim().split(/\s+/, 2);
+      const action = actionRaw || "select";
+      if (action === "list") return listCheckpoints(ctx);
+      if (action === "clear") return clearCheckpoints(ctx);
       if (ctx.mode !== "tui" && ctx.mode !== "rpc") {
         ctx.ui.notify(
           "Timeline restore requires interactive confirmation.",
@@ -945,143 +1334,16 @@ export default function timelineExtension(
         );
         return;
       }
-      let mode = action;
-      let id: string | undefined = idRaw;
-      if (action === "select") {
-        const current = await inspectGitState(ctx.cwd);
-        const choices = [...records].map(([checkpointId, bound]) => ({
-          id: checkpointId,
-          label: checkpointRow(bound, current),
-        }));
-        const selected = await ctx.ui.select(
-          "Checkpoint",
-          choices.map((choice) => choice.label),
-        );
-        id = choices.find((choice) => choice.label === selected)?.id;
-        if (!id) return;
-        mode =
-          (await ctx.ui.select("Action", ["View", "Fork & continue"])) ===
-          "View"
-            ? "jump"
-            : "fork";
-      }
-      const target = id && records.get(id);
-      if (!target) {
-        ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
-        return;
-      }
-      const preconfirmed = mode === "fork" && !!id && confirmedForks.delete(id);
-      let current = await inspectGitState(ctx.cwd),
-        compatibility = classifyCompatibility(target.record, current);
-      if (!compatibility.allowed) {
-        ctx.ui.notify(compatibilityDetail(target.record, current, compatibility), "error");
-        return;
-      }
-      const source = await checkpoint(ctx);
-      if (!source) {
-        ctx.ui.notify("Unable to checkpoint current state.", "error");
-        return;
-      }
-      current = source;
-      compatibility = classifyCompatibility(target.record, current);
-      if (!compatibility.allowed) {
-        ctx.ui.notify(
-          `Git state changed while creating rollback checkpoint. ${compatibilityDetail(target.record, current, compatibility)}`,
-          "error",
-        );
-        return;
-      }
-      const ok = preconfirmed || await ctx.ui.confirm(
-          mode === "fork" ? "Fork and restore?" : "View and restore?",
-          `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
-        );
-      if (!ok) return;
-      const foreign =
-        target.sessionId !== ctx.sessionManager.getSessionId() &&
-        target.sessionPath;
-      if (foreign) {
-        await ctx.switchSession(target.sessionPath!, {
-          withSession: async (fresh) => {
-            if (mode === "jump") {
-              try {
-                await fresh.navigateTree(target.record.continuationEntryId, {
-                  summarize: false,
-                });
-                await restore(target.record, fresh.cwd);
-                await fresh.sendMessage(
-                  mutationMessage(fresh.cwd, "linked-jump-restore", `Filesystem restored from linked run checkpoint ${id}.`),
-                  { deliverAs: "nextTurn" },
-                );
-              } catch (e: any) {
-                await restore(source, fresh.cwd).catch(() => {});
-                fresh.ui.notify(
-                  `Timeline restore failed; source files restored: ${e.message}`,
-                  "error",
-                );
-              }
-            } else {
-              await fresh.fork(target.checkpointEntryId, {
-                position: "at",
-                withSession: async (child) => {
-                  try {
-                    await restore(target.record, child.cwd);
-                    await child.sendMessage(
-                      mutationMessage(child.cwd, "linked-fork-restore", `Filesystem restored in forked Pi session from linked run checkpoint ${id}.`),
-                      { deliverAs: "nextTurn" },
-                    );
-                  } catch (e: any) {
-                    await restore(source, child.cwd).catch(() => {});
-                    child.ui.notify(
-                      `Child restore failed; source files restored: ${e.message}`,
-                      "error",
-                    );
-                  }
-                },
-              });
-            }
-          },
-        });
-      } else if (mode === "jump") {
-        const old = ctx.sessionManager.getLeafId();
-        try {
-          await ctx.navigateTree(target.record.continuationEntryId, {
-            summarize: false,
-          });
-          await restore(target.record, ctx.cwd);
-          publishMutation(ctx.cwd, "jump-restore");
-          paired = true;
-          pendingContext = `Filesystem restored from user prompt ${id}. Later changes may not exist.`;
-          refresh(ctx);
-        } catch (e: any) {
-          await restore(source, ctx.cwd).catch(() => {});
-          if (old)
-            await ctx.navigateTree(old, { summarize: false }).catch(() => {});
-          ctx.ui.notify(
-            `Timeline restore failed and rollback attempted: ${e.message}`,
-            "error",
-          );
+      if (action !== "select") {
+        if (!idRaw) {
+          ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
+          return;
         }
-      } else {
-        await ctx.fork(target.checkpointEntryId, {
-          position: "at",
-          withSession: async (fresh) => {
-            try {
-              await restore(target.record, fresh.cwd);
-              await fresh.sendMessage(
-                mutationMessage(fresh.cwd, "fork-restore", `Filesystem restored in forked Pi session from user prompt ${id}.`),
-                { deliverAs: "nextTurn" },
-              );
-              fresh.ui.notify("Timeline fork restored.", "info");
-            } catch (e: any) {
-              await restore(source, fresh.cwd).catch(() => {});
-              fresh.ui.notify(
-                `Child restore failed; source files restored: ${e.message}`,
-                "error",
-              );
-            }
-          },
-        });
+        return restoreCheckpoint(ctx, idRaw, action);
       }
+      const selection = await promptForCheckpoint(ctx);
+      if (!selection) return;
+      return restoreCheckpoint(ctx, selection.id, selection.mode);
     },
   });
 }

@@ -1,7 +1,14 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +18,9 @@ import { restore } from "../src/restore.ts";
 
 const exec = promisify(execFile);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-checkpoint-agent-"));
+const isolatedAgentDir = await mkdtemp(
+  join(tmpdir(), "pi-timeline-checkpoint-agent-"),
+);
 process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
 after(async () => {
   try {
@@ -44,18 +53,33 @@ test("version 4 checkpoints restore across linked worktrees and v3 migrates only
     const snapshot = await capture(root, "portable-session");
     await git("worktree", "add", "--detach", linked, "HEAD");
     await restore(snapshot, linked);
-    assert.equal((await readFile(join(linked, "tracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "checkpoint\n");
+    assert.equal(
+      (await readFile(join(linked, "tracked.txt"), "utf8")).replaceAll(
+        "\r\n",
+        "\n",
+      ),
+      "checkpoint\n",
+    );
 
     const legacy = {
       ...snapshot,
       commonDir: undefined,
-      nested: snapshot.nested?.map((repository) => ({ ...repository, commonDir: undefined })),
+      nested: snapshot.nested?.map((repository) => ({
+        ...repository,
+        commonDir: undefined,
+      })),
     };
     const migrated = await makePortable(legacy, root);
     assert.ok(migrated.commonDir);
-    await assert.rejects(() => makePortable(legacy, linked), /original checkout/);
+    await assert.rejects(
+      () => makePortable(legacy, linked),
+      /original checkout/,
+    );
   } finally {
-    await exec("git", ["worktree", "remove", "--force", linked], { cwd: root, windowsHide: true }).catch(() => {});
+    await exec("git", ["worktree", "remove", "--force", linked], {
+      cwd: root,
+      windowsHide: true,
+    }).catch(() => {});
     await rm(linked, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
@@ -63,16 +87,22 @@ test("version 4 checkpoints restore across linked worktrees and v3 migrates only
 
 test("automatic checkpoints skip read-only turns and unchanged bash", async () => {
   const { root } = await repository();
-  const entries = [{
-    type: "message", id: "user-1",
-    message: { role: "user", content: "Inspect then update" },
-  }];
-  const handlers = new Map<string, Function[]>(), appended: any[] = [];
+  const entries = [
+    {
+      type: "message",
+      id: "user-1",
+      message: { role: "user", content: "Inspect then update" },
+    },
+  ];
+  const handlers = new Map<string, Function[]>(),
+    appended: any[] = [];
   const pi: any = {
     events: { on: () => () => {} },
-    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    on: (name: string, handler: Function) =>
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand() {},
-    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    appendEntry: (customType: string, data: any) =>
+      appended.push({ customType, data }),
     setSessionName() {},
   };
   extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
@@ -92,19 +122,41 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
   try {
     await handlers.get("session_start")![0]({}, ctx);
     await handlers.get("agent_settled")![0]({}, ctx);
-    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+    assert.equal(
+      appended.filter((entry) => entry.customType === "pi-prompt-checkpoint")
+        .length,
+      0,
+    );
 
-    await handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "read-only" }, ctx);
-    await handlers.get("tool_result")![0]({ toolName: "bash", toolCallId: "read-only" }, ctx);
+    await handlers.get("tool_call")![0](
+      { toolName: "bash", toolCallId: "read-only" },
+      ctx,
+    );
+    await handlers.get("tool_result")![0](
+      { toolName: "bash", toolCallId: "read-only" },
+      ctx,
+    );
     await handlers.get("agent_settled")![0]({}, ctx);
-    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+    assert.equal(
+      appended.filter((entry) => entry.customType === "pi-prompt-checkpoint")
+        .length,
+      0,
+    );
 
     await writeFile(join(root, "tracked.txt"), "changed\n");
-    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write" }, ctx);
+    await handlers.get("tool_result")![0](
+      { toolName: "write", toolCallId: "write" },
+      ctx,
+    );
     await handlers.get("agent_settled")![0]({}, ctx);
-    const checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
+    const checkpoints = appended.filter(
+      (entry) => entry.customType === "pi-prompt-checkpoint",
+    );
     assert.equal(checkpoints.length, 1);
-    await deleteRefs(root, [checkpoints[0].data.worktreeRef, checkpoints[0].data.indexRef]);
+    await deleteRefs(root, [
+      checkpoints[0].data.worktreeRef,
+      checkpoints[0].data.indexRef,
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -117,11 +169,16 @@ async function deleteRefs(root: string, refs: string[]) {
 
 test("Heartbeat completion delays checkpoints and Grunt mutations are captured", async () => {
   const { root } = await repository();
-  const entries: any[] = [{
-    type: "message", id: "user-1",
-    message: { role: "user", content: "Start background work" },
-  }];
-  const handlers = new Map<string, Function[]>(), eventHandlers = new Map<string, Set<Function>>(), appended: any[] = [];
+  const entries: any[] = [
+    {
+      type: "message",
+      id: "user-1",
+      message: { role: "user", content: "Start background work" },
+    },
+  ];
+  const handlers = new Map<string, Function[]>(),
+    eventHandlers = new Map<string, Set<Function>>(),
+    appended: any[] = [];
   const events = {
     on(name: string, handler: Function) {
       const values = eventHandlers.get(name) ?? new Set();
@@ -130,22 +187,30 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
       return () => values.delete(handler);
     },
     async emit(name: string, value: any) {
-      await Promise.all([...eventHandlers.get(name) ?? []].map((handler) => handler(value)));
+      await Promise.all(
+        [...(eventHandlers.get(name) ?? [])].map((handler) => handler(value)),
+      );
     },
   };
   const pi: any = {
     events,
-    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    on: (name: string, handler: Function) =>
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand() {},
-    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    appendEntry: (customType: string, data: any) =>
+      appended.push({ customType, data }),
     setSessionName() {},
   };
   extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
   const ctx: any = {
-    cwd: root, hasUI: false, mode: "json",
+    cwd: root,
+    hasUI: false,
+    mode: "json",
     sessionManager: {
-      getBranch: () => entries, getEntries: () => entries,
-      getLeafId: () => entries.at(-1)?.id, getSessionFile: () => undefined,
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
       getSessionId: () => "integration-session",
     },
     ui: { notify() {}, setStatus() {} },
@@ -153,39 +218,99 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
   try {
     await handlers.get("session_start")![0]({}, ctx);
     await handlers.get("agent_start")![0]({}, ctx);
-    await events.emit("pi-heartbeat:job", { version: 1, id: "foreign-job", sessionId: "other-session", cwd: root, state: "running" });
-    await events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "running" });
-    await handlers.get("tool_result")![0]({ toolName: "heartbeat_start", toolCallId: "heartbeat" }, ctx);
+    await events.emit("pi-heartbeat:job", {
+      version: 1,
+      id: "foreign-job",
+      sessionId: "other-session",
+      cwd: root,
+      state: "running",
+    });
+    await events.emit("pi-heartbeat:job", {
+      version: 1,
+      id: "job-1",
+      sessionId: "integration-session",
+      cwd: root,
+      state: "running",
+    });
+    await handlers.get("tool_result")![0](
+      { toolName: "heartbeat_start", toolCallId: "heartbeat" },
+      ctx,
+    );
     await handlers.get("agent_settled")![0]({}, ctx);
-    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 0);
+    assert.equal(
+      appended.filter((entry) => entry.customType === "pi-prompt-checkpoint")
+        .length,
+      0,
+    );
     await writeFile(join(root, "tracked.txt"), "background\n");
-    await events.emit("pi-heartbeat:job", { version: 1, id: "job-1", sessionId: "integration-session", cwd: root, state: "completed" });
-    assert.equal(appended.filter((entry) => entry.customType === "pi-prompt-checkpoint").length, 1);
+    await events.emit("pi-heartbeat:job", {
+      version: 1,
+      id: "job-1",
+      sessionId: "integration-session",
+      cwd: root,
+      state: "completed",
+    });
+    assert.equal(
+      appended.filter((entry) => entry.customType === "pi-prompt-checkpoint")
+        .length,
+      1,
+    );
 
-    entries.push({ type: "message", id: "user-2", message: { role: "user", content: "Delegate edit" } });
+    entries.push({
+      type: "message",
+      id: "user-2",
+      message: { role: "user", content: "Delegate edit" },
+    });
     await handlers.get("input")![0]({ source: "interactive" }, ctx);
     await handlers.get("agent_start")![0]({}, ctx);
-    await handlers.get("tool_call")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
+    await handlers.get("tool_call")![0](
+      { toolName: "grunt", toolCallId: "grunt-1" },
+      ctx,
+    );
     await writeFile(join(root, "tracked.txt"), "delegated\n");
-    await handlers.get("tool_result")![0]({ toolName: "grunt", toolCallId: "grunt-1" }, ctx);
+    await handlers.get("tool_result")![0](
+      { toolName: "grunt", toolCallId: "grunt-1" },
+      ctx,
+    );
     await handlers.get("agent_settled")![0]({}, ctx);
-    let checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
+    let checkpoints = appended.filter(
+      (entry) => entry.customType === "pi-prompt-checkpoint",
+    );
     assert.equal(checkpoints.length, 2);
 
-    entries.push({ type: "message", id: "user-3", message: { role: "user", content: "Handle overlapping edits" } });
+    entries.push({
+      type: "message",
+      id: "user-3",
+      message: { role: "user", content: "Handle overlapping edits" },
+    });
     await handlers.get("input")![0]({ source: "interactive" }, ctx);
     await handlers.get("agent_start")![0]({}, ctx);
     await writeFile(join(root, "tracked.txt"), "race-one\n");
-    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-race" }, ctx);
+    await handlers.get("tool_result")![0](
+      { toolName: "write", toolCallId: "write-race" },
+      ctx,
+    );
     const settling = handlers.get("agent_settled")![0]({}, ctx);
     await writeFile(join(root, "tracked.txt"), "race-two\n");
-    await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-race" }, ctx);
+    await handlers.get("tool_result")![0](
+      { toolName: "edit", toolCallId: "edit-race" },
+      ctx,
+    );
     const shutdown = handlers.get("session_shutdown")![0]();
     await Promise.all([settling, shutdown]);
-    checkpoints = appended.filter((entry) => entry.customType === "pi-prompt-checkpoint");
-    assert.equal(checkpoints.length, 4, "shutdown drains a mutation arriving during capture");
+    checkpoints = appended.filter(
+      (entry) => entry.customType === "pi-prompt-checkpoint",
+    );
+    assert.equal(
+      checkpoints.length,
+      4,
+      "shutdown drains a mutation arriving during capture",
+    );
     for (const checkpoint of checkpoints)
-      await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
+      await deleteRefs(root, [
+        checkpoint.data.worktreeRef,
+        checkpoint.data.indexRef,
+      ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -198,7 +323,11 @@ test("timeline rejects incompatible targets before rollback capture", async () =
       checkpointTime = "2026-02-18T12:34:56.789Z",
       displayedTime = "2026-02-18T12:34:56Z",
       entries = [
-        { type: "message", id: "user-1", message: { role: "user", content: "Old prompt" } },
+        {
+          type: "message",
+          id: "user-1",
+          message: { role: "user", content: "Old prompt" },
+        },
         {
           type: "custom",
           customType: "pi-prompt-checkpoint",
@@ -248,12 +377,18 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     let appended = 0;
     const pi: any = {
       events: { on: () => () => {} },
-      on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-      registerCommand: (name: string, command: any) => commands.set(name, command),
-      appendEntry: () => { appended++; },
+      on: (name: string, handler: Function) =>
+        handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+      registerCommand: (name: string, command: any) =>
+        commands.set(name, command),
+      appendEntry: () => {
+        appended++;
+      },
       setSessionName() {},
     };
-    extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+    extension(pi, undefined, {
+      artifactRoot: join(root, "timeline-artifacts"),
+    });
     const ctx: any = {
       cwd: root,
       hasUI: true,
@@ -275,13 +410,27 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     };
     await handlers.get("session_start")![0]({}, ctx);
     await commands.get("timeline").handler("list", ctx);
-    assert.match(notices.at(-1)!, new RegExp(`\\[blocked:HEAD\\] ${displayedTime} Old prompt`));
-    assert.doesNotMatch(notices.at(-1)!, /branch:unknown|unsupported-without-head-ref|test-session:checkpoint/);
+    assert.match(
+      notices.at(-1)!,
+      new RegExp(`\\[blocked:HEAD\\] ${displayedTime} Old prompt`),
+    );
+    assert.doesNotMatch(
+      notices.at(-1)!,
+      /branch:unknown|unsupported-without-head-ref|test-session:checkpoint/,
+    );
     await commands.get("timeline").handler("", ctx);
     assert.equal(selections.length, 1);
-    assert.ok(selections[0]!.every((row) => row.includes(` ${displayedTime} Old prompt`)));
-    assert.ok(selections[0]!.every((row) => !row.includes("test-session:checkpoint")));
-    await commands.get("timeline").handler("jump test-session:checkpoint-1", ctx);
+    assert.ok(
+      selections[0]!.every((row) =>
+        row.includes(` ${displayedTime} Old prompt`),
+      ),
+    );
+    assert.ok(
+      selections[0]!.every((row) => !row.includes("test-session:checkpoint")),
+    );
+    await commands
+      .get("timeline")
+      .handler("jump test-session:checkpoint-1", ctx);
     assert.equal(appended, 0);
     assert.match(notices.at(-1)!, /HEAD commit differs/);
   } finally {
@@ -298,8 +447,18 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     checkpoint = await capture(root, "edit-session");
     await writeFile(join(root, "tracked.txt"), "current work\n");
     const entries = [
-      { type: "message", id: "user-1", parentId: null, message: { role: "user", content: "First prompt" } },
-      { type: "message", id: "assistant-1", parentId: "user-1", message: { role: "assistant", content: "First answer" } },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        message: { role: "user", content: "First prompt" },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        message: { role: "assistant", content: "First answer" },
+      },
       {
         type: "custom",
         customType: "pi-prompt-checkpoint",
@@ -315,8 +474,18 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
           ...checkpoint,
         },
       },
-      { type: "message", id: "user-2", parentId: "checkpoint-1", message: { role: "user", content: "Second prompt" } },
-      { type: "message", id: "assistant-2", parentId: "user-2", message: { role: "assistant", content: "Second answer" } },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "checkpoint-1",
+        message: { role: "user", content: "Second prompt" },
+      },
+      {
+        type: "message",
+        id: "assistant-2",
+        parentId: "user-2",
+        message: { role: "assistant", content: "Second answer" },
+      },
     ];
     const sessionHandlers = new Map<string, Function[]>();
     const eventHandlers = new Map<string, Function>();
@@ -336,8 +505,12 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
         },
       },
       on: (name: string, handler: Function) =>
-        sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
-      registerCommand: (name: string, command: any) => commands.set(name, command),
+        sessionHandlers.set(name, [
+          ...(sessionHandlers.get(name) ?? []),
+          handler,
+        ]),
+      registerCommand: (name: string, command: any) =>
+        commands.set(name, command),
       appendEntry() {},
       setSessionName() {},
     };
@@ -376,7 +549,9 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
     eventHandlers.get("pi-timeline:state-request")!({
       version: 4,
       sessionId: "edit-session",
-      respond: (value: unknown) => { state = value; },
+      respond: (value: unknown) => {
+        state = value;
+      },
     });
     assert.deepEqual(state.undoPromptEntryIds, ["user-2"]);
     const timelineCheckpointId = state.checkpoints[0].id;
@@ -387,120 +562,193 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
       sessionId: "edit-session",
       targetEntryId: "user-2",
       rollbackFiles: true,
-      respond: (value: Promise<any>) => { operation = value; },
+      respond: (value: Promise<any>) => {
+        operation = value;
+      },
     });
     const transaction = await operation;
     await sessionHandlers.get("session_tree")![0]({}, ctx);
     assert.deepEqual(notices, []);
     await transaction.apply();
-    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "after first turn\n");
+    assert.equal(
+      (await readFile(join(root, "tracked.txt"), "utf8")).replace(
+        /\r\n/g,
+        "\n",
+      ),
+      "after first turn\n",
+    );
     assert.equal(mutations.length, 1);
     assert.deepEqual(
-      { version: mutations[0].version, cwd: mutations[0].cwd, changed: mutations[0].changed, source: mutations[0].source, operation: mutations[0].operation },
-      { version: 1, cwd: root, changed: true, source: "pi-timeline", operation: "edit-navigation-restore" },
+      {
+        version: mutations[0].version,
+        cwd: mutations[0].cwd,
+        changed: mutations[0].changed,
+        source: mutations[0].source,
+        operation: mutations[0].operation,
+      },
+      {
+        version: 1,
+        cwd: root,
+        changed: true,
+        source: "pi-timeline",
+        operation: "edit-navigation-restore",
+      },
     );
     await transaction.rollback();
-    assert.equal((await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"), "current work\n");
+    assert.equal(
+      (await readFile(join(root, "tracked.txt"), "utf8")).replace(
+        /\r\n/g,
+        "\n",
+      ),
+      "current work\n",
+    );
 
     let forkAvailability: any;
     eventHandlers.get("pi-timeline:prompt-fork")!({
       version: 1,
       sessionId: "edit-session",
       checkpointId: timelineCheckpointId,
-      respond: (value: unknown) => { forkAvailability = value; },
+      respond: (value: unknown) => {
+        forkAvailability = value;
+      },
     });
     assert.deepEqual(forkAvailability, { version: 1, available: true });
     await commands.get("timeline").handler(`fork ${timelineCheckpointId}`, ctx);
     assert.equal(confirmations, 0);
     assert.equal(forks, 1);
   } finally {
-    if (checkpoint) await deleteRefs(root, [checkpoint.worktreeRef, checkpoint.indexRef]);
+    if (checkpoint)
+      await deleteRefs(root, [checkpoint.worktreeRef, checkpoint.indexRef]);
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("capture completes and restore preserves ignored files", { timeout: 20_000 }, async () => {
-  const { root, git } = await repository();
-  try {
-    await writeFile(join(root, "tracked.txt"), "checkpoint\n");
-    await writeFile(join(root, "ordinary.txt"), "ordinary\n");
-    await writeFile(join(root, "ignored.log"), "ignored-before\n");
-    const snapshot = await capture(root, "test-session");
-    assert.match(snapshot.worktreeTree, /^[0-9a-f]{40}$/);
-    assert.match(snapshot.headRef!, /^refs\/heads\//);
-    assert.equal(
-      (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline"))
-        .split(/\r?\n/)
-        .filter(Boolean).length,
-      2,
-    );
+test(
+  "capture completes and restore preserves ignored files",
+  { timeout: 20_000 },
+  async () => {
+    const { root, git } = await repository();
+    try {
+      await writeFile(join(root, "tracked.txt"), "checkpoint\n");
+      await writeFile(join(root, "ordinary.txt"), "ordinary\n");
+      await writeFile(join(root, "ignored.log"), "ignored-before\n");
+      const snapshot = await capture(root, "test-session");
+      assert.match(snapshot.worktreeTree, /^[0-9a-f]{40}$/);
+      assert.match(snapshot.headRef!, /^refs\/heads\//);
+      assert.equal(
+        (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline"))
+          .split(/\r?\n/)
+          .filter(Boolean).length,
+        2,
+      );
 
-    await writeFile(join(root, "tracked.txt"), "later\n");
-    await rm(join(root, "ordinary.txt"));
-    await writeFile(join(root, "ignored.log"), "ignored-later\n");
-    await restore(snapshot);
+      await writeFile(join(root, "tracked.txt"), "later\n");
+      await rm(join(root, "ordinary.txt"));
+      await writeFile(join(root, "ignored.log"), "ignored-later\n");
+      await restore(snapshot);
 
-    assert.equal(
-      (await readFile(join(root, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n"),
-      "checkpoint\n",
-    );
-    assert.equal(
-      (await readFile(join(root, "ordinary.txt"), "utf8")).replace(/\r\n/g, "\n"),
-      "ordinary\n",
-    );
-    assert.equal(await readFile(join(root, "ignored.log"), "utf8"), "ignored-later\n");
-    await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+      assert.equal(
+        (await readFile(join(root, "tracked.txt"), "utf8")).replace(
+          /\r\n/g,
+          "\n",
+        ),
+        "checkpoint\n",
+      );
+      assert.equal(
+        (await readFile(join(root, "ordinary.txt"), "utf8")).replace(
+          /\r\n/g,
+          "\n",
+        ),
+        "ordinary\n",
+      );
+      assert.equal(
+        await readFile(join(root, "ignored.log"), "utf8"),
+        "ignored-later\n",
+      );
+      await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
-test("capture and restore include initialized gitlinks without .gitmodules", { timeout: 20_000 }, async () => {
-  const { root, git } = await repository(), child = join(root, "vendor", "child");
-  const childGit = async (...args: string[]) =>
-    (await exec("git", args, { cwd: child, windowsHide: true })).stdout.trim();
-  try {
-    await mkdir(child, { recursive: true });
-    await childGit("init", "-q");
-    await childGit("config", "user.email", "timeline@test.local");
-    await childGit("config", "user.name", "timeline-test");
-    await writeFile(join(child, "child.txt"), "base\n");
-    await childGit("add", "child.txt");
-    await childGit("commit", "-qm", "base");
-    await git("add", "vendor/child");
-    await git("commit", "-qm", "add nested repository");
-    await assert.rejects(access(join(root, ".gitmodules")));
+test(
+  "capture and restore include initialized gitlinks without .gitmodules",
+  { timeout: 20_000 },
+  async () => {
+    const { root, git } = await repository(),
+      child = join(root, "vendor", "child");
+    const childGit = async (...args: string[]) =>
+      (
+        await exec("git", args, { cwd: child, windowsHide: true })
+      ).stdout.trim();
+    try {
+      await mkdir(child, { recursive: true });
+      await childGit("init", "-q");
+      await childGit("config", "user.email", "timeline@test.local");
+      await childGit("config", "user.name", "timeline-test");
+      await writeFile(join(child, "child.txt"), "base\n");
+      await childGit("add", "child.txt");
+      await childGit("commit", "-qm", "base");
+      await git("add", "vendor/child");
+      await git("commit", "-qm", "add nested repository");
+      await assert.rejects(access(join(root, ".gitmodules")));
 
-    await writeFile(join(child, "child.txt"), "checkpoint worktree\n");
-    await writeFile(join(child, "staged.txt"), "checkpoint index\n");
-    await childGit("add", "staged.txt");
-    await writeFile(join(child, "staged.txt"), "checkpoint worktree\n");
-    await writeFile(join(child, "ordinary.txt"), "checkpoint ordinary\n");
-    const ownedRoots: string[] = [], snapshot = await capture(
-      root,
-      "nested-session",
-      async (repositoryRoot) => { ownedRoots.push(repositoryRoot); },
-    );
-    assert.deepEqual(new Set(ownedRoots), new Set([root, child]));
-    assert.equal(snapshot.nested?.length, 1);
-    assert.equal(snapshot.nested![0].prefix, "vendor/child");
+      await writeFile(join(child, "child.txt"), "checkpoint worktree\n");
+      await writeFile(join(child, "staged.txt"), "checkpoint index\n");
+      await childGit("add", "staged.txt");
+      await writeFile(join(child, "staged.txt"), "checkpoint worktree\n");
+      await writeFile(join(child, "ordinary.txt"), "checkpoint ordinary\n");
+      const ownedRoots: string[] = [],
+        snapshot = await capture(
+          root,
+          "nested-session",
+          async (repositoryRoot) => {
+            ownedRoots.push(repositoryRoot);
+          },
+        );
+      assert.deepEqual(new Set(ownedRoots), new Set([root, child]));
+      assert.equal(snapshot.nested?.length, 1);
+      assert.equal(snapshot.nested![0].prefix, "vendor/child");
 
-    await writeFile(join(child, "child.txt"), "later\n");
-    await writeFile(join(child, "staged.txt"), "later\n");
-    await rm(join(child, "ordinary.txt"));
-    await childGit("add", "-A");
-    await restore(snapshot);
+      await writeFile(join(child, "child.txt"), "later\n");
+      await writeFile(join(child, "staged.txt"), "later\n");
+      await rm(join(child, "ordinary.txt"));
+      await childGit("add", "-A");
+      await restore(snapshot);
 
-    assert.equal((await readFile(join(child, "child.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint worktree\n");
-    assert.equal((await readFile(join(child, "staged.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint worktree\n");
-    assert.equal((await readFile(join(child, "ordinary.txt"), "utf8")).replace(/\r\n/g, "\n"), "checkpoint ordinary\n");
-    assert.equal(await childGit("show", ":staged.txt"), "checkpoint index");
-    await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
-    await deleteRefs(child, [snapshot.nested![0].worktreeRef, snapshot.nested![0].indexRef]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+      assert.equal(
+        (await readFile(join(child, "child.txt"), "utf8")).replace(
+          /\r\n/g,
+          "\n",
+        ),
+        "checkpoint worktree\n",
+      );
+      assert.equal(
+        (await readFile(join(child, "staged.txt"), "utf8")).replace(
+          /\r\n/g,
+          "\n",
+        ),
+        "checkpoint worktree\n",
+      );
+      assert.equal(
+        (await readFile(join(child, "ordinary.txt"), "utf8")).replace(
+          /\r\n/g,
+          "\n",
+        ),
+        "checkpoint ordinary\n",
+      );
+      assert.equal(await childGit("show", ":staged.txt"), "checkpoint index");
+      await deleteRefs(root, [snapshot.worktreeRef, snapshot.indexRef]);
+      await deleteRefs(child, [
+        snapshot.nested![0].worktreeRef,
+        snapshot.nested![0].indexRef,
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("capture records detached HEAD", async () => {
   const { root, git } = await repository();

@@ -34,11 +34,16 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
   };
 }
 
-export async function saveConfig(config: TimelineConfig, path = configPath()): Promise<void> {
+export async function saveConfig(
+  config: TimelineConfig,
+  path = configPath(),
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, {
+      mode: 0o600,
+    });
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);

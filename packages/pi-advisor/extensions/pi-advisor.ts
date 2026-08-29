@@ -19,35 +19,32 @@ import {
   resetConfig,
   saveConfig,
   thinkingLevels,
+  type AdvisorConfig,
   type ThinkingLevel,
 } from "../src/config.ts";
-import { advisorMaxTokens, buildSnapshot, type DuplicateTelemetry, type SectionAllocation } from "../src/context.ts";
+import {
+  ADVISOR_TIMEOUT_MS,
+  emptyUsage,
+  runConsultation,
+  type AdvisorUsage,
+  type FailureCode,
+} from "../src/consult.ts";
+import {
+  advisorMaxTokens,
+  buildSnapshot,
+  type DuplicateTelemetry,
+  type SectionAllocation,
+  type Snapshot,
+} from "../src/context.ts";
 import { loadEvidenceRecords, type EvidenceRef } from "../src/evidence.ts";
-import { redact } from "../src/redact.ts";
-import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
+import { waitForDelegateRetry } from "../src/retry.ts";
 
-type FailureCode =
-  | "unavailable"
-  | "timeout"
-  | "aborted"
-  | "rate_limited"
-  | "provider_unavailable"
-  | "invalid_response"
-  | "budget_exceeded"
-  | "pricing_unavailable"
-  | "context_overflow";
 type Details = {
-  agentName: string;
-  startedAt: string;
+  agentName?: string;
+  startedAt?: string;
   advisorModel?: string;
   durationMs: number;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: number;
-  };
+  usage: AdvisorUsage;
   thinking?: string;
   callNumber: 1 | 2 | 3;
   snapshotEstimatedTokens: number;
@@ -61,45 +58,31 @@ type Details = {
   failureMessage?: string;
   attempts?: number;
 };
-const emptyUsage = () => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  cost: 0,
-});
-const validUsageNumber = (value: unknown) =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 const modelName = (model: { provider: string; id: string }) =>
   `${model.provider}/${model.id}`;
-const ADVISOR_TIMEOUT_MS = 15 * 60 * 1000;
 const HEARTBEAT_MS = 1_000;
-const FAILURE_MESSAGE_MAX_LENGTH = 500;
-function failureMessage(value: unknown, fallback: string): string {
-  const message = value instanceof Error
-    ? value.message
-    : typeof value === "string"
-      ? value
-      : fallback;
-  const clean = redact(message).text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim() || fallback;
-  return clean.length > FAILURE_MESSAGE_MAX_LENGTH
-    ? `${clean.slice(0, FAILURE_MESSAGE_MAX_LENGTH - 3)}...`
-    : clean;
-}
-function errorCode(
-  error: unknown,
-  aborted: boolean,
-  timedOut: boolean,
-): FailureCode {
-  if (timedOut) return "timeout";
-  if (aborted) return "aborted";
-  const message = String((error as any)?.message ?? error);
-  return /429|rate.?limit/i.test(message)
-    ? "rate_limited"
-    : isTransientProviderFailure(message)
-      ? "provider_unavailable"
-      : "invalid_response";
-}
+
+const snapshotDetails = (snapshot: Snapshot) => ({
+  snapshotEstimatedTokens: snapshot.estimatedTokens,
+  redactionCount: snapshot.redactionCount,
+  truncated: snapshot.truncated,
+  omittedEvidence: snapshot.omittedEvidence,
+  sectionAllocations: snapshot.sectionAllocations,
+  duplicateTelemetry: snapshot.duplicateTelemetry,
+});
+const textResult = (text: string, details: Details) => ({
+  content: [{ type: "text" as const, text }],
+  details,
+});
+const configuredModel = (
+  ctx: any,
+  config: AdvisorConfig,
+): Model<any> | undefined => {
+  if (config.useMainModel) return ctx.model;
+  if (!config.advisorModel) return undefined;
+  const ref = parseModelRef(config.advisorModel);
+  return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
+};
 function delegatedName(pi: ExtensionAPI, callId: string): string {
   let assigned: string | undefined;
   pi.events.emit("pylon:delegate-name", {
@@ -110,17 +93,52 @@ function delegatedName(pi: ExtensionAPI, callId: string): string {
       if (typeof name === "string" && /^A\d+$/.test(name)) assigned = name;
     },
   });
-  return assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
+  return (
+    assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`
+  );
 }
 
-export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = complete, retryWait = waitForDelegateRetry) {
+type CallLifecycle = { signal: AbortSignal; isTimedOut: () => boolean };
+/** Owns the abort chain, the hard timeout, and the progress heartbeat for one consultation. */
+async function withCallLifecycle<T>(
+  outerSignal: AbortSignal | undefined,
+  onHeartbeat: () => void,
+  run: (lifecycle: CallLifecycle) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const abort = () => controller.abort();
+  outerSignal?.addEventListener("abort", abort, { once: true });
+  if (outerSignal?.aborted) abort();
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ADVISOR_TIMEOUT_MS);
+  const heartbeat = setInterval(onHeartbeat, HEARTBEAT_MS);
+  heartbeat.unref();
+  try {
+    return await run({ signal: controller.signal, isTimedOut: () => timedOut });
+  } finally {
+    clearTimeout(timeout);
+    clearInterval(heartbeat);
+    outerSignal?.removeEventListener("abort", abort);
+  }
+}
+
+export default function advisorExtension(
+  pi: ExtensionAPI,
+  completeAdvisor = complete,
+  retryWait = waitForDelegateRetry,
+) {
   let calls = 0;
   let previousAdvice: string | undefined;
   let advisorQueue = Promise.resolve();
   const serializeAdvisor = async <T>(run: () => Promise<T>): Promise<T> => {
     const previousRun = advisorQueue;
     let releaseRun = () => {};
-    advisorQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
+    advisorQueue = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
     await previousRun;
     try {
       return await run();
@@ -128,16 +146,14 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       releaseRun();
     }
   };
-  const configuredModel = async (ctx: any, agentDir?: string): Promise<Model<any> | undefined> => {
-    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
-    if (config.useMainModel) return ctx.model;
-    if (!config.advisorModel) return;
-    const ref = parseModelRef(config.advisorModel);
-    return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
-  };
   const refreshTool = async (ctx: any, agentDir?: string) => {
-    const model = await configuredModel(ctx, agentDir);
-    const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
+    const config = await loadConfig(
+      agentDir ? configPath(agentDir) : undefined,
+    );
+    const model = configuredModel(ctx, config);
+    const enabled = Boolean(
+      model && ctx.modelRegistry.hasConfiguredAuth(model),
+    );
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -145,8 +161,17 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       owner: "pi-advisor",
       managedTools: ["advisor"],
       enabledTools: enabled ? ["advisor"] : [],
-      ...(enabled ? { toolUsage: { advisor: "review consequential decisions, architecture, migrations, security, or broad regression risk" } } : {}),
-      acknowledge: () => { coordinated = true; },
+      ...(enabled
+        ? {
+            toolUsage: {
+              advisor:
+                "review consequential decisions, architecture, migrations, security, or broad regression risk",
+            },
+          }
+        : {}),
+      acknowledge: () => {
+        coordinated = true;
+      },
     });
     if (coordinated) return;
     const active = pi.getActiveTools().filter((name) => name !== "advisor");
@@ -161,13 +186,21 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     }
   });
   let sessionContext: any;
-  const disposeSettingsRefresh = pi.events.on?.("pylon:package-settings-changed", (request: any) => {
-    if (request?.version !== 1 || request.packageId !== "pi-advisor" || typeof request.agentDir !== "string"
-      || typeof request.acknowledge !== "function") return;
-    request.acknowledge(() => sessionContext
-      ? refreshTool(sessionContext, request.agentDir)
-      : Promise.reject(new Error("Advisor session is unavailable")));
-  }) ?? (() => {});
+  const disposeSettingsRefresh =
+    pi.events.on?.("pylon:package-settings-changed", (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.packageId !== "pi-advisor" ||
+        typeof request.agentDir !== "string" ||
+        typeof request.acknowledge !== "function"
+      )
+        return;
+      request.acknowledge(() =>
+        sessionContext
+          ? refreshTool(sessionContext, request.agentDir)
+          : Promise.reject(new Error("Advisor session is unavailable")),
+      );
+    }) ?? (() => {});
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     await refreshTool(ctx);
@@ -181,6 +214,173 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
       owner: "pi-advisor",
     });
   });
+
+  type PreparedCall = {
+    started: number;
+    named: (value: string) => string;
+    base: Details;
+    model: Model<any>;
+    auth: any;
+    snapshot: Snapshot;
+    budget: { maxTokens: number; estimatedInputCostUsd: number };
+    thinking?: string;
+    userMessage: Message;
+    cacheRetention: "short" | "long";
+  };
+  type PrepareResult =
+    | { ok: true; call: PreparedCall }
+    | { ok: false; result: ReturnType<typeof textResult> };
+
+  /** Everything that must hold before a provider call: quota, model, credentials, snapshot, budget. */
+  const prepareCall = async (
+    id: string,
+    params: any,
+    ctx: any,
+  ): Promise<PrepareResult> => {
+    const cacheRetention: "short" | "long" =
+      process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
+    if (calls >= ADVISOR_MAX_CALLS)
+      return {
+        ok: false,
+        result: textResult("Advisor call limit reached for this request.", {
+          durationMs: 0,
+          usage: emptyUsage(),
+          callNumber: ADVISOR_MAX_CALLS,
+          snapshotEstimatedTokens: 0,
+          redactionCount: 0,
+          truncated: false,
+          cacheRetention,
+          failureCode: "unavailable",
+        }),
+      };
+
+    const started = Date.now();
+    const agentName = delegatedName(pi, id);
+    const named = (value: string) => `[${agentName} · Advisor] ${value}`;
+    const config = await loadConfig();
+    const model = configuredModel(ctx, config);
+    const thinking =
+      config.thinking ??
+      (config.useMainModel ? pi.getThinkingLevel() : undefined);
+    const base: Details = {
+      agentName,
+      startedAt: new Date(started).toISOString(),
+      advisorModel: model ? modelName(model) : undefined,
+      thinking,
+      durationMs: 0,
+      usage: emptyUsage(),
+      callNumber: Math.min(
+        calls + 1,
+        ADVISOR_MAX_CALLS,
+      ) as Details["callNumber"],
+      snapshotEstimatedTokens: 0,
+      redactionCount: 0,
+      truncated: false,
+      cacheRetention,
+    };
+    const fail = (
+      text: string,
+      code: FailureCode,
+      extra: Partial<Details> = {},
+    ): PrepareResult => ({
+      ok: false,
+      result: textResult(text, { ...base, ...extra, failureCode: code }),
+    });
+
+    if (!model)
+      return fail(
+        "Advisor unavailable: no valid model selected.",
+        "unavailable",
+      );
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok || !auth.apiKey)
+      return fail(
+        "Advisor unavailable: selected model has no credentials.",
+        "unavailable",
+      );
+
+    const messages: any[] = ctx.sessionManager
+      .buildContextEntries()
+      .flatMap(sessionEntryToContextMessages);
+    messages.push({
+      role: "custom",
+      customType: "advisor-request",
+      content: params.request.trim(),
+    });
+    for (const record of await loadEvidenceRecords(ctx.cwd, params.evidence))
+      messages.push({
+        role: "custom",
+        customType: "advisor-evidence",
+        content: record.text,
+        evidenceRef: record.ref,
+        evidenceUnavailable: record.unavailable,
+      });
+
+    const continuationPrefix = previousAdvice
+      ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
+      : "";
+    const reservedInputTokens =
+      Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
+    const snapshot = buildSnapshot(
+      messages,
+      model.contextWindow,
+      reservedInputTokens,
+    );
+    if (snapshot.requiredContextOmitted)
+      return fail(
+        named(
+          "Advisor failed nonfatally: required context exceeds the input budget.",
+        ),
+        "context_overflow",
+        snapshotDetails(snapshot),
+      );
+
+    const budget = advisorBudget(
+      model,
+      snapshot.estimatedTokens + reservedInputTokens,
+      advisorMaxTokens(model.contextWindow),
+    );
+    if ("error" in budget) {
+      const reason =
+        budget.error === "pricing_unavailable"
+          ? "selected model pricing is unavailable"
+          : budget.error === "input_cost_exceeds_budget"
+            ? "estimated input cost exceeds the limit"
+            : "estimated output budget is exhausted";
+      return fail(
+        named(
+          `Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`,
+        ),
+        budget.error === "pricing_unavailable"
+          ? "pricing_unavailable"
+          : "budget_exceeded",
+        snapshotDetails(snapshot),
+      );
+    }
+
+    const userMessage: Message = {
+      role: "user",
+      content: [
+        { type: "text", text: `${continuationPrefix}${snapshot.text}` },
+      ],
+      timestamp: Date.now(),
+    };
+    return {
+      ok: true,
+      call: {
+        started,
+        named,
+        base,
+        model,
+        auth,
+        snapshot,
+        budget,
+        thinking,
+        userMessage,
+        cacheRetention,
+      },
+    };
+  };
 
   pi.registerTool({
     name: "advisor",
@@ -199,7 +399,8 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
         request: Type.String({
           minLength: 1,
           maxLength: 8_192,
-          description: "Concrete decision, risk, or approach for the advisor to review",
+          description:
+            "Concrete decision, risk, or approach for the advisor to review",
         }),
         evidence: Type.Optional(
           Type.Array(
@@ -208,15 +409,22 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
                 path: Type.String({ minLength: 1, maxLength: 500 }),
                 start: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
                 end: Type.Integer({ minimum: 1, maximum: 10_000_000 }),
-                claim: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
-                revision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
-                verification: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+                claim: Type.Optional(
+                  Type.String({ minLength: 1, maxLength: 500 }),
+                ),
+                revision: Type.Optional(
+                  Type.String({ minLength: 1, maxLength: 200 }),
+                ),
+                verification: Type.Optional(
+                  Type.String({ minLength: 1, maxLength: 500 }),
+                ),
               },
               { additionalProperties: false },
             ),
             {
               maxItems: 8,
-              description: "Usually 3–5 concise, non-overlapping decisive ranges; use up to 8 only when independently necessary; usually 150–300 total lines, exceeding that when required for correctness",
+              description:
+                "Usually 3–5 concise, non-overlapping decisive ranges; use up to 8 only when independently necessary; usually 150–300 total lines, exceeding that when required for correctness",
             },
           ),
         ),
@@ -225,285 +433,115 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
     ),
     async execute(id, params, signal, onUpdate, ctx) {
       return serializeAdvisor(async () => {
-      if (signal?.aborted) throw new DOMException("Advisor call was aborted.", "AbortError");
-      const callNumber = Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"];
-      const cacheRetention: "short" | "long" =
-        process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
-      if (calls >= ADVISOR_MAX_CALLS)
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Advisor call limit reached for this request.",
-            },
-          ],
-          details: {
-            durationMs: 0,
-            usage: emptyUsage(),
-            callNumber: ADVISOR_MAX_CALLS,
-            snapshotEstimatedTokens: 0,
-            redactionCount: 0,
-            truncated: false,
-            cacheRetention,
-            failureCode: "unavailable" as const,
-          },
-        };
-      const started = Date.now();
-      const startedAt = new Date(started).toISOString();
-      const agentName = delegatedName(pi, id);
-      const named = (value: string) => `[${agentName} · Advisor] ${value}`;
-      const model = await configuredModel(ctx);
-      const config = await loadConfig();
-      const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
-      const base = {
-        agentName,
-        startedAt,
-        advisorModel: model ? modelName(model) : undefined,
-        thinking,
-        durationMs: 0,
-        usage: emptyUsage(),
-        callNumber,
-        snapshotEstimatedTokens: 0,
-        redactionCount: 0,
-        truncated: false,
-        cacheRetention,
-      };
-      if (!model)
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Advisor unavailable: no valid model selected.",
-            },
-          ],
-          details: { ...base, failureCode: "unavailable" as const },
-        };
-      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (!auth.ok || !auth.apiKey)
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Advisor unavailable: selected model has no credentials.",
-            },
-          ],
-          details: { ...base, failureCode: "unavailable" as const },
-        };
-      const messages: any[] = ctx.sessionManager
-        .buildContextEntries()
-        .flatMap(sessionEntryToContextMessages);
-      messages.push({
-        role: "custom",
-        customType: "advisor-request",
-        content: params.request.trim(),
-      });
-      const evidence = await loadEvidenceRecords(ctx.cwd, params.evidence);
-      for (const record of evidence)
-        messages.push({
-          role: "custom",
-          customType: "advisor-evidence",
-          content: record.text,
-          evidenceRef: record.ref,
-          evidenceUnavailable: record.unavailable,
-        });
-      const continuationPrefix = previousAdvice
-        ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
-        : "";
-      const reservedInputTokens = Math.ceil(
-        (ADVISOR_PROMPT.length + continuationPrefix.length) / 4,
-      ) + 256;
-      const snapshot = buildSnapshot(
-        messages,
-        model.contextWindow,
-        reservedInputTokens,
-      );
-      if (snapshot.requiredContextOmitted)
-        return {
-          content: [{ type: "text" as const, text: named("Advisor failed nonfatally: required context exceeds the input budget.") }],
-          details: { ...base, snapshotEstimatedTokens: 0, truncated: true, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: "context_overflow" as const },
-        };
-      const budget = advisorBudget(
-        model,
-        snapshot.estimatedTokens + reservedInputTokens,
-        advisorMaxTokens(model.contextWindow),
-      );
-      if ("error" in budget) {
-        const reason = budget.error === "pricing_unavailable"
-          ? "selected model pricing is unavailable"
-          : budget.error === "input_cost_exceeds_budget"
-            ? "estimated input cost exceeds the limit"
-            : "estimated output budget is exhausted";
-        return {
-          content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`) }],
-          details: { ...base, snapshotEstimatedTokens: snapshot.estimatedTokens, redactionCount: snapshot.redactionCount, truncated: snapshot.truncated, omittedEvidence: snapshot.omittedEvidence, sectionAllocations: snapshot.sectionAllocations, duplicateTelemetry: snapshot.duplicateTelemetry, failureCode: budget.error === "pricing_unavailable" ? "pricing_unavailable" as const : "budget_exceeded" as const },
-        };
-      }
-      if (ctx.hasUI)
-        ctx.ui.setStatus(
-          "pi-advisor",
-          `advisor: consulting ${modelName(model)}…`,
-        );
-      const { usage: _usage, ...runningDetails } = base;
-      onUpdate?.({
-        content: [{ type: "text", text: `Consulting ${modelName(model)}…` }],
-        details: {
-          ...runningDetails,
-          state: "running",
-          snapshotEstimatedTokens: snapshot.estimatedTokens,
-          redactionCount: snapshot.redactionCount,
-          truncated: snapshot.truncated,
-          omittedEvidence: snapshot.omittedEvidence,
-          sectionAllocations: snapshot.sectionAllocations,
-          duplicateTelemetry: snapshot.duplicateTelemetry,
-        },
-      });
-      const controller = new AbortController();
-      let timedOut = false;
-      const abort = () => controller.abort();
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, ADVISOR_TIMEOUT_MS);
-      const heartbeat = setInterval(() => {
-        const durationMs = Date.now() - started;
-        onUpdate?.({
-          content: [{ type: "text", text: `${(durationMs / 1000).toFixed(0)}s` }],
-          details: { ...runningDetails, state: "running", durationMs },
-        });
-      }, HEARTBEAT_MS);
-      heartbeat.unref();
-      try {
-        const userMessage: Message = {
-          role: "user",
-          content: [{ type: "text", text: `${continuationPrefix}${snapshot.text}` }],
-          timestamp: Date.now(),
-        };
-        let attempts = 0;
-        const totalUsage = emptyUsage();
-        for (;;) {
-          attempts++;
-          try {
-            const response = await completeAdvisor(
-              model,
-              { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
+        if (signal?.aborted)
+          throw new DOMException("Advisor call was aborted.", "AbortError");
+        const prepared = await prepareCall(id, params, ctx);
+        if (!prepared.ok) return prepared.result;
+        const {
+          started,
+          named,
+          base,
+          model,
+          auth,
+          snapshot,
+          budget,
+          thinking,
+          userMessage,
+          cacheRetention,
+        } = prepared.call;
+
+        if (ctx.hasUI)
+          ctx.ui.setStatus(
+            "pi-advisor",
+            `advisor: consulting ${modelName(model)}…`,
+          );
+        const { usage: _usage, ...runningDetails } = base;
+        const running = (text: string, extra: Record<string, unknown> = {}) =>
+          onUpdate?.({
+            content: [{ type: "text", text }],
+            details: { ...runningDetails, state: "running", ...extra },
+          });
+        running(`Consulting ${modelName(model)}…`, snapshotDetails(snapshot));
+
+        try {
+          const result = await withCallLifecycle(
+            signal,
+            () =>
+              running(`${((Date.now() - started) / 1000).toFixed(0)}s`, {
+                durationMs: Date.now() - started,
+              }),
+            (lifecycle) =>
+              runConsultation({
+                complete: completeAdvisor,
+                retryWait,
+                model,
+                request: {
+                  systemPrompt: ADVISOR_PROMPT,
+                  messages: [userMessage],
+                },
+                completeOptions: {
+                  apiKey: auth.apiKey,
+                  headers: auth.headers,
+                  env: auth.env,
+                  signal: lifecycle.signal,
+                  timeoutMs: ADVISOR_TIMEOUT_MS,
+                  maxTokens: budget.maxTokens,
+                  cacheRetention,
+                  sessionId: `${ctx.sessionManager.getSessionId()}:advisor`,
+                  ...(thinking
+                    ? { reasoning: thinking === "off" ? undefined : thinking }
+                    : process.env.PI_ADVISOR_THINKING
+                      ? { reasoning: process.env.PI_ADVISOR_THINKING }
+                      : {}),
+                },
+                signal: lifecycle.signal,
+                isTimedOut: lifecycle.isTimedOut,
+                onProgress: ({ note, usage, attempts }) =>
+                  running(note ?? "Advisor usage updated", {
+                    durationMs: Date.now() - started,
+                    usage: { ...usage },
+                    attempts,
+                  }),
+              }),
+          );
+
+          const details: Details = {
+            ...base,
+            durationMs: Date.now() - started,
+            usage: result.usage,
+            ...snapshotDetails(snapshot),
+            attempts: result.attempts,
+          };
+          if (!result.ok)
+            return textResult(
+              named(`Advisor failed nonfatally: ${result.code}.`),
               {
-                apiKey: auth.apiKey,
-                headers: auth.headers,
-                env: auth.env,
-                signal: controller.signal,
-                timeoutMs: ADVISOR_TIMEOUT_MS,
-                maxTokens: budget.maxTokens,
-                cacheRetention,
-                sessionId: `${ctx.sessionManager.getSessionId()}:advisor`,
-                ...(thinking
-                  ? { reasoning: thinking === "off" ? undefined : thinking }
-                  : process.env.PI_ADVISOR_THINKING
-                    ? { reasoning: process.env.PI_ADVISOR_THINKING }
-                    : {}),
+                ...details,
+                failureCode: result.code,
+                failureMessage: result.message,
               },
             );
-            const responseUsage = response.usage;
-            if (responseUsage) {
-              totalUsage.input += validUsageNumber(responseUsage.input);
-              totalUsage.output += validUsageNumber(responseUsage.output);
-              totalUsage.cacheRead += validUsageNumber(responseUsage.cacheRead);
-              totalUsage.cacheWrite += validUsageNumber(responseUsage.cacheWrite);
-              totalUsage.cost += validUsageNumber(responseUsage.cost?.total);
-            }
-            try {
-              onUpdate?.({ content: [{ type: "text", text: "Advisor usage updated" }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
-            } catch { /* Progress observers must not control provider execution. */ }
-            const raw = response.content
-              .filter((part) => part.type === "text")
-              .map((part) => (part as any).text)
-              .join("\n")
-              .trim();
-            if (response.stopReason === "error" || response.stopReason === "aborted" || !raw) {
-              const retryable = response.stopReason === "error" && isTransientProviderFailure(response.errorMessage);
-              if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && retryable && await retryWait(attempts, controller.signal)) {
-                onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
-                continue;
-              }
-              const code = response.stopReason === "aborted"
-                ? timedOut ? "timeout" : "aborted"
-                : /429|rate.?limit/i.test(response.errorMessage ?? "")
-                  ? "rate_limited"
-                  : retryable ? "provider_unavailable" : "invalid_response";
-              return {
-                content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${code}.`) }],
-                details: {
-                  ...base,
-                  durationMs: Date.now() - started,
-                  usage: totalUsage,
-                  snapshotEstimatedTokens: snapshot.estimatedTokens,
-                  redactionCount: snapshot.redactionCount,
-                  truncated: snapshot.truncated,
-                  omittedEvidence: snapshot.omittedEvidence,
-                  sectionAllocations: snapshot.sectionAllocations,
-                  duplicateTelemetry: snapshot.duplicateTelemetry,
-                  failureCode: code,
-                  failureMessage: failureMessage(response.errorMessage, !raw ? "Provider returned no text content." : "Provider returned an error without a message."),
-                  attempts,
-                },
-              };
-            }
-            const advice = capAdvice(raw);
-            calls++;
-            previousAdvice = advice.text;
-            const details: Details = {
-              ...base,
-              durationMs: Date.now() - started,
-              usage: totalUsage,
-              snapshotEstimatedTokens: snapshot.estimatedTokens,
-              redactionCount: snapshot.redactionCount,
-              truncated: snapshot.truncated || advice.truncated,
-              omittedEvidence: snapshot.omittedEvidence,
-              sectionAllocations: snapshot.sectionAllocations,
-              duplicateTelemetry: snapshot.duplicateTelemetry,
-              attempts,
-            };
-            return { content: [{ type: "text" as const, text: `${named("Advice:")}\n\n${advice.text}` }], details };
-          } catch (error) {
-            if (attempts < DELEGATE_MAX_ATTEMPTS && totalUsage.cost === 0 && isTransientProviderFailure(error) && await retryWait(attempts, controller.signal)) {
-              onUpdate?.({ content: [{ type: "text", text: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }], details: { ...runningDetails, state: "running", durationMs: Date.now() - started, usage: { ...totalUsage }, attempts } });
-              continue;
-            }
-            const code = errorCode(error, controller.signal.aborted && !timedOut, timedOut);
-            return {
-              content: [{ type: "text" as const, text: named(`Advisor failed nonfatally: ${code}.`) }],
-              details: {
-                ...base,
-                durationMs: Date.now() - started,
-                usage: totalUsage,
-                snapshotEstimatedTokens: snapshot.estimatedTokens,
-                redactionCount: snapshot.redactionCount,
-                truncated: snapshot.truncated,
-                omittedEvidence: snapshot.omittedEvidence,
-                sectionAllocations: snapshot.sectionAllocations,
-                duplicateTelemetry: snapshot.duplicateTelemetry,
-                failureCode: code,
-                failureMessage: failureMessage(error, "Advisor request failed without an Error message."),
-                attempts,
-              },
-            };
-          }
+
+          const advice = capAdvice(result.raw);
+          calls++;
+          previousAdvice = advice.text;
+          return textResult(`${named("Advice:")}\n\n${advice.text}`, {
+            ...details,
+            truncated: snapshot.truncated || advice.truncated,
+          });
+        } finally {
+          if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", undefined);
         }
-      } finally {
-        clearTimeout(timeout);
-        clearInterval(heartbeat);
-        signal?.removeEventListener("abort", abort);
-        if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", undefined);
-      }
       });
     },
     renderCall(args, theme, context) {
-      const callNumber = (context.state.callNumber as number | undefined) ??
+      const callNumber =
+        (context.state.callNumber as number | undefined) ??
         Math.min(calls + 1, ADVISOR_MAX_CALLS);
       context.state.callNumber = callNumber;
       const request = args.request?.trim().replace(/\s+/g, " ") ?? "";
-      const truncatedRequest = request.length > 512 ? `${request.slice(0, 509)}...` : request;
+      const truncatedRequest =
+        request.length > 512 ? `${request.slice(0, 509)}...` : request;
       return new Text(
         theme.fg("toolTitle", theme.bold("Advisor")) +
           theme.fg("muted", ` · ${callNumber}/${ADVISOR_MAX_CALLS}`) +
@@ -526,100 +564,108 @@ export default function advisorExtension(pi: ExtensionAPI, completeAdvisor = com
         text += ` · ${details.usage.input} input · ${details.usage.output} output · R${details.usage.cacheRead} · W${details.usage.cacheWrite} · $${details.usage.cost.toFixed(4)} · ${(details.durationMs / 1000).toFixed(1)}s`;
       else if (details.durationMs)
         text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
-      if (details.failureCode && body?.text)
-        text += `\n${body.text}`;
+      if (details.failureCode && body?.text) text += `\n${body.text}`;
       else if (expanded && body?.text)
         text += `\n\nAdvisor report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });
 
-  pi.registerCommand("advisor", {
-    description: "Select model and thinking, reset, or show status",
-    handler: async (args, ctx) => {
-      const value = args.trim();
-      if (value === "disable") {
-        await resetConfig();
-        await refreshTool(ctx);
-        ctx.ui.notify("Advisor disabled.", "info");
-        return;
-      }
-      if (value === "reset") {
-        const model = ctx.model;
-        if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
-          ctx.ui.notify("Current main model is unavailable.", "error");
-          return;
-        }
-        if (ctx.mode === "tui") {
-          const ok = await ctx.ui.confirm(
-            "Share current context with advisor?",
-            `Advisor receives a redacted snapshot of current Pi conversation, including user prompts, assistant text, and relevant tool results. Continue with ${modelName(model)}?`,
-          );
-          if (!ok) return;
-        }
-        await saveConfig({ version: 1, useMainModel: true });
-        await refreshTool(ctx);
-        ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
-        return;
-      }
-      if (value === "status") {
-        const config = await loadConfig();
-        const model = await configuredModel(ctx);
+  const confirmContextSharing = async (
+    ctx: any,
+    model: Model<any>,
+  ): Promise<boolean> =>
+    ctx.mode !== "tui" ||
+    (await ctx.ui.confirm(
+      "Share current context with advisor?",
+      `Advisor receives a redacted snapshot of current Pi conversation, including user prompts, assistant text, and relevant tool results. Continue with ${modelName(model)}?`,
+    ));
+
+  const disableAdvisor = async (ctx: any) => {
+    await resetConfig();
+    await refreshTool(ctx);
+    ctx.ui.notify("Advisor disabled.", "info");
+  };
+  const resetAdvisor = async (ctx: any) => {
+    const model = ctx.model;
+    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+      ctx.ui.notify("Current main model is unavailable.", "error");
+      return;
+    }
+    if (!(await confirmContextSharing(ctx, model))) return;
+    await saveConfig({ version: 1, useMainModel: true });
+    await refreshTool(ctx);
+    ctx.ui.notify(
+      "Advisor enabled; uses current main model and thinking level.",
+      "info",
+    );
+  };
+  const showAdvisorStatus = async (ctx: any) => {
+    const config = await loadConfig();
+    const model = configuredModel(ctx, config);
+    ctx.ui.notify(
+      `Selected: ${config.useMainModel ? "current main model" : (config.advisorModel ?? "none")}\nThinking: ${config.useMainModel ? "current main level" : (config.thinking ?? "provider default")}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${ADVISOR_MAX_CALLS} calls per original user prompt`,
+      "info",
+    );
+  };
+  const selectAdvisorModel = async (value: string, ctx: any) => {
+    let selected = value;
+    if (!selected) {
+      if (ctx.mode !== "tui") {
         ctx.ui.notify(
-          `Selected: ${config.useMainModel ? "current main model" : config.advisorModel ?? "none"}\nThinking: ${config.useMainModel ? "current main level" : config.thinking ?? "provider default"}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${ADVISOR_MAX_CALLS} calls per original user prompt`,
+          "Usage: /advisor <provider/model-id[:thinking]>|disable|reset|status",
           "info",
         );
         return;
       }
-      let selected = value;
-      if (!selected) {
-        if (ctx.mode !== "tui") {
-          ctx.ui.notify(
-            "Usage: /advisor <provider/model-id[:thinking]>|disable|reset|status",
-            "info",
-          );
-          return;
-        }
-        selected =
-          (await ctx.ui.select(
-            "Advisor model",
-            (ctx.scopedModels.length
-              ? ctx.scopedModels.map(({ model }) => model)
-              : ctx.modelRegistry.getAvailable()
-            ).map(modelName),
-          )) ?? "";
-        if (!selected) return;
-      }
-      const ref = parseModelRef(selected);
-      const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);
-      if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
-        ctx.ui.notify(`Unavailable model: ${selected}`, "error");
-        return;
-      }
-      let thinking: ThinkingLevel | undefined = ref.thinking;
-      if (!value && ctx.mode === "tui") {
-        thinking = (await ctx.ui.select("Advisor thinking level", [...thinkingLevels])) as
-          | ThinkingLevel
-          | undefined;
-        if (!thinking) return;
-      }
-      if (ctx.mode === "tui") {
-        const ok = await ctx.ui.confirm(
-          "Share current context with advisor?",
-          `Advisor receives a redacted snapshot of current Pi conversation, including user prompts, assistant text, and relevant tool results. Continue with ${modelName(model)}?`,
-        );
-        if (!ok) return;
-      }
-      await saveConfig({
-        version: 1,
-        advisorModel: modelName(model),
-        ...(thinking ? { thinking } : {}),
-      });
-      await refreshTool(ctx);
-      ctx.ui.notify(
-        `Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`,
-        "info",
-      );
+      selected =
+        (await ctx.ui.select(
+          "Advisor model",
+          (ctx.scopedModels.length
+            ? ctx.scopedModels.map(({ model }: any) => model)
+            : ctx.modelRegistry.getAvailable()
+          ).map(modelName),
+        )) ?? "";
+      if (!selected) return;
+    }
+    const ref = parseModelRef(selected);
+    const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);
+    if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+      ctx.ui.notify(`Unavailable model: ${selected}`, "error");
+      return;
+    }
+    let thinking: ThinkingLevel | undefined = ref.thinking;
+    if (!value && ctx.mode === "tui") {
+      thinking = (await ctx.ui.select("Advisor thinking level", [
+        ...thinkingLevels,
+      ])) as ThinkingLevel | undefined;
+      if (!thinking) return;
+    }
+    if (!(await confirmContextSharing(ctx, model))) return;
+    await saveConfig({
+      version: 1,
+      advisorModel: modelName(model),
+      ...(thinking ? { thinking } : {}),
+    });
+    await refreshTool(ctx);
+    ctx.ui.notify(
+      `Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`,
+      "info",
+    );
+  };
+
+  pi.registerCommand("advisor", {
+    description: "Select model and thinking, reset, or show status",
+    handler: async (args, ctx) => {
+      const subcommands: Record<string, (ctx: any) => Promise<void>> = {
+        disable: disableAdvisor,
+        reset: resetAdvisor,
+        status: showAdvisorStatus,
+      };
+      const value = args.trim();
+      const subcommand = subcommands[value];
+      if (subcommand) return subcommand(ctx);
+      return selectAdvisorModel(value, ctx);
     },
   });
 }

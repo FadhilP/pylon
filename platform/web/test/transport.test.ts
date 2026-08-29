@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CommandIdempotency } from "../src/server/transport/commands.ts";
-import { EventJournal, eventCursor } from "../src/server/transport/event-journal.ts";
+import {
+  EventJournal,
+  eventCursor,
+} from "../src/server/transport/event-journal.ts";
 import type { WebCommand } from "../src/shared/protocol/commands.ts";
 
-const command: WebCommand = { type: "prompt", commandId: "one", expectedGeneration: 1, message: "hello" };
+const command: WebCommand = {
+  type: "prompt",
+  commandId: "one",
+  expectedGeneration: 1,
+  message: "hello",
+};
 
 test("journal uses opaque generation cursors and rejects stale, future, and malformed cursors", () => {
   const journal = new EventJournal(1, "session", 2, 1024 * 1024);
@@ -13,8 +21,15 @@ test("journal uses opaque generation cursors and rejects stale, future, and malf
   journal.append("message.start", {});
   assert.equal(eventCursor(first), "1:1");
   assert.equal(journal.serialized(first), JSON.stringify(first));
-  assert.deepEqual(journal.replay("1:1").events.map((event) => event.sequence), [2, 3]);
-  assert.equal(journal.replay("1:0").ok, false, "cursor before evicted event is stale");
+  assert.deepEqual(
+    journal.replay("1:1").events.map((event) => event.sequence),
+    [2, 3],
+  );
+  assert.equal(
+    journal.replay("1:0").ok,
+    false,
+    "cursor before evicted event is stale",
+  );
   assert.equal(journal.replay("1:4").ok, false, "future cursor is invalid");
   assert.equal(journal.replay("bad").ok, false);
   assert.equal(journal.replay("2:0").ok, false);
@@ -31,14 +46,18 @@ test("oversized events request a clean bootstrap instead of changing payload sha
   });
 
   assert.equal(event.type, "stream.reset-required");
-  assert.deepEqual(event.payload, { reason: "message.start exceeded transport limit" });
+  assert.deepEqual(event.payload, {
+    reason: "message.start exceeded transport limit",
+  });
 });
 
 test("idempotency joins in-flight duplicates and rejects commandId reuse with a changed payload", async () => {
   const idempotency = new CommandIdempotency();
   let calls = 0;
   let release!: () => void;
-  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const action = async () => {
     calls++;
     await pending;
@@ -49,6 +68,9 @@ test("idempotency joins in-flight duplicates and rejects commandId reuse with a 
   assert.strictEqual(first, duplicate);
   release();
   await first;
-  await assert.rejects(idempotency.execute({ ...command, message: "changed" }, action), { name: "IdempotencyConflictError" });
+  await assert.rejects(
+    idempotency.execute({ ...command, message: "changed" }, action),
+    { name: "IdempotencyConflictError" },
+  );
   assert.equal(calls, 1);
 });

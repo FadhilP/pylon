@@ -13,9 +13,8 @@ type RemoteQuestionnaire = ExtensionUIContext & {
   ) => Promise<string[] | undefined>;
 };
 
-const label = (option: Option) => option.description
-  ? `${option.label} — ${option.description}`
-  : option.label;
+const label = (option: Option) =>
+  option.description ? `${option.label} — ${option.description}` : option.label;
 
 export async function askQuestionnaire(
   ui: ExtensionUIContext,
@@ -44,9 +43,10 @@ export async function askQuestionnaire(
     const offered = [...item.options.map(label), "Write a different answer…"];
     const choice = await ui.select(item.question, offered, options);
     if (!choice) return undefined;
-    const answer = choice === "Write a different answer…"
-      ? (await ui.input("Custom answer", undefined, options))?.trim()
-      : choice;
+    const answer =
+      choice === "Write a different answer…"
+        ? (await ui.input("Custom answer", undefined, options))?.trim()
+        : choice;
     if (!answer) return undefined;
     answers.push({ question: item.question, answer });
   }

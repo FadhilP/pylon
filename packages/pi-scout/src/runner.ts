@@ -1,29 +1,30 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import {
+  activityRecorder,
+  cacheReadTokensFromUsage,
+  contextTokensFromUsage,
+  emptyUsage,
+  getPiInvocation,
+  lineBuffer,
+  stderrTail,
+  terminate,
+  validCost,
+  validTokens,
+  type ChildActivity,
+  type ChildUsage,
+  type Invocation,
+} from "pylon-core/child-process";
 import { capReport, capText, type EvidenceAnchor } from "./result.ts";
 
-export type ChildUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-};
+const SCOUT_PROTOCOL_MAX_BYTES = 5 * 1024 * 1024;
+
+export { cacheReadTokensFromUsage, contextTokensFromUsage, getPiInvocation };
+export type { ChildUsage, Invocation };
 export type ChildTurnUsage = ChildUsage & {
   model?: string;
   stopReason?: string;
 };
-export type ScoutActivity = {
-  id?: string;
-  kind: "call" | "result";
-  tool: string;
-  text: string;
-  isError?: boolean;
-  startedAt?: string;
-  durationMs?: number;
-};
+export type ScoutActivity = ChildActivity;
 export type ScoutRun = {
   text: string;
   model?: string;
@@ -45,68 +46,8 @@ export type ScoutRun = {
   contextTokens: number;
   cacheReadTokens: number;
 };
-export type Invocation = { command: string; args: string[] };
 
 let scoutRunQueue = Promise.resolve();
-
-export function getPiInvocation(args: string[]): Invocation {
-  const packageDir = getPackageDir();
-  const cli = join(packageDir, "dist", "cli.js");
-  const script = process.argv[1];
-  const piEntrypoints = [cli, join(packageDir, "dist", "rpc-entry.js"), join(packageDir, "src", "cli.ts"), join(packageDir, "src", "cli-new.ts"), join(packageDir, "src", "rpc-entry.ts")]
-    .map((path) => resolve(path));
-  if (script && !script.startsWith("/$bunfs/root/") && existsSync(script) && piEntrypoints.includes(resolve(script)))
-    return { command: process.execPath, args: [script, ...args] };
-  if (!/^(node|bun)(\.exe)?$/i.test(basename(process.execPath)))
-    return { command: process.execPath, args };
-  return { command: process.execPath, args: [cli, ...args] };
-}
-
-function emptyUsage(): ChildUsage {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-}
-const validTokens = (value: unknown): number => {
-  const tokens = Number(value);
-  return Number.isFinite(tokens) && tokens >= 0 ? tokens : 0;
-};
-const validCost = (value: unknown): number =>
-  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-export function cacheReadTokensFromUsage(usage: any): number {
-  return validTokens(usage?.cacheRead);
-}
-export function contextTokensFromUsage(usage: any): number {
-  const cacheRead = cacheReadTokensFromUsage(usage);
-  const nativeTotal = Number(usage?.totalTokens);
-  if (Number.isFinite(nativeTotal) && nativeTotal > 0)
-    return Math.max(0, nativeTotal - cacheRead);
-  const parts = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite]
-    .map(Number);
-  if (!parts.every((value) => Number.isFinite(value) && value >= 0)) return 0;
-  return Math.max(0, parts.reduce((sum, value) => sum + value, 0) - cacheRead);
-}
-function terminate(child: ChildProcess): void {
-  if (child.exitCode !== null) return;
-  if (process.platform === "win32" && child.pid)
-    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      shell: false,
-      stdio: "ignore",
-    });
-  else if (child.pid) {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      child.kill("SIGTERM");
-    }
-    setTimeout(() => {
-      if (child.exitCode !== null) return;
-      try {
-        process.kill(-child.pid!, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    }, 1000).unref();
-  }
-}
 
 export type RunPiOptions = {
   cwd: string;
@@ -128,25 +69,41 @@ export type RunPiOptions = {
   onUsage?: (usage: ChildUsage) => void;
 };
 
-export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
+export async function runPi(
+  args: string[],
+  options: RunPiOptions,
+): Promise<ScoutRun> {
   if (options.concurrent) return runPiUnlocked(args, options);
   const previousRun = scoutRunQueue;
   let releaseRun = () => {};
-  scoutRunQueue = new Promise<void>((resolve) => { releaseRun = resolve; });
+  scoutRunQueue = new Promise<void>((resolve) => {
+    releaseRun = resolve;
+  });
   await previousRun;
   try {
-    if (options.signal?.aborted) throw new DOMException("Scout run was aborted.", "AbortError");
+    if (options.signal?.aborted)
+      throw new DOMException("Scout run was aborted.", "AbortError");
     return await runPiUnlocked(args, options);
   } finally {
     releaseRun();
   }
 }
 
-async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<ScoutRun> {
+async function runPiUnlocked(
+  args: string[],
+  options: RunPiOptions,
+): Promise<ScoutRun> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? 90_000;
-  if (options.finalizeAfterMs !== undefined && (!Number.isFinite(options.finalizeAfterMs) || options.finalizeAfterMs <= 0 || options.finalizeAfterMs >= timeoutMs)) {
-    throw new Error("Scout finalization deadline must be positive and earlier than its timeout");
+  if (
+    options.finalizeAfterMs !== undefined &&
+    (!Number.isFinite(options.finalizeAfterMs) ||
+      options.finalizeAfterMs <= 0 ||
+      options.finalizeAfterMs >= timeoutMs)
+  ) {
+    throw new Error(
+      "Scout finalization deadline must be positive and earlier than its timeout",
+    );
   }
   const invocation = options.invocation ?? getPiInvocation(args);
   const child = spawn(invocation.command, invocation.args, {
@@ -155,25 +112,45 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     detached: process.platform !== "win32",
-    env: options.inheritEnv === false ? options.env : options.env ? { ...process.env, ...options.env } : process.env,
+    env:
+      options.inheritEnv === false
+        ? options.env
+        : options.env
+          ? { ...process.env, ...options.env }
+          : process.env,
   });
   const messages: any[] = [];
   const turns: ChildTurnUsage[] = [];
   const usage = emptyUsage();
-  const activity: ScoutActivity[] = [];
-  const activityStarts = new Map<string, { startedAtMs: number }>();
-  let stdout = "", stderr = "", timedOut = false, aborted = false, protocolOverflow = false;
+  const recorder = activityRecorder(
+    (text) => capText(text, 2000, 40).text,
+    options.onActivity,
+  );
+  const stderr = stderrTail();
+  let timedOut = false,
+    aborted = false,
+    protocolOverflow = false;
   let commandError: string | undefined;
   let agentSettled = false;
   let controlledCompletion = false;
   let budgetExceeded = false;
-  let finalizationAttempted = false;
-  let finalizationSucceeded = false;
-  let finalizationFailed = false;
-  let finalizationReason: "budget" | "deadline" | undefined;
-  let contextTokens = 0, cacheReadTokens = 0, reportedCost = 0;
-  let finalizationMessage: any;
+  let contextTokens = 0,
+    cacheReadTokens = 0,
+    reportedCost = 0;
   let commandId = 0;
+
+  /**
+   * Scout can be told to stop searching and return early, on budget or on deadline.
+   * The request, the reply that answers it, and whether that reply was usable are one
+   * unit of state; keeping them together is what makes the outcome ladder below readable.
+   */
+  const finalization = {
+    attempted: false,
+    succeeded: false,
+    failed: false,
+    reason: undefined as "budget" | "deadline" | undefined,
+    message: undefined as any,
+  };
 
   const failCommand = (command: string, detail?: unknown) => {
     if (commandError) return;
@@ -185,30 +162,113 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     const command = { id: `scout-${++commandId}`, type, message };
     try {
       child.stdin!.write(`${JSON.stringify(command)}\n`, (error) => {
-        if (error && !controlledCompletion && !timedOut && !aborted && !finalizationFailed) failCommand(type, error.message);
+        if (
+          error &&
+          !controlledCompletion &&
+          !timedOut &&
+          !aborted &&
+          !finalization.failed
+        )
+          failCommand(type, error.message);
       });
     } catch (error) {
       failCommand(type, error instanceof Error ? error.message : String(error));
     }
   };
-  const requestFinalization = (reason: "budget" | "deadline", message: string) => {
-    if (finalizationAttempted || controlledCompletion || timedOut || aborted || commandError) return;
-    finalizationAttempted = true;
-    finalizationReason = reason;
+  const requestFinalization = (
+    reason: "budget" | "deadline",
+    message: string,
+  ) => {
+    if (
+      finalization.attempted ||
+      controlledCompletion ||
+      timedOut ||
+      aborted ||
+      commandError
+    )
+      return;
+    finalization.attempted = true;
+    finalization.reason = reason;
     sendCommand("steer", message);
   };
-  const pushActivity = (item: ScoutActivity) => {
-    activity.push(item);
-    if (activity.length > 100) activity.shift();
-    options.onActivity?.(item, activity);
+  /** Returns true when the message was consumed as the reply to a finalization request. */
+  const observeFinalization = (message: any) => {
+    if (!finalization.attempted || finalization.message) return false;
+    if (message.stopReason === "toolUse") {
+      // A budget finalization treats "more tools" as a hard failure; a deadline one keeps waiting.
+      if (finalization.reason === "budget") {
+        finalization.message = message;
+        finalization.failed = true;
+        terminate(child);
+      }
+      return true;
+    }
+    finalization.message = message;
+    if (message.stopReason !== "error" && message.stopReason !== "aborted")
+      finalization.succeeded = true;
+    return true;
   };
+
+  const observeTurn = (message: any) => {
+    messages.push(message);
+    const rawUsage = message.usage ?? {};
+    const latestContextTokens = contextTokensFromUsage(rawUsage);
+    const latestCacheReadTokens = cacheReadTokensFromUsage(rawUsage);
+    if (
+      message.stopReason !== "aborted" &&
+      message.stopReason !== "error" &&
+      (latestContextTokens > 0 || latestCacheReadTokens > 0)
+    ) {
+      contextTokens = latestContextTokens;
+      cacheReadTokens = latestCacheReadTokens;
+    }
+    const turn = {
+      input: validTokens(rawUsage.input),
+      output: validTokens(rawUsage.output),
+      cacheRead: validTokens(rawUsage.cacheRead),
+      cacheWrite: validTokens(rawUsage.cacheWrite),
+      cost: validCost(rawUsage.cost?.total),
+      model: message.model,
+      stopReason: message.stopReason,
+    };
+    turns.push(turn);
+    reportedCost += turn.cost;
+    usage.input += turn.input;
+    usage.output += turn.output;
+    usage.cacheRead += turn.cacheRead;
+    usage.cacheWrite += turn.cacheWrite;
+    usage.cost += turn.cost;
+    try {
+      options.onUsage?.({ ...usage });
+    } catch {
+      /* Progress observers must not control the child. */
+    }
+
+    if (observeFinalization(message)) return;
+    if (
+      !budgetExceeded &&
+      message.stopReason === "toolUse" &&
+      options.maxCostUsd !== undefined &&
+      reportedCost >= options.maxCostUsd
+    ) {
+      budgetExceeded = true;
+      requestFinalization(
+        "budget",
+        "Discovery budget exhausted. Stop searching and return your compact cited findings now. Do not call more tools.",
+      );
+    }
+  };
+
   const processLine = (line: string) => {
     if (!line.trim()) return;
     try {
       const event = JSON.parse(line);
       // RPC responses are envelopes, not agent events. Only rejected commands matter.
       if (event.type === "response") {
-        if (event.success === false && (event.command === "prompt" || event.command === "steer"))
+        if (
+          event.success === false &&
+          (event.command === "prompt" || event.command === "steer")
+        )
           failCommand(event.command, event.error);
         return;
       }
@@ -218,94 +278,45 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
         terminate(child);
         return;
       }
-      if (event.type === "tool_execution_start") {
-        const startedAtMs = Date.now();
-        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
-        if (id) activityStarts.set(id, { startedAtMs });
-        pushActivity({ ...(id ? { id } : {}), kind: "call", tool: event.toolName, text: JSON.stringify(event.args ?? {}), startedAt: new Date(startedAtMs).toISOString() });
+      if (event.type === "tool_execution_start") return recorder.start(event);
+      if (event.type === "tool_execution_end") return recorder.end(event);
+      if (event.type !== "message_end" || event.message?.role !== "assistant")
         return;
-      }
-      if (event.type === "tool_execution_end") {
-        const text = (event.result?.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-        const id = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
-        const timing = id ? activityStarts.get(id) : undefined;
-        if (id) activityStarts.delete(id);
-        const durationMs = timing ? Math.max(0, Date.now() - timing.startedAtMs) : undefined;
-        pushActivity({ ...(id ? { id } : {}), kind: "result", tool: event.toolName, text: capText(text, 2000, 40).text, ...(event.isError ? { isError: true } : {}), ...(durationMs === undefined ? {} : { durationMs }) });
-        return;
-      }
-      if (event.type !== "message_end" || event.message?.role !== "assistant") return;
-      const message = event.message;
-      messages.push(message);
-      const rawUsage = message.usage ?? {};
-      const latestContextTokens = contextTokensFromUsage(rawUsage);
-      const latestCacheReadTokens = cacheReadTokensFromUsage(rawUsage);
-      if (message.stopReason !== "aborted" && message.stopReason !== "error" && (latestContextTokens > 0 || latestCacheReadTokens > 0)) {
-        contextTokens = latestContextTokens;
-        cacheReadTokens = latestCacheReadTokens;
-      }
-      const turn = {
-        input: validTokens(rawUsage.input), output: validTokens(rawUsage.output),
-        cacheRead: validTokens(rawUsage.cacheRead), cacheWrite: validTokens(rawUsage.cacheWrite),
-        cost: validCost(rawUsage.cost?.total), model: message.model, stopReason: message.stopReason,
-      };
-      turns.push(turn);
-      reportedCost += turn.cost;
-      usage.input += turn.input;
-      usage.output += turn.output;
-      usage.cacheRead += turn.cacheRead;
-      usage.cacheWrite += turn.cacheWrite;
-      usage.cost += turn.cost;
-      try { options.onUsage?.({ ...usage }); } catch { /* Progress observers must not control the child. */ }
-
-      if (finalizationAttempted && !finalizationMessage) {
-        if (message.stopReason === "toolUse") {
-          if (finalizationReason === "budget") {
-            finalizationMessage = message;
-            finalizationFailed = true;
-            terminate(child);
-          }
-          return;
-        }
-        finalizationMessage = message;
-        if (message.stopReason !== "error" && message.stopReason !== "aborted") finalizationSucceeded = true;
-        return;
-      }
-      if (!budgetExceeded && message.stopReason === "toolUse" && options.maxCostUsd !== undefined && reportedCost >= options.maxCostUsd) {
-        budgetExceeded = true;
-        requestFinalization("budget", "Discovery budget exhausted. Stop searching and return your compact cited findings now. Do not call more tools.");
-      }
+      observeTurn(event.message);
     } catch {
       /* Malformed lines remain harmless unless no usable final response arrives. */
     }
   };
 
-  child.stdout!.on("data", (data) => {
-    stdout += data;
-    if (Buffer.byteLength(stdout) > 1024 * 1024 * 5) {
-      protocolOverflow = true;
-      stdout = "";
-      terminate(child);
-      return;
-    }
-    const lines = stdout.split("\n");
-    stdout = lines.pop() ?? "";
-    for (const line of lines) processLine(line);
+  const stdout = lineBuffer(processLine, SCOUT_PROTOCOL_MAX_BYTES, () => {
+    protocolOverflow = true;
+    terminate(child);
   });
-  child.stderr!.on("data", (data) => {
-    stderr += data;
-    if (Buffer.byteLength(stderr) > 8192) stderr = Buffer.from(stderr).subarray(-8192).toString("utf8");
-  });
+  child.stdout!.on("data", (data) => stdout.push(data));
+  child.stderr!.on("data", (data) => stderr.push(data));
   child.stdin!.on("error", (error) => {
-    if (!controlledCompletion && !timedOut && !aborted && !finalizationFailed) failCommand("write", error.message);
+    if (!controlledCompletion && !timedOut && !aborted && !finalization.failed)
+      failCommand("write", error.message);
   });
-  const abort = () => { aborted = true; terminate(child); };
+  const abort = () => {
+    aborted = true;
+    terminate(child);
+  };
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
-  const timeout = setTimeout(() => { timedOut = true; terminate(child); }, timeoutMs);
-  const finalizationTimer = options.finalizeAfterMs === undefined ? undefined : setTimeout(() => {
-    requestFinalization("deadline", "Research deadline approaching. Stop searching and return your compact cited findings now. Do not call more tools.");
-  }, options.finalizeAfterMs);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    terminate(child);
+  }, timeoutMs);
+  const finalizationTimer =
+    options.finalizeAfterMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          requestFinalization(
+            "deadline",
+            "Research deadline approaching. Stop searching and return your compact cited findings now. Do not call more tools.",
+          );
+        }, options.finalizeAfterMs);
   finalizationTimer?.unref();
   // Attach every handler before the initial command; RPC uses strict LF-delimited JSON.
   if (!aborted) sendCommand("prompt", options.prompt);
@@ -316,54 +327,71 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   clearTimeout(timeout);
   if (finalizationTimer) clearTimeout(finalizationTimer);
   options.signal?.removeEventListener("abort", abort);
-  if (stdout.trim()) processLine(stdout);
+  stdout.flush();
 
-  const final = finalizationMessage ?? messages.at(-1);
-  const rawText = final?.content?.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") ?? "";
-  const capped = options.resultMaxBytes === false
-    ? { text: rawText, truncated: false, omittedEvidence: [] }
-    : options.resultMaxBytes === undefined
-      ? capText(rawText)
-      : capReport(rawText, options.resultMaxBytes);
-  const incompleteFinalization = agentSettled && finalizationAttempted && !finalizationSucceeded;
-  const finalizationFailure = finalizationFailed || incompleteFinalization;
-  const finalizationLabel = finalizationReason === "deadline" ? "deadline finalization" : "budget finalization";
-  const error = protocolOverflow
-    ? "Scout protocol buffer exceeded 5 MiB."
-    : aborted
-      ? "Scout aborted."
-      : timedOut
-        ? "Scout timed out."
-        : commandError
-          ? commandError
-          : finalizationFailed
-            ? `Scout requested more tools during finalization (${finalizationLabel}).`
-            : incompleteFinalization
-              ? `Scout settled before returning its finalization (${finalizationLabel}).`
-              : !agentSettled && !controlledCompletion
-                ? "Scout exited before agent settlement."
-                : final?.stopReason === "error"
-                  ? final.errorMessage || "Scout model error."
-                  : !rawText
-                    ? "Scout returned no assistant text."
-                    : undefined;
+  const final = finalization.message ?? messages.at(-1);
+  const rawText =
+    final?.content
+      ?.filter((part: any) => part.type === "text")
+      .map((part: any) => part.text)
+      .join("\n") ?? "";
+  const capped =
+    options.resultMaxBytes === false
+      ? { text: rawText, truncated: false, omittedEvidence: [] }
+      : options.resultMaxBytes === undefined
+        ? capText(rawText)
+        : capReport(rawText, options.resultMaxBytes);
+  const incompleteFinalization =
+    agentSettled && finalization.attempted && !finalization.succeeded;
+  const finalizationFailure = finalization.failed || incompleteFinalization;
+  const finalizationLabel =
+    finalization.reason === "deadline"
+      ? "deadline finalization"
+      : "budget finalization";
+  // First matching row wins; order is the diagnosis priority, most specific cause first.
+  const errorLadder: Array<[boolean, string]> = [
+    [protocolOverflow, "Scout protocol buffer exceeded 5 MiB."],
+    [aborted, "Scout aborted."],
+    [timedOut, "Scout timed out."],
+    [commandError !== undefined, commandError!],
+    [
+      finalization.failed,
+      `Scout requested more tools during finalization (${finalizationLabel}).`,
+    ],
+    [
+      incompleteFinalization,
+      `Scout settled before returning its finalization (${finalizationLabel}).`,
+    ],
+    [
+      !agentSettled && !controlledCompletion,
+      "Scout exited before agent settlement.",
+    ],
+    [
+      final?.stopReason === "error",
+      final?.errorMessage || "Scout model error.",
+    ],
+    [!rawText, "Scout returned no assistant text."],
+  ];
+  const error = errorLadder.find(([failed]) => failed)?.[1];
   return {
     text: capped.text,
     model: final?.model,
     stopReason: final?.stopReason,
     error,
-    ...(finalizationReason === "budget" && finalizationFailure ? { failure: "budget_exceeded" as const } : {}),
+    ...(finalization.reason === "budget" && finalizationFailure
+      ? { failure: "budget_exceeded" as const }
+      : {}),
     budgetExceeded,
-    finalizationAttempted,
-    finalizationSucceeded,
-    stderr,
+    finalizationAttempted: finalization.attempted,
+    finalizationSucceeded: finalization.succeeded,
+    stderr: stderr.text,
     durationMs: Date.now() - started,
     usage,
     turns,
     truncated: capped.truncated,
     omittedEvidence: capped.omittedEvidence,
     exitCode,
-    activity,
+    activity: recorder.items,
     contextTokens,
     cacheReadTokens,
   };

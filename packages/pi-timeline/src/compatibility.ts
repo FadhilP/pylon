@@ -12,10 +12,7 @@ export type Compatibility =
   | {
       allowed: true;
       refState:
-        | "same"
-        | "target-detached"
-        | "current-detached"
-        | "ref-mismatch";
+        "same" | "target-detached" | "current-detached" | "ref-mismatch";
     };
 
 const canonical = (path: string) =>
@@ -25,9 +22,11 @@ export function classifyCompatibility(
   target: GitState,
   current: GitState,
 ): Compatibility {
-  if (target.commonDir && current.commonDir
-    ? canonical(target.commonDir) !== canonical(current.commonDir)
-    : canonical(target.gitRoot) !== canonical(current.gitRoot))
+  if (
+    target.commonDir && current.commonDir
+      ? canonical(target.commonDir) !== canonical(current.commonDir)
+      : canonical(target.gitRoot) !== canonical(current.gitRoot)
+  )
     return { allowed: false, reason: "repository-mismatch" };
   if (target.head !== current.head)
     return { allowed: false, reason: "head-mismatch" };

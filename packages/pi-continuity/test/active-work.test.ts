@@ -7,7 +7,10 @@ test("plan revisions reject duplicate normalized todo text without mutating Work
   setPlan(work, ["Implement"]);
   const before = structuredClone(work.todos);
 
-  assert.throws(() => setPlan(work, ["Same step", " same   STEP "]), /unique non-empty text/);
+  assert.throws(
+    () => setPlan(work, ["Same step", " same   STEP "]),
+    /unique non-empty text/,
+  );
   assert.deepEqual(work.todos, before);
   assert.equal(isWork(work), true);
 });
@@ -19,10 +22,13 @@ test("initial plans ignore caller-supplied todo IDs", () => {
     { id: "invented", text: "Review" },
   ]);
 
-  assert.deepEqual(work.todos.map(({ id, text }) => ({ id, text })), [
-    { id: "todo_1", text: "Implement" },
-    { id: "todo_2", text: "Review" },
-  ]);
+  assert.deepEqual(
+    work.todos.map(({ id, text }) => ({ id, text })),
+    [
+      { id: "todo_1", text: "Implement" },
+      { id: "todo_2", text: "Review" },
+    ],
+  );
 });
 
 test("explicit todo IDs preserve progress across wording changes", () => {
@@ -37,15 +43,25 @@ test("explicit todo IDs preserve progress across wording changes", () => {
     { id: reviewId, text: "Review" },
   ]);
 
-  assert.deepEqual(work.todos.map(({ id, status }) => ({ id, status })), [
-    { id: implementId, status: "done" },
-    { id: reviewId, status: "pending" },
-  ]);
-  assert.throws(() => setPlan(work, [{ id: "todo_missing", text: "Unknown" }]), /IDs from the current plan/);
-  assert.throws(() => setPlan(work, [
-    { id: implementId, text: "Implement" },
-    { id: implementId, text: "Review" },
-  ]), /IDs from the current plan/);
+  assert.deepEqual(
+    work.todos.map(({ id, status }) => ({ id, status })),
+    [
+      { id: implementId, status: "done" },
+      { id: reviewId, status: "pending" },
+    ],
+  );
+  assert.throws(
+    () => setPlan(work, [{ id: "todo_missing", text: "Unknown" }]),
+    /IDs from the current plan/,
+  );
+  assert.throws(
+    () =>
+      setPlan(work, [
+        { id: implementId, text: "Implement" },
+        { id: implementId, text: "Review" },
+      ]),
+    /IDs from the current plan/,
+  );
   assert.equal(isWork(work), true);
 });
 
@@ -54,7 +70,14 @@ test("plan revisions reject oversized lists before mutation", () => {
   setPlan(work, ["Implement"]);
   const before = structuredClone(work.todos);
 
-  assert.throws(() => setPlan(work, Array.from({ length: 13 }, (_, index) => `Step ${index}`)), /more than 12/);
+  assert.throws(
+    () =>
+      setPlan(
+        work,
+        Array.from({ length: 13 }, (_, index) => `Step ${index}`),
+      ),
+    /more than 12/,
+  );
   assert.deepEqual(work.todos, before);
 });
 

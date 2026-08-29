@@ -20,16 +20,24 @@ test("maps matching workspace revisions into full diff context", () => {
       cacheKey: "revision-4:src/example.ts:current",
     },
   });
-  assert.throws(() => createPierreLoadedDiffFiles({
-    path: "src/example.ts",
-    revision: "revision-4",
-    base: { revision: "revision-3", state: "available", text: "old\n" },
-    current: { revision: "revision-4", state: "available", text: "new\n" },
-  }), /Workspace changed/);
-  assert.throws(() => createPierreLoadedDiffFiles({
-    path: "src/example.ts",
-    revision: "revision-4",
-    base: { revision: "revision-4", state: "oversized" },
-    current: { revision: "revision-4", state: "available", text: "new\n" },
-  }), /unavailable/);
+  assert.throws(
+    () =>
+      createPierreLoadedDiffFiles({
+        path: "src/example.ts",
+        revision: "revision-4",
+        base: { revision: "revision-3", state: "available", text: "old\n" },
+        current: { revision: "revision-4", state: "available", text: "new\n" },
+      }),
+    /Workspace changed/,
+  );
+  assert.throws(
+    () =>
+      createPierreLoadedDiffFiles({
+        path: "src/example.ts",
+        revision: "revision-4",
+        base: { revision: "revision-4", state: "oversized" },
+        current: { revision: "revision-4", state: "available", text: "new\n" },
+      }),
+    /unavailable/,
+  );
 });

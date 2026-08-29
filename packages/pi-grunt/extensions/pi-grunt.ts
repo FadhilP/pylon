@@ -7,23 +7,48 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { buildWorkerContext, sanitizeFailureMessage } from "../src/context.ts";
 import {
-  configPath, gruntMaxCostUsd, gruntMaxTurns, gruntMode, gruntParentContextChars, gruntThinkingLevels,
-  gruntTimeoutMs, isGruntEnabled, loadConfig, parseModelRef, saveConfig, defaultThinkingLevels,
+  configPath,
+  gruntMaxCostUsd,
+  gruntMaxTurns,
+  gruntMode,
+  gruntParentContextChars,
+  gruntThinkingLevels,
+  gruntTimeoutMs,
+  isGruntEnabled,
+  loadConfig,
+  parseModelRef,
+  saveConfig,
+  defaultThinkingLevels,
 } from "../src/config.ts";
 import {
-  applyWorkerPatch, cleanupSessionPatchArtifacts, collectWorkerPatch,
-  createIsolatedWorktree, parentChangesSinceBaseline, persistPatchArtifact,
-  pruneStalePatchArtifacts, removeIsolatedWorktree, type IsolatedWorktree,
+  applyWorkerPatch,
+  cleanupSessionPatchArtifacts,
+  collectWorkerPatch,
+  createIsolatedWorktree,
+  parentChangesSinceBaseline,
+  persistPatchArtifact,
+  pruneStalePatchArtifacts,
+  removeIsolatedWorktree,
+  type IsolatedWorktree,
 } from "../src/isolation.ts";
 import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
-import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
+import {
+  DELEGATE_MAX_ATTEMPTS,
+  isTransientProviderFailure,
+  waitForDelegateRetry,
+} from "../src/retry.ts";
 
-const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
-const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
+const LINE_EDIT_EXTENSION = fileURLToPath(
+  import.meta.resolve("pylon-core/extensions/line-edit.ts"),
+);
+const SIEVE_EXTENSION = fileURLToPath(
+  import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"),
+);
 
 const HEARTBEAT_MS = 1000;
-const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
+const modelName = (model: { provider: string; id: string }) =>
+  `${model.provider}/${model.id}`;
 function delegatedName(pi: ExtensionAPI, callId: string): string {
   let assigned: string | undefined;
   pi.events.emit("pylon:delegate-name", {
@@ -34,17 +59,34 @@ function delegatedName(pi: ExtensionAPI, callId: string): string {
       if (typeof name === "string" && /^G\d+$/.test(name)) assigned = name;
     },
   });
-  return assigned ?? `G-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
+  return (
+    assigned ?? `G-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`
+  );
 }
 
-async function resolveExecutionMode(configured: ReturnType<typeof gruntMode>, exec: any, cwd: string): Promise<"isolated" | "direct"> {
+async function resolveExecutionMode(
+  configured: ReturnType<typeof gruntMode>,
+  exec: any,
+  cwd: string,
+): Promise<"isolated" | "direct"> {
   if (configured !== "dynamic") return configured;
-  const git = await exec("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree", "--verify", "HEAD"], { timeout: 10_000 });
-  return git.code === 0 && git.stdout.trim().startsWith("true") ? "isolated" : "direct";
+  const git = await exec(
+    "git",
+    ["-C", cwd, "rev-parse", "--is-inside-work-tree", "--verify", "HEAD"],
+    { timeout: 10_000 },
+  );
+  return git.code === 0 && git.stdout.trim().startsWith("true")
+    ? "isolated"
+    : "direct";
 }
 
 function activityText(activity: readonly WorkerActivity[]): string {
-  return activity.map((item) => `${item.kind === "call" ? ">" : item.isError ? "!" : "<"} ${item.tool} ${item.text.replace(/\s+/g, " ").slice(0, 180)}`).join("\n");
+  return activity
+    .map(
+      (item) =>
+        `${item.kind === "call" ? ">" : item.isError ? "!" : "<"} ${item.tool} ${item.text.replace(/\s+/g, " ").slice(0, 180)}`,
+    )
+    .join("\n");
 }
 
 function usageText(run: WorkerRun): string {
@@ -52,7 +94,10 @@ function usageText(run: WorkerRun): string {
   return `${run.turns} turn${run.turns === 1 ? "" : "s"} · ${u.input} input · ${u.output} output · R${u.cacheRead} · W${u.cacheWrite} · $${u.cost.toFixed(4)} · ${(run.durationMs / 1000).toFixed(1)}s`;
 }
 
-const addUsage = (left: WorkerRun["usage"], right: WorkerRun["usage"]): WorkerRun["usage"] => ({
+const addUsage = (
+  left: WorkerRun["usage"],
+  right: WorkerRun["usage"],
+): WorkerRun["usage"] => ({
   input: left.input + right.input,
   output: left.output + right.output,
   cacheRead: left.cacheRead + right.cacheRead,
@@ -60,13 +105,35 @@ const addUsage = (left: WorkerRun["usage"], right: WorkerRun["usage"]): WorkerRu
   cost: left.cost + right.cost,
 });
 
-type SessionStats = { runs: number; integrated: number; requiresAttention: number; turns: number; cost: number };
-const emptyStats = (): SessionStats => ({ runs: 0, integrated: 0, requiresAttention: 0, turns: 0, cost: 0 });
-function workerMetrics(run: WorkerRun, workerStatus: string, integrationStatus: string, changedFileCount?: number) {
+type SessionStats = {
+  runs: number;
+  integrated: number;
+  requiresAttention: number;
+  turns: number;
+  cost: number;
+};
+const emptyStats = (): SessionStats => ({
+  runs: 0,
+  integrated: 0,
+  requiresAttention: 0,
+  turns: 0,
+  cost: 0,
+});
+function workerMetrics(
+  run: WorkerRun,
+  workerStatus: string,
+  integrationStatus: string,
+  changedFileCount?: number,
+) {
   return {
-    workerStatus, integrationStatus, workerCostUsd: run.usage.cost, turns: run.turns,
-    inputTokens: run.usage.input, outputTokens: run.usage.output,
-    cacheReadTokens: run.usage.cacheRead, cacheWriteTokens: run.usage.cacheWrite,
+    workerStatus,
+    integrationStatus,
+    workerCostUsd: run.usage.cost,
+    turns: run.turns,
+    inputTokens: run.usage.input,
+    outputTokens: run.usage.output,
+    cacheReadTokens: run.usage.cacheRead,
+    cacheWriteTokens: run.usage.cacheWrite,
     ...(changedFileCount === undefined ? {} : { changedFileCount }),
   };
 }
@@ -75,53 +142,200 @@ function isSuggested(path: string, suggestions: readonly string[]): boolean {
   const normalized = path.replace(/\\/g, "/");
   return suggestions.some((item) => {
     const value = item.replace(/\\/g, "/").replace(/^\.\//, "");
-    const prefix = value.endsWith("/**") ? value.slice(0, -3).replace(/\/$/, "") : value.replace(/\/$/, "");
+    const prefix = value.endsWith("/**")
+      ? value.slice(0, -3).replace(/\/$/, "")
+      : value.replace(/\/$/, "");
     return normalized === prefix || normalized.startsWith(`${prefix}/`);
   });
 }
 
 function derivedStatus(run: WorkerRun, changedCount: number): string {
   if (run.failure === "aborted") return changedCount ? "partial" : "aborted";
-  if (run.failure === "timed_out") return changedCount ? "partial" : "timed_out";
+  if (run.failure === "timed_out")
+    return changedCount ? "partial" : "timed_out";
   if (run.error) return changedCount ? "partial" : "failed";
-  if (/^Status:\s*blocked\b/im.test(run.text)) return changedCount ? "partial" : "blocked";
+  if (/^Status:\s*blocked\b/im.test(run.text))
+    return changedCount ? "partial" : "blocked";
   if (/^Status:\s*completed\b/im.test(run.text)) return "completed";
   return changedCount ? "partial" : "failed";
 }
 
-function unavailableDependencies(parentRoot: string, parentCwd: string, workerRoot: string, workerCwd: string): string[] {
+function unavailableDependencies(
+  parentRoot: string,
+  parentCwd: string,
+  workerRoot: string,
+  workerCwd: string,
+): string[] {
   const missing = new Set<string>();
   let parent = parentCwd;
   let worker = workerCwd;
   for (;;) {
     for (const name of ["node_modules", ".venv", "venv"])
       if (existsSync(join(parent, name)) && !existsSync(join(worker, name)))
-        missing.add(relative(parentRoot, join(parent, name)).replace(/\\/g, "/") || name);
+        missing.add(
+          relative(parentRoot, join(parent, name)).replace(/\\/g, "/") || name,
+        );
     if (parent === parentRoot) break;
     const nextParent = dirname(parent);
     const nextWorker = dirname(worker);
-    if (nextParent === parent || relative(parentRoot, nextParent).startsWith("..")) break;
+    if (
+      nextParent === parent ||
+      relative(parentRoot, nextParent).startsWith("..")
+    )
+      break;
     parent = nextParent;
     worker = nextWorker;
   }
   return [...missing].sort();
 }
 
-export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retryWait = waitForDelegateRetry) {
+type IsolationSetup = {
+  mode: "isolated" | "direct";
+  isolated?: IsolatedWorktree;
+  isolationFallback?: string;
+};
+
+/**
+ * Resolves the execution mode and, for isolated mode, creates the worktree.
+ * Only a `dynamic` configuration is allowed to silently fall back to direct editing;
+ * an explicit `isolated` configuration fails the call rather than touching the parent.
+ */
+async function prepareIsolation(
+  exec: any,
+  cwd: string,
+  configuredMode: ReturnType<typeof gruntMode>,
+  signal?: AbortSignal,
+): Promise<IsolationSetup> {
+  const mode = await resolveExecutionMode(configuredMode, exec, cwd);
+  if (mode !== "isolated") return { mode };
+  try {
+    return { mode, isolated: await createIsolatedWorktree(exec, cwd, signal) };
+  } catch (error) {
+    const message = sanitizeFailureMessage(
+      error,
+      "Grunt isolation unavailable.",
+    );
+    if (configuredMode !== "dynamic")
+      throw new Error(`Grunt isolation unavailable: ${message}`);
+    return { mode: "direct", isolationFallback: message };
+  }
+}
+
+type Integration = {
+  status: string;
+  applied: boolean;
+  failureCode?: string;
+  integrationError: string;
+};
+
+/**
+ * Decides the fate of a completed worker's patch: applied, blocked because the parent
+ * moved underneath it, or failed during apply. A worker that did not complete is passed
+ * through untouched — there is nothing to integrate.
+ */
+async function integrateWorkerPatch(input: {
+  exec: any;
+  isolation: IsolatedWorktree;
+  baseline: IsolatedWorktree;
+  patch: string;
+  workerStatus: string;
+  runFailure?: string;
+}): Promise<Integration> {
+  const unchanged = {
+    status: input.workerStatus,
+    applied: false,
+    failureCode: input.runFailure,
+    integrationError: "",
+  };
+  if (input.workerStatus !== "completed") return unchanged;
+
+  const parentChanges = await parentChangesSinceBaseline(
+    input.exec,
+    input.baseline,
+  );
+  if (parentChanges.length)
+    return {
+      status: "stale",
+      applied: false,
+      failureCode: "stale_parent",
+      integrationError: sanitizeFailureMessage(
+        `Parent changed while worker ran: ${parentChanges.join(", ")}.`,
+        "Parent changed while worker ran.",
+      ),
+    };
+
+  try {
+    await applyWorkerPatch(input.exec, input.isolation, input.patch);
+    return { ...unchanged, applied: true };
+  } catch (error) {
+    const raw =
+      error instanceof Error ? error.message : "Worker patch apply failed.";
+    const stale = raw.startsWith(
+      "Parent changed immediately before patch apply:",
+    );
+    return {
+      status: stale ? "stale" : "failed",
+      applied: false,
+      failureCode: stale ? "stale_parent" : "apply_failed",
+      integrationError: sanitizeFailureMessage(
+        raw,
+        "Worker patch apply failed.",
+      ),
+    };
+  }
+}
+
+export default function gruntExtension(
+  pi: ExtensionAPI,
+  runWorker = runPi,
+  retryWait = waitForDelegateRetry,
+) {
   let calls = 0;
   let stats = emptyStats();
   const sessionPatchArtifacts = new Set<string>();
-  const GruntParameters = Type.Object({
-    task: Type.String({ minLength: 1, maxLength: 8000, description: "Self-contained implementation handoff including decisions and acceptance criteria" }),
-    thinking: StringEnum(defaultThinkingLevels, { description: "Worker thinking effort selected by the main model" }),
-    suggestedPaths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 40, uniqueItems: true, description: "Scope guidance, not an allowlist" })),
-    targetedContext: Type.Optional(Type.String({ minLength: 1, maxLength: 4000, description: "Directly applicable code snippets or project instructions; never broad transcript context" })),
-    checkCommands: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 8, uniqueItems: true, description: "Focused existing checks useful for this task" })),
-  }, { additionalProperties: false });
+  const GruntParameters = Type.Object(
+    {
+      task: Type.String({
+        minLength: 1,
+        maxLength: 8000,
+        description:
+          "Self-contained implementation handoff including decisions and acceptance criteria",
+      }),
+      thinking: StringEnum(defaultThinkingLevels, {
+        description: "Worker thinking effort selected by the main model",
+      }),
+      suggestedPaths: Type.Optional(
+        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+          maxItems: 40,
+          uniqueItems: true,
+          description: "Scope guidance, not an allowlist",
+        }),
+      ),
+      targetedContext: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 4000,
+          description:
+            "Directly applicable code snippets or project instructions; never broad transcript context",
+        }),
+      ),
+      checkCommands: Type.Optional(
+        Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+          maxItems: 8,
+          uniqueItems: true,
+          description: "Focused existing checks useful for this task",
+        }),
+      ),
+    },
+    { additionalProperties: false },
+  );
   const refreshSchema = (config: Awaited<ReturnType<typeof loadConfig>>) => {
-    GruntParameters.properties.thinking = StringEnum(gruntThinkingLevels(config), {
-      description: "Worker thinking effort selected by the main model",
-    });
+    GruntParameters.properties.thinking = StringEnum(
+      gruntThinkingLevels(config),
+      {
+        description: "Worker thinking effort selected by the main model",
+      },
+    );
   };
   const recordRun = (run: WorkerRun, integrationStatus: string) => {
     stats.runs++;
@@ -138,26 +352,48 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
   };
   const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
-    request.respond((async () => {
-      const config = await loadConfig();
-      return {
-        version: 1, owner: "pi-grunt", label: "Grunt",
-        lines: [`State: ${config.disabled ? "disabled" : isGruntEnabled(config) ? "active" : "inactive"}`, `Model: ${config.model ?? "current main model"}`, `Execution: synchronous ${gruntMode(config) === "isolated" ? "isolated Git worktree" : gruntMode(config) === "direct" ? "DIRECT current working directory" : "DYNAMIC (isolated with Git HEAD, direct otherwise)"}`],
-        warning: gruntMode(config) !== "isolated",
-      };
-    })());
+    request.respond(
+      (async () => {
+        const config = await loadConfig();
+        return {
+          version: 1,
+          owner: "pi-grunt",
+          label: "Grunt",
+          lines: [
+            `State: ${config.disabled ? "disabled" : isGruntEnabled(config) ? "active" : "inactive"}`,
+            `Model: ${config.model ?? "current main model"}`,
+            `Execution: synchronous ${gruntMode(config) === "isolated" ? "isolated Git worktree" : gruntMode(config) === "direct" ? "DIRECT current working directory" : "DYNAMIC (isolated with Git HEAD, direct otherwise)"}`,
+          ],
+          warning: gruntMode(config) !== "isolated",
+        };
+      })(),
+    );
   });
   const refreshTool = async (agentDir?: string) => {
-    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
+    const config = await loadConfig(
+      agentDir ? configPath(agentDir) : undefined,
+    );
     refreshSchema(config);
     const enabled = isGruntEnabled(config);
     let coordinated = false;
     pi.events.emit("pylon:tool-policy", {
-      version: 1, kind: "register", owner: "pi-grunt",
-      managedTools: ["grunt"], enabledTools: enabled ? ["grunt"] : [],
+      version: 1,
+      kind: "register",
+      owner: "pi-grunt",
+      managedTools: ["grunt"],
+      enabledTools: enabled ? ["grunt"] : [],
       ...(enabled ? { deferredTools: ["grunt"] } : {}),
-      ...(enabled ? { toolUsage: { grunt: "delegate a large mechanical implementation slice to an isolated synchronous worker" } } : {}),
-      acknowledge: () => { coordinated = true; },
+      ...(enabled
+        ? {
+            toolUsage: {
+              grunt:
+                "delegate a large mechanical implementation slice to an isolated synchronous worker",
+            },
+          }
+        : {}),
+      acknowledge: () => {
+        coordinated = true;
+      },
     });
     if (coordinated) return;
     const active = pi.getActiveTools().filter((name) => name !== "grunt");
@@ -165,32 +401,47 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     pi.setActiveTools(active);
   };
 
-  const disposeSettingsRefresh = pi.events.on("pylon:package-settings-changed", (request: any) => {
-    if (request?.version !== 1 || request.packageId !== "pi-grunt" || typeof request.agentDir !== "string"
-      || typeof request.acknowledge !== "function") return;
-    request.acknowledge(() => refreshTool(request.agentDir));
-  });
+  const disposeSettingsRefresh = pi.events.on(
+    "pylon:package-settings-changed",
+    (request: any) => {
+      if (
+        request?.version !== 1 ||
+        request.packageId !== "pi-grunt" ||
+        typeof request.agentDir !== "string" ||
+        typeof request.acknowledge !== "function"
+      )
+        return;
+      request.acknowledge(() => refreshTool(request.agentDir));
+    },
+  );
   pi.on("session_start", async () => {
     stats = emptyStats();
     await pruneStalePatchArtifacts();
     await refreshTool();
   });
   pi.on("input", (event) => {
-    if (event.source !== "extension" && event.streamingBehavior !== "steer") calls = 0;
+    if (event.source !== "extension" && event.streamingBehavior !== "steer")
+      calls = 0;
   });
   pi.on("session_shutdown", async () => {
     await cleanupSessionPatchArtifacts(sessionPatchArtifacts);
     sessionPatchArtifacts.clear();
     disposeHealth();
     disposeSettingsRefresh();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
+    pi.events.emit("pylon:tool-policy", {
+      version: 1,
+      kind: "unregister",
+      owner: "pi-grunt",
+    });
   });
 
   pi.registerTool({
     name: "grunt",
     label: "Grunt",
-    description: "Run one synchronous delegated implementation worker. Isolated mode retries transient provider failures in fresh worktrees and applies completed work after stale-parent checks; direct mode edits without rollback or automatic retry. Main model reviews and verifies.",
-    promptSnippet: "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
+    description:
+      "Run one synchronous delegated implementation worker. Isolated mode retries transient provider failures in fresh worktrees and applies completed work after stale-parent checks; direct mode edits without rollback or automatic retry. Main model reviews and verifies.",
+    promptSnippet:
+      "Delegate a compact implementation slice or complete non-difficult change to a synchronous worker",
     promptGuidelines: [
       "Delegate based on expected main-model effort avoided, not changed LOC alone. Keep diagnosis, architecture, cross-cutting changes, and ordinary semantic changes around 50–300 LOC in the main model. Use grunt mainly for mechanical multi-file work or designed slices, typically 300–500+ LOC. Use the lowest configured thinking level that fits. Run dependent slices sequentially, inspecting and checking each result first.",
       "The main model owns integration and recovery. Fix small remaining defects directly; re-delegate only self-contained medium or large work that is cheaper to validate. Never call grunt only to verify or repair its previous result.",
@@ -200,59 +451,124 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     executionMode: "sequential",
     async execute(id, params, signal, onUpdate, ctx) {
       const config = await loadConfig();
-      if (!isGruntEnabled(config)) return { content: [{ type: "text" as const, text: "Grunt inactive. Configure it with /grunt or use /grunt reset." }], details: { status: "disabled" } };
-      if (!gruntThinkingLevels(config).includes(params.thinking)) return { content: [{ type: "text" as const, text: `Grunt thinking level is not enabled: ${params.thinking}.` }], details: { status: "invalid" } };
+      const refuse = (
+        text: string,
+        status: string,
+        extra: Record<string, unknown> = {},
+      ) => ({
+        content: [{ type: "text" as const, text }],
+        details: { status, ...extra },
+      });
+      if (!isGruntEnabled(config))
+        return refuse(
+          "Grunt inactive. Configure it with /grunt or use /grunt reset.",
+          "disabled",
+        );
+      if (!gruntThinkingLevels(config).includes(params.thinking))
+        return refuse(
+          `Grunt thinking level is not enabled: ${params.thinking}.`,
+          "invalid",
+        );
       const task = params.task.trim();
-      if (!task) return { content: [{ type: "text" as const, text: "Grunt task must not be empty." }], details: { status: "invalid" } };
+      if (!task) return refuse("Grunt task must not be empty.", "invalid");
       const model = await resolveModel(ctx);
-      if (!model) return { content: [{ type: "text" as const, text: "Grunt unavailable: no selected model." }], details: { status: "unavailable" } };
+      if (!model)
+        return refuse("Grunt unavailable: no selected model.", "unavailable");
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-      if (!auth.ok || !auth.apiKey) return { content: [{ type: "text" as const, text: "Grunt unavailable: selected model has no credentials." }], details: { status: "unavailable", model: modelName(model) } };
+      if (!auth.ok || !auth.apiKey)
+        return refuse(
+          "Grunt unavailable: selected model has no credentials.",
+          "unavailable",
+          { model: modelName(model) },
+        );
       calls++;
       const started = Date.now();
-      const agent = { agentName: delegatedName(pi, id), startedAt: new Date(started).toISOString() };
+      const agent = {
+        agentName: delegatedName(pi, id),
+        startedAt: new Date(started).toISOString(),
+      };
       const named = (value: string) => `[${agent.agentName} · Grunt] ${value}`;
 
       const exec = pi.exec.bind(pi);
       const configuredMode = gruntMode(config);
-      let mode = await resolveExecutionMode(configuredMode, exec, ctx.cwd);
-      let isolated: IsolatedWorktree | undefined;
-      const isolatedAttempts: IsolatedWorktree[] = [];
-      let isolationFallback: string | undefined;
-      if (mode === "isolated") {
-        try {
-          isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
-          isolatedAttempts.push(isolated);
-        } catch (error) {
-          const message = sanitizeFailureMessage(error, "Grunt isolation unavailable.");
-          if (configuredMode !== "dynamic") throw new Error(`Grunt isolation unavailable: ${message}`);
-          mode = "direct";
-          isolationFallback = message;
-        }
-      }
+      const setup = await prepareIsolation(
+        exec,
+        ctx.cwd,
+        configuredMode,
+        signal,
+      );
+      const { mode, isolationFallback } = setup;
+      // Reassigned when a transient failure is retried in a fresh worktree.
+      let isolated = setup.isolated;
+      const isolatedAttempts: IsolatedWorktree[] = isolated ? [isolated] : [];
 
       const callIsolation = isolated;
       let heartbeat: NodeJS.Timeout | undefined;
-      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+      const usage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+      };
       let attemptUsage = { ...usage };
       try {
         const contextChars = gruntParentContextChars();
-        const entries = contextChars ? ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [] : [];
+        const entries = contextChars
+          ? (ctx.sessionManager?.buildContextEntries?.() ??
+            ctx.sessionManager?.getBranch?.() ??
+            [])
+          : [];
         const suggested = params.suggestedPaths ?? [];
         const targetedContext = params.targetedContext?.trim() ?? "";
         const checkCommands = params.checkCommands ?? [];
         const parentContext = contextChars
-          ? buildWorkerContext(entries, contextChars, 10, [task, targetedContext, ...suggested, ...checkCommands])
+          ? buildWorkerContext(entries, contextChars, 10, [
+              task,
+              targetedContext,
+              ...suggested,
+              ...checkCommands,
+            ])
           : "";
-        const runningText = mode === "isolated" ? "implementing in isolation" : "DIRECT — editing current working directory";
-        if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
-        onUpdate?.({ content: [{ type: "text", text: `Grunt ${runningText}…` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking } });
+        const runningText =
+          mode === "isolated"
+            ? "implementing in isolation"
+            : "DIRECT — editing current working directory";
         let activity: readonly WorkerActivity[] = [];
         let lastUpdateAt = started;
+        let attempts = 0;
+        // Every progress frame carries the same identity; only the message and extras differ.
+        const progress = (text: string, extra: Record<string, unknown> = {}) =>
+          onUpdate?.({
+            content: [{ type: "text", text }],
+            details: {
+              ...agent,
+              state: "running",
+              mode,
+              configuredMode,
+              model: modelName(model),
+              thinking: params.thinking,
+              durationMs: Date.now() - started,
+              attempts,
+              ...extra,
+            },
+          });
+        if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", `grunt: ${runningText}…`);
+        onUpdate?.({
+          content: [{ type: "text", text: `Grunt ${runningText}…` }],
+          details: {
+            ...agent,
+            state: "running",
+            mode,
+            configuredMode,
+            model: modelName(model),
+            thinking: params.thinking,
+          },
+        });
         heartbeat = setInterval(() => {
           const now = Date.now();
           if (now - lastUpdateAt < HEARTBEAT_MS) return;
-          onUpdate?.({ content: [{ type: "text", text: `${((now - started) / 1000).toFixed(0)}s` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: now - started, activity } });
+          progress(`${((now - started) / 1000).toFixed(0)}s`, { activity });
         }, HEARTBEAT_MS);
         heartbeat.unref();
         const timeoutMs = gruntTimeoutMs();
@@ -260,81 +576,186 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         const maxTurns = gruntMaxTurns(config.maxTurns);
         const deadline = started + timeoutMs;
         let totalTurns = 0;
-        let attempts = 0;
         let workerCwd = "";
         let missingDependencies: string[] = [];
-        let run!: WorkerRun;
-        for (;;) {
-          attempts++;
-          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-          workerCwd = isolated?.workerCwd ?? ctx.cwd;
-          missingDependencies = isolated
-            ? unavailableDependencies(isolated.parentRoot, isolated.parentCwd, isolated.workerRoot, isolated.workerCwd)
-            : [];
-          const dependencyNote = missingDependencies.length
-            ? `\n\nUnavailable ignored dependency directories: ${missingDependencies.join(", ")}. Do not install dependencies; skip checks requiring them and report that limitation.`
-            : "";
-          const prompt = `Implementation task:\n${task}${targetedContext ? `\n\nTargeted context (directly applicable background only):\n${targetedContext}` : ""}${suggested.length ? `\n\nSuggested paths (guidance only):\n${suggested.map((path) => `- ${path}`).join("\n")}` : ""}${checkCommands.length ? `\n\nFocused checks:\n${checkCommands.map((command) => `- ${command}`).join("\n")}` : ""}${dependencyNote}${parentContext ? `\n\nBounded redacted parent context (background only; task above is authoritative):\n${parentContext}` : ""}`;
-          const args = [
-            "--mode", "json", "--no-session", "--no-extensions",
-            "--extension", LINE_EDIT_EXTENSION, "--extension", SIEVE_EXTENSION,
-            "--no-skills", "--no-prompt-templates", "--no-context-files",
-            "--tools", "read,grep,find,ls,edit,write,bash,sieve_recall", "--model", modelName(model), "--thinking", params.thinking,
-            "--system-prompt", isolated ? WORKER_PROMPT : DIRECT_WORKER_PROMPT, prompt,
-          ];
-          run = await runWorker(args, {
-            cwd: workerCwd,
-            signal,
-            timeoutMs: Math.max(1, deadline - Date.now()),
-            maxTurns: Math.max(1, maxTurns - totalTurns),
-            maxCostUsd: Math.max(0, maxCostUsd - usage.cost),
-            onUsage: (snapshot) => {
-              attemptUsage = snapshot;
-              lastUpdateAt = Date.now();
-              onUpdate?.({ content: [{ type: "text", text: "Grunt usage updated" }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity, attempts } });
-            },
-            onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
-              activity = all; lastUpdateAt = Date.now();
-              onUpdate?.({ content: [{ type: "text", text: `Grunt activity:\n${activityText(all)}` }], details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: lastUpdateAt - started, usage: addUsage(usage, attemptUsage), activity: all, attempts } });
-            },
-          });
-          usage.input += run.usage.input;
-          usage.output += run.usage.output;
-          usage.cacheRead += run.usage.cacheRead;
-          usage.cacheWrite += run.usage.cacheWrite;
-          usage.cost += run.usage.cost;
-          attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-          totalTurns += run.turns;
-          if (run.cwd !== workerCwd)
-            throw new Error(`Worker runner did not confirm the ${mode} working directory`);
-          const retryIsolation = isolated;
-          const canRetry = retryIsolation !== undefined
-            && attempts < DELEGATE_MAX_ATTEMPTS
-            && Date.now() < deadline
-            && usage.cost < maxCostUsd
-            && totalTurns < maxTurns
-            && run.failure === "child_error"
-            && isTransientProviderFailure(run.error);
-          if (!canRetry || !await retryWait(attempts, signal)) break;
-          if (signal?.aborted || Date.now() >= deadline || usage.cost >= maxCostUsd || totalTurns >= maxTurns) break;
-          if ((await parentChangesSinceBaseline(exec, callIsolation ?? retryIsolation!)).length) break;
-          onUpdate?.({
-            content: [{ type: "text", text: `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…` }],
-            details: { ...agent, state: "running", mode, configuredMode, model: modelName(model), thinking: params.thinking, durationMs: Date.now() - started, usage: { ...usage }, attempts },
-          });
-          const cleanupWarnings = await removeIsolatedWorktree(exec, retryIsolation!);
-          if (cleanupWarnings.length)
-            throw new Error(`Grunt retry isolation cleanup failed: ${cleanupWarnings.join("; ")}`);
-          const cleanupIndex = isolatedAttempts.indexOf(retryIsolation!);
-          if (cleanupIndex >= 0) isolatedAttempts.splice(cleanupIndex, 1);
-          isolated = undefined;
-          isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
-          isolatedAttempts.push(isolated);
-        }
-        run = { ...run, durationMs: Date.now() - started, usage, turns: totalTurns };
+
+        /**
+         * Runs the worker, retrying transient provider failures in a *fresh* worktree —
+         * a failed attempt may have left partial edits, so the previous one is destroyed first.
+         * Only isolated mode retries; a direct-mode failure has already touched the workspace.
+         */
+        const runWorkerAttempts = async (): Promise<WorkerRun> => {
+          let run!: WorkerRun;
+          for (;;) {
+            attempts++;
+            attemptUsage = {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: 0,
+            };
+            workerCwd = isolated?.workerCwd ?? ctx.cwd;
+            missingDependencies = isolated
+              ? unavailableDependencies(
+                  isolated.parentRoot,
+                  isolated.parentCwd,
+                  isolated.workerRoot,
+                  isolated.workerCwd,
+                )
+              : [];
+            const dependencyNote = missingDependencies.length
+              ? `\n\nUnavailable ignored dependency directories: ${missingDependencies.join(", ")}. Do not install dependencies; skip checks requiring them and report that limitation.`
+              : "";
+            const prompt = `Implementation task:\n${task}${targetedContext ? `\n\nTargeted context (directly applicable background only):\n${targetedContext}` : ""}${suggested.length ? `\n\nSuggested paths (guidance only):\n${suggested.map((path) => `- ${path}`).join("\n")}` : ""}${checkCommands.length ? `\n\nFocused checks:\n${checkCommands.map((command) => `- ${command}`).join("\n")}` : ""}${dependencyNote}${parentContext ? `\n\nBounded redacted parent context (background only; task above is authoritative):\n${parentContext}` : ""}`;
+            const args = [
+              "--mode",
+              "json",
+              "--no-session",
+              "--no-extensions",
+              "--extension",
+              LINE_EDIT_EXTENSION,
+              "--extension",
+              SIEVE_EXTENSION,
+              "--no-skills",
+              "--no-prompt-templates",
+              "--no-context-files",
+              "--tools",
+              "read,grep,find,ls,edit,write,bash,sieve_recall",
+              "--model",
+              modelName(model),
+              "--thinking",
+              params.thinking,
+              "--system-prompt",
+              isolated ? WORKER_PROMPT : DIRECT_WORKER_PROMPT,
+              prompt,
+            ];
+            run = await runWorker(args, {
+              cwd: workerCwd,
+              signal,
+              timeoutMs: Math.max(1, deadline - Date.now()),
+              maxTurns: Math.max(1, maxTurns - totalTurns),
+              maxCostUsd: Math.max(0, maxCostUsd - usage.cost),
+              onUsage: (snapshot) => {
+                attemptUsage = snapshot;
+                lastUpdateAt = Date.now();
+                progress("Grunt usage updated", {
+                  usage: addUsage(usage, attemptUsage),
+                  activity,
+                });
+              },
+              onActivity: (
+                _item: WorkerActivity,
+                all: readonly WorkerActivity[],
+              ) => {
+                activity = all;
+                lastUpdateAt = Date.now();
+                progress(`Grunt activity:\n${activityText(all)}`, {
+                  usage: addUsage(usage, attemptUsage),
+                  activity: all,
+                });
+              },
+            });
+            usage.input += run.usage.input;
+            usage.output += run.usage.output;
+            usage.cacheRead += run.usage.cacheRead;
+            usage.cacheWrite += run.usage.cacheWrite;
+            usage.cost += run.usage.cost;
+            attemptUsage = {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: 0,
+            };
+            totalTurns += run.turns;
+            if (run.cwd !== workerCwd)
+              throw new Error(
+                `Worker runner did not confirm the ${mode} working directory`,
+              );
+            const retryIsolation = isolated;
+            const canRetry =
+              retryIsolation !== undefined &&
+              attempts < DELEGATE_MAX_ATTEMPTS &&
+              Date.now() < deadline &&
+              usage.cost < maxCostUsd &&
+              totalTurns < maxTurns &&
+              run.failure === "child_error" &&
+              isTransientProviderFailure(run.error);
+            if (!canRetry || !(await retryWait(attempts, signal))) return run;
+            if (
+              signal?.aborted ||
+              Date.now() >= deadline ||
+              usage.cost >= maxCostUsd ||
+              totalTurns >= maxTurns
+            )
+              return run;
+            if (
+              (
+                await parentChangesSinceBaseline(
+                  exec,
+                  callIsolation ?? retryIsolation!,
+                )
+              ).length
+            )
+              return run;
+            progress(
+              `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
+              { usage: { ...usage } },
+            );
+            const cleanupWarnings = await removeIsolatedWorktree(
+              exec,
+              retryIsolation!,
+            );
+            if (cleanupWarnings.length)
+              throw new Error(
+                `Grunt retry isolation cleanup failed: ${cleanupWarnings.join("; ")}`,
+              );
+            const cleanupIndex = isolatedAttempts.indexOf(retryIsolation!);
+            if (cleanupIndex >= 0) isolatedAttempts.splice(cleanupIndex, 1);
+            isolated = undefined;
+            isolated = await createIsolatedWorktree(exec, ctx.cwd, signal);
+            isolatedAttempts.push(isolated);
+          }
+        };
+
+        let run = await runWorkerAttempts();
+        run = {
+          ...run,
+          durationMs: Date.now() - started,
+          usage,
+          turns: totalTurns,
+        };
         const workerFailureMessage = run.error
           ? sanitizeFailureMessage(run.error, "Grunt worker failed.")
           : undefined;
+        // Keys both result shapes share; each mode then adds only what is specific to it.
+        const baseDetails = (status: string, recovery: boolean) => ({
+          ...agent,
+          status,
+          mode,
+          configuredMode,
+          workerCwd: run.cwd,
+          ...(recovery
+            ? {
+                task,
+                suggestedPaths: suggested,
+                targetedContext,
+                checkCommands,
+              }
+            : {}),
+          model: modelName(model),
+          thinking: params.thinking,
+          durationMs: run.durationMs,
+          attempts,
+          usage: run.usage,
+          turns: run.turns,
+          activity: run.activity,
+          stopReason: run.stopReason,
+          truncated: run.truncated,
+          stderr: run.stderr,
+        });
+
         if (!isolated) {
           const status = derivedStatus(run, 0);
           const recovery = status !== "completed";
@@ -343,117 +764,172 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             `Worker status: ${status}.`,
             "Execution mode: DIRECT; worker edits affected the current working directory immediately.",
             "Rollback and changed-path derivation: unavailable.",
-            isolationFallback ? `Dynamic isolation fallback: ${isolationFallback}` : "",
-            recovery && workerFailureMessage ? `Worker failure: ${workerFailureMessage}` : "",
+            isolationFallback
+              ? `Dynamic isolation fallback: ${isolationFallback}`
+              : "",
+            recovery && workerFailureMessage
+              ? `Worker failure: ${workerFailureMessage}`
+              : "",
             recovery && run.text ? `\nWorker report:\n${run.text}` : "",
           ].filter(Boolean);
           return {
             content: [{ type: "text" as const, text: named(lines.join("\n")) }],
             details: {
-              ...agent,
-              status, mode, configuredMode, isolationFallback, isolated: false, workerCwd: run.cwd,
-              ...(recovery ? { task, suggestedPaths: suggested, targetedContext, checkCommands } : {}),
-              model: modelName(model), thinking: params.thinking, durationMs: run.durationMs, attempts,
-              usage: run.usage, metrics: workerMetrics(run, status, status), turns: run.turns, activity: run.activity, stopReason: run.stopReason,
-              truncated: run.truncated, stderr: run.stderr, failureCode: run.failure,
-              ...(workerFailureMessage ? { failureMessage: workerFailureMessage } : {}),
+              ...baseDetails(status, recovery),
+              isolationFallback,
+              isolated: false,
+              metrics: workerMetrics(run, status, status),
+              failureCode: run.failure,
+              ...(workerFailureMessage
+                ? { failureMessage: workerFailureMessage }
+                : {}),
             },
           };
         }
+
         const finalIsolation = isolated;
         const worker = await collectWorkerPatch(exec, finalIsolation);
         const workerStatus = derivedStatus(run, worker.changedPaths.length);
-        let status = workerStatus;
-        let applied = false;
+        const integration = await integrateWorkerPatch({
+          exec,
+          isolation: finalIsolation,
+          baseline: callIsolation ?? finalIsolation,
+          patch: worker.patch,
+          workerStatus,
+          runFailure: run.failure,
+        });
+        const { status, applied, failureCode, integrationError } = integration;
         let artifactPath: string | undefined;
-        let failureCode: string | undefined = run.failure;
-        let integrationError = "";
-
-        if (status === "completed") {
-          const parentChanges = await parentChangesSinceBaseline(exec, callIsolation ?? finalIsolation);
-          if (parentChanges.length) {
-            status = "stale";
-            failureCode = "stale_parent";
-            integrationError = sanitizeFailureMessage(
-              `Parent changed while worker ran: ${parentChanges.join(", ")}.`,
-              "Parent changed while worker ran.",
-            );
-          } else {
-            try {
-              await applyWorkerPatch(exec, finalIsolation, worker.patch);
-              applied = true;
-            } catch (error) {
-              const rawIntegrationError = error instanceof Error ? error.message : "Worker patch apply failed.";
-              const stale = rawIntegrationError.startsWith("Parent changed immediately before patch apply:");
-              integrationError = sanitizeFailureMessage(rawIntegrationError, "Worker patch apply failed.");
-              status = stale ? "stale" : "failed";
-              failureCode = stale ? "stale_parent" : "apply_failed";
-            }
-          }
-        }
         if (!applied && worker.patch) {
           artifactPath = await persistPatchArtifact(worker.patch);
           if (artifactPath) sessionPatchArtifacts.add(artifactPath);
         }
 
-        const cwdPrefix = relative(finalIsolation.parentRoot, finalIsolation.parentCwd).replace(/\\/g, "/");
-        const suggestionPath = (path: string) => cwdPrefix && path.startsWith(`${cwdPrefix}/`) ? path.slice(cwdPrefix.length + 1) : path;
-        const outsideSuggestedPaths = suggested.length ? worker.changedPaths.filter((path) => !isSuggested(suggestionPath(path), suggested)) : [];
-        const preExistingDirtyTouched = worker.changedPaths.filter((path) => finalIsolation.parentBaseline.paths.has(path));
+        const cwdPrefix = relative(
+          finalIsolation.parentRoot,
+          finalIsolation.parentCwd,
+        ).replace(/\\/g, "/");
+        const suggestionPath = (path: string) =>
+          cwdPrefix && path.startsWith(`${cwdPrefix}/`)
+            ? path.slice(cwdPrefix.length + 1)
+            : path;
+        const outsideSuggestedPaths = suggested.length
+          ? worker.changedPaths.filter(
+              (path) => !isSuggested(suggestionPath(path), suggested),
+            )
+          : [];
+        const preExistingDirtyTouched = worker.changedPaths.filter((path) =>
+          finalIsolation.parentBaseline.paths.has(path),
+        );
         const recovery = status !== "completed";
         recordRun(run, status);
         const lines = [
           `Worker status: ${status}.`,
           `Isolation verified: ${finalIsolation.isolationVerified ? "yes" : "no"}.`,
           `Parent patch applied: ${applied ? "yes" : "no"}.`,
-          recovery ? `Derived changed paths: ${worker.changedPaths.join(", ") || "none"}.` : "",
-          recovery && preExistingDirtyTouched.length ? `Pre-existing dirty paths touched in isolated snapshot: ${preExistingDirtyTouched.join(", ")}.` : "",
-          recovery && outsideSuggestedPaths.length ? `Outside suggested paths: ${outsideSuggestedPaths.join(", ")}.` : "",
+          recovery
+            ? `Derived changed paths: ${worker.changedPaths.join(", ") || "none"}.`
+            : "",
+          recovery && preExistingDirtyTouched.length
+            ? `Pre-existing dirty paths touched in isolated snapshot: ${preExistingDirtyTouched.join(", ")}.`
+            : "",
+          recovery && outsideSuggestedPaths.length
+            ? `Outside suggested paths: ${outsideSuggestedPaths.join(", ")}.`
+            : "",
           artifactPath ? `Unapplied patch artifact: ${artifactPath}.` : "",
           integrationError ? `Integration failure: ${integrationError}` : "",
-          recovery && workerFailureMessage ? `Worker failure: ${workerFailureMessage}` : "",
+          recovery && workerFailureMessage
+            ? `Worker failure: ${workerFailureMessage}`
+            : "",
           recovery && run.text ? `\nWorker report:\n${run.text}` : "",
         ].filter(Boolean);
         return {
           content: [{ type: "text" as const, text: named(lines.join("\n")) }],
           details: {
-            ...agent,
-            status, applied, mode, configuredMode, isolated: true, isolationVerified: finalIsolation.isolationVerified,
-            workerCwd: run.cwd, workerHead: finalIsolation.workerHead, artifactPath,
-            ...(recovery ? { task, suggestedPaths: suggested, targetedContext, checkCommands, missingDependencies, changedPaths: worker.changedPaths, preExistingDirtyTouched, outsideSuggestedPaths } : {}),
-            model: modelName(model), thinking: params.thinking, durationMs: run.durationMs, attempts,
-            usage: run.usage, metrics: workerMetrics(run, workerStatus, status, worker.changedPaths.length), turns: run.turns, activity: run.activity, stopReason: run.stopReason,
-            truncated: run.truncated, stderr: run.stderr, failureCode,
+            ...baseDetails(status, recovery),
+            applied,
+            isolated: true,
+            isolationVerified: finalIsolation.isolationVerified,
+            workerHead: finalIsolation.workerHead,
+            artifactPath,
+            ...(recovery
+              ? {
+                  missingDependencies,
+                  changedPaths: worker.changedPaths,
+                  preExistingDirtyTouched,
+                  outsideSuggestedPaths,
+                }
+              : {}),
+            metrics: workerMetrics(
+              run,
+              workerStatus,
+              status,
+              worker.changedPaths.length,
+            ),
+            failureCode,
             ...(integrationError || workerFailureMessage
               ? { failureMessage: integrationError || workerFailureMessage }
               : {}),
           },
         };
       } catch (error) {
-        const failureMessage = sanitizeFailureMessage(error, "Grunt execution failed.");
+        const failureMessage = sanitizeFailureMessage(
+          error,
+          "Grunt execution failed.",
+        );
         const liveUsage = addUsage(usage, attemptUsage);
         return {
-          content: [{ type: "text" as const, text: named(mode === "isolated" ? `Grunt failed in isolated worktree; parent unchanged. ${failureMessage}` : `Grunt failed in DIRECT mode; partial edits may remain. ${failureMessage}`) }],
-          details: { ...agent, status: "failed", mode, configuredMode, applied: mode === "isolated" ? false : undefined, isolated: mode === "isolated", failureCode: mode === "isolated" ? "isolation_error" : "worker_error", failureMessage, model: modelName(model), thinking: params.thinking, usage: liveUsage },
+          content: [
+            {
+              type: "text" as const,
+              text: named(
+                mode === "isolated"
+                  ? `Grunt failed in isolated worktree; parent unchanged. ${failureMessage}`
+                  : `Grunt failed in DIRECT mode; partial edits may remain. ${failureMessage}`,
+              ),
+            },
+          ],
+          details: {
+            ...agent,
+            status: "failed",
+            mode,
+            configuredMode,
+            applied: mode === "isolated" ? false : undefined,
+            isolated: mode === "isolated",
+            failureCode:
+              mode === "isolated" ? "isolation_error" : "worker_error",
+            failureMessage,
+            model: modelName(model),
+            thinking: params.thinking,
+            usage: liveUsage,
+          },
         };
       } finally {
         if (heartbeat) clearInterval(heartbeat);
         const cleanupWarnings: string[] = [];
         for (const worktree of isolatedAttempts)
-          cleanupWarnings.push(...await removeIsolatedWorktree(exec, worktree));
+          cleanupWarnings.push(
+            ...(await removeIsolatedWorktree(exec, worktree)),
+          );
         if (cleanupWarnings.length) {
           const text = `Grunt cleanup warning: ${cleanupWarnings.join("; ")}`;
           if (ctx.hasUI) ctx.ui.notify(text, "warning");
-          else onUpdate?.({ content: [{ type: "text", text }], details: { ...agent, state: "cleanup_warning", cleanupWarnings } });
+          else
+            onUpdate?.({
+              content: [{ type: "text", text }],
+              details: { ...agent, state: "cleanup_warning", cleanupWarnings },
+            });
         }
         if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", undefined);
       }
     },
     renderCall(args, theme, context) {
-      const callNumber = (context.state.callNumber as number | undefined) ?? calls + 1;
+      const callNumber =
+        (context.state.callNumber as number | undefined) ?? calls + 1;
       context.state.callNumber = callNumber;
       const prompt = args.task.trim().replace(/\s+/g, " ");
-      const truncatedPrompt = prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt;
+      const truncatedPrompt =
+        prompt.length > 512 ? `${prompt.slice(0, 509)}...` : prompt;
       return new Text(
         theme.fg("toolTitle", theme.bold("Grunt")) +
           theme.fg("muted", ` · ${callNumber}/∞`) +
@@ -464,70 +940,128 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     },
     renderResult(result, { expanded }, theme, context) {
       const details = result.details as any;
-      const body = result.content.find((part: any) => part.type === "text") as any;
-      const color = context?.isError || details?.failureCode === "isolation_error"
-        ? "error"
-        : details?.state === "running" || details?.status === "completed" ? "success" : "warning";
-      const modeLabel = details?.configuredMode === "dynamic"
-        ? ` · DYNAMIC/${details?.mode === "direct" ? "DIRECT" : "ISOLATED"}`
-        : details?.mode === "direct" ? " · DIRECT" : "";
-      let text = theme.fg(color, `Grunt · ${details?.model ?? "Unavailable"}${modeLabel}`);
-      if (details?.usage) text += ` · ${usageText({ usage: details.usage, turns: details.turns, durationMs: details.durationMs } as WorkerRun)}`;
-      else if (details?.durationMs) text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
-      if (expanded && details?.activity?.length) text += `\n\nChild activity:\n${activityText(details.activity)}`;
+      const body = result.content.find(
+        (part: any) => part.type === "text",
+      ) as any;
+      const color =
+        context?.isError || details?.failureCode === "isolation_error"
+          ? "error"
+          : details?.state === "running" || details?.status === "completed"
+            ? "success"
+            : "warning";
+      const modeLabel =
+        details?.configuredMode === "dynamic"
+          ? ` · DYNAMIC/${details?.mode === "direct" ? "DIRECT" : "ISOLATED"}`
+          : details?.mode === "direct"
+            ? " · DIRECT"
+            : "";
+      let text = theme.fg(
+        color,
+        `Grunt · ${details?.model ?? "Unavailable"}${modeLabel}`,
+      );
+      if (details?.usage)
+        text += ` · ${usageText({ usage: details.usage, turns: details.turns, durationMs: details.durationMs } as WorkerRun)}`;
+      else if (details?.durationMs)
+        text += ` · ${(details.durationMs / 1000).toFixed(0)}s`;
+      if (expanded && details?.activity?.length)
+        text += `\n\nChild activity:\n${activityText(details.activity)}`;
       if (expanded && body?.text) text += `\n\nGrunt report:\n${body.text}`;
       return new Text(text, 0, 0);
     },
   });
 
   pi.registerCommand("grunt", {
-    description: "Select worker model, execution mode, reset, disable, or show status",
+    description:
+      "Select worker model, execution mode, reset, disable, or show status",
     handler: async (args, ctx) => {
       const value = args.trim();
       if (value === "disable") {
-        await saveConfig({ ...await loadConfig(), version: 1, disabled: true }); await refreshTool();
-        ctx.ui.notify("Grunt disabled.", "info"); return;
+        await saveConfig({
+          ...(await loadConfig()),
+          version: 1,
+          disabled: true,
+        });
+        await refreshTool();
+        ctx.ui.notify("Grunt disabled.", "info");
+        return;
       }
       if (value === "reset") {
-        await saveConfig({ version: 1, disabled: false, mode: "isolated" }); await refreshTool();
-        ctx.ui.notify("Grunt reset to current main model in isolated mode.", "info"); return;
+        await saveConfig({ version: 1, disabled: false, mode: "isolated" });
+        await refreshTool();
+        ctx.ui.notify(
+          "Grunt reset to current main model in isolated mode.",
+          "info",
+        );
+        return;
       }
       if (value === "isolated" || value === "direct" || value === "dynamic") {
         const config = await loadConfig();
-        await saveConfig({ ...config, mode: value }); await refreshTool();
-        const message = value === "isolated"
-          ? "Grunt mode: isolated Git worktree."
-          : value === "direct"
-            ? "Grunt mode: DIRECT. Worker edits affect the current working directory immediately."
-            : "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.";
-        ctx.ui.notify(message, value === "direct" ? "warning" : "info"); return;
+        await saveConfig({ ...config, mode: value });
+        await refreshTool();
+        const message =
+          value === "isolated"
+            ? "Grunt mode: isolated Git worktree."
+            : value === "direct"
+              ? "Grunt mode: DIRECT. Worker edits affect the current working directory immediately."
+              : "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.";
+        ctx.ui.notify(message, value === "direct" ? "warning" : "info");
+        return;
       }
       if (value === "status") {
         const config = await loadConfig();
         const model = await resolveModel(ctx);
-        const state = config.disabled ? "disabled" : !isGruntEnabled(config) ? "inactive" : model ? "active" : "unavailable";
+        const state = config.disabled
+          ? "disabled"
+          : !isGruntEnabled(config)
+            ? "inactive"
+            : model
+              ? "active"
+              : "unavailable";
         const measured = stats.runs
           ? `\nSession worker metrics: ${stats.integrated}/${stats.runs} integrated · ${stats.requiresAttention} requiring main attention · ${stats.turns} turns · $${stats.cost.toFixed(4)}`
           : "\nSession worker metrics: no runs yet";
-        ctx.ui.notify(`Model: ${config.model ?? "current main model"}\nState: ${state}\nMode: ${gruntMode(config)}\nThinking: selected by main model per call${measured}\nNote: metrics exclude main-model handoff, review, repair, and verification cost.`, "info"); return;
+        ctx.ui.notify(
+          `Model: ${config.model ?? "current main model"}\nState: ${state}\nMode: ${gruntMode(config)}\nThinking: selected by main model per call${measured}\nNote: metrics exclude main-model handoff, review, repair, and verification cost.`,
+          "info",
+        );
+        return;
       }
       let selected = value;
       if (!selected) {
-        if (ctx.mode !== "tui") { ctx.ui.notify("Usage: /grunt <provider/model-id>|isolated|direct|dynamic|status|reset|disable", "info"); return; }
-        selected = (await ctx.ui.select(
-          "Grunt worker model",
-          (ctx.scopedModels.length
-            ? ctx.scopedModels.map(({ model }) => model)
-            : ctx.modelRegistry.getAvailable()
-          ).map(modelName),
-        )) ?? "";
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify(
+            "Usage: /grunt <provider/model-id>|isolated|direct|dynamic|status|reset|disable",
+            "info",
+          );
+          return;
+        }
+        selected =
+          (await ctx.ui.select(
+            "Grunt worker model",
+            (ctx.scopedModels.length
+              ? ctx.scopedModels.map(({ model }) => model)
+              : ctx.modelRegistry.getAvailable()
+            ).map(modelName),
+          )) ?? "";
         if (!selected) return;
       }
       const ref = parseModelRef(selected);
       const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);
-      if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) { ctx.ui.notify(`Unavailable model: ${selected}`, "error"); return; }
-      await saveConfig({ ...await loadConfig(), version: 1, model: modelName(model), disabled: false }); await refreshTool();
-      ctx.ui.notify(`Grunt model: ${modelName(model)}\nThinking: selected by main model per call`, "info");
+      if (!model || !ctx.modelRegistry.hasConfiguredAuth(model)) {
+        ctx.ui.notify(`Unavailable model: ${selected}`, "error");
+        return;
+      }
+      await saveConfig({
+        ...(await loadConfig()),
+        version: 1,
+        model: modelName(model),
+        disabled: false,
+      });
+      await refreshTool();
+      ctx.ui.notify(
+        `Grunt model: ${modelName(model)}\nThinking: selected by main model per call`,
+        "info",
+      );
     },
   });
 }

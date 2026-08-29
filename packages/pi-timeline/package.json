@@ -4,7 +4,7 @@
   "description": "Git-backed filesystem checkpoints paired with Pi prompts",
   "type": "module",
   "keywords": ["pi-package"],
-  "engines": { "node": ">=22.19.0" },
+  "engines": { "node": ">=24.15.0" },
   "files": ["bin", "extensions", "src", "README.md", "LICENSE"],
   "bin": { "pi-timeline": "./bin/pi-timeline.mjs" },
   "scripts": {

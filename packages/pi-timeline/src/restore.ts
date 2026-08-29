@@ -10,27 +10,40 @@ const canonical = (path: string) =>
   process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
 
 function repositories(target: Snapshot): RepositorySnapshot[] {
-  return [{
-    prefix: "",
-    gitRoot: target.gitRoot,
-    commonDir: target.commonDir,
-    head: target.head,
-    headRef: target.headRef,
-    worktreeRef: target.worktreeRef,
-    indexRef: target.indexRef,
-    worktreeTree: target.worktreeTree,
-    indexTree: target.indexTree,
-  }, ...(target.nested ?? []).map((repository) => ({ ...repository }))];
+  return [
+    {
+      prefix: "",
+      gitRoot: target.gitRoot,
+      commonDir: target.commonDir,
+      head: target.head,
+      headRef: target.headRef,
+      worktreeRef: target.worktreeRef,
+      indexRef: target.indexRef,
+      worktreeTree: target.worktreeTree,
+      indexTree: target.indexTree,
+    },
+    ...(target.nested ?? []).map((repository) => ({ ...repository })),
+  ];
 }
 
 async function apply(repository: RepositorySnapshot, worktreeIndex: string) {
   const env = { GIT_INDEX_FILE: worktreeIndex },
-    currentPaths = paths(await git(repository.gitRoot, [
-      "ls-files", "-z", "-co", "--exclude-standard",
-    ])),
-    targetPaths = paths(await git(repository.gitRoot, [
-      "ls-tree", "-rz", "--name-only", repository.worktreeTree,
-    ])),
+    currentPaths = paths(
+      await git(repository.gitRoot, [
+        "ls-files",
+        "-z",
+        "-co",
+        "--exclude-standard",
+      ]),
+    ),
+    targetPaths = paths(
+      await git(repository.gitRoot, [
+        "ls-tree",
+        "-rz",
+        "--name-only",
+        repository.worktreeTree,
+      ]),
+    ),
     keep = new Set(targetPaths);
   for (const path of currentPaths)
     if (!keep.has(path)) {
@@ -41,7 +54,8 @@ async function apply(repository: RepositorySnapshot, worktreeIndex: string) {
         outside.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
         path === ".git" ||
         path.startsWith(".git/")
-      ) throw Error("Unsafe restore path.");
+      )
+        throw Error("Unsafe restore path.");
       await rm(absolute, { recursive: true, force: true });
     }
   await git(repository.gitRoot, ["checkout-index", "--all", "--force"], env);
@@ -50,16 +64,21 @@ async function apply(repository: RepositorySnapshot, worktreeIndex: string) {
 
 export async function restore(target: Snapshot, cwd = target.gitRoot) {
   const targets = repositories(target);
-  if (targets.some((repository) =>
-    !objectId.test(repository.head) ||
-    !objectId.test(repository.worktreeTree) ||
-    !objectId.test(repository.indexTree)))
+  if (
+    targets.some(
+      (repository) =>
+        !objectId.test(repository.head) ||
+        !objectId.test(repository.worktreeTree) ||
+        !objectId.test(repository.indexTree),
+    )
+  )
     throw Error("Invalid checkpoint object ID.");
   const current = await preflight(cwd);
   if (current.repositories.length !== targets.length)
     throw Error("Nested repository graph changed since checkpoint.");
   for (let index = 0; index < targets.length; index++) {
-    const actual = current.repositories[index], expected = targets[index];
+    const actual = current.repositories[index],
+      expected = targets[index];
     const repositoryMatches = expected.commonDir
       ? canonical(actual.commonDir) === canonical(expected.commonDir)
       : canonical(actual.root) === canonical(expected.gitRoot);
@@ -70,22 +89,35 @@ export async function restore(target: Snapshot, cwd = target.gitRoot) {
     expected.gitRoot = actual.root;
   }
 
-  const dir = await mkdtemp(join(tmpdir(), "pi-timeline-")), indexes: string[] = [];
+  const dir = await mkdtemp(join(tmpdir(), "pi-timeline-")),
+    indexes: string[] = [];
   try {
     // Validate every repository before deleting or overwriting any user files.
     for (let index = 0; index < targets.length; index++) {
       const worktreeIndex = join(dir, `worktree-${index}`),
         stagedIndex = join(dir, `staged-${index}`);
       await git(targets[index].gitRoot, [
-        "fsck", "--no-dangling", "--no-reflogs", "--connectivity-only",
-        targets[index].worktreeTree, targets[index].indexTree,
+        "fsck",
+        "--no-dangling",
+        "--no-reflogs",
+        "--connectivity-only",
+        targets[index].worktreeTree,
+        targets[index].indexTree,
       ]);
-      await git(targets[index].gitRoot, ["read-tree", targets[index].worktreeTree], {
-        GIT_INDEX_FILE: worktreeIndex,
-      });
-      await git(targets[index].gitRoot, ["read-tree", targets[index].indexTree], {
-        GIT_INDEX_FILE: stagedIndex,
-      });
+      await git(
+        targets[index].gitRoot,
+        ["read-tree", targets[index].worktreeTree],
+        {
+          GIT_INDEX_FILE: worktreeIndex,
+        },
+      );
+      await git(
+        targets[index].gitRoot,
+        ["read-tree", targets[index].indexTree],
+        {
+          GIT_INDEX_FILE: stagedIndex,
+        },
+      );
       indexes.push(worktreeIndex);
     }
     // Children first; outer gitlink checkout must not replace initialized child worktrees.

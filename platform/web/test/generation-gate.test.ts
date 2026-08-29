@@ -8,8 +8,16 @@ test("generation gate rejects old callbacks through replacement", () => {
   assert.equal(gate.accepts(1), true);
 
   assert.equal(gate.beginReplacement(), 2);
-  assert.equal(gate.accepts(1), false, "session events stop while replacement is pending");
-  assert.equal(gate.acceptsUi(1), true, "pre-replacement safety dialogs remain answerable");
+  assert.equal(
+    gate.accepts(1),
+    false,
+    "session events stop while replacement is pending",
+  );
+  assert.equal(
+    gate.acceptsUi(1),
+    true,
+    "pre-replacement safety dialogs remain answerable",
+  );
   assert.equal(gate.invalidateCurrent(), 2);
   assert.equal(gate.accepts(1), false);
   assert.equal(gate.acceptsUi(1), false);

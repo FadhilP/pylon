@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState, type FocusEvent as ReactFocusEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent as ReactFocusEvent,
+} from "react";
 import type { DialogTimeoutSeconds } from "../shared/protocol/snapshots";
-import { timeoutParts, timeoutUnitSeconds, type TimeoutUnit } from "../shared/runtime-policy-format";
+import {
+  timeoutParts,
+  timeoutUnitSeconds,
+  type TimeoutUnit,
+} from "../shared/runtime-policy-format";
 
 export function RuntimePolicyTimeoutControl({
   label,
@@ -55,55 +64,95 @@ export function RuntimePolicyTimeoutControl({
   };
 
   const onControlsBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
-    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    if (
+      event.relatedTarget instanceof Node &&
+      event.currentTarget.contains(event.relatedTarget)
+    )
+      return;
     if (value !== null) commit();
   };
 
-  return <div className="policy-timeout" data-override={!inherited}>
-    <div className="policy-label-row">
-      <span className="policy-timeout-copy"><span>{label}</span>{description && <small>{description}</small>}</span>
-      <span className="policy-field-state">
-        {inherited && inheritedFrom && <small>From {inheritedFrom}</small>}
-        {inherited
-          ? <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value)}>Override</button>
-          : onReset && <button className="text-button" type="button" disabled={disabled} onClick={onReset}>Use {inheritedFrom}</button>}
-      </span>
+  return (
+    <div className="policy-timeout" data-override={!inherited}>
+      <div className="policy-label-row">
+        <span className="policy-timeout-copy">
+          <span>{label}</span>
+          {description && <small>{description}</small>}
+        </span>
+        <span className="policy-field-state">
+          {inherited && inheritedFrom && <small>From {inheritedFrom}</small>}
+          {inherited ? (
+            <button
+              className="text-button"
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(value)}
+            >
+              Override
+            </button>
+          ) : (
+            onReset && (
+              <button
+                className="text-button"
+                type="button"
+                disabled={disabled}
+                onClick={onReset}
+              >
+                Use {inheritedFrom}
+              </button>
+            )
+          )}
+        </span>
+      </div>
+      <div className="policy-timeout-controls" onBlur={onControlsBlur}>
+        {value === null ? (
+          <span className="policy-timeout-never">Never</span>
+        ) : (
+          <>
+            <input
+              type="number"
+              min={unit === "seconds" ? 15 : 1}
+              max={unit === "hours" ? 24 : unit === "minutes" ? 1_440 : 86_400}
+              step="1"
+              value={amount}
+              disabled={disabled}
+              aria-label={`${label} duration`}
+              onChange={(event) => setAmount(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                commit();
+              }}
+            />
+            <select
+              value={unit}
+              disabled={disabled}
+              aria-label={`${label} unit`}
+              onChange={(event) => setUnit(event.target.value as TimeoutUnit)}
+            >
+              <option value="seconds">Seconds</option>
+              <option value="minutes">Minutes</option>
+              <option value="hours">Hours</option>
+            </select>
+          </>
+        )}
+        <button
+          className="text-button"
+          type="button"
+          disabled={disabled}
+          onClick={() =>
+            changeValue(value === null ? lastFiniteValue.current : null)
+          }
+        >
+          {value === null ? "Use timeout" : "Never"}
+        </button>
+      </div>
+      {error && (
+        <small className="policy-timeout-error" role="alert">
+          {error}
+        </small>
+      )}
+      <small>Paused while the response tab is visible and focused.</small>
     </div>
-    <div className="policy-timeout-controls" onBlur={onControlsBlur}>
-      {value === null
-        ? <span className="policy-timeout-never">Never</span>
-        : <>
-          <input
-            type="number"
-            min={unit === "seconds" ? 15 : 1}
-            max={unit === "hours" ? 24 : unit === "minutes" ? 1_440 : 86_400}
-            step="1"
-            value={amount}
-            disabled={disabled}
-            aria-label={`${label} duration`}
-            onChange={(event) => setAmount(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              commit();
-            }}
-          />
-          <select
-            value={unit}
-            disabled={disabled}
-            aria-label={`${label} unit`}
-            onChange={(event) => setUnit(event.target.value as TimeoutUnit)}
-          >
-            <option value="seconds">Seconds</option>
-            <option value="minutes">Minutes</option>
-            <option value="hours">Hours</option>
-          </select>
-        </>}
-      <button className="text-button" type="button" disabled={disabled} onClick={() => changeValue(value === null ? lastFiniteValue.current : null)}>
-        {value === null ? "Use timeout" : "Never"}
-      </button>
-    </div>
-    {error && <small className="policy-timeout-error" role="alert">{error}</small>}
-    <small>Paused while the response tab is visible and focused.</small>
-  </div>;
+  );
 }

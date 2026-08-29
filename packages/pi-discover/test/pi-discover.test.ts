@@ -2,45 +2,96 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 const execFileAsync = promisify(execFile);
-import discover, { keywordRankTools, normalizedQuery, rankInactiveTools, relationshipRoles } from "../extensions/pi-discover.ts";
-import registerDiscoverChildTools, { DISCOVER_CHILD_MAX_BYTES } from "../src/discover-child-tools.ts";
+import discover, {
+  keywordRankTools,
+  normalizedQuery,
+  rankInactiveTools,
+  relationshipRoles,
+} from "../extensions/pi-discover.ts";
+import registerDiscoverChildTools, {
+  DISCOVER_CHILD_MAX_BYTES,
+} from "../src/discover-child-tools.ts";
 import { registerFd } from "../src/fd.ts";
-import { extractSymbols, indexDatabasePath, registerIndexTools, WorkspaceIndex } from "../src/index.ts";
+import {
+  extractSymbols,
+  indexDatabasePath,
+  registerIndexTools,
+  WorkspaceIndex,
+} from "../src/index.ts";
 import { registerRelationshipGraph } from "../src/relationship-graph.ts";
 import { registerRg } from "../src/rg.ts";
-import { registerSessionSearch, registerSessionStats, searchSessions, sessionStats, type SessionSource } from "../src/sessions.ts";
+import {
+  registerSessionSearch,
+  registerSessionStats,
+  searchSessions,
+  sessionStats,
+  type SessionSource,
+} from "../src/sessions.ts";
 
 class Bus {
   handlers = new Map<string, ((...values: any[]) => any)[]>();
   on(name: string, handler: (...values: any[]) => any) {
     this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]);
-    return () => this.handlers.set(name, (this.handlers.get(name) ?? []).filter((candidate) => candidate !== handler));
+    return () =>
+      this.handlers.set(
+        name,
+        (this.handlers.get(name) ?? []).filter(
+          (candidate) => candidate !== handler,
+        ),
+      );
   }
   emit(name: string, ...values: any[]) {
     for (const handler of this.handlers.get(name) ?? []) handler(...values);
   }
   async emitAsync(name: string, ...values: any[]) {
-    await Promise.all((this.handlers.get(name) ?? []).map((handler) => handler(...values)));
+    await Promise.all(
+      (this.handlers.get(name) ?? []).map((handler) => handler(...values)),
+    );
   }
 }
 
-function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, stdout: "", stderr: "" })) {
+function setup(
+  exec: (...args: any[]) => Promise<any> = async () => ({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  }),
+) {
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
   const events = new Bus();
   const lifecycle = new Bus();
-  const active = ["read", "rg", "fd", "relationship_graph", "symbol_search", "code_search", "index_status", "search_sessions", "session_stats", "search_tools"];
+  const active = [
+    "read",
+    "rg",
+    "fd",
+    "relationship_graph",
+    "symbol_search",
+    "code_search",
+    "index_status",
+    "search_sessions",
+    "session_stats",
+    "search_tools",
+  ];
   let setActiveCalls = 0;
   const pi: any = {
     events,
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerCommand: (name: string, command: any) =>
+      commands.set(name, command),
     getActiveTools: () => active,
     getAllTools: () => [
       { name: "read", description: "Read files" },
@@ -51,21 +102,38 @@ function setup(exec: (...args: any[]) => Promise<any> = async () => ({ code: 0, 
       { name: "code_search", description: "Search indexed code" },
       { name: "index_status", description: "Report index status" },
       { name: "search_sessions", description: "Search historical Pi sessions" },
-      { name: "session_stats", description: "Inspect historical Pi session statistics" },
+      {
+        name: "session_stats",
+        description: "Inspect historical Pi session statistics",
+      },
       { name: "search_tools", description: "Find inactive tools" },
       { name: "git_history", description: "Search commit history and changes" },
       { name: "web_lookup", description: "Search public web pages" },
       { name: "shell", description: "Run shell commands" },
     ],
-    setActiveTools: (names: string[]) => { active.splice(0, active.length, ...names); setActiveCalls++; },
-    on: (name: string, handler: (value: any, ctx?: any) => void) => lifecycle.on(name, handler),
+    setActiveTools: (names: string[]) => {
+      active.splice(0, active.length, ...names);
+      setActiveCalls++;
+    },
+    on: (name: string, handler: (value: any, ctx?: any) => void) =>
+      lifecycle.on(name, handler),
     exec,
   };
   discover(pi);
-  return { active, commands, events, lifecycle, tools, getSetActiveCalls: () => setActiveCalls };
+  return {
+    active,
+    commands,
+    events,
+    lifecycle,
+    tools,
+    getSetActiveCalls: () => setActiveCalls,
+  };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error("condition was not met");
@@ -75,7 +143,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 const gitObject = "a".repeat(40);
 
-function porcelainStatus(head = "abc123", branch = "main", entries = ""): string {
+function porcelainStatus(
+  head = "abc123",
+  branch = "main",
+  entries = "",
+): string {
   return `# branch.oid ${head}\0# branch.head ${branch}\0${entries}`;
 }
 
@@ -83,10 +155,19 @@ function changedPath(path: string, state = ".M"): string {
   return `1 ${state} N... 100644 100644 100644 ${gitObject} ${gitObject} ${path}\0`;
 }
 
-function sessionSource(sessions: any[], branches: Record<string, any[]>): SessionSource {
+function sessionSource(
+  sessions: any[],
+  branches: Record<string, any[]>,
+): SessionSource {
   return {
-    async list(cwd?: string) { return cwd ? sessions.filter((session) => resolve(session.cwd) === resolve(cwd)) : sessions; },
-    open(path: string) { return { getBranch: () => branches[path] ?? [] } as any; },
+    async list(cwd?: string) {
+      return cwd
+        ? sessions.filter((session) => resolve(session.cwd) === resolve(cwd))
+        : sessions;
+    },
+    open(path: string) {
+      return { getBranch: () => branches[path] ?? [] } as any;
+    },
   };
 }
 
@@ -94,14 +175,47 @@ test("session search scopes by cwd, excludes the active session, redacts, and ac
   const cwd = process.cwd();
   const other = join(cwd, "other-workspace");
   const sessions = [
-    { id: "current", path: "current", cwd, modified: new Date("2026-01-03"), allMessagesText: "OAuth current" },
-    { id: "same-cwd", path: "same", cwd, modified: new Date("2026-01-02"), allMessagesText: "OAuth decision" },
-    { id: "other-cwd", path: "other", cwd: other, modified: new Date("2026-01-01"), allMessagesText: "" },
+    {
+      id: "current",
+      path: "current",
+      cwd,
+      modified: new Date("2026-01-03"),
+      allMessagesText: "OAuth current",
+    },
+    {
+      id: "same-cwd",
+      path: "same",
+      cwd,
+      modified: new Date("2026-01-02"),
+      allMessagesText: "OAuth decision",
+    },
+    {
+      id: "other-cwd",
+      path: "other",
+      cwd: other,
+      modified: new Date("2026-01-01"),
+      allMessagesText: "",
+    },
   ];
   const branches = {
-    current: [{ type: "message", message: { role: "user", content: "OAuth current" } }],
-    same: [{ type: "message", message: { role: "assistant", content: `OAuth api_key=sk-${"x".repeat(40)}` } }],
-    other: [{ type: "message", message: { role: "user", content: "OAuth elsewhere" } }],
+    current: [
+      { type: "message", message: { role: "user", content: "OAuth current" } },
+    ],
+    same: [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `OAuth api_key=sk-${"x".repeat(40)}`,
+        },
+      },
+    ],
+    other: [
+      {
+        type: "message",
+        message: { role: "user", content: "OAuth elsewhere" },
+      },
+    ],
   };
   const source = sessionSource(sessions, branches);
   const requestedScopes: Array<string | undefined> = [];
@@ -111,43 +225,124 @@ test("session search scopes by cwd, excludes the active session, redacts, and ac
     return baseList(requestedCwd);
   };
 
-  const local = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current" }, source);
-  assert.deepEqual(local.matches.map((match) => match.sessionId), ["same-cwd"]);
+  const local = await searchSessions(
+    { query: "OAuth", cwd, currentSessionId: "current" },
+    source,
+  );
+  assert.deepEqual(
+    local.matches.map((match) => match.sessionId),
+    ["same-cwd"],
+  );
   assert.deepEqual(requestedScopes, [cwd]);
   assert.ok(local.redactionCount >= 1);
   assert.doesNotMatch(local.matches[0].text, /sk-/);
 
-  const selected = await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "other-cwd", scope: "all" }, source);
-  assert.deepEqual(selected.matches.map((match) => match.sessionId), ["other-cwd"]);
+  const selected = await searchSessions(
+    {
+      query: "OAuth",
+      cwd,
+      currentSessionId: "current",
+      sessionId: "other-cwd",
+      scope: "all",
+    },
+    source,
+  );
+  assert.deepEqual(
+    selected.matches.map((match) => match.sessionId),
+    ["other-cwd"],
+  );
   assert.equal(requestedScopes.at(-1), undefined);
   assert.equal(selected.sessionLookup, "found");
-  const outside = await searchSessions({ query: "OAuth", cwd, sessionId: "other-cwd" }, source);
+  const outside = await searchSessions(
+    { query: "OAuth", cwd, sessionId: "other-cwd" },
+    source,
+  );
   assert.equal(outside.matches.length, 0);
   assert.equal(outside.sessionLookup, "outside_scope");
-  assert.equal((await searchSessions({ query: "OAuth", cwd, currentSessionId: "current", sessionId: "current" }, source)).sessionLookup, "active_session");
-  assert.equal((await searchSessions({ query: "OAuth", cwd, sessionId: "missing" }, source)).sessionLookup, "not_found");
+  assert.equal(
+    (
+      await searchSessions(
+        {
+          query: "OAuth",
+          cwd,
+          currentSessionId: "current",
+          sessionId: "current",
+        },
+        source,
+      )
+    ).sessionLookup,
+    "active_session",
+  );
+  assert.equal(
+    (
+      await searchSessions(
+        { query: "OAuth", cwd, sessionId: "missing" },
+        source,
+      )
+    ).sessionLookup,
+    "not_found",
+  );
 });
 
 test("session search retrieves correlated tool calls only in explicit tools mode", async () => {
   const cwd = process.cwd();
   const credential = `ghp_${"x".repeat(32)}`;
-  const source = sessionSource([{
-    id: "tools", path: "tools", cwd, modified: new Date("2026-01-01"), allMessagesText: "",
-  }], {
-    tools: [
-      { id: "call-entry", type: "message", message: { role: "assistant", content: [
-        { type: "toolCall", id: "advisor-call", name: "advisor", arguments: { request: `diagnose OAuth api_key=${credential}` } },
-        { type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "echo unrelated" } },
-      ] } },
-      { id: "result-entry", type: "message", message: {
-        role: "toolResult", toolCallId: "advisor-call", toolName: "advisor",
-        content: [{ type: "text", text: `failure secret=${credential}` }], isError: true,
-      } },
+  const source = sessionSource(
+    [
+      {
+        id: "tools",
+        path: "tools",
+        cwd,
+        modified: new Date("2026-01-01"),
+        allMessagesText: "",
+      },
     ],
-  });
+    {
+      tools: [
+        {
+          id: "call-entry",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "advisor-call",
+                name: "advisor",
+                arguments: { request: `diagnose OAuth api_key=${credential}` },
+              },
+              {
+                type: "toolCall",
+                id: "bash-call",
+                name: "bash",
+                arguments: { command: "echo unrelated" },
+              },
+            ],
+          },
+        },
+        {
+          id: "result-entry",
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "advisor-call",
+            toolName: "advisor",
+            content: [{ type: "text", text: `failure secret=${credential}` }],
+            isError: true,
+          },
+        },
+      ],
+    },
+  );
 
-  assert.equal((await searchSessions({ query: "diagnose", cwd }, source)).matches.length, 0);
-  const call = await searchSessions({ query: "diagnose", cwd, mode: "tools", toolName: "advisor" }, source);
+  assert.equal(
+    (await searchSessions({ query: "diagnose", cwd }, source)).matches.length,
+    0,
+  );
+  const call = await searchSessions(
+    { query: "diagnose", cwd, mode: "tools", toolName: "advisor" },
+    source,
+  );
   assert.equal(call.matches.length, 1);
   assert.equal(call.matches[0].kind, "tool_call");
   assert.equal(call.matches[0].toolCallId, "advisor-call");
@@ -155,9 +350,16 @@ test("session search retrieves correlated tool calls only in explicit tools mode
   assert.equal(call.matches[0].status, "error");
   assert.match(call.matches[0].text, /diagnose OAuth/);
   assert.doesNotMatch(call.matches[0].text, new RegExp(credential));
-  assert.equal((await searchSessions({ query: "failure", cwd, mode: "tools" }, source)).matches.length, 0);
+  assert.equal(
+    (await searchSessions({ query: "failure", cwd, mode: "tools" }, source))
+      .matches.length,
+    0,
+  );
 
-  const result = await searchSessions({ query: "failure", cwd, mode: "tools", includeResult: true }, source);
+  const result = await searchSessions(
+    { query: "failure", cwd, mode: "tools", includeResult: true },
+    source,
+  );
   assert.equal(result.matches.length, 1);
   assert.match(result.matches[0].text, /error result: failure/);
   assert.doesNotMatch(result.matches[0].text, new RegExp(credential));
@@ -169,42 +371,150 @@ test("session search retrieves correlated tool calls only in explicit tools mode
 
 test("session tool search rejects ambiguous calls and results", async () => {
   const cwd = process.cwd();
-  const source = sessionSource([{
-    id: "ambiguous", path: "ambiguous", cwd, modified: new Date("2026-01-01"), allMessagesText: "",
-  }], {
-    ambiguous: [
-      { id: "call-1", type: "message", message: { role: "assistant", content: [
-        { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
-        { type: "toolCall", id: "multi-result", name: "bash", arguments: { command: "ambiguous results" } },
-      ] } },
-      { id: "result-1", type: "message", message: { role: "toolResult", toolCallId: "duplicate", toolName: "advisor", content: [{ type: "text", text: "must not link" }] } },
-      { id: "call-2", type: "message", message: { role: "assistant", content: [
-        { type: "toolCall", id: "duplicate", name: "advisor", arguments: { request: "ambiguous duplicate" } },
-      ] } },
-      { id: "result-2", type: "message", message: { role: "toolResult", toolCallId: "multi-result", toolName: "bash", content: [{ type: "text", text: "first" }] } },
-      { id: "result-3", type: "message", message: { role: "toolResult", toolCallId: "multi-result", toolName: "bash", content: [{ type: "text", text: "second" }] } },
+  const source = sessionSource(
+    [
+      {
+        id: "ambiguous",
+        path: "ambiguous",
+        cwd,
+        modified: new Date("2026-01-01"),
+        allMessagesText: "",
+      },
     ],
-  });
+    {
+      ambiguous: [
+        {
+          id: "call-1",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "duplicate",
+                name: "advisor",
+                arguments: { request: "ambiguous duplicate" },
+              },
+              {
+                type: "toolCall",
+                id: "multi-result",
+                name: "bash",
+                arguments: { command: "ambiguous results" },
+              },
+            ],
+          },
+        },
+        {
+          id: "result-1",
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "duplicate",
+            toolName: "advisor",
+            content: [{ type: "text", text: "must not link" }],
+          },
+        },
+        {
+          id: "call-2",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "duplicate",
+                name: "advisor",
+                arguments: { request: "ambiguous duplicate" },
+              },
+            ],
+          },
+        },
+        {
+          id: "result-2",
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "multi-result",
+            toolName: "bash",
+            content: [{ type: "text", text: "first" }],
+          },
+        },
+        {
+          id: "result-3",
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "multi-result",
+            toolName: "bash",
+            content: [{ type: "text", text: "second" }],
+          },
+        },
+      ],
+    },
+  );
 
-  const result = await searchSessions({ query: "ambiguous", cwd, mode: "tools", includeResult: true }, source);
+  const result = await searchSessions(
+    { query: "ambiguous", cwd, mode: "tools", includeResult: true },
+    source,
+  );
   assert.equal(result.matches.length, 3);
-  assert.ok(result.matches.every((match) => match.status === "pending" && !match.resultEntryId));
+  assert.ok(
+    result.matches.every(
+      (match) => match.status === "pending" && !match.resultEntryId,
+    ),
+  );
   assert.doesNotMatch(JSON.stringify(result), /must not link|first|second/);
 });
 
 test("session search reports truncation only when session or match limits overflow", async () => {
   const cwd = process.cwd();
   const sessions = Array.from({ length: 201 }, (_, index) => ({
-    id: `session-${index}`, path: `session-${index}`, cwd, modified: new Date("2026-01-01"), allMessagesText: "",
+    id: `session-${index}`,
+    path: `session-${index}`,
+    cwd,
+    modified: new Date("2026-01-01"),
+    allMessagesText: "",
   }));
-  const emptyBranches = Object.fromEntries(sessions.map((session) => [session.path, []]));
-  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(sessions.slice(0, 200), emptyBranches))).truncated, false);
-  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(sessions, emptyBranches))).truncated, true);
+  const emptyBranches = Object.fromEntries(
+    sessions.map((session) => [session.path, []]),
+  );
+  assert.equal(
+    (
+      await searchSessions(
+        { query: "needle", cwd },
+        sessionSource(sessions.slice(0, 200), emptyBranches),
+      )
+    ).truncated,
+    false,
+  );
+  assert.equal(
+    (
+      await searchSessions(
+        { query: "needle", cwd },
+        sessionSource(sessions, emptyBranches),
+      )
+    ).truncated,
+    true,
+  );
 
-  const messages = Array.from({ length: 13 }, (_, index) => ({ type: "message", message: { role: "user", content: `needle ${index}` } }));
+  const messages = Array.from({ length: 13 }, (_, index) => ({
+    type: "message",
+    message: { role: "user", content: `needle ${index}` },
+  }));
   const oneSession = [sessions[0]];
-  assert.equal((await searchSessions({ query: "needle", cwd }, sessionSource(oneSession, { "session-0": messages.slice(0, 12) }))).truncated, false);
-  const overflow = await searchSessions({ query: "needle", cwd }, sessionSource(oneSession, { "session-0": messages }));
+  assert.equal(
+    (
+      await searchSessions(
+        { query: "needle", cwd },
+        sessionSource(oneSession, { "session-0": messages.slice(0, 12) }),
+      )
+    ).truncated,
+    false,
+  );
+  const overflow = await searchSessions(
+    { query: "needle", cwd },
+    sessionSource(oneSession, { "session-0": messages }),
+  );
   assert.equal(overflow.matches.length, 12);
   assert.equal(overflow.truncated, true);
 });
@@ -212,79 +522,226 @@ test("session search reports truncation only when session or match limits overfl
 test("session stats aggregates branch usage and completed tool results without returning content", async () => {
   const cwd = process.cwd();
   const sessions = [
-    { id: "target", path: "target", cwd, modified: new Date("2026-01-01"), allMessagesText: "" },
-    { id: "current", path: "current", cwd, modified: new Date("2026-01-02"), allMessagesText: "" },
-    { id: "other", path: "other", cwd: join(cwd, "other"), modified: new Date("2026-01-03"), allMessagesText: "" },
-    { id: "broken", path: "broken", cwd, modified: new Date("2026-01-04"), allMessagesText: "" },
+    {
+      id: "target",
+      path: "target",
+      cwd,
+      modified: new Date("2026-01-01"),
+      allMessagesText: "",
+    },
+    {
+      id: "current",
+      path: "current",
+      cwd,
+      modified: new Date("2026-01-02"),
+      allMessagesText: "",
+    },
+    {
+      id: "other",
+      path: "other",
+      cwd: join(cwd, "other"),
+      modified: new Date("2026-01-03"),
+      allMessagesText: "",
+    },
+    {
+      id: "broken",
+      path: "broken",
+      cwd,
+      modified: new Date("2026-01-04"),
+      allMessagesText: "",
+    },
   ];
   const source: SessionSource = {
-    async list(requestedCwd?: string) { return requestedCwd ? sessions.filter((session) => resolve(session.cwd) === resolve(requestedCwd)) as any : sessions as any; },
+    async list(requestedCwd?: string) {
+      return requestedCwd
+        ? (sessions.filter(
+            (session) => resolve(session.cwd) === resolve(requestedCwd),
+          ) as any)
+        : (sessions as any);
+    },
     open(path) {
       if (path === "broken") throw new Error("unreadable");
-      return { getBranch: () => path === "target" ? [
-        { type: "message", message: {
-          role: "assistant",
-          usage: { input: 100, output: 20, cacheRead: 300, cacheWrite: 100, cost: { total: 0.5 } },
-          content: [
-            { type: "toolCall", id: "advisor-call", name: "advisor", arguments: { request: "private request" } },
-            { type: "toolCall", id: "read-call", name: "read", arguments: { path: "private.ts" } },
-            { type: "toolCall", id: "pending-call", name: "write", arguments: { path: "private.ts" } },
-          ],
-        } },
-        { type: "message", message: {
-          role: "toolResult", toolCallId: "advisor-call", toolName: "advisor",
-          content: [{ type: "text", text: "private advice" }], isError: false,
-          details: { usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 10, cost: 0.1 } },
-        } },
-        { type: "message", message: {
-          role: "toolResult", toolCallId: "read-call", toolName: "read",
-          content: [{ type: "image", data: "private image" }], isError: true,
-        } },
-      ] : [] } as any;
+      return {
+        getBranch: () =>
+          path === "target"
+            ? [
+                {
+                  type: "message",
+                  message: {
+                    role: "assistant",
+                    usage: {
+                      input: 100,
+                      output: 20,
+                      cacheRead: 300,
+                      cacheWrite: 100,
+                      cost: { total: 0.5 },
+                    },
+                    content: [
+                      {
+                        type: "toolCall",
+                        id: "advisor-call",
+                        name: "advisor",
+                        arguments: { request: "private request" },
+                      },
+                      {
+                        type: "toolCall",
+                        id: "read-call",
+                        name: "read",
+                        arguments: { path: "private.ts" },
+                      },
+                      {
+                        type: "toolCall",
+                        id: "pending-call",
+                        name: "write",
+                        arguments: { path: "private.ts" },
+                      },
+                    ],
+                  },
+                },
+                {
+                  type: "message",
+                  message: {
+                    role: "toolResult",
+                    toolCallId: "advisor-call",
+                    toolName: "advisor",
+                    content: [{ type: "text", text: "private advice" }],
+                    isError: false,
+                    details: {
+                      usage: {
+                        input: 10,
+                        output: 2,
+                        cacheRead: 30,
+                        cacheWrite: 10,
+                        cost: 0.1,
+                      },
+                    },
+                  },
+                },
+                {
+                  type: "message",
+                  message: {
+                    role: "toolResult",
+                    toolCallId: "read-call",
+                    toolName: "read",
+                    content: [{ type: "image", data: "private image" }],
+                    isError: true,
+                  },
+                },
+              ]
+            : [],
+      } as any;
     },
   };
 
-  const result = await sessionStats({ sessionId: "target", cwd, currentSessionId: "current" }, source);
+  const result = await sessionStats(
+    { sessionId: "target", cwd, currentSessionId: "current" },
+    source,
+  );
   assert.equal(result.sessionLookup, "found");
   assert.equal(result.branchScope, "current");
   assert.equal(result.branchEntries, 3);
   assert.deepEqual(result.usage?.main, {
-    turns: 1, input: 100, output: 20, cacheRead: 300, cacheWrite: 100, cost: 0.5, cacheReadRate: 0.6,
+    turns: 1,
+    input: 100,
+    output: 20,
+    cacheRead: 300,
+    cacheWrite: 100,
+    cost: 0.5,
+    cacheReadRate: 0.6,
   });
   assert.deepEqual(result.usage?.children, {
-    turns: 1, input: 10, output: 2, cacheRead: 30, cacheWrite: 10, cost: 0.1, cacheReadRate: 0.6,
+    turns: 1,
+    input: 10,
+    output: 2,
+    cacheRead: 30,
+    cacheWrite: 10,
+    cost: 0.1,
+    cacheReadRate: 0.6,
   });
   assert.deepEqual(result.usage?.total, {
-    turns: 2, input: 110, output: 22, cacheRead: 330, cacheWrite: 110, cost: 0.6, cacheReadRate: 0.6,
+    turns: 2,
+    input: 110,
+    output: 22,
+    cacheRead: 330,
+    cacheWrite: 110,
+    cost: 0.6,
+    cacheReadRate: 0.6,
   });
   assert.deepEqual(result.tools, {
-    completedCalls: 2, errors: 1, images: 1, truncated: false,
+    completedCalls: 2,
+    errors: 1,
+    images: 1,
+    truncated: false,
     byName: [
       { name: "advisor", calls: 1, errors: 0, images: 0 },
       { name: "read", calls: 1, errors: 1, images: 1 },
     ],
   });
   assert.doesNotMatch(JSON.stringify(result), /private/);
-  assert.equal((await sessionStats({ sessionId: "missing", cwd }, source)).sessionLookup, "not_found");
-  assert.equal((await sessionStats({ sessionId: "current", cwd, currentSessionId: "current" }, source)).sessionLookup, "active_session");
-  assert.equal((await sessionStats({ sessionId: "other", cwd }, source)).sessionLookup, "outside_scope");
-  const empty = await sessionStats({ sessionId: "other", cwd, scope: "all" }, source);
+  assert.equal(
+    (await sessionStats({ sessionId: "missing", cwd }, source)).sessionLookup,
+    "not_found",
+  );
+  assert.equal(
+    (
+      await sessionStats(
+        { sessionId: "current", cwd, currentSessionId: "current" },
+        source,
+      )
+    ).sessionLookup,
+    "active_session",
+  );
+  assert.equal(
+    (await sessionStats({ sessionId: "other", cwd }, source)).sessionLookup,
+    "outside_scope",
+  );
+  const empty = await sessionStats(
+    { sessionId: "other", cwd, scope: "all" },
+    source,
+  );
   assert.equal(empty.sessionLookup, "found");
   assert.equal(empty.usage?.main.cacheReadRate, null);
-  assert.equal((await sessionStats({ sessionId: "broken", cwd }, source)).sessionLookup, "unreadable");
+  assert.equal(
+    (await sessionStats({ sessionId: "broken", cwd }, source)).sessionLookup,
+    "unreadable",
+  );
 });
 
 test("session stats bounds per-tool rows and registered output", async () => {
   const cwd = process.cwd();
-  const calls = Array.from({ length: 26 }, (_, index) => ({ type: "toolCall", id: `call-${index}`, name: `tool-${index}`, arguments: {} }));
-  const results = calls.map((call) => ({
-    type: "message", message: { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [], isError: false },
+  const calls = Array.from({ length: 26 }, (_, index) => ({
+    type: "toolCall",
+    id: `call-${index}`,
+    name: `tool-${index}`,
+    arguments: {},
   }));
-  const source = sessionSource([
-    { id: "target", path: "target", cwd, modified: new Date("2026-01-01"), allMessagesText: "" },
-  ], {
-    target: [{ type: "message", message: { role: "assistant", content: calls } }, ...results],
-  });
+  const results = calls.map((call) => ({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [],
+      isError: false,
+    },
+  }));
+  const source = sessionSource(
+    [
+      {
+        id: "target",
+        path: "target",
+        cwd,
+        modified: new Date("2026-01-01"),
+        allMessagesText: "",
+      },
+    ],
+    {
+      target: [
+        { type: "message", message: { role: "assistant", content: calls } },
+        ...results,
+      ],
+    },
+  );
   const stats = await sessionStats({ sessionId: "target", cwd }, source);
   assert.equal(stats.tools?.completedCalls, 26);
   assert.equal(stats.tools?.byName.length, 25);
@@ -292,35 +749,79 @@ test("session stats bounds per-tool rows and registered output", async () => {
 
   const context = { cwd, sessionManager: { getSessionId: () => "current" } };
   const tools = new Map<string, any>();
-  registerSessionStats({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
+  registerSessionStats(
+    { registerTool: (tool: any) => tools.set(tool.name, tool) } as any,
+    source,
+  );
   const statsTool = tools.get("session_stats");
   assert.match(statsTool.description, /only when the user explicitly requests/);
   assert.match(statsTool.description, /Default to current_cwd/);
-  const output = await statsTool.execute("stats", { sessionId: "target" }, undefined, undefined, context);
+  const output = await statsTool.execute(
+    "stats",
+    { sessionId: "target" },
+    undefined,
+    undefined,
+    context,
+  );
   assert.equal(JSON.parse(output.content[0].text).truncated, true);
   assert.equal(output.details.truncated, true);
   assert.equal(output.details.sessionLookup, "found");
   assert.equal(output.details.completedCalls, 26);
 
   const cappedTools = new Map<string, any>();
-  registerSessionStats({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, source, 200);
-  const capped = await cappedTools.get("session_stats").execute("stats-capped", { sessionId: "target" }, undefined, undefined, context);
+  registerSessionStats(
+    { registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any,
+    source,
+    200,
+  );
+  const capped = await cappedTools
+    .get("session_stats")
+    .execute(
+      "stats-capped",
+      { sessionId: "target" },
+      undefined,
+      undefined,
+      context,
+    );
   assert.ok(Buffer.byteLength(capped.content[0].text, "utf8") <= 200);
   assert.equal(JSON.parse(capped.content[0].text).sessionLookup, "found");
 });
 
 test("search_sessions runs without UI and reports bounded searches", async () => {
   const tools = new Map<string, any>();
-  const source = sessionSource([
-    { id: "chosen", path: "chosen", cwd: process.cwd(), modified: new Date("2026-01-01"), allMessagesText: "release decision" },
-  ], {
-    chosen: [{ type: "message", message: { role: "user", content: "release decision" } }],
-  });
-  registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
+  const source = sessionSource(
+    [
+      {
+        id: "chosen",
+        path: "chosen",
+        cwd: process.cwd(),
+        modified: new Date("2026-01-01"),
+        allMessagesText: "release decision",
+      },
+    ],
+    {
+      chosen: [
+        {
+          type: "message",
+          message: { role: "user", content: "release decision" },
+        },
+      ],
+    },
+  );
+  registerSessionSearch(
+    { registerTool: (tool: any) => tools.set(tool.name, tool) } as any,
+    source,
+  );
   const tool = tools.get("search_sessions");
   assert.match(tool.description, /only when the user explicitly requests/);
-  assert.match(tool.description, /exact historical Pi session ID.*sessionId.*query for the requested subject/i);
-  assert.match(tool.promptGuidelines.join("\n"), /exact historical Pi session ID.*sessionId.*requested subject as query.*do not pass the ID as query text to continuity_recall/i);
+  assert.match(
+    tool.description,
+    /exact historical Pi session ID.*sessionId.*query for the requested subject/i,
+  );
+  assert.match(
+    tool.promptGuidelines.join("\n"),
+    /exact historical Pi session ID.*sessionId.*requested subject as query.*do not pass the ID as query text to continuity_recall/i,
+  );
   assert.match(tool.description, /explicit cross-workspace request/);
   assert.match(tool.description, /untrusted and possibly stale/);
   const ctx = {
@@ -328,13 +829,28 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
     sessionManager: { getSessionId: () => "current" },
   };
 
-  const result = await tool.execute("headless", { query: "release", sessionId: "chosen", scope: "all" }, undefined, undefined, ctx);
+  const result = await tool.execute(
+    "headless",
+    { query: "release", sessionId: "chosen", scope: "all" },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.equal(result.details.sessionId, "chosen");
-  assert.equal(JSON.parse(result.content[0].text).matches[0].sessionId, "chosen");
+  assert.equal(
+    JSON.parse(result.content[0].text).matches[0].sessionId,
+    "chosen",
+  );
 
   const cappedTools = new Map<string, any>();
-  registerSessionSearch({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, source, 200);
-  const capped = await cappedTools.get("search_sessions").execute("capped", { query: "release" }, undefined, undefined, ctx);
+  registerSessionSearch(
+    { registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any,
+    source,
+    200,
+  );
+  const capped = await cappedTools
+    .get("search_sessions")
+    .execute("capped", { query: "release" }, undefined, undefined, ctx);
   assert.equal(capped.details.scope, "current_cwd");
   assert.ok(Buffer.byteLength(capped.content[0].text, "utf8") <= 200);
   assert.doesNotThrow(() => JSON.parse(capped.content[0].text));
@@ -342,38 +858,87 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
 
 test("indexed searches display only model-useful fields", async () => {
   const tools = new Map<string, any>();
-  registerIndexTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, () => ({
-    searchSymbols: async () => [{ name: "redact", kind: "function", path: "src/redact.ts", language: "typescript", line: 8, column: 17, signature: "export function redact()" }],
-    searchCode: async () => [{ path: "src/redact.ts", language: "typescript", rank: -3.4, line: 8, text: "export function redact()" }],
-  } as any));
+  registerIndexTools(
+    { registerTool: (tool: any) => tools.set(tool.name, tool) } as any,
+    () =>
+      ({
+        searchSymbols: async () => [
+          {
+            name: "redact",
+            kind: "function",
+            path: "src/redact.ts",
+            language: "typescript",
+            line: 8,
+            column: 17,
+            signature: "export function redact()",
+          },
+        ],
+        searchCode: async () => [
+          {
+            path: "src/redact.ts",
+            language: "typescript",
+            rank: -3.4,
+            line: 8,
+            text: "export function redact()",
+          },
+        ],
+      }) as any,
+  );
   const context = { cwd: process.cwd() };
-  const symbolResult = await tools.get("symbol_search").execute("symbol", { query: "redact" }, undefined, undefined, context);
+  const symbolResult = await tools
+    .get("symbol_search")
+    .execute("symbol", { query: "redact" }, undefined, undefined, context);
   assert.deepEqual(JSON.parse(symbolResult.content[0].text), {
     heuristic: true,
-    results: [{ name: "redact", kind: "function", path: "src/redact.ts", line: 8 }],
-    observed: 1, returned: 1, truncated: false,
+    results: [
+      { name: "redact", kind: "function", path: "src/redact.ts", line: 8 },
+    ],
+    observed: 1,
+    returned: 1,
+    truncated: false,
   });
-  const codeResult = await tools.get("code_search").execute("code", { query: "redact" }, undefined, undefined, context);
+  const codeResult = await tools
+    .get("code_search")
+    .execute("code", { query: "redact" }, undefined, undefined, context);
   assert.deepEqual(JSON.parse(codeResult.content[0].text), {
     semantic: false,
-    results: [{ path: "src/redact.ts", line: 8, text: "export function redact()" }],
-    observed: 1, returned: 1, truncated: false,
+    results: [
+      { path: "src/redact.ts", line: 8, text: "export function redact()" },
+    ],
+    observed: 1,
+    returned: 1,
+    truncated: false,
   });
 });
 
 test("indexed search caps preserve valid JSON and complete ranked results", async () => {
   const tools = new Map<string, any>();
   const rows = Array.from({ length: 20 }, (_, index) => ({
-    name: `symbol_${index}_${"界".repeat(30)}`, kind: "function", path: `src/file-${index}.ts`, line: index + 1,
+    name: `symbol_${index}_${"界".repeat(30)}`,
+    kind: "function",
+    path: `src/file-${index}.ts`,
+    line: index + 1,
   }));
   const symbolRows = Object.assign(rows, { moreAvailable: true });
-  const codeRows = Object.assign(rows.map(({ path, line }) => ({ path, line, text: "界".repeat(100) })), { moreAvailable: true });
-  registerIndexTools({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, () => ({
-    searchSymbols: async () => symbolRows,
-    searchCode: async () => codeRows,
-  } as any), 600);
+  const codeRows = Object.assign(
+    rows.map(({ path, line }) => ({ path, line, text: "界".repeat(100) })),
+    { moreAvailable: true },
+  );
+  registerIndexTools(
+    { registerTool: (tool: any) => tools.set(tool.name, tool) } as any,
+    () =>
+      ({
+        searchSymbols: async () => symbolRows,
+        searchCode: async () => codeRows,
+      }) as any,
+    600,
+  );
   for (const name of ["symbol_search", "code_search"]) {
-    const result = await tools.get(name).execute("id", { query: "symbol", limit: 20 }, undefined, undefined, { cwd: process.cwd() });
+    const result = await tools
+      .get(name)
+      .execute("id", { query: "symbol", limit: 20 }, undefined, undefined, {
+        cwd: process.cwd(),
+      });
     assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 600);
     const parsed = JSON.parse(result.content[0].text);
     assert.equal(parsed.observed, 20);
@@ -388,15 +953,22 @@ test("discover child tools enforce their child-local output cap", async () => {
   const tools = new Map<string, any>();
   registerDiscoverChildTools({
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    exec: async () => ({ code: 0, stdout: "x".repeat(DISCOVER_CHILD_MAX_BYTES * 2), stderr: "" }),
+    exec: async () => ({
+      code: 0,
+      stdout: "x".repeat(DISCOVER_CHILD_MAX_BYTES * 2),
+      stderr: "",
+    }),
   } as any);
-  const result = await tools.get("rg").execute(
-    "id", { pattern: "x" }, undefined, undefined, { cwd: process.cwd() },
+  const result = await tools
+    .get("rg")
+    .execute("id", { pattern: "x" }, undefined, undefined, {
+      cwd: process.cwd(),
+    });
+  assert.ok(
+    Buffer.byteLength(result.content[0].text) <= DISCOVER_CHILD_MAX_BYTES,
   );
-  assert.ok(Buffer.byteLength(result.content[0].text) <= DISCOVER_CHILD_MAX_BYTES);
   assert.match(result.content[0].text, /truncated/i);
 });
-
 
 test("index database lives under pi-discover and migrates the legacy path", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-discover-agent-"));
@@ -437,24 +1009,72 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
   legacy.close();
   const executor = async (_command: string, args: string[]) => {
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "current.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(), stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse")
+      return { code: 0, stdout: "abc123\n", stderr: "" };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return {
+        code: 0,
+        stdout: gitArgs.includes("--stage") ? "" : "current.ts\0",
+        stderr: "",
+      };
+    if (gitArgs[0] === "status")
+      return { code: 0, stdout: porcelainStatus(), stderr: "" };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
   try {
     await index.rebuild();
-    assert.equal((await index.searchSymbols(root, { query: "currentSymbol" }) as any[])[0].path, "current.ts");
+    assert.equal(
+      (
+        (await index.searchSymbols(root, { query: "currentSymbol" })) as any[]
+      )[0].path,
+      "current.ts",
+    );
     const migrated = new DatabaseSync(dbPath);
     try {
-      assert.equal((migrated.prepare("PRAGMA user_version").get() as any).user_version, 3);
-      assert.equal((migrated.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count, 1);
-      assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='stale.ts'").get() as any).count, 0);
-      assert.equal((migrated.prepare("SELECT count(*) AS count FROM files WHERE path='current.ts'").get() as any).count, 1);
-      assert.ok((migrated.prepare("SELECT count(*) AS count FROM sqlite_stat1").get() as any).count > 0);
+      assert.equal(
+        (migrated.prepare("PRAGMA user_version").get() as any).user_version,
+        3,
+      );
+      assert.equal(
+        (
+          migrated
+            .prepare("SELECT count(*) AS count FROM workspaces")
+            .get() as any
+        ).count,
+        1,
+      );
+      assert.equal(
+        (
+          migrated
+            .prepare(
+              "SELECT count(*) AS count FROM files WHERE path='stale.ts'",
+            )
+            .get() as any
+        ).count,
+        0,
+      );
+      assert.equal(
+        (
+          migrated
+            .prepare(
+              "SELECT count(*) AS count FROM files WHERE path='current.ts'",
+            )
+            .get() as any
+        ).count,
+        1,
+      );
+      assert.ok(
+        (
+          migrated
+            .prepare("SELECT count(*) AS count FROM sqlite_stat1")
+            .get() as any
+        ).count > 0,
+      );
     } finally {
       migrated.close();
     }
@@ -472,23 +1092,36 @@ test("porcelain v2 refresh handles unborn and detached branches", async () => {
   let branch = "main";
   const executor = async (_command: string, args: string[]) => {
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return head === "unborn"
-      ? { code: 128, stdout: "", stderr: "unknown revision" }
-      : { code: 0, stdout: `${head}\n`, stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: branch ? `${branch}\n` : "", stderr: "" };
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return {
-      code: 0,
-      stdout: porcelainStatus(head === "unborn" ? "(initial)" : head, branch || "(detached)", "? app.ts\0"),
-      stderr: "",
-    };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse")
+      return head === "unborn"
+        ? { code: 128, stdout: "", stderr: "unknown revision" }
+        : { code: 0, stdout: `${head}\n`, stderr: "" };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: branch ? `${branch}\n` : "", stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return {
+        code: 0,
+        stdout: gitArgs.includes("--stage") ? "" : "app.ts\0",
+        stderr: "",
+      };
+    if (gitArgs[0] === "status")
+      return {
+        code: 0,
+        stdout: porcelainStatus(
+          head === "unborn" ? "(initial)" : head,
+          branch || "(detached)",
+          "? app.ts\0",
+        ),
+        stderr: "",
+      };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
   try {
     await index.refresh();
-    const unborn = await index.status() as any;
+    const unborn = (await index.status()) as any;
     assert.equal(unborn.head, "unborn");
     assert.equal(unborn.branch, "main");
     assert.equal(unborn.files, 1);
@@ -496,7 +1129,7 @@ test("porcelain v2 refresh handles unborn and detached branches", async () => {
     head = "abc123";
     branch = "";
     await index.refresh();
-    const detached = await index.status() as any;
+    const detached = (await index.status()) as any;
     assert.equal(detached.head, "abc123");
     assert.equal(detached.branch, "");
   } finally {
@@ -506,64 +1139,143 @@ test("porcelain v2 refresh handles unborn and detached branches", async () => {
 });
 
 test("symbol extraction covers common language declarations", () => {
-  assert.deepEqual(extractSymbols("export function run() {}\nconst later = async () => 1\nconst typed: Handler = async (value: string): Promise<void> => {}\nclass Worker {\n  async execute(): Promise<void> {}\n}", "typescript").map(({ name, kind }) => ({ name, kind })), [
-    { name: "run", kind: "function" }, { name: "later", kind: "function" }, { name: "typed", kind: "function" },
-    { name: "Worker", kind: "class" }, { name: "execute", kind: "function" },
-  ]);
-  assert.deepEqual(extractSymbols("public class Worker {\n  public void run() {}\n}", "java").map(({ name }) => name), ["Worker", "run"]);
-  assert.deepEqual(extractSymbols("public class Worker {\n  public async Task Run() => done;\n}", "csharp").map(({ name }) => name), ["Worker", "Run"]);
-  assert.deepEqual(extractSymbols("int run(void) { return 0; }", "c").map(({ name }) => name), ["run"]);
-  assert.deepEqual(extractSymbols("class Worker:\n    async def execute(self):", "python").map(({ name, kind }) => ({ name, kind })), [
-    { name: "Worker", kind: "class" }, { name: "execute", kind: "function" },
-  ]);
-  assert.deepEqual(extractSymbols("sealed class Worker {}\nenum State { ready }\nmixin Logging {}\nextension Labels on String {}\nextension type UserId(int value) {}\ntypedef Callback = void Function();\nFuture<void> execute() async {}\nString label() => 'ready';", "dart").map(({ name, kind }) => ({ name, kind })), [
-    { name: "Worker", kind: "class" }, { name: "State", kind: "enum" }, { name: "Logging", kind: "mixin" },
-    { name: "Labels", kind: "extension" }, { name: "UserId", kind: "extension type" }, { name: "Callback", kind: "typedef" },
-    { name: "execute", kind: "function" }, { name: "label", kind: "function" },
-  ]);
+  assert.deepEqual(
+    extractSymbols(
+      "export function run() {}\nconst later = async () => 1\nconst typed: Handler = async (value: string): Promise<void> => {}\nclass Worker {\n  async execute(): Promise<void> {}\n}",
+      "typescript",
+    ).map(({ name, kind }) => ({ name, kind })),
+    [
+      { name: "run", kind: "function" },
+      { name: "later", kind: "function" },
+      { name: "typed", kind: "function" },
+      { name: "Worker", kind: "class" },
+      { name: "execute", kind: "function" },
+    ],
+  );
+  assert.deepEqual(
+    extractSymbols(
+      "public class Worker {\n  public void run() {}\n}",
+      "java",
+    ).map(({ name }) => name),
+    ["Worker", "run"],
+  );
+  assert.deepEqual(
+    extractSymbols(
+      "public class Worker {\n  public async Task Run() => done;\n}",
+      "csharp",
+    ).map(({ name }) => name),
+    ["Worker", "Run"],
+  );
+  assert.deepEqual(
+    extractSymbols("int run(void) { return 0; }", "c").map(({ name }) => name),
+    ["run"],
+  );
+  assert.deepEqual(
+    extractSymbols("class Worker:\n    async def execute(self):", "python").map(
+      ({ name, kind }) => ({ name, kind }),
+    ),
+    [
+      { name: "Worker", kind: "class" },
+      { name: "execute", kind: "function" },
+    ],
+  );
+  assert.deepEqual(
+    extractSymbols(
+      "sealed class Worker {}\nenum State { ready }\nmixin Logging {}\nextension Labels on String {}\nextension type UserId(int value) {}\ntypedef Callback = void Function();\nFuture<void> execute() async {}\nString label() => 'ready';",
+      "dart",
+    ).map(({ name, kind }) => ({ name, kind })),
+    [
+      { name: "Worker", kind: "class" },
+      { name: "State", kind: "enum" },
+      { name: "Logging", kind: "mixin" },
+      { name: "Labels", kind: "extension" },
+      { name: "UserId", kind: "extension type" },
+      { name: "Callback", kind: "typedef" },
+      { name: "execute", kind: "function" },
+      { name: "label", kind: "function" },
+    ],
+  );
 });
 
 test("SQLite index refreshes changed, restored, and deleted files atomically", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-discover-index-"));
   const sourcePath = join(root, "src", "a.ts");
   const dbPath = join(root, "index.sqlite");
-  const original = "export function alpha() { return 'authentication middleware'; }\n";
+  const original =
+    "export function alpha() { return 'authentication middleware'; }\n";
   let status = "";
   await mkdir(join(root, "src"));
   await writeFile(sourcePath, original);
   const exec = async (_command: string, args: string[]) => {
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse")
+      return { code: 0, stdout: "abc123\n", stderr: "" };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files") {
-      if (gitArgs.includes("--stage")) return { code: 0, stdout: "", stderr: "" };
+      if (gitArgs.includes("--stage"))
+        return { code: 0, stdout: "", stderr: "" };
       assert.equal(gitArgs.includes("--full-name"), true);
       return { code: 0, stdout: "src/a.ts\0", stderr: "" };
     }
-    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus("abc123", "main", status), stderr: "" };
+    if (gitArgs[0] === "status")
+      return {
+        code: 0,
+        stdout: porcelainStatus("abc123", "main", status),
+        stderr: "",
+      };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, exec, dbPath);
   try {
     await index.refresh();
-    assert.deepEqual((await index.searchSymbols(root, { query: "alpha" }) as any[]).map((row) => row.name), ["alpha"]);
-    assert.equal((await index.searchCode(root, { query: "authentication middleware" }) as any[])[0].path, "src/a.ts");
+    assert.deepEqual(
+      ((await index.searchSymbols(root, { query: "alpha" })) as any[]).map(
+        (row) => row.name,
+      ),
+      ["alpha"],
+    );
+    assert.equal(
+      (
+        (await index.searchCode(root, {
+          query: "authentication middleware",
+        })) as any[]
+      )[0].path,
+      "src/a.ts",
+    );
 
-    await writeFile(sourcePath, "export function beta() { return 'changed token'; }\n");
+    await writeFile(
+      sourcePath,
+      "export function beta() { return 'changed token'; }\n",
+    );
     status = changedPath("src/a.ts");
     await index.refresh();
-    assert.deepEqual((await index.searchSymbols(root, { query: "beta" }) as any[]).map((row) => row.name), ["beta"]);
+    assert.deepEqual(
+      ((await index.searchSymbols(root, { query: "beta" })) as any[]).map(
+        (row) => row.name,
+      ),
+      ["beta"],
+    );
 
     await writeFile(sourcePath, original);
     status = "";
     await index.refresh();
-    assert.deepEqual((await index.searchSymbols(root, { query: "alpha" }) as any[]).map((row) => row.name), ["alpha"]);
+    assert.deepEqual(
+      ((await index.searchSymbols(root, { query: "alpha" })) as any[]).map(
+        (row) => row.name,
+      ),
+      ["alpha"],
+    );
 
     await rm(sourcePath);
     status = changedPath("src/a.ts", ".D");
     await index.refresh();
-    assert.equal((await index.searchSymbols(root, { query: "alpha" }) as any[]).length, 0);
+    assert.equal(
+      ((await index.searchSymbols(root, { query: "alpha" })) as any[]).length,
+      0,
+    );
   } finally {
     await index.close();
     await rm(root, { recursive: true, force: true });
@@ -580,7 +1292,8 @@ test("refresh retries when a clean path becomes dirty after the initial snapshot
   let dirty = "";
   const executor = async (_command: string, args: string[]) => {
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${root}\n`, stderr: "" };
     if (gitArgs[0] === "ls-files" && gitArgs.includes("--stage")) {
       if (injectChange && !changed) {
         await writeFile(sourcePath, "export function afterRace() {}\n");
@@ -589,16 +1302,30 @@ test("refresh retries when a clean path becomes dirty after the initial snapshot
       }
       return { code: 0, stdout: "", stderr: "" };
     }
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus("abc123", "main", dirty), stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return { code: 0, stdout: "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "status")
+      return {
+        code: 0,
+        stdout: porcelainStatus("abc123", "main", dirty),
+        stderr: "",
+      };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
   try {
     await index.refresh();
     injectChange = true;
-    assert.equal((await index.searchSymbols(root, { query: "afterRace" }) as any[]).length, 1);
-    assert.equal((await index.searchSymbols(root, { query: "beforeRace" }) as any[]).length, 0);
+    assert.equal(
+      ((await index.searchSymbols(root, { query: "afterRace" })) as any[])
+        .length,
+      1,
+    );
+    assert.equal(
+      ((await index.searchSymbols(root, { query: "beforeRace" })) as any[])
+        .length,
+      0,
+    );
   } finally {
     await index.close();
     await rm(root, { recursive: true, force: true });
@@ -618,11 +1345,28 @@ test("SQLite index prunes workspaces, repositories, and FTS rows for missing dir
   const executor = async (_command: string, args: string[]) => {
     const cwd = args[1];
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${cwd}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: `${cwd === live ? "live" : "stale"}-head\n`, stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: gitArgs.includes("--stage") ? "" : "app.ts\0", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(`${cwd === live ? "live" : "stale"}-head`), stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${cwd}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse")
+      return {
+        code: 0,
+        stdout: `${cwd === live ? "live" : "stale"}-head\n`,
+        stderr: "",
+      };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return {
+        code: 0,
+        stdout: gitArgs.includes("--stage") ? "" : "app.ts\0",
+        stderr: "",
+      };
+    if (gitArgs[0] === "status")
+      return {
+        code: 0,
+        stdout: porcelainStatus(`${cwd === live ? "live" : "stale"}-head`),
+        stderr: "",
+      };
     throw new Error(`unexpected git call: ${gitArgs.join(" ")}`);
   };
   const liveIndex = new WorkspaceIndex(live, executor, dbPath);
@@ -639,17 +1383,55 @@ test("SQLite index prunes workspaces, repositories, and FTS rows for missing dir
     });
     const database = new DatabaseSync(dbPath);
     try {
-      assert.deepEqual({
-        workspaces: Number((database.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count),
-        repositories: Number((database.prepare("SELECT count(*) AS count FROM repositories").get() as any).count),
-        files: Number((database.prepare("SELECT count(*) AS count FROM files").get() as any).count),
-        fts: Number((database.prepare("SELECT count(*) AS count FROM code_fts").get() as any).count),
-        symbols: Number((database.prepare("SELECT count(*) AS count FROM symbols").get() as any).count),
-      }, { workspaces: 1, repositories: 1, files: 1, fts: 1, symbols: 1 });
+      assert.deepEqual(
+        {
+          workspaces: Number(
+            (
+              database
+                .prepare("SELECT count(*) AS count FROM workspaces")
+                .get() as any
+            ).count,
+          ),
+          repositories: Number(
+            (
+              database
+                .prepare("SELECT count(*) AS count FROM repositories")
+                .get() as any
+            ).count,
+          ),
+          files: Number(
+            (
+              database
+                .prepare("SELECT count(*) AS count FROM files")
+                .get() as any
+            ).count,
+          ),
+          fts: Number(
+            (
+              database
+                .prepare("SELECT count(*) AS count FROM code_fts")
+                .get() as any
+            ).count,
+          ),
+          symbols: Number(
+            (
+              database
+                .prepare("SELECT count(*) AS count FROM symbols")
+                .get() as any
+            ).count,
+          ),
+        },
+        { workspaces: 1, repositories: 1, files: 1, fts: 1, symbols: 1 },
+      );
     } finally {
       database.close();
     }
-    assert.deepEqual((await liveIndex.searchSymbols(live, { query: "liveProject" }) as any[]).map((row) => row.name), ["liveProject"]);
+    assert.deepEqual(
+      (
+        (await liveIndex.searchSymbols(live, { query: "liveProject" })) as any[]
+      ).map((row) => row.name),
+      ["liveProject"],
+    );
   } finally {
     await Promise.all([liveIndex.close(), staleIndex.close()]);
     await rm(parent, { recursive: true, force: true });
@@ -660,39 +1442,78 @@ test("full refresh tracks dirty files, queries refresh on demand, and code searc
   const root = await mkdtemp(join(tmpdir(), "pi-discover-fresh-"));
   const dbPath = join(root, "index.sqlite");
   const sourcePath = join(root, "filenameonly.ts");
-  const runGit = (...args: string[]) => execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
+  const runGit = (...args: string[]) =>
+    execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
   const executor = async (command: string, args: string[]) => {
     try {
       const result = await execFileAsync(command, args, { encoding: "utf8" });
       return { code: 0, stdout: result.stdout, stderr: result.stderr };
     } catch (error: any) {
-      return { code: typeof error.code === "number" ? error.code : 1, stdout: error.stdout ?? "", stderr: error.stderr ?? error.message };
+      return {
+        code: typeof error.code === "number" ? error.code : 1,
+        stdout: error.stdout ?? "",
+        stderr: error.stderr ?? error.message,
+      };
     }
   };
   try {
     await runGit("init", "-q");
     await runGit("config", "user.email", "test@example.com");
     await runGit("config", "user.name", "Test");
-    await writeFile(sourcePath, "export function run() {}\nexport function runner() {}\nexport function outrun() {}\n");
+    await writeFile(
+      sourcePath,
+      "export function run() {}\nexport function runner() {}\nexport function outrun() {}\n",
+    );
     for (let index = 0; index < 12; index++)
-      await writeFile(join(root, `shared-${index}.ts`), `export const value${index} = 'shared searchable phrase';\n`);
+      await writeFile(
+        join(root, `shared-${index}.ts`),
+        `export const value${index} = 'shared searchable phrase';\n`,
+      );
     await runGit("add", ".");
     await runGit("commit", "-qm", "initial");
-    await writeFile(sourcePath, "export function dirtyOnly() { return 'dirty content'; }\n");
+    await writeFile(
+      sourcePath,
+      "export function dirtyOnly() { return 'dirty content'; }\n",
+    );
 
     const index = new WorkspaceIndex(root, executor, dbPath);
     try {
       await index.refresh();
-      assert.equal((await index.searchSymbols(root, { query: "dirtyOnly" }) as any[]).length, 1);
+      assert.equal(
+        ((await index.searchSymbols(root, { query: "dirtyOnly" })) as any[])
+          .length,
+        1,
+      );
       await runGit("checkout", "--", "filenameonly.ts");
-      assert.deepEqual((await index.searchSymbols(root, { query: "run" }) as any[]).map((row) => row.name), ["run", "runner", "outrun"]);
-      assert.equal((await index.searchSymbols(root, { query: "dirtyOnly" }) as any[]).length, 0);
-      assert.equal((await index.searchCode(root, { query: "filenameonly" }) as any[]).length, 0);
-      const codeResults = await index.searchCode(root, { query: "shared searchable" }) as any;
+      assert.deepEqual(
+        ((await index.searchSymbols(root, { query: "run" })) as any[]).map(
+          (row) => row.name,
+        ),
+        ["run", "runner", "outrun"],
+      );
+      assert.equal(
+        ((await index.searchSymbols(root, { query: "dirtyOnly" })) as any[])
+          .length,
+        0,
+      );
+      assert.equal(
+        ((await index.searchCode(root, { query: "filenameonly" })) as any[])
+          .length,
+        0,
+      );
+      const codeResults = (await index.searchCode(root, {
+        query: "shared searchable",
+      })) as any;
       assert.equal(codeResults.length, 10);
       assert.equal(codeResults.moreAvailable, true);
-      await assert.rejects(() => index.searchSymbols(root, { query: "   " }), /non-whitespace/);
-      await assert.rejects(() => index.searchCode(root, { query: "   " }), /non-whitespace/);
+      await assert.rejects(
+        () => index.searchSymbols(root, { query: "   " }),
+        /non-whitespace/,
+      );
+      await assert.rejects(
+        () => index.searchCode(root, { query: "   " }),
+        /non-whitespace/,
+      );
     } finally {
       await index.close();
     }
@@ -706,24 +1527,56 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
   const child = join(root, "child repo");
   const source = join(child, "nested.ts");
   const dbPath = join(root, "index.sqlite");
-  const runGit = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+  const runGit = (cwd: string, ...args: string[]) =>
+    execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
   const executor = async (command: string, args: string[]) => {
     try {
       const result = await execFileAsync(command, args, { encoding: "utf8" });
       return { code: 0, stdout: result.stdout, stderr: result.stderr };
     } catch (error: any) {
-      return { code: typeof error.code === "number" ? error.code : 1, stdout: error.stdout ?? "", stderr: error.stderr ?? error.message };
+      return {
+        code: typeof error.code === "number" ? error.code : 1,
+        stdout: error.stdout ?? "",
+        stderr: error.stderr ?? error.message,
+      };
     }
   };
   const counts = () => {
     const database = new DatabaseSync(dbPath);
     try {
       return {
-        repositories: Number((database.prepare("SELECT count(*) AS count FROM repositories").get() as any).count),
-        workspaces: Number((database.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count),
-        files: Number((database.prepare("SELECT count(*) AS count FROM files").get() as any).count),
-        fts: Number((database.prepare("SELECT count(*) AS count FROM code_fts").get() as any).count),
-        symbols: Number((database.prepare("SELECT count(*) AS count FROM symbols").get() as any).count),
+        repositories: Number(
+          (
+            database
+              .prepare("SELECT count(*) AS count FROM repositories")
+              .get() as any
+          ).count,
+        ),
+        workspaces: Number(
+          (
+            database
+              .prepare("SELECT count(*) AS count FROM workspaces")
+              .get() as any
+          ).count,
+        ),
+        files: Number(
+          (database.prepare("SELECT count(*) AS count FROM files").get() as any)
+            .count,
+        ),
+        fts: Number(
+          (
+            database
+              .prepare("SELECT count(*) AS count FROM code_fts")
+              .get() as any
+          ).count,
+        ),
+        symbols: Number(
+          (
+            database
+              .prepare("SELECT count(*) AS count FROM symbols")
+              .get() as any
+          ).count,
+        ),
       };
     } finally {
       database.close();
@@ -737,7 +1590,10 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
     await runGit(child, "init", "-q");
     await runGit(child, "config", "user.email", "test@example.com");
     await runGit(child, "config", "user.name", "Test");
-    await writeFile(source, "export function nestedAlpha() { return 'shared content'; }\n");
+    await writeFile(
+      source,
+      "export function nestedAlpha() { return 'shared content'; }\n",
+    );
     await runGit(child, "add", ".");
     await runGit(child, "commit", "-qm", "initial child");
     await runGit(root, "add", "child repo");
@@ -748,34 +1604,140 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
     const childIndex = new WorkspaceIndex(child, executor, dbPath);
     try {
       await aggregateIndex.rebuild();
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 1, files: 1, fts: 1, symbols: 1 });
-      assert.equal((await aggregateIndex.searchSymbols(root, { query: "nestedAlpha", path: "child repo" }) as any[])[0].path, "child repo/nested.ts");
-      assert.equal((await aggregateIndex.searchCode(root, { query: "shared content" }) as any[])[0].path, "child repo/nested.ts");
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 1,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
+      assert.equal(
+        (
+          (await aggregateIndex.searchSymbols(root, {
+            query: "nestedAlpha",
+            path: "child repo",
+          })) as any[]
+        )[0].path,
+        "child repo/nested.ts",
+      );
+      assert.equal(
+        (
+          (await aggregateIndex.searchCode(root, {
+            query: "shared content",
+          })) as any[]
+        )[0].path,
+        "child repo/nested.ts",
+      );
 
       await childIndex.rebuild();
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
-      assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
-      assert.equal((await childIndex.searchCode(child, { query: "shared content" }) as any[])[0].path, "nested.ts");
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 2,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
+      assert.equal(
+        (
+          (await childIndex.searchSymbols(child, {
+            query: "nestedAlpha",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
+      assert.equal(
+        (
+          (await childIndex.searchCode(child, {
+            query: "shared content",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
 
       const database = new DatabaseSync(dbPath);
       try {
-        assert.equal(database.prepare("UPDATE workspaces SET root=? WHERE root=?").run(join(root, "missing"), root).changes, 1);
+        assert.equal(
+          database
+            .prepare("UPDATE workspaces SET root=? WHERE root=?")
+            .run(join(root, "missing"), root).changes,
+          1,
+        );
       } finally {
         database.close();
       }
-      assert.deepEqual(await childIndex.prune(), { removedWorkspaces: 1, removedRepositories: 0, removedFiles: 0 });
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 1, files: 1, fts: 1, symbols: 1 });
-      assert.equal((await childIndex.searchSymbols(child, { query: "nestedAlpha" }) as any[])[0].path, "nested.ts");
+      assert.deepEqual(await childIndex.prune(), {
+        removedWorkspaces: 1,
+        removedRepositories: 0,
+        removedFiles: 0,
+      });
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 1,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
+      assert.equal(
+        (
+          (await childIndex.searchSymbols(child, {
+            query: "nestedAlpha",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
       await aggregateIndex.refresh();
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 2,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
 
-      await writeFile(source, "export function nestedDirty() { return 'updated shared content'; }\n");
+      await writeFile(
+        source,
+        "export function nestedDirty() { return 'updated shared content'; }\n",
+      );
       await childIndex.refresh();
-      assert.equal((await aggregateIndex.searchSymbols(root, { query: "nestedDirty" }) as any[])[0].path, "child repo/nested.ts");
-      assert.equal((await childIndex.searchSymbols(child, { query: "nestedDirty" }) as any[])[0].path, "nested.ts");
-      assert.equal((await aggregateIndex.searchCode(root, { query: "updated shared content" }) as any[])[0].path, "child repo/nested.ts");
-      assert.equal((await childIndex.searchCode(child, { query: "updated shared content" }) as any[])[0].path, "nested.ts");
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
+      assert.equal(
+        (
+          (await aggregateIndex.searchSymbols(root, {
+            query: "nestedDirty",
+          })) as any[]
+        )[0].path,
+        "child repo/nested.ts",
+      );
+      assert.equal(
+        (
+          (await childIndex.searchSymbols(child, {
+            query: "nestedDirty",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
+      assert.equal(
+        (
+          (await aggregateIndex.searchCode(root, {
+            query: "updated shared content",
+          })) as any[]
+        )[0].path,
+        "child repo/nested.ts",
+      );
+      assert.equal(
+        (
+          (await childIndex.searchCode(child, {
+            query: "updated shared content",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 2,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
 
       await runGit(child, "add", ".");
       await runGit(child, "commit", "-qm", "change child head");
@@ -784,21 +1746,62 @@ test("SQLite index deduplicates gitlinks across aggregate and child workspaces",
       await runGit(child, "add", ".");
       await runGit(child, "commit", "-qm", "delete child source");
       await aggregateIndex.refresh();
-      assert.equal((await aggregateIndex.searchSymbols(root, { query: "nestedDirty" }) as any[]).length, 0);
-      assert.equal((await childIndex.searchSymbols(child, { query: "nestedDirty" }) as any[]).length, 0);
+      assert.equal(
+        (
+          (await aggregateIndex.searchSymbols(root, {
+            query: "nestedDirty",
+          })) as any[]
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          (await childIndex.searchSymbols(child, {
+            query: "nestedDirty",
+          })) as any[]
+        ).length,
+        0,
+      );
       assert.equal(counts().files, 0);
 
       await writeFile(source, "export function retainedChild() {}\n");
       await runGit(child, "add", ".");
       await runGit(child, "commit", "-qm", "restore child source");
       await childIndex.refresh();
-      assert.equal((await aggregateIndex.searchSymbols(root, { query: "retainedChild" }) as any[]).length, 1);
+      assert.equal(
+        (
+          (await aggregateIndex.searchSymbols(root, {
+            query: "retainedChild",
+          })) as any[]
+        ).length,
+        1,
+      );
       await runGit(root, "rm", "--cached", "-q", "-f", "child repo");
       await runGit(root, "commit", "-qm", "remove gitlink membership");
       await aggregateIndex.refresh();
-      assert.equal((await aggregateIndex.searchSymbols(root, { query: "retainedChild" }) as any[]).length, 0);
-      assert.equal((await childIndex.searchSymbols(child, { query: "retainedChild" }) as any[])[0].path, "nested.ts");
-      assert.deepEqual(counts(), { repositories: 2, workspaces: 2, files: 1, fts: 1, symbols: 1 });
+      assert.equal(
+        (
+          (await aggregateIndex.searchSymbols(root, {
+            query: "retainedChild",
+          })) as any[]
+        ).length,
+        0,
+      );
+      assert.equal(
+        (
+          (await childIndex.searchSymbols(child, {
+            query: "retainedChild",
+          })) as any[]
+        )[0].path,
+        "nested.ts",
+      );
+      assert.deepEqual(counts(), {
+        repositories: 2,
+        workspaces: 2,
+        files: 1,
+        fts: 1,
+        symbols: 1,
+      });
     } finally {
       await Promise.all([aggregateIndex.close(), childIndex.close()]);
     }
@@ -812,34 +1815,91 @@ test("SQLite index projects one physical repository through two gitlink prefixes
   const child = join(root, "physical-child");
   const dbPath = join(root, "index.sqlite");
   await mkdir(child);
-  await writeFile(join(child, "nested.ts"), "export function aliasedSymbol() {}\n");
-  await symlink(child, join(root, "alias-one"), process.platform === "win32" ? "junction" : "dir");
-  await symlink(child, join(root, "alias-two"), process.platform === "win32" ? "junction" : "dir");
+  await writeFile(
+    join(child, "nested.ts"),
+    "export function aliasedSymbol() {}\n",
+  );
+  await symlink(
+    child,
+    join(root, "alias-one"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  await symlink(
+    child,
+    join(root, "alias-two"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   const executor = async (_command: string, args: string[]) => {
     const cwd = args[1];
     const gitArgs = args.slice(2);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${cwd === root ? root : child}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: `${cwd === root ? "root-head" : "child-head"}\n`, stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return {
+        code: 0,
+        stdout: `${cwd === root ? root : child}\n`,
+        stderr: "",
+      };
+    if (gitArgs[0] === "rev-parse")
+      return {
+        code: 0,
+        stdout: `${cwd === root ? "root-head" : "child-head"}\n`,
+        stderr: "",
+      };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: "main\n", stderr: "" };
     if (gitArgs[0] === "ls-files" && gitArgs.includes("--stage")) {
-      const entries = [`160000 ${"a".repeat(40)} 0\talias-one`, `160000 ${"a".repeat(40)} 0\talias-two`];
-      return { code: 0, stdout: cwd === root ? `${entries.join("\0")}\0` : "", stderr: "" };
+      const entries = [
+        `160000 ${"a".repeat(40)} 0\talias-one`,
+        `160000 ${"a".repeat(40)} 0\talias-two`,
+      ];
+      return {
+        code: 0,
+        stdout: cwd === root ? `${entries.join("\0")}\0` : "",
+        stderr: "",
+      };
     }
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: cwd === child ? "nested.ts\0" : "", stderr: "" };
-    if (gitArgs[0] === "status") return { code: 0, stdout: porcelainStatus(cwd === root ? "root-head" : "child-head"), stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return {
+        code: 0,
+        stdout: cwd === child ? "nested.ts\0" : "",
+        stderr: "",
+      };
+    if (gitArgs[0] === "status")
+      return {
+        code: 0,
+        stdout: porcelainStatus(cwd === root ? "root-head" : "child-head"),
+        stderr: "",
+      };
     throw new Error(`unexpected git call: ${cwd} ${gitArgs.join(" ")}`);
   };
   const index = new WorkspaceIndex(root, executor, dbPath);
   try {
     await index.rebuild();
-    assert.deepEqual((await index.searchSymbols(root, { query: "aliasedSymbol" }) as any[]).map((row) => row.path), [
-      "alias-one/nested.ts", "alias-two/nested.ts",
-    ]);
+    assert.deepEqual(
+      (
+        (await index.searchSymbols(root, { query: "aliasedSymbol" })) as any[]
+      ).map((row) => row.path),
+      ["alias-one/nested.ts", "alias-two/nested.ts"],
+    );
     const database = new DatabaseSync(dbPath);
     try {
-      assert.equal((database.prepare("SELECT count(*) AS count FROM files").get() as any).count, 1);
-      assert.equal((database.prepare("SELECT count(*) AS count FROM code_fts").get() as any).count, 1);
-      assert.equal((database.prepare("SELECT count(*) AS count FROM symbols").get() as any).count, 1);
+      assert.equal(
+        (database.prepare("SELECT count(*) AS count FROM files").get() as any)
+          .count,
+        1,
+      );
+      assert.equal(
+        (
+          database
+            .prepare("SELECT count(*) AS count FROM code_fts")
+            .get() as any
+        ).count,
+        1,
+      );
+      assert.equal(
+        (database.prepare("SELECT count(*) AS count FROM symbols").get() as any)
+          .count,
+        1,
+      );
     } finally {
       database.close();
     }
@@ -861,14 +1921,22 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
   const runtime = setup(async (_command, args) => {
     const gitArgs = args.slice(2);
     gitCalls.push(gitArgs);
-    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel") return { code: 0, stdout: `${root}\n`, stderr: "" };
-    if (gitArgs[0] === "rev-parse") return { code: 0, stdout: "abc123\n", stderr: "" };
-    if (gitArgs[0] === "branch") return { code: 0, stdout: "main\n", stderr: "" };
-    if (gitArgs[0] === "ls-files") return { code: 0, stdout: "app.ts\0", stderr: "" };
+    if (gitArgs[0] === "rev-parse" && gitArgs[1] === "--show-toplevel")
+      return { code: 0, stdout: `${root}\n`, stderr: "" };
+    if (gitArgs[0] === "rev-parse")
+      return { code: 0, stdout: "abc123\n", stderr: "" };
+    if (gitArgs[0] === "branch")
+      return { code: 0, stdout: "main\n", stderr: "" };
+    if (gitArgs[0] === "ls-files")
+      return { code: 0, stdout: "app.ts\0", stderr: "" };
     if (gitArgs[0] === "status") {
       assert.ok(gitArgs.includes("--porcelain=v2"));
       statusCalls++;
-      return { code: 0, stdout: porcelainStatus("abc123", "main", status), stderr: "" };
+      return {
+        code: 0,
+        stdout: porcelainStatus("abc123", "main", status),
+        stderr: "",
+      };
     }
     return { code: 1, stdout: "", stderr: "unexpected git call" };
   });
@@ -877,34 +1945,56 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     cwd: root,
     waitForIdle: async () => undefined,
     ui: {
-      notify: (text: string, level: string) => notifications.push({ text, level }),
+      notify: (text: string, level: string) =>
+        notifications.push({ text, level }),
       setStatus: () => undefined,
     },
   };
   let policy: any;
   const indexStates: any[] = [];
   runtime.events.on("pylon:tool-policy", (value) => {
-    if (value?.kind === "register" && value?.owner === "pi-discover") policy = value;
+    if (value?.kind === "register" && value?.owner === "pi-discover")
+      policy = value;
   });
-  runtime.events.on("pi-discover:index-state", (value) => indexStates.push(value));
+  runtime.events.on("pi-discover:index-state", (value) =>
+    indexStates.push(value),
+  );
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
     assert.deepEqual(policy.managedTools, [
-      "search_tools", "symbol_search", "fd", "rg", "code_search",
-      "relationship_graph", "index_status", "search_sessions", "session_stats",
+      "search_tools",
+      "symbol_search",
+      "fd",
+      "rg",
+      "code_search",
+      "relationship_graph",
+      "index_status",
+      "search_sessions",
+      "session_stats",
     ]);
     assert.deepEqual(policy.enabledTools, policy.managedTools);
-    assert.deepEqual(policy.deferredTools, ["symbol_search", "code_search", "relationship_graph", "index_status", "search_sessions", "session_stats"]);
+    assert.deepEqual(policy.deferredTools, [
+      "symbol_search",
+      "code_search",
+      "relationship_graph",
+      "index_status",
+      "search_sessions",
+      "session_stats",
+    ]);
     assert.deepEqual(policy.toolUsage, {
       search_tools: "find and activate inactive tools by capability",
-      symbol_search: "search local repository symbols by name, kind, language, or path",
+      symbol_search:
+        "search local repository symbols by name, kind, language, or path",
       fd: "find files and directories by path pattern",
       rg: "search file contents with regex and line-numbered matches",
       code_search: "search indexed source with ranked lexical snippets",
-      relationship_graph: "map source symbols or tokens to related files and source locations",
+      relationship_graph:
+        "map source symbols or tokens to related files and source locations",
       index_status: "inspect local repository code-index status",
-      search_sessions: "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
-      session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
+      search_sessions:
+        "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
+      session_stats:
+        "inspect historical Pi session usage and tool-call statistics when explicitly requested",
     });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
@@ -920,25 +2010,41 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.equal(indexStates.at(-1)?.files, 1);
     assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
     const callsBeforeSearch = gitCalls.length;
-    let result = await runtime.tools.get("symbol_search").execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
-    assert.equal(JSON.parse(result.content[0].text).results[0].name, "beforeTurn");
+    let result = await runtime.tools
+      .get("symbol_search")
+      .execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
+    assert.equal(
+      JSON.parse(result.content[0].text).results[0].name,
+      "beforeTurn",
+    );
     const searchCalls = gitCalls.slice(callsBeforeSearch);
     assert.equal(searchCalls.length, 3);
-    assert.deepEqual(searchCalls.map((args) => args[0]).sort(), ["ls-files", "status", "status"]);
+    assert.deepEqual(searchCalls.map((args) => args[0]).sort(), [
+      "ls-files",
+      "status",
+      "status",
+    ]);
 
     await writeFile(sourcePath, "export function manualRebuild() {}\n");
     await runtime.commands.get("discover-index").handler("rebuild", ctx);
-    result = await runtime.tools.get("symbol_search").execute("manual", { query: "manualRebuild" }, undefined, undefined, ctx);
-    assert.equal(JSON.parse(result.content[0].text).results[0].name, "manualRebuild");
+    result = await runtime.tools
+      .get("symbol_search")
+      .execute("manual", { query: "manualRebuild" }, undefined, undefined, ctx);
+    assert.equal(
+      JSON.parse(result.content[0].text).results[0].name,
+      "manualRebuild",
+    );
     assert.match(notifications.at(-1)!.text, /rebuild complete/);
 
-    await new Promise<void>((resolve, reject) => runtime.events.emit("pi-discover:index-action", {
-      version: 1,
-      action: "rebuild",
-      acknowledge() {},
-      resolve,
-      reject,
-    }));
+    await new Promise<void>((resolve, reject) =>
+      runtime.events.emit("pi-discover:index-action", {
+        version: 1,
+        action: "rebuild",
+        acknowledge() {},
+        resolve,
+        reject,
+      }),
+    );
     assert.ok(indexStates.some((state) => state.state === "indexing"));
     assert.equal(indexStates.at(-1)?.state, "idle");
 
@@ -948,15 +2054,23 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     await runtime.lifecycle.emitAsync("turn_end", {}, ctx);
     await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(statusCalls, statusCallsBeforeTurn);
-    result = await runtime.tools.get("symbol_search").execute("two", { query: "afterTurn" }, undefined, undefined, ctx);
+    result = await runtime.tools
+      .get("symbol_search")
+      .execute("two", { query: "afterTurn" }, undefined, undefined, ctx);
     assert.ok(statusCalls > statusCallsBeforeTurn);
-    assert.equal(JSON.parse(result.content[0].text).results[0].name, "afterTurn");
+    assert.equal(
+      JSON.parse(result.content[0].text).results[0].name,
+      "afterTurn",
+    );
 
     await runtime.commands.get("discover-index").handler("status", ctx);
     assert.match(notifications.at(-1)!.text, /index status/);
 
     await runtime.commands.get("discover-index").handler("prune", ctx);
-    assert.match(notifications.at(-1)!.text, /prune complete.*"removedWorkspaces":0/);
+    assert.match(
+      notifications.at(-1)!.text,
+      /prune complete.*"removedWorkspaces":0/,
+    );
   } finally {
     await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
@@ -971,8 +2085,12 @@ test("automatic indexing does not block session startup", async () => {
   process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
   let releaseIndex!: () => void;
   let markStarted!: () => void;
-  const release = new Promise<void>((resolve) => { releaseIndex = resolve; });
-  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const release = new Promise<void>((resolve) => {
+    releaseIndex = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
   const runtime = setup(async () => {
     markStarted();
     await release;
@@ -981,10 +2099,15 @@ test("automatic indexing does not block session startup", async () => {
   const ctx = { cwd: root };
   try {
     const startup = runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.equal(await Promise.race([
-      startup.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100)),
-    ]), true);
+    assert.equal(
+      await Promise.race([
+        startup.then(() => true),
+        new Promise<boolean>((resolve) =>
+          setTimeout(() => resolve(false), 100),
+        ),
+      ]),
+      true,
+    );
     await started;
     releaseIndex();
     await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
@@ -1000,16 +2123,30 @@ test("rg uses argument arrays and supports files mode", async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const { tools } = setup(async (command, args) => {
     calls.push({ command, args });
-    return { stdout: "src/a.ts\nsrc/b.ts\n", stderr: "", code: 0, killed: false };
+    return {
+      stdout: "src/a.ts\nsrc/b.ts\n",
+      stderr: "",
+      code: 0,
+      killed: false,
+    };
   });
-  const result = await tools.get("rg").execute(
-    "id", { pattern: "a;b", path: ".", glob: "*.ts", mode: "files" }, undefined, undefined, { cwd: process.cwd() },
-  );
+  const result = await tools
+    .get("rg")
+    .execute(
+      "id",
+      { pattern: "a;b", path: ".", glob: "*.ts", mode: "files" },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
   assert.equal(calls[0].command, "rg");
   assert.ok(calls[0].args.includes("a;b"));
   assert.ok(calls[0].args.includes("--files-with-matches"));
   assert.ok(!calls[0].args.includes("--line-number"));
-  assert.deepEqual(result.content[0].text.trimEnd().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(result.content[0].text.trimEnd().split(/\r?\n/), [
+    "src/a.ts",
+    "src/b.ts",
+  ]);
 });
 
 test("rg resolves paths without restricting them to the workspace", async () => {
@@ -1020,10 +2157,31 @@ test("rg resolves paths without restricting them to the workspace", async () => 
   });
   const cwd = process.cwd();
   const outside = resolve(cwd, "..");
-  await tools.get("rg").execute("absolute", { pattern: "needle", path: `@${outside}` }, undefined, undefined, { cwd });
-  await tools.get("rg").execute("relative", { pattern: "needle", path: "../elsewhere" }, undefined, undefined, { cwd });
-  await tools.get("rg").execute("default", { pattern: "needle" }, undefined, undefined, { cwd });
-  assert.deepEqual(calls.map(({ args }) => args.at(-1)), [outside, resolve(cwd, "../elsewhere"), cwd]);
+  await tools
+    .get("rg")
+    .execute(
+      "absolute",
+      { pattern: "needle", path: `@${outside}` },
+      undefined,
+      undefined,
+      { cwd },
+    );
+  await tools
+    .get("rg")
+    .execute(
+      "relative",
+      { pattern: "needle", path: "../elsewhere" },
+      undefined,
+      undefined,
+      { cwd },
+    );
+  await tools
+    .get("rg")
+    .execute("default", { pattern: "needle" }, undefined, undefined, { cwd });
+  assert.deepEqual(
+    calls.map(({ args }) => args.at(-1)),
+    [outside, resolve(cwd, "../elsewhere"), cwd],
+  );
 });
 
 test("fd resolves paths without restricting them to the workspace", async () => {
@@ -1034,14 +2192,27 @@ test("fd resolves paths without restricting them to the workspace", async () => 
   });
   const cwd = process.cwd();
   const outside = resolve(cwd, "..");
-  await tools.get("fd").execute("id", { pattern: "-private*", path: `@${outside}` }, undefined, undefined, { cwd });
-  await tools.get("fd").execute("id", { path: "../elsewhere" }, undefined, undefined, { cwd });
+  await tools
+    .get("fd")
+    .execute(
+      "id",
+      { pattern: "-private*", path: `@${outside}` },
+      undefined,
+      undefined,
+      { cwd },
+    );
+  await tools
+    .get("fd")
+    .execute("id", { path: "../elsewhere" }, undefined, undefined, { cwd });
   await tools.get("fd").execute("id", {}, undefined, undefined, { cwd });
-  assert.deepEqual(calls.map(({ args }) => args.slice(-3)), [
-    ["--", "-private*", outside],
-    ["--", ".", resolve(cwd, "../elsewhere")],
-    ["--", ".", cwd],
-  ]);
+  assert.deepEqual(
+    calls.map(({ args }) => args.slice(-3)),
+    [
+      ["--", "-private*", outside],
+      ["--", ".", resolve(cwd, "../elsewhere")],
+      ["--", ".", cwd],
+    ],
+  );
 });
 
 test("rg falls back to grep in line and files modes only when ripgrep is absent", async () => {
@@ -1051,20 +2222,42 @@ test("rg falls back to grep in line and files modes only when ripgrep is absent"
     registerTool: (tool: any) => tools.set(tool.name, tool),
     exec: async (command: string, args: string[]) => {
       calls.push({ command, args });
-      if (command === "rg") return { stdout: "", stderr: "", code: 1, killed: false };
+      if (command === "rg")
+        return { stdout: "", stderr: "", code: 1, killed: false };
       const files = args.includes("-l");
-      return { stdout: files ? "src/a.ts\nsrc/b.ts\n" : "src/a.ts:3:needle\n", stderr: "", code: 0, killed: false };
+      return {
+        stdout: files ? "src/a.ts\nsrc/b.ts\n" : "src/a.ts:3:needle\n",
+        stderr: "",
+        code: 0,
+        killed: false,
+      };
     },
   };
   registerRg(pi, 8 * 1024, async (command) => command === "grep");
   const ctx = { cwd: process.cwd() };
-  const lines = await tools.get("rg").execute("lines", { pattern: "needle" }, undefined, undefined, ctx);
-  const files = await tools.get("rg").execute("files", { pattern: "needle", mode: "files" }, undefined, undefined, ctx);
+  const lines = await tools
+    .get("rg")
+    .execute("lines", { pattern: "needle" }, undefined, undefined, ctx);
+  const files = await tools
+    .get("rg")
+    .execute(
+      "files",
+      { pattern: "needle", mode: "files" },
+      undefined,
+      undefined,
+      ctx,
+    );
   assert.match(lines.content[0].text, /src\/a\.ts:3:needle/);
   assert.equal(lines.details.fallback, true);
-  assert.deepEqual(files.content[0].text.trim().split(/\r?\n/), ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(files.content[0].text.trim().split(/\r?\n/), [
+    "src/a.ts",
+    "src/b.ts",
+  ]);
   assert.equal(files.details.fallback, true);
-  assert.deepEqual(calls.map(({ command }) => command), ["rg", "grep", "rg", "grep"]);
+  assert.deepEqual(
+    calls.map(({ command }) => command),
+    ["rg", "grep", "rg", "grep"],
+  );
 });
 
 test("rg does not mistake an invalid path error for a missing executable", async () => {
@@ -1074,12 +2267,25 @@ test("rg does not mistake an invalid path error for a missing executable", async
     registerTool: (tool: any) => tools.set(tool.name, tool),
     exec: async (command: string) => {
       calls.push(command);
-      return { stdout: "", stderr: "The system cannot find the path specified", code: 2, killed: false };
+      return {
+        stdout: "",
+        stderr: "The system cannot find the path specified",
+        code: 2,
+        killed: false,
+      };
     },
   };
   registerRg(pi, 8 * 1024, async () => true);
   await assert.rejects(
-    tools.get("rg").execute("id", { pattern: "needle", path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
+    tools
+      .get("rg")
+      .execute(
+        "id",
+        { pattern: "needle", path: "missing" },
+        undefined,
+        undefined,
+        { cwd: process.cwd() },
+      ),
     /ripgrep failed.*cannot find the path/i,
   );
   assert.deepEqual(calls, ["rg"]);
@@ -1099,7 +2305,11 @@ test("rg does not start a fallback after cancellation", async () => {
   };
   registerRg(pi);
   await assert.rejects(
-    tools.get("rg").execute("id", { pattern: "needle" }, controller.signal, undefined, { cwd: process.cwd() }),
+    tools
+      .get("rg")
+      .execute("id", { pattern: "needle" }, controller.signal, undefined, {
+        cwd: process.cwd(),
+      }),
     /cancelled/,
   );
   assert.deepEqual(calls, ["rg"]);
@@ -1113,9 +2323,12 @@ test("fd falls back to system find when fd and fdfind are absent", async () => {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     exec: async (command: string, args: string[]) => {
       calls.push({ command, args });
-      if (command !== "find") return { stdout: "", stderr: "", code: 1, killed: false };
+      if (command !== "find")
+        return { stdout: "", stderr: "", code: 1, killed: false };
       return {
-        stdout: [cwd, resolve(cwd, "src/a.ts"), resolve(cwd, "src/a.js")].join("\n"),
+        stdout: [cwd, resolve(cwd, "src/a.ts"), resolve(cwd, "src/a.js")].join(
+          "\n",
+        ),
         stderr: "",
         code: 0,
         killed: false,
@@ -1123,13 +2336,25 @@ test("fd falls back to system find when fd and fdfind are absent", async () => {
     },
   };
   registerFd(pi, 8 * 1024, async (command) => command === "find", "linux");
-  const regex = await tools.get("fd").execute("regex", { pattern: "\\.ts$" }, undefined, undefined, { cwd });
-  const glob = await tools.get("fd").execute("glob", { pattern: "*.js", glob: true }, undefined, undefined, { cwd });
+  const regex = await tools
+    .get("fd")
+    .execute("regex", { pattern: "\\.ts$" }, undefined, undefined, { cwd });
+  const glob = await tools
+    .get("fd")
+    .execute("glob", { pattern: "*.js", glob: true }, undefined, undefined, {
+      cwd,
+    });
   assert.equal(regex.content[0].text, resolve(cwd, "src/a.ts"));
   assert.equal(glob.content[0].text, resolve(cwd, "src/a.js"));
   assert.equal(regex.details.fallback, true);
-  assert.deepEqual(calls.map(({ command }) => command), ["fd", "fdfind", "find", "fd", "fdfind", "find"]);
-  assert.deepEqual(calls.filter(({ command }) => command === "find").map(({ args }) => args), [[cwd], [cwd]]);
+  assert.deepEqual(
+    calls.map(({ command }) => command),
+    ["fd", "fdfind", "find", "fd", "fdfind", "find"],
+  );
+  assert.deepEqual(
+    calls.filter(({ command }) => command === "find").map(({ args }) => args),
+    [[cwd], [cwd]],
+  );
 });
 
 test("fd reports unavailable when system find cannot start on POSIX", async () => {
@@ -1144,7 +2369,9 @@ test("fd reports unavailable when system find cannot start on POSIX", async () =
     },
   };
   registerFd(pi, 8 * 1024, async () => false, "linux");
-  const result = await tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() });
+  const result = await tools
+    .get("fd")
+    .execute("id", {}, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(calls, ["fd", "fdfind", "find"]);
   assert.match(result.content[0].text, /fd, fdfind, and find unavailable/);
 });
@@ -1153,13 +2380,16 @@ test("fd surfaces find failures after the fallback starts", async () => {
   const tools = new Map<string, any>();
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    exec: async (command: string) => command === "find"
-      ? { stdout: "", stderr: "missing path", code: 1, killed: false }
-      : { stdout: "", stderr: "", code: 1, killed: false },
+    exec: async (command: string) =>
+      command === "find"
+        ? { stdout: "", stderr: "missing path", code: 1, killed: false }
+        : { stdout: "", stderr: "", code: 1, killed: false },
   };
   registerFd(pi, 8 * 1024, async (command) => command === "find", "linux");
   await assert.rejects(
-    tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() }),
+    tools
+      .get("fd")
+      .execute("id", {}, undefined, undefined, { cwd: process.cwd() }),
     /find failed.*missing path/i,
   );
 });
@@ -1175,7 +2405,9 @@ test("fd does not invoke Windows find.exe as a path-search fallback", async () =
     },
   };
   registerFd(pi, 8 * 1024, async () => false, "win32");
-  const result = await tools.get("fd").execute("id", {}, undefined, undefined, { cwd: process.cwd() });
+  const result = await tools
+    .get("fd")
+    .execute("id", {}, undefined, undefined, { cwd: process.cwd() });
   assert.deepEqual(calls, ["fd", "fdfind"]);
   assert.match(result.content[0].text, /unsupported on Windows/);
 });
@@ -1187,25 +2419,49 @@ test("fd does not mistake an invalid path error for a missing executable", async
     registerTool: (tool: any) => tools.set(tool.name, tool),
     exec: async (command: string) => {
       calls.push(command);
-      return { stdout: "", stderr: "The system cannot find the path specified", code: 1, killed: false };
+      return {
+        stdout: "",
+        stderr: "The system cannot find the path specified",
+        code: 1,
+        killed: false,
+      };
     },
   };
   registerFd(pi, 8 * 1024, async () => true);
   await assert.rejects(
-    tools.get("fd").execute("id", { path: "missing" }, undefined, undefined, { cwd: process.cwd() }),
+    tools
+      .get("fd")
+      .execute("id", { path: "missing" }, undefined, undefined, {
+        cwd: process.cwd(),
+      }),
     /fd failed.*cannot find the path/i,
   );
   assert.deepEqual(calls, ["fd"]);
 });
 
 function rgMatch(path: string, line: number, text: string) {
-  return JSON.stringify({ type: "match", data: { path: { text: path }, lines: { text: `${text}\n` }, line_number: line } });
+  return JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: path },
+      lines: { text: `${text}\n` },
+      line_number: line,
+    },
+  });
 }
 
 test("relationship role classification remains explicitly heuristic", () => {
-  assert.deepEqual(relationshipRoles("run", "export function run() {"), ["possible_definition", "possible_export"]);
-  assert.deepEqual(relationshipRoles("run", "import { run } from './task.js';"), ["possible_import"]);
-  assert.deepEqual(relationshipRoles("run", "const value = run;"), ["reference"]);
+  assert.deepEqual(relationshipRoles("run", "export function run() {"), [
+    "possible_definition",
+    "possible_export",
+  ]);
+  assert.deepEqual(
+    relationshipRoles("run", "import { run } from './task.js';"),
+    ["possible_import"],
+  );
+  assert.deepEqual(relationshipRoles("run", "const value = run;"), [
+    "reference",
+  ]);
   assert.deepEqual(relationshipRoles("run", "run();"), ["possible_call"]);
 });
 
@@ -1222,15 +2478,26 @@ test("relationship_graph returns a bounded JSON occurrence graph", async () => {
       ? { code: 0, stdout: "src/a.ts\0src/b.ts\0src/c.ts\0", stderr: "" }
       : { code: 0, stdout, stderr: "" };
   });
-  const result = await tools.get("relationship_graph").execute(
-    "id", { query: "run", path: "src", glob: "*.ts", max_results: 2 }, undefined, undefined, { cwd: process.cwd() },
-  );
+  const result = await tools
+    .get("relationship_graph")
+    .execute(
+      "id",
+      { query: "run", path: "src", glob: "*.ts", max_results: 2 },
+      undefined,
+      undefined,
+      { cwd: process.cwd() },
+    );
   const graph = JSON.parse(result.content[0].text);
   assert.equal(result.content[0].text.includes("\n"), false);
   assert.equal(call[0], "rg");
   assert.ok(call[1].includes("--json"));
   assert.ok(call[1].includes("--word-regexp"));
-  assert.deepEqual(call[1].slice(-4), ["run", "src/a.ts", "src/b.ts", "src/c.ts"]);
+  assert.deepEqual(call[1].slice(-4), [
+    "run",
+    "src/a.ts",
+    "src/b.ts",
+    "src/c.ts",
+  ]);
   assert.equal(graph.heuristic, true);
   assert.equal(graph.metadata.observedMatchCount, 3);
   assert.equal(graph.metadata.returnedCount, 2);
@@ -1238,7 +2505,13 @@ test("relationship_graph returns a bounded JSON occurrence graph", async () => {
   assert.equal(graph.files.length, 2);
   assert.deepEqual(graph.files[0], {
     path: "src/a.ts",
-    locations: [{ line: 2, text: "export function run() {", roles: ["possible_definition", "possible_export"] }],
+    locations: [
+      {
+        line: 2,
+        text: "export function run() {",
+        roles: ["possible_definition", "possible_export"],
+      },
+    ],
   });
   assert.equal(call[1][call[1].indexOf("--max-count") + 1], "2");
   assert.ok(call[1].includes("--max-filesize"));
@@ -1246,16 +2519,29 @@ test("relationship_graph returns a bounded JSON occurrence graph", async () => {
 
 test("relationship_graph preserves parseable grouped shape at small byte caps", async () => {
   const tools = new Map<string, any>();
-  registerRelationshipGraph({
-    registerTool: (tool: any) => tools.set(tool.name, tool),
-    exec: async (_command: string, args: string[]) => args.includes("--files-with-matches")
-      ? { code: 0, stdout: "src/long.ts\0", stderr: "" }
-      : { code: 0, stdout: rgMatch("src/long.ts", 1, "x".repeat(500)), stderr: "" },
-  } as any, 80);
-  assert.match(tools.get("relationship_graph").description, /confirm important relationships from source/);
-  const result = await tools.get("relationship_graph").execute(
-    "id", { query: "x" }, undefined, undefined, { cwd: process.cwd() },
+  registerRelationshipGraph(
+    {
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      exec: async (_command: string, args: string[]) =>
+        args.includes("--files-with-matches")
+          ? { code: 0, stdout: "src/long.ts\0", stderr: "" }
+          : {
+              code: 0,
+              stdout: rgMatch("src/long.ts", 1, "x".repeat(500)),
+              stderr: "",
+            },
+    } as any,
+    80,
   );
+  assert.match(
+    tools.get("relationship_graph").description,
+    /confirm important relationships from source/,
+  );
+  const result = await tools
+    .get("relationship_graph")
+    .execute("id", { query: "x" }, undefined, undefined, {
+      cwd: process.cwd(),
+    });
   assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 80);
   assert.ok(Array.isArray(JSON.parse(result.content[0].text).files));
 });
@@ -1263,20 +2549,39 @@ test("relationship_graph preserves parseable grouped shape at small byte caps", 
 test("relationship_graph returns a valid empty graph and confines paths without probing after rg reports no matches", async () => {
   const tools = new Map<string, any>();
   let probes = 0;
-  registerRelationshipGraph({
-    registerTool: (tool: any) => tools.set(tool.name, tool),
-    exec: async () => ({ code: 1, stdout: "", stderr: "" }),
-  } as any, undefined, async () => { probes++; return false; });
-  const result = await tools.get("relationship_graph").execute(
-    "id", { query: "missing" }, undefined, undefined, { cwd: process.cwd() },
+  registerRelationshipGraph(
+    {
+      registerTool: (tool: any) => tools.set(tool.name, tool),
+      exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+    } as any,
+    undefined,
+    async () => {
+      probes++;
+      return false;
+    },
   );
+  const result = await tools
+    .get("relationship_graph")
+    .execute("id", { query: "missing" }, undefined, undefined, {
+      cwd: process.cwd(),
+    });
   const graph = JSON.parse(result.content[0].text);
   assert.equal(graph.metadata.observedMatchCount, 0);
   assert.deepEqual(graph.files, []);
   assert.equal(probes, 0);
-  await assert.rejects(() => tools.get("relationship_graph").execute(
-    "id", { query: "missing", path: "../outside" }, undefined, undefined, { cwd: process.cwd() },
-  ), /stay within workspace/);
+  await assert.rejects(
+    () =>
+      tools
+        .get("relationship_graph")
+        .execute(
+          "id",
+          { query: "missing", path: "../outside" },
+          undefined,
+          undefined,
+          { cwd: process.cwd() },
+        ),
+    /stay within workspace/,
+  );
 });
 
 test("relationship_graph deduplicates locations, reports malformed output, and avoids word mode for punctuation", async () => {
@@ -1288,9 +2593,11 @@ test("relationship_graph deduplicates locations, reports malformed output, and a
       ? { code: 0, stdout: "src/a.ts\0", stderr: "" }
       : { code: 0, stdout: `${match}\n${match}\nnot-json`, stderr: "" };
   });
-  const result = await tools.get("relationship_graph").execute(
-    "id", { query: "$run" }, undefined, undefined, { cwd: process.cwd() },
-  );
+  const result = await tools
+    .get("relationship_graph")
+    .execute("id", { query: "$run" }, undefined, undefined, {
+      cwd: process.cwd(),
+    });
   const graph = JSON.parse(result.content[0].text);
   assert.ok(args.includes("--no-config"));
   assert.ok(!args.includes("--word-regexp"));
@@ -1301,9 +2608,15 @@ test("relationship_graph deduplicates locations, reports malformed output, and a
 
 test("relationship_graph rejects whitespace-only direct execution", async () => {
   const { tools } = setup();
-  await assert.rejects(() => tools.get("relationship_graph").execute(
-    "id", { query: "   " }, undefined, undefined, { cwd: process.cwd() },
-  ), /non-whitespace token/);
+  await assert.rejects(
+    () =>
+      tools
+        .get("relationship_graph")
+        .execute("id", { query: "   " }, undefined, undefined, {
+          cwd: process.cwd(),
+        }),
+    /non-whitespace token/,
+  );
 });
 
 test("keyword ranking is deterministic and excludes active search tool", () => {
@@ -1312,35 +2625,68 @@ test("keyword ranking is deterministic and excludes active search tool", () => {
     { name: "alpha_search", description: "web documents" },
     { name: "unrelated", description: "nothing" },
   ];
-  assert.deepEqual(keywordRankTools(tools, "search web", 3).map((tool) => tool.name), ["alpha_search", "beta_search"]);
-  assert.deepEqual(rankInactiveTools([...tools, { name: "search_tools", description: "web search" }], ["beta_search"], "web", 3).map((tool) => tool.name), ["alpha_search"]);
+  assert.deepEqual(
+    keywordRankTools(tools, "search web", 3).map((tool) => tool.name),
+    ["alpha_search", "beta_search"],
+  );
+  assert.deepEqual(
+    rankInactiveTools(
+      [...tools, { name: "search_tools", description: "web search" }],
+      ["beta_search"],
+      "web",
+      3,
+    ).map((tool) => tool.name),
+    ["alpha_search"],
+  );
 });
 
 test("query normalization and structured metadata outrank description overlap", () => {
   assert.equal(normalizedQuery("  Web, SEARCH web! "), "search web");
   const tools = [
     { name: "browser", description: "miscellaneous" },
-    { name: "page_reader", capabilities: ["browser"], description: "read pages" },
+    {
+      name: "page_reader",
+      capabilities: ["browser"],
+      description: "read pages",
+    },
     { name: "alpha", description: "browser browser" },
   ];
-  assert.deepEqual(keywordRankTools(tools, "BROWSER", 3).map((tool) => tool.name), ["browser", "page_reader", "alpha"]);
-  assert.equal(keywordRankTools([
-    { name: "zeta", aliases: ["public web"] },
-    { name: "alpha", capabilities: ["web public"] },
-  ], "Public WEB", 2)[0].name, "alpha");
+  assert.deepEqual(
+    keywordRankTools(tools, "BROWSER", 3).map((tool) => tool.name),
+    ["browser", "page_reader", "alpha"],
+  );
+  assert.equal(
+    keywordRankTools(
+      [
+        { name: "zeta", aliases: ["public web"] },
+        { name: "alpha", capabilities: ["web public"] },
+      ],
+      "Public WEB",
+      2,
+    )[0].name,
+    "alpha",
+  );
 });
-
 
 test("search_tools uses advertised usage and activates eligible matches", async () => {
   const { events, tools, getSetActiveCalls } = setup();
   const selected: string[][] = [];
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history"],
-    catalog: () => [{ name: "git_history", usage: "inspect release provenance" }],
-    select: (names: string[]) => { selected.push(names); return { selected: names }; },
-    reset: () => ({ reset: true }),
-  }));
-  const result = await tools.get("search_tools").execute("id", { query: "release provenance" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history"],
+      catalog: () => [
+        { name: "git_history", usage: "inspect release provenance" },
+      ],
+      select: (names: string[]) => {
+        selected.push(names);
+        return { selected: names };
+      },
+      reset: () => ({ reset: true }),
+    }),
+  );
+  const result = await tools
+    .get("search_tools")
+    .execute("id", { query: "release provenance" }, undefined, undefined, {});
   assert.deepEqual(selected, [["git_history"]]);
   assert.equal(getSetActiveCalls(), 0);
   assert.match(result.content[0].text, /next model turn/i);
@@ -1352,13 +2698,28 @@ test("search_tools uses advertised usage and activates eligible matches", async 
 test("search_tools caches normalized searches within a turn", async () => {
   const { events, tools } = setup();
   const selected: string[][] = [];
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history"],
-    select: (names: string[]) => { selected.push(names); return { selected: names }; },
-    reset: () => ({ selected: [] }),
-  }));
-  const first = await tools.get("search_tools").execute("id-1", { query: "History SEARCH" }, undefined, undefined, {});
-  const second = await tools.get("search_tools").execute("id-2", { query: "search history history" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history"],
+      select: (names: string[]) => {
+        selected.push(names);
+        return { selected: names };
+      },
+      reset: () => ({ selected: [] }),
+    }),
+  );
+  const first = await tools
+    .get("search_tools")
+    .execute("id-1", { query: "History SEARCH" }, undefined, undefined, {});
+  const second = await tools
+    .get("search_tools")
+    .execute(
+      "id-2",
+      { query: "search history history" },
+      undefined,
+      undefined,
+      {},
+    );
   assert.equal(first.details.cacheHit, false);
   assert.equal(second.details.cacheHit, true);
   assert.deepEqual(selected, [["git_history"], ["git_history"]]);
@@ -1367,13 +2728,18 @@ test("search_tools caches normalized searches within a turn", async () => {
 test("search_tools marks repeated misses and invalidates them on turn end or inventory change", async () => {
   const { active, events, lifecycle, tools } = setup();
   let usage: string | undefined;
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["shell"],
-    catalog: () => [{ name: "shell", usage }],
-    select: () => ({ selected: [] }),
-    reset: () => ({ selected: [] }),
-  }));
-  const search = () => tools.get("search_tools").execute("id", { query: "browser" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["shell"],
+      catalog: () => [{ name: "shell", usage }],
+      select: () => ({ selected: [] }),
+      reset: () => ({ selected: [] }),
+    }),
+  );
+  const search = () =>
+    tools
+      .get("search_tools")
+      .execute("id", { query: "browser" }, undefined, undefined, {});
   assert.equal((await search()).details.alreadySearched, false);
   const repeated = await search();
   assert.equal(repeated.details.alreadySearched, true);
@@ -1393,16 +2759,37 @@ test("search_tools marks repeated misses and invalidates them on turn end or inv
 
 test("discovery health exposes aggregate signals without raw queries", async () => {
   const { events, lifecycle, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history", "shell"],
-    select: (names: string[]) => ({ selected: names, blocked: [] }),
-    reset: () => ({ selected: [] }),
-  }));
-  await tools.get("search_tools").execute("id-1", { query: "private history phrase" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history", "shell"],
+      select: (names: string[]) => ({ selected: names, blocked: [] }),
+      reset: () => ({ selected: [] }),
+    }),
+  );
+  await tools
+    .get("search_tools")
+    .execute(
+      "id-1",
+      { query: "private history phrase" },
+      undefined,
+      undefined,
+      {},
+    );
   lifecycle.emit("tool_call", { toolName: "git_history" });
-  await tools.get("search_tools").execute("id-2", { query: "unmatched browser phrase" }, undefined, undefined, {});
+  await tools
+    .get("search_tools")
+    .execute(
+      "id-2",
+      { query: "unmatched browser phrase" },
+      undefined,
+      undefined,
+      {},
+    );
   const reports: any[] = [];
-  events.emit("pylon:health-request", { version: 1, respond: (value: any) => reports.push(value) });
+  events.emit("pylon:health-request", {
+    version: 1,
+    respond: (value: any) => reports.push(value),
+  });
   const text = reports[0].lines.join("\n");
   assert.match(text, /git_history=1/);
   assert.match(text, /misses: 1/);
@@ -1412,48 +2799,73 @@ test("discovery health exposes aggregate signals without raw queries", async () 
 
 test("selection reports blocked tools and counts only callable tools as later invoked", async () => {
   const { events, lifecycle, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history", "web_lookup"],
-    select: (names: string[]) => ({ selected: names, blocked: ["git_history", "not_requested"] }),
-    reset: () => ({ selected: [] }),
-  }));
-  const result = await tools.get("search_tools").execute("id", { query: "search" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history", "web_lookup"],
+      select: (names: string[]) => ({
+        selected: names,
+        blocked: ["git_history", "not_requested"],
+      }),
+      reset: () => ({ selected: [] }),
+    }),
+  );
+  const result = await tools
+    .get("search_tools")
+    .execute("id", { query: "search" }, undefined, undefined, {});
   assert.deepEqual(result.details.selected, ["git_history", "web_lookup"]);
   assert.deepEqual(result.details.blocked, ["git_history"]);
-  assert.match(result.content[0].text, /blocked by current policy: git_history/i);
+  assert.match(
+    result.content[0].text,
+    /blocked by current policy: git_history/i,
+  );
   lifecycle.emit("tool_call", { toolName: "git_history" });
   lifecycle.emit("tool_call", { toolName: "web_lookup" });
   const reports: any[] = [];
-  events.emit("pylon:health-request", { version: 1, respond: (value: any) => reports.push(value) });
+  events.emit("pylon:health-request", {
+    version: 1,
+    respond: (value: any) => reports.push(value),
+  });
   assert.match(reports[0].lines.join("\n"), /later invoked: web_lookup=1/);
 });
 
 test("search_tools rejects invalid limits", async () => {
   const { events, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history"], select: () => ({ selected: [] }), reset: () => ({ selected: [] }),
-  }));
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history"],
+      select: () => ({ selected: [] }),
+      reset: () => ({ selected: [] }),
+    }),
+  );
   for (const limit of [0, 7, 1.5]) {
-    const result = await tools.get("search_tools").execute("id", { query: "history", limit }, undefined, undefined, {});
+    const result = await tools
+      .get("search_tools")
+      .execute("id", { query: "history", limit }, undefined, undefined, {});
     assert.equal(result.details.failureCode, "invalid_limit");
   }
 });
 
 test("search_tools does not change tools when Pylon coordination is absent", async () => {
   const { tools, getSetActiveCalls } = setup();
-  const result = await tools.get("search_tools").execute("id", { query: "web" }, undefined, undefined, {});
+  const result = await tools
+    .get("search_tools")
+    .execute("id", { query: "web" }, undefined, undefined, {});
   assert.equal(getSetActiveCalls(), 0);
   assert.match(result.content[0].text, /coordination is unavailable/i);
 });
 
 test("selection failures are reported without claiming activation", async () => {
   const { events, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => ["git_history"],
-    select: () => ({ error: "forced failure" }),
-    reset: () => ({ selected: [] }),
-  }));
-  const result = await tools.get("search_tools").execute("id", { query: "history" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => ["git_history"],
+      select: () => ({ error: "forced failure" }),
+      reset: () => ({ selected: [] }),
+    }),
+  );
+  const result = await tools
+    .get("search_tools")
+    .execute("id", { query: "history" }, undefined, undefined, {});
   assert.match(result.content[0].text, /activation failed/i);
   assert.equal(result.details.failureCode, "selection_failed");
 });
@@ -1461,13 +2873,25 @@ test("selection failures are reported without claiming activation", async () => 
 test("successful reset clears repeated-miss state", async () => {
   const { events, tools } = setup();
   let resets = 0;
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => [], select: () => undefined, reset: () => { resets++; return { reset: true }; },
-  }));
-  const search = () => tools.get("search_tools").execute("search", { query: "browser" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => [],
+      select: () => undefined,
+      reset: () => {
+        resets++;
+        return { reset: true };
+      },
+    }),
+  );
+  const search = () =>
+    tools
+      .get("search_tools")
+      .execute("search", { query: "browser" }, undefined, undefined, {});
   await search();
   assert.equal((await search()).details.alreadySearched, true);
-  const result = await tools.get("search_tools").execute("reset", { action: "reset" }, undefined, undefined, {});
+  const result = await tools
+    .get("search_tools")
+    .execute("reset", { action: "reset" }, undefined, undefined, {});
   assert.equal(resets, 1);
   assert.match(result.content[0].text, /reset/i);
   assert.equal((await search()).details.alreadySearched, false);
@@ -1475,11 +2899,20 @@ test("successful reset clears repeated-miss state", async () => {
 
 test("failed reset retains repeated-miss state", async () => {
   const { events, tools } = setup();
-  events.on("pylon:tool-discovery", (request) => request.respond({
-    eligible: () => [], select: () => undefined, reset: () => ({ error: "forced failure" }),
-  }));
-  const search = () => tools.get("search_tools").execute("search", { query: "browser" }, undefined, undefined, {});
+  events.on("pylon:tool-discovery", (request) =>
+    request.respond({
+      eligible: () => [],
+      select: () => undefined,
+      reset: () => ({ error: "forced failure" }),
+    }),
+  );
+  const search = () =>
+    tools
+      .get("search_tools")
+      .execute("search", { query: "browser" }, undefined, undefined, {});
   await search();
-  await tools.get("search_tools").execute("reset", { action: "reset" }, undefined, undefined, {});
+  await tools
+    .get("search_tools")
+    .execute("reset", { action: "reset" }, undefined, undefined, {});
   assert.equal((await search()).details.alreadySearched, true);
 });

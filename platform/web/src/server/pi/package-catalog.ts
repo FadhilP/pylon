@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
@@ -47,35 +56,62 @@ function inside(parent: string, child: string): boolean {
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
-async function extensionPaths(base: string, value: unknown, confined: boolean): Promise<string[] | undefined> {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || item.length === 0 || item.length > 500)) {
+async function extensionPaths(
+  base: string,
+  value: unknown,
+  confined: boolean,
+): Promise<string[] | undefined> {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some(
+      (item) =>
+        typeof item !== "string" || item.length === 0 || item.length > 500,
+    )
+  ) {
     return undefined;
   }
   const realBase = await realpath(base);
   const paths: string[] = [];
   for (const item of value as string[]) {
-    const candidate = await realpath(isAbsolute(item) ? item : resolve(base, item)).catch(() => undefined);
-    if (!candidate || confined && !inside(realBase, candidate)) return undefined;
+    const candidate = await realpath(
+      isAbsolute(item) ? item : resolve(base, item),
+    ).catch(() => undefined);
+    if (!candidate || (confined && !inside(realBase, candidate)))
+      return undefined;
     if (!(await stat(candidate)).isFile()) return undefined;
     paths.push(candidate);
   }
   return paths;
 }
 
-async function confinedFile(base: string, value: unknown): Promise<string | undefined> {
-  if (typeof value !== "string" || !value || value.length > 500) return undefined;
+async function confinedFile(
+  base: string,
+  value: unknown,
+): Promise<string | undefined> {
+  if (typeof value !== "string" || !value || value.length > 500)
+    return undefined;
   const [realBase, candidate] = await Promise.all([
     realpath(base),
-    realpath(isAbsolute(value) ? value : resolve(base, value)).catch(() => undefined),
+    realpath(isAbsolute(value) ? value : resolve(base, value)).catch(
+      () => undefined,
+    ),
   ]);
-  if (!candidate || !inside(realBase, candidate) || !(await stat(candidate)).isFile()) return undefined;
+  if (
+    !candidate ||
+    !inside(realBase, candidate) ||
+    !(await stat(candidate)).isFile()
+  )
+    return undefined;
   return candidate;
 }
 
 async function readManifest(path: string): Promise<PiManifest | undefined> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value) ? value as PiManifest : undefined;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as PiManifest)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -84,9 +120,15 @@ async function readManifest(path: string): Promise<PiManifest | undefined> {
 export class PackageCatalog {
   private readonly packagesRoot: string;
   private readonly configPath: string;
-  private readonly adapters = new Map<string, Promise<PackageSettingsAdapter>>();
+  private readonly adapters = new Map<
+    string,
+    Promise<PackageSettingsAdapter>
+  >();
 
-  constructor(private readonly repositoryRoot: string, private readonly agentDir: string) {
+  constructor(
+    private readonly repositoryRoot: string,
+    private readonly agentDir: string,
+  ) {
     this.packagesRoot = resolve(repositoryRoot, "packages");
     this.configPath = resolve(agentDir, "pylon-web", "packages.json");
   }
@@ -94,9 +136,13 @@ export class PackageCatalog {
   async scan(): Promise<PackageCatalogState> {
     const packages = await this.discoverPackages();
     const rootPaths = await this.rootExtensionPaths();
-    const packagePaths = new Set(packages.flatMap((item) => item.extensionPaths));
+    const packagePaths = new Set(
+      packages.flatMap((item) => item.extensionPaths),
+    );
     const defaultIds = packages
-      .filter((item) => item.extensionPaths.some((path) => rootPaths.includes(path)))
+      .filter((item) =>
+        item.extensionPaths.some((path) => rootPaths.includes(path)),
+      )
       .map((item) => item.id);
     const enabledIds = await this.readEnabled(defaultIds);
     for (const item of packages) {
@@ -107,16 +153,22 @@ export class PackageCatalog {
       enabledIds,
       extensionPaths: [
         ...rootPaths.filter((path) => !packagePaths.has(path)),
-        ...packages.filter((item) => enabledIds.has(item.id)).flatMap((item) => item.extensionPaths),
+        ...packages
+          .filter((item) => enabledIds.has(item.id))
+          .flatMap((item) => item.extensionPaths),
       ],
     };
   }
 
-  async setEnabled(packageId: string, enabled: boolean): Promise<PackageCatalogState> {
+  async setEnabled(
+    packageId: string,
+    enabled: boolean,
+  ): Promise<PackageCatalogState> {
     const current = await this.scan();
     const definition = current.packages.find((item) => item.id === packageId);
     if (!definition) throw new Error("package is unavailable");
-    if (definition.required && !enabled) throw new Error(`${packageId} is required`);
+    if (definition.required && !enabled)
+      throw new Error(`${packageId} is required`);
     const enabledIds = new Set(current.enabledIds);
     if (enabled) enabledIds.add(packageId);
     else enabledIds.delete(packageId);
@@ -124,14 +176,20 @@ export class PackageCatalog {
       if (item.required) enabledIds.add(item.id);
     }
     await this.writeEnabled(enabledIds);
-    const packagePaths = new Set(current.packages.flatMap((item) => item.extensionPaths));
-    const rootOnlyPaths = current.extensionPaths.filter((path) => !packagePaths.has(path));
+    const packagePaths = new Set(
+      current.packages.flatMap((item) => item.extensionPaths),
+    );
+    const rootOnlyPaths = current.extensionPaths.filter(
+      (path) => !packagePaths.has(path),
+    );
     return {
       packages: current.packages,
       enabledIds,
       extensionPaths: [
         ...rootOnlyPaths,
-        ...current.packages.filter((item) => enabledIds.has(item.id)).flatMap((item) => item.extensionPaths),
+        ...current.packages
+          .filter((item) => enabledIds.has(item.id))
+          .flatMap((item) => item.extensionPaths),
       ],
     };
   }
@@ -140,21 +198,36 @@ export class PackageCatalog {
     await this.writeEnabled(enabledIds);
   }
 
-  async readSettings(packageId: string, state?: PackageCatalogState): Promise<PackageSettingsReadModel | undefined> {
-    const definition = (state ?? await this.scan()).packages.find((item) => item.id === packageId);
+  async readSettings(
+    packageId: string,
+    state?: PackageCatalogState,
+  ): Promise<PackageSettingsReadModel | undefined> {
+    const definition = (state ?? (await this.scan())).packages.find(
+      (item) => item.id === packageId,
+    );
     if (!definition?.settingsPath) return undefined;
-    const value = await (await this.adapter(definition.settingsPath)).readSettings({ agentDir: this.agentDir });
-    if (!validPackageSettings(value)) throw new Error(`${packageId} returned invalid settings`);
+    const value = await (
+      await this.adapter(definition.settingsPath)
+    ).readSettings({ agentDir: this.agentDir });
+    if (!validPackageSettings(value))
+      throw new Error(`${packageId} returned invalid settings`);
     return value;
   }
 
-  async updateSettings(packageId: string, value: PackageSettingsReadModel): Promise<PackageSettingsReadModel> {
-    const definition = (await this.scan()).packages.find((item) => item.id === packageId);
-    if (!definition?.settingsPath) throw new Error("package has no configurable settings");
+  async updateSettings(
+    packageId: string,
+    value: PackageSettingsReadModel,
+  ): Promise<PackageSettingsReadModel> {
+    const definition = (await this.scan()).packages.find(
+      (item) => item.id === packageId,
+    );
+    if (!definition?.settingsPath)
+      throw new Error("package has no configurable settings");
     const adapter = await this.adapter(definition.settingsPath);
     const context = { agentDir: this.agentDir };
     const previous = await adapter.readSettings(context);
-    if (!validPackageSettings(previous)) throw new Error(`${packageId} returned invalid settings`);
+    if (!validPackageSettings(previous))
+      throw new Error(`${packageId} returned invalid settings`);
     await adapter.updateSettings(value, context);
     const updated = await adapter.readSettings(context);
     if (!validPackageSettings(updated)) {
@@ -165,7 +238,9 @@ export class PackageCatalog {
   }
 
   private async discoverPackages(): Promise<PackageDefinition[]> {
-    const entries = await readdir(this.packagesRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    const entries = await readdir(this.packagesRoot, {
+      withFileTypes: true,
+    }).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;
     });
@@ -176,16 +251,31 @@ export class PackageCatalog {
       const manifest = await readManifest(resolve(packageRoot, "package.json"));
       if (!manifest) continue;
       const id = manifest?.name;
-      if (typeof id !== "string" || id.length > MAX_ID_LENGTH || !PACKAGE_ID.test(id)) continue;
-      const paths = await extensionPaths(packageRoot, manifest.pi?.extensions, true).catch(() => undefined);
+      if (
+        typeof id !== "string" ||
+        id.length > MAX_ID_LENGTH ||
+        !PACKAGE_ID.test(id)
+      )
+        continue;
+      const paths = await extensionPaths(
+        packageRoot,
+        manifest.pi?.extensions,
+        true,
+      ).catch(() => undefined);
       if (!paths) continue;
       packages.push({
         id,
         name: id,
-        description: typeof manifest.description === "string" ? manifest.description.slice(0, 500) : "",
+        description:
+          typeof manifest.description === "string"
+            ? manifest.description.slice(0, 500)
+            : "",
         required: id === "pylon-core",
         extensionPaths: paths,
-        settingsPath: await confinedFile(packageRoot, manifest.pylon?.settings).catch(() => undefined),
+        settingsPath: await confinedFile(
+          packageRoot,
+          manifest.pylon?.settings,
+        ).catch(() => undefined),
       });
     }
     if (!packages.some((item) => item.id === "pylon-core")) {
@@ -194,7 +284,11 @@ export class PackageCatalog {
         name: "pylon-core",
         description: "Required web runtime coordination",
         required: true,
-        extensionPaths: [fileURLToPath(import.meta.resolve("pylon-core/extensions/pylon-core.ts"))],
+        extensionPaths: [
+          fileURLToPath(
+            import.meta.resolve("pylon-core/extensions/pylon-core.ts"),
+          ),
+        ],
       });
     }
     return packages.sort((left, right) => left.name.localeCompare(right.name));
@@ -203,29 +297,52 @@ export class PackageCatalog {
   private adapter(path: string): Promise<PackageSettingsAdapter> {
     let adapter = this.adapters.get(path);
     if (adapter) return adapter;
-    adapter = importTypeScript.import<Record<string, unknown>>(path).then((module) => {
-      if (typeof module.readSettings !== "function" || typeof module.updateSettings !== "function") {
-        throw new Error("package settings adapter is invalid");
-      }
-      return module as unknown as PackageSettingsAdapter;
-    });
+    adapter = importTypeScript
+      .import<Record<string, unknown>>(path)
+      .then((module) => {
+        if (
+          typeof module.readSettings !== "function" ||
+          typeof module.updateSettings !== "function"
+        ) {
+          throw new Error("package settings adapter is invalid");
+        }
+        return module as unknown as PackageSettingsAdapter;
+      });
     this.adapters.set(path, adapter);
     return adapter;
   }
 
   private async rootExtensionPaths(): Promise<string[]> {
-    const manifest = await readManifest(resolve(this.repositoryRoot, "package.json"));
-    return await extensionPaths(this.repositoryRoot, manifest?.pi?.extensions, false).catch(() => undefined) ?? [];
+    const manifest = await readManifest(
+      resolve(this.repositoryRoot, "package.json"),
+    );
+    return (
+      (await extensionPaths(
+        this.repositoryRoot,
+        manifest?.pi?.extensions,
+        false,
+      ).catch(() => undefined)) ?? []
+    );
   }
 
   private async readEnabled(defaultIds: string[]): Promise<Set<string>> {
     try {
-      const value = JSON.parse(await readFile(this.configPath, "utf8")) as Partial<PackageConfig>;
-      if (value.version !== 1 || !Array.isArray(value.enabled)) return new Set();
-      return new Set(value.enabled.filter((item): item is string =>
-        typeof item === "string" && item.length <= MAX_ID_LENGTH && PACKAGE_ID.test(item)));
+      const value = JSON.parse(
+        await readFile(this.configPath, "utf8"),
+      ) as Partial<PackageConfig>;
+      if (value.version !== 1 || !Array.isArray(value.enabled))
+        return new Set();
+      return new Set(
+        value.enabled.filter(
+          (item): item is string =>
+            typeof item === "string" &&
+            item.length <= MAX_ID_LENGTH &&
+            PACKAGE_ID.test(item),
+        ),
+      );
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Set(defaultIds);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return new Set(defaultIds);
       return new Set();
     }
   }

@@ -3,25 +3,79 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { configPath, DEFAULT_REPO_TIMEOUT_MS, DEFAULT_SCOUT_MAX_COST_USD, isScoutEnabled, loadConfig, parseModelRef, repoTimeoutMs, saveConfig, scoutMaxCostUsd } from "../src/config.ts";
+import {
+  configPath,
+  DEFAULT_REPO_TIMEOUT_MS,
+  DEFAULT_SCOUT_MAX_COST_USD,
+  isScoutEnabled,
+  loadConfig,
+  parseModelRef,
+  repoTimeoutMs,
+  saveConfig,
+  scoutMaxCostUsd,
+} from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
 test("config is atomic, validated, and corrupt input is preserved", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "scout-config-")); const path = join(dir, "nested", "config.json");
-  await saveConfig({ version: 1, model: "openai/gpt", thinking: "xhigh", disabled: true, webSearch: true }, path);
-  assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/gpt", thinking: "xhigh", disabled: true, webSearch: true });
+  const dir = await mkdtemp(join(tmpdir(), "scout-config-"));
+  const path = join(dir, "nested", "config.json");
+  await saveConfig(
+    {
+      version: 1,
+      model: "openai/gpt",
+      thinking: "xhigh",
+      disabled: true,
+      webSearch: true,
+    },
+    path,
+  );
+  assert.deepEqual(await loadConfig(path), {
+    version: 1,
+    model: "openai/gpt",
+    thinking: "xhigh",
+    disabled: true,
+    webSearch: true,
+  });
   await saveConfig({ version: 1, disabled: false, webSearch: false }, path);
-  assert.deepEqual(await loadConfig(path), { version: 1, disabled: false, webSearch: false });
-  await writeFile(path, "bad"); assert.deepEqual(await loadConfig(path), { version: 1 });
+  assert.deepEqual(await loadConfig(path), {
+    version: 1,
+    disabled: false,
+    webSearch: false,
+  });
+  await writeFile(path, "bad");
+  assert.deepEqual(await loadConfig(path), { version: 1 });
 });
 
 test("Pylon Scout settings round-trip optional OpenAI/Exa search", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "scout-web-settings-"));
-  assert.deepEqual(await readSettings({ agentDir }), { kind: "scout", mode: "disabled", webSearch: false });
-  await updateSettings({ kind: "scout", mode: "session", thinking: "high", webSearch: true }, { agentDir });
-  assert.deepEqual(await readSettings({ agentDir }), { kind: "scout", mode: "session", thinking: "high", webSearch: true });
-  assert.deepEqual(await loadConfig(configPath(agentDir)), { version: 1, disabled: false, thinking: "high", webSearch: true });
-  await assert.rejects(updateSettings({ kind: "scout", mode: "session", webSearch: "yes" }, { agentDir }), /invalid Scout settings/);
+  assert.deepEqual(await readSettings({ agentDir }), {
+    kind: "scout",
+    mode: "disabled",
+    webSearch: false,
+  });
+  await updateSettings(
+    { kind: "scout", mode: "session", thinking: "high", webSearch: true },
+    { agentDir },
+  );
+  assert.deepEqual(await readSettings({ agentDir }), {
+    kind: "scout",
+    mode: "session",
+    thinking: "high",
+    webSearch: true,
+  });
+  assert.deepEqual(await loadConfig(configPath(agentDir)), {
+    version: 1,
+    disabled: false,
+    thinking: "high",
+    webSearch: true,
+  });
+  await assert.rejects(
+    updateSettings(
+      { kind: "scout", mode: "session", webSearch: "yes" },
+      { agentDir },
+    ),
+    /invalid Scout settings/,
+  );
 });
 test("Scout stays inactive until configured or explicitly reset", () => {
   assert.equal(isScoutEnabled({ version: 1 }), false);
@@ -47,7 +101,14 @@ test("Scout reported-cost ceiling defaults, disables, and validates overrides", 
 });
 
 test("model refs support thinking without breaking colon model IDs", () => {
-  assert.deepEqual(parseModelRef("p/m:low"), { provider: "p", id: "m", thinking: "low" });
-  assert.deepEqual(parseModelRef("ollama/qwen:7b"), { provider: "ollama", id: "qwen:7b" });
+  assert.deepEqual(parseModelRef("p/m:low"), {
+    provider: "p",
+    id: "m",
+    thinking: "low",
+  });
+  assert.deepEqual(parseModelRef("ollama/qwen:7b"), {
+    provider: "ollama",
+    id: "qwen:7b",
+  });
   assert.equal(parseModelRef("m"), undefined);
 });

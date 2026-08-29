@@ -16,7 +16,10 @@ export interface BrowserSession {
 }
 
 export class SessionStore {
-  private readonly sessions = new Map<string, { session: BrowserSession; touchedAt: number }>();
+  private readonly sessions = new Map<
+    string,
+    { session: BrowserSession; touchedAt: number }
+  >();
   get(request: IncomingMessage): BrowserSession | undefined {
     this.prune();
     const secret = parseCookies(request.headers.cookie)[SESSION_COOKIE];
@@ -27,33 +30,54 @@ export class SessionStore {
   create(response: ServerResponse, secure = false): BrowserSession {
     this.prune();
     const secret = randomToken();
-    const session = { secret, csrfToken: randomToken(), tabs: new Set<string>() };
+    const session = {
+      secret,
+      csrfToken: randomToken(),
+      tabs: new Set<string>(),
+    };
     this.sessions.set(secret, { session, touchedAt: Date.now() });
-    while (this.sessions.size > 100) this.sessions.delete(this.sessions.keys().next().value as string);
-    response.setHeader("set-cookie", `${SESSION_COOKIE}=${secret}; Path=/; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`);
+    while (this.sessions.size > 100)
+      this.sessions.delete(this.sessions.keys().next().value as string);
+    response.setHeader(
+      "set-cookie",
+      `${SESSION_COOKIE}=${secret}; Path=/; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`,
+    );
     return session;
   }
   private prune(now = Date.now()): void {
     for (const [secret, stored] of this.sessions) {
-      if (now - stored.touchedAt > 24 * 60 * 60_000) this.sessions.delete(secret);
+      if (now - stored.touchedAt > 24 * 60 * 60_000)
+        this.sessions.delete(secret);
     }
   }
 }
 
-export function applySecurityHeaders(response: ServerResponse, development = false): void {
+export function applySecurityHeaders(
+  response: ServerResponse,
+  development = false,
+): void {
   const scripts = development ? "; script-src 'self' 'unsafe-inline'" : "";
-  response.setHeader("content-security-policy", `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'${scripts}`);
+  response.setHeader(
+    "content-security-policy",
+    `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'${scripts}`,
+  );
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("cache-control", "no-store");
 }
 
-export function hostAllowed(request: IncomingMessage, allowedHosts: readonly string[]): boolean {
+export function hostAllowed(
+  request: IncomingMessage,
+  allowedHosts: readonly string[],
+): boolean {
   const host = request.headers.host;
   return typeof host === "string" && allowedHosts.includes(host);
 }
 
-export function requestAllowed(request: IncomingMessage, options: SecurityOptions): boolean {
+export function requestAllowed(
+  request: IncomingMessage,
+  options: SecurityOptions,
+): boolean {
   if (!hostAllowed(request, options.allowedHosts)) return false;
   const host = request.headers.host as string;
   const origin = request.headers.origin;
@@ -63,7 +87,10 @@ export function requestAllowed(request: IncomingMessage, options: SecurityOption
   return site !== "cross-site" && site !== "cross-origin";
 }
 
-export function validCsrf(session: BrowserSession | undefined, supplied: string | undefined): boolean {
+export function validCsrf(
+  session: BrowserSession | undefined,
+  supplied: string | undefined,
+): boolean {
   if (!session || !supplied) return false;
   const expected = Buffer.from(session.csrfToken);
   const actual = Buffer.from(supplied);
@@ -71,16 +98,31 @@ export function validCsrf(session: BrowserSession | undefined, supplied: string 
 }
 
 export function validTabId(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9_-]+$/.test(value);
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
 }
 
-export async function readJson(request: IncomingMessage, limit = MAX_JSON_BODY_BYTES): Promise<unknown> {
+export async function readJson(
+  request: IncomingMessage,
+  limit = MAX_JSON_BODY_BYTES,
+): Promise<unknown> {
   return (await readJsonWithSize(request, limit)).value;
 }
 
-export async function readJsonWithSize(request: IncomingMessage, limit = MAX_JSON_BODY_BYTES): Promise<{ value: unknown; bytes: number }> {
+export async function readJsonWithSize(
+  request: IncomingMessage,
+  limit = MAX_JSON_BODY_BYTES,
+): Promise<{ value: unknown; bytes: number }> {
   const contentType = request.headers["content-type"];
-  if (!contentType || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)) throw httpError(415, "application/json content type required");
+  if (
+    !contentType ||
+    !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
+  )
+    throw httpError(415, "application/json content type required");
   let bytes = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -89,16 +131,31 @@ export async function readJsonWithSize(request: IncomingMessage, limit = MAX_JSO
     if (bytes > limit) throw httpError(413, "request body too large");
     chunks.push(buffer);
   }
-  try { return { value: JSON.parse(Buffer.concat(chunks).toString("utf8")), bytes }; }
-  catch { throw httpError(400, "invalid JSON"); }
+  try {
+    return { value: JSON.parse(Buffer.concat(chunks).toString("utf8")), bytes };
+  } catch {
+    throw httpError(400, "invalid JSON");
+  }
 }
 
-export interface HttpError extends Error { statusCode: number; }
-export function httpError(statusCode: number, message: string): HttpError {
-  const error = new Error(message) as HttpError; error.statusCode = statusCode; return error;
+export interface HttpError extends Error {
+  statusCode: number;
 }
-function randomToken(): string { return randomBytes(32).toString("base64url"); }
+export function httpError(statusCode: number, message: string): HttpError {
+  const error = new Error(message) as HttpError;
+  error.statusCode = statusCode;
+  return error;
+}
+function randomToken(): string {
+  return randomBytes(32).toString("base64url");
+}
 function parseCookies(header: string | undefined): Record<string, string> {
   if (!header) return {};
-  return Object.fromEntries(header.split(";").map((part) => part.trim().split(/=(.*)/s)).filter(([key, value]) => key && value).map(([key, value]) => [key, value]));
+  return Object.fromEntries(
+    header
+      .split(";")
+      .map((part) => part.trim().split(/=(.*)/s))
+      .filter(([key, value]) => key && value)
+      .map(([key, value]) => [key, value]),
+  );
 }

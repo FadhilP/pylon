@@ -56,15 +56,22 @@ test("worktree summaries survive reload and follow the active branch", async () 
       padding: "x".repeat(64 * 1024),
     });
 
-    assert.equal(JSON.stringify(session.buildSessionContext()).includes("src/app.ts"), false);
+    assert.equal(
+      JSON.stringify(session.buildSessionContext()).includes("src/app.ts"),
+      false,
+    );
     const resumed = SessionManager.open(session.getSessionFile()!);
-    assert.deepEqual(readPersistedWorktreeSummaries(resumed).get(assistantEntryId), [
-      { path: "src/app.ts", additions: 4, deletions: 2 },
-    ]);
+    assert.deepEqual(
+      readPersistedWorktreeSummaries(resumed).get(assistantEntryId),
+      [{ path: "src/app.ts", additions: 4, deletions: 2 }],
+    );
 
     resumed.branch(userEntryId);
     resumed.appendMessage(assistant("Different branch"));
-    assert.equal(readPersistedWorktreeSummaries(resumed).has(assistantEntryId), false);
+    assert.equal(
+      readPersistedWorktreeSummaries(resumed).has(assistantEntryId),
+      false,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

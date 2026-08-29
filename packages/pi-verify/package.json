@@ -4,7 +4,7 @@
   "description": "Bounded project verification for Pi",
   "type": "module",
   "keywords": ["pi-package"],
-  "engines": { "node": ">=22.19.0" },
+  "engines": { "node": ">=24.15.0" },
   "files": ["extensions", "src", "README.md", "LICENSE"],
   "scripts": { "test": "node --test test/*.test.ts", "check": "tsc --noEmit" },
   "pi": { "extensions": ["./extensions/pi-verify.ts"] },

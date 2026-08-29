@@ -16,7 +16,13 @@ test("run metadata requires explicit timeline lineage", () => {
   assert.equal(isRunEntry({ ...run, timelineId: undefined }), false);
   assert.equal(isRunEntry({ ...run, timelineId: "" }), false);
   assert.equal(
-    isRunEntry({ version: 1, runId: "run", timelineId: "run", role: "invalid", createdAt: "x" }),
+    isRunEntry({
+      version: 1,
+      runId: "run",
+      timelineId: "run",
+      role: "invalid",
+      createdAt: "x",
+    }),
     false,
   );
 });

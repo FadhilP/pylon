@@ -10,7 +10,10 @@ test("truncateUtf8 returns the largest complete prefix within the byte cap", () 
 });
 
 test("delegate retry classification is shared and excludes terminal failures", () => {
-  assert.equal(isTransientProviderFailure("websocket error; please retry your request"), true);
+  assert.equal(
+    isTransientProviderFailure("websocket error; please retry your request"),
+    true,
+  );
   assert.equal(isTransientProviderFailure("401 authentication failed"), false);
   assert.equal(isTransientProviderFailure("request timed out"), false);
 });

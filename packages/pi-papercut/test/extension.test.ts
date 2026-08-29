@@ -27,27 +27,43 @@ function runtime() {
         for (const handler of eventHandlers.get(channel) ?? []) handler(value);
       },
       on: (channel: string, handler: Function) => {
-        eventHandlers.set(channel, [...(eventHandlers.get(channel) ?? []), handler]);
-        return () => eventHandlers.set(channel, (eventHandlers.get(channel) ?? []).filter((item) => item !== handler));
+        eventHandlers.set(channel, [
+          ...(eventHandlers.get(channel) ?? []),
+          handler,
+        ]);
+        return () =>
+          eventHandlers.set(
+            channel,
+            (eventHandlers.get(channel) ?? []).filter(
+              (item) => item !== handler,
+            ),
+          );
       },
     },
-    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    on: (name: string, handler: Function) =>
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerCommand: (name: string, command: any) =>
+      commands.set(name, command),
   };
   extension(pi);
   return { tools, commands, handlers, eventHandlers, emitted, pi };
 }
 
-function context(cwd: string, notifications: Array<{ text: string; level: string }> = []) {
+function context(
+  cwd: string,
+  notifications: Array<{ text: string; level: string }> = [],
+) {
   return {
     cwd,
     model: { provider: "openai", id: "gpt-test" },
     sessionManager: { getSessionId: () => "session-1" },
-    ui: { notify: (text: string, level: string) => notifications.push({ text, level }) },
+    ui: {
+      notify: (text: string, level: string) =>
+        notifications.push({ text, level }),
+    },
   } as any;
 }
-
 
 test("capture, dedupe, list, resolve, and command flows persist project state", async () => {
   const cwd = join(root, "repo");
@@ -56,25 +72,75 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   const ctx = context(cwd);
   const tool = app.tools.get("papercut");
 
-  const first = await tool.execute("one", { message: "Setup required an undocumented retry." }, undefined, undefined, ctx);
+  const first = await tool.execute(
+    "one",
+    { message: "Setup required an undocumented retry." },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.match(first.content[0].text, /captured/i);
-  assert.deepEqual(first.details.papercut.source, { sessionId: "session-1", provider: "openai", model: "gpt-test" });
-  const repeated = await tool.execute("two", { message: "setup required an undocumented retry." }, undefined, undefined, ctx);
+  assert.deepEqual(first.details.papercut.source, {
+    sessionId: "session-1",
+    provider: "openai",
+    model: "gpt-test",
+  });
+  const repeated = await tool.execute(
+    "two",
+    { message: "setup required an undocumented retry." },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.match(repeated.content[0].text, /already open.*seen 2/i);
 
-  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, ctx);
+  const listed = await tool.execute(
+    "list",
+    { action: "list" },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.match(listed.content[0].text, /Papercuts \(open, 1\)/);
   const id = listed.details.records[0].id;
-  const resolved = await tool.execute("resolve", { action: "resolve", ids: [id.slice(0, 8)], note: "Documented setup and added a regression test." }, undefined, undefined, ctx);
+  const resolved = await tool.execute(
+    "resolve",
+    {
+      action: "resolve",
+      ids: [id.slice(0, 8)],
+      note: "Documented setup and added a regression test.",
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.match(resolved.content[0].text, /Resolved papercut/);
-  const open = await tool.execute("open", { action: "list" }, undefined, undefined, ctx);
+  const open = await tool.execute(
+    "open",
+    { action: "list" },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.match(open.content[0].text, /No open papercuts/);
-  const closed = await tool.execute("closed", { action: "list", status: "resolved" }, undefined, undefined, ctx);
-  assert.match(closed.content[0].text, /Documented setup and added a regression test/);
+  const closed = await tool.execute(
+    "closed",
+    { action: "list", status: "resolved" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(
+    closed.content[0].text,
+    /Documented setup and added a regression test/,
+  );
 
-
-  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-  const policy = app.emitted.find((item) => item.channel === "pylon:tool-policy" && item.value?.kind === "register")?.value;
+  for (const handler of app.handlers.get("session_start") ?? [])
+    await handler({}, ctx);
+  const policy = app.emitted.find(
+    (item) =>
+      item.channel === "pylon:tool-policy" && item.value?.kind === "register",
+  )?.value;
   assert.deepEqual(policy.deferredTools, []);
   let response: Promise<any> | undefined;
   app.pi.events.emit("pylon:papercut-list-request", {
@@ -85,31 +151,66 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
     offset: 0,
     limit: 25,
     claim: () => true,
-    respond: (value: Promise<any>) => { response = value; },
+    respond: (value: Promise<any>) => {
+      response = value;
+    },
   });
   const page = await response;
   assert.equal(page.total, 1);
-  assert.equal(page.records[0].resolution, "Documented setup and added a regression test.");
+  assert.equal(
+    page.records[0].resolution,
+    "Documented setup and added a regression test.",
+  );
   assert.equal(page.records[0].source, undefined);
   assert.equal(page.records[0].lastSource, undefined);
   await assert.rejects(
-    tool.execute("invalid", { action: "list", ids: [id] }, undefined, undefined, ctx),
+    tool.execute(
+      "invalid",
+      { action: "list", ids: [id] },
+      undefined,
+      undefined,
+      ctx,
+    ),
     /not valid when listing/,
   );
   await assert.rejects(
-    tool.execute("missing-ids", { action: "dismiss" }, undefined, undefined, ctx),
+    tool.execute(
+      "missing-ids",
+      { action: "dismiss" },
+      undefined,
+      undefined,
+      ctx,
+    ),
     /ids are required/,
   );
   await assert.rejects(
-    tool.execute("missing-note", { action: "resolve", ids: [id] }, undefined, undefined, ctx),
+    tool.execute(
+      "missing-note",
+      { action: "resolve", ids: [id] },
+      undefined,
+      undefined,
+      ctx,
+    ),
     /note is required/,
   );
   await assert.rejects(
-    tool.execute("reopen-note", { action: "reopen", ids: [id], note: "extra" }, undefined, undefined, ctx),
+    tool.execute(
+      "reopen-note",
+      { action: "reopen", ids: [id], note: "extra" },
+      undefined,
+      undefined,
+      ctx,
+    ),
     /note is not valid/,
   );
   await assert.rejects(
-    tool.execute("secret", { message: "token=super-secret-value" }, undefined, undefined, ctx),
+    tool.execute(
+      "secret",
+      { message: "token=super-secret-value" },
+      undefined,
+      undefined,
+      ctx,
+    ),
     /possible credential/,
   );
 
@@ -121,30 +222,54 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   await command.handler("all", commandCtx);
   await command.handler("capture this", commandCtx);
   assert.match(notifications[0].text, /No open papercuts/i);
-  assert.match(notifications[1].text, /Documented setup and added a regression test/i);
+  assert.match(
+    notifications[1].text,
+    /Documented setup and added a regression test/i,
+  );
   assert.match(notifications[2].text, /Papercuts \(all, 1\)/i);
   assert.match(notifications[3].text, /usage: \/papercuts/i);
   assert.equal(notifications[3].level, "error");
 
-  const request = <T>(channel: string, value: Record<string, unknown>) => new Promise<T>((resolve, reject) => {
-    app.pi.events.emit(channel, {
-      version: 1, sessionId: "session-1", ...value, claim: () => true,
-      respond: (result: Promise<T>) => { void result.then(resolve, reject); },
+  const request = <T>(channel: string, value: Record<string, unknown>) =>
+    new Promise<T>((resolve, reject) => {
+      app.pi.events.emit(channel, {
+        version: 1,
+        sessionId: "session-1",
+        ...value,
+        claim: () => true,
+        respond: (result: Promise<T>) => {
+          void result.then(resolve, reject);
+        },
+      });
     });
-  });
   const editResult = await request<any>("pylon:papercut-mutation-request", {
-    action: "edit", id, expectedUpdatedAt: page.records[0].updatedAt, message: "Setup retry is now documented.",
+    action: "edit",
+    id,
+    expectedUpdatedAt: page.records[0].updatedAt,
+    message: "Setup retry is now documented.",
   });
   assert.equal(editResult.ok, true);
 
   const editedPage = await request<any>("pylon:papercut-list-request", {
-    status: "all", query: "documented", offset: 0, limit: 25,
+    status: "all",
+    query: "documented",
+    offset: 0,
+    limit: 25,
   });
   assert.equal(editedPage.records[0].message, "Setup retry is now documented.");
 
   const deleteResult = await request<any>("pylon:papercut-mutation-request", {
-    action: "delete", id, expectedUpdatedAt: editedPage.records[0].updatedAt,
+    action: "delete",
+    id,
+    expectedUpdatedAt: editedPage.records[0].updatedAt,
   });
   assert.equal(deleteResult.ok, true);
-  assert.equal(app.emitted.some((item) => item.channel === "pi-papercut:state-change" && item.value.counts.total === 0), true);
+  assert.equal(
+    app.emitted.some(
+      (item) =>
+        item.channel === "pi-papercut:state-change" &&
+        item.value.counts.total === 0,
+    ),
+    true,
+  );
 });
