@@ -810,6 +810,12 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
     const ownerSessionId = identifier(item?.ownerSessionId);
     const createdAt = string(item?.createdAt, 64);
     if (!item || !id || !title || !ownerSessionId || !createdAt) return [];
+    const verificationState: "passed" | "failed" | "unverified" =
+      item.verificationState === "passed" || item.verificationState === "failed"
+        ? item.verificationState
+        : item.verified === true
+          ? "passed"
+          : "unverified";
     const changes = record(item.changes);
     const boundedChanges =
       changes &&
@@ -829,7 +835,8 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
         title,
         ownerSessionId,
         createdAt,
-        verified: item.verified === true,
+        verified: verificationState === "passed",
+        verificationState,
         ...(string(item.branch, 200) ? { branch: string(item.branch, 200) } : {}),
         ...(boundedChanges ? { changes: boundedChanges } : {}),
       },

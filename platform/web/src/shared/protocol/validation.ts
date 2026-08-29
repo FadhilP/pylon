@@ -1136,6 +1136,17 @@ function validDelegatedRun(value: unknown): boolean {
       (value.durationMs as number) > 7 * 24 * 60 * 60 * 1_000)
   )
     return false;
+  if (
+    value.contextTokens !== undefined &&
+    value.contextTokens !== null &&
+    (!Number.isSafeInteger(value.contextTokens) || (value.contextTokens as number) < 0)
+  )
+    return false;
+  if (
+    value.contextLimit !== undefined &&
+    (!Number.isSafeInteger(value.contextLimit) || (value.contextLimit as number) <= 0)
+  )
+    return false;
   if (value.usage !== undefined) {
     const usage = value.usage;
     if (

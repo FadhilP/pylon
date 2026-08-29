@@ -44,10 +44,12 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
     `console.log(JSON.stringify({type:'tool_execution_start',toolCallId:'edit-1',toolName:'edit',args:{path:'a.ts'}})); console.log(JSON.stringify({type:'tool_execution_end',toolCallId:'edit-1',toolName:'edit',result:{content:[{type:'text',text:'updated'}]}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`,
   );
   const usage: any[] = [];
+  const contexts: Array<number | null> = [];
   const run = await runPi([], {
     cwd: dir,
     invocation: { command: process.execPath, args: [script] },
     onUsage: item => usage.push(item),
+    onContext: tokens => contexts.push(tokens),
   });
   assert.equal(run.text, "turn 2");
   assert.equal(run.cwd, dir);
@@ -57,6 +59,8 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
     [1, 3],
   );
   assert.deepEqual(run.usage, usage.at(-1));
+  assert.deepEqual(contexts, [10, 11]);
+  assert.equal(run.contextTokens, 11);
   assert.equal(run.activity[0]?.id, "edit-1");
   assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
   assert.equal(run.activity[1]?.id, "edit-1");

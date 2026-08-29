@@ -7,9 +7,27 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import extension from "../extensions/pi-timeline.ts";
 import { capture, makePortable } from "../src/snapshot.ts";
+import { verificationWorktreeState, type CommandExecutor } from "pylon-core/verification-worktree";
 import { restore } from "../src/restore.ts";
 
 const exec = promisify(execFile);
+const execute: CommandExecutor = async (command, args, options) => {
+  try {
+    const result = await exec(command, args, {
+      cwd: options.cwd,
+      signal: options.signal,
+      timeout: options.timeout,
+      windowsHide: true,
+    });
+    return { code: 0, stdout: String(result.stdout), stderr: String(result.stderr) };
+  } catch (error: any) {
+    return {
+      code: typeof error?.code === "number" ? error.code : null,
+      stdout: error?.stdout ?? "",
+      stderr: error?.stderr ?? "",
+    };
+  }
+};
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-checkpoint-agent-"));
 process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
@@ -67,6 +85,7 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
     appended: any[] = [];
   const pi: any = {
     events: { on: () => () => {} },
+    exec: execute,
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand() {},
     appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
@@ -107,6 +126,104 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
   }
 });
 
+test("automatic checkpoints attach matching verification outcomes only", async () => {
+  const { root } = await repository();
+  const entries: any[] = [{ type: "message", id: "user-1", message: { role: "user", content: "Update and verify" } }];
+  const handlers = new Map<string, Function[]>(),
+    eventHandlers = new Map<string, Set<Function>>(),
+    appended: any[] = [];
+  const events = {
+    on(name: string, handler: Function) {
+      const values = eventHandlers.get(name) ?? new Set();
+      values.add(handler);
+      eventHandlers.set(name, values);
+      return () => values.delete(handler);
+    },
+    async emit(name: string, value: any) {
+      await Promise.all([...(eventHandlers.get(name) ?? [])].map(handler => handler(value)));
+    },
+  };
+  const pi: any = {
+    events,
+    exec: execute,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
+    setSessionName() {},
+  };
+  extension(pi, undefined, { artifactRoot: join(isolatedAgentDir, "timeline-verification-artifacts") });
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    mode: "json",
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
+      getSessionId: () => "verified-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await writeFile(join(root, "tracked.txt"), "verified\n");
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
+    const verifiedState = await verificationWorktreeState(execute, root);
+    await events.emit("pi-verify:result", {
+      version: 1,
+      sessionId: "verified-session",
+      cwd: root,
+      runId: "run-1",
+      state: "passed",
+      scope: "changed",
+      worktreeId: verifiedState!.id,
+      results: [{ label: "tests" }],
+    });
+    await handlers.get("agent_settled")![0]({}, ctx);
+
+    entries.push({ type: "message", id: "user-2", message: { role: "user", content: "Change after verify" } });
+    await events.emit("pi-verify:result", {
+      version: 1,
+      sessionId: "verified-session",
+      cwd: root,
+      runId: "run-2",
+      state: "passed",
+      scope: "changed",
+      worktreeId: verifiedState!.id,
+      results: [{ label: "tests" }],
+    });
+    await writeFile(join(root, "tracked.txt"), "changed after verification\n");
+    await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-1" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+
+    entries.push({ type: "message", id: "user-3", message: { role: "user", content: "Fail verification" } });
+    await writeFile(join(root, "tracked.txt"), "failed verification\n");
+    await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-2" }, ctx);
+    const failedState = await verificationWorktreeState(execute, root);
+    await events.emit("pi-verify:result", {
+      version: 1,
+      sessionId: "verified-session",
+      cwd: root,
+      runId: "run-3",
+      state: "failed",
+      scope: "changed",
+      worktreeId: failedState!.id,
+      results: [{ label: "tests" }],
+    });
+    await handlers.get("agent_settled")![0]({}, ctx);
+
+    const checkpoints = appended.filter(entry => entry.customType === "pi-prompt-checkpoint");
+    assert.equal(checkpoints[0]?.data.verification?.state, "passed");
+    assert.equal(checkpoints[1]?.data.verification, undefined);
+    assert.equal(checkpoints[2]?.data.verification?.state, "failed");
+    for (const checkpoint of checkpoints)
+      await deleteRefs(root, [checkpoint.data.worktreeRef, checkpoint.data.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function deleteRefs(root: string, refs: string[]) {
   for (const ref of refs) await exec("git", ["update-ref", "-d", ref], { cwd: root });
 }
@@ -132,6 +249,7 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
   };
   const pi: any = {
     events,
+    exec: execute,
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand() {},
     appendEntry: (customType: string, data: any) => appended.push({ customType, data }),
@@ -267,6 +385,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     let appended = 0;
     const pi: any = {
       events: { on: () => () => {} },
+      exec: execute,
       on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
       registerCommand: (name: string, command: any) => commands.set(name, command),
       appendEntry: () => {
@@ -366,6 +485,7 @@ test("web prompt editing restores the nearest earlier checkpoint and can roll ba
           if (name === "pi-worktree:mutation") mutations.push(value);
         },
       },
+      exec: execute,
       on: (name: string, handler: Function) =>
         sessionHandlers.set(name, [...(sessionHandlers.get(name) ?? []), handler]),
       registerCommand: (name: string, command: any) => commands.set(name, command),

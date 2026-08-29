@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { truncateTail, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { verificationWorktreeState } from "pylon-core/verification-worktree";
+import { checksForChangedPaths } from "../src/changed.ts";
 import { detectChecks } from "../src/detect.ts";
 import { runGrouped } from "../src/schedule.ts";
 
@@ -170,47 +170,15 @@ export default function verifyExtension(pi: ExtensionAPI) {
       return;
     request.respond(catalog(currentCwd));
   });
-  const worktreeState = async (cwd: string, signal?: AbortSignal) => {
-    try {
-      const options = { cwd, signal, timeout: 15_000 };
-      const [head, status, index, paths] = await Promise.all([
-        pi.exec("git", ["rev-parse", "HEAD"], options),
-        pi.exec("git", ["status", "--porcelain=v1", "--untracked-files=all"], options),
-        pi.exec("git", ["diff", "--cached", "--raw", "-z", "HEAD", "--"], options),
-        pi.exec("git", ["ls-files", "--modified", "--deleted", "--others", "--exclude-standard", "-z"], options),
-      ]);
-      if ([head, status, index, paths].some(result => result.code !== 0)) return undefined;
-      const changedPaths = [...new Set(paths.stdout.split("\0").filter(Boolean))].sort();
-      const content = createHash("sha256")
-        .update(head.stdout.trim())
-        .update("\0")
-        .update(status.stdout)
-        .update("\0")
-        .update(index.stdout)
-        .update("\0");
-      for (let offset = 0; offset < changedPaths.length; offset += 64) {
-        const existing = (
-          await Promise.all(
-            changedPaths.slice(offset, offset + 64).map(
-              async path =>
-                await lstat(join(cwd, path)).then(
-                  () => path,
-                  () => undefined,
-                ),
-            ),
-          )
-        ).filter((path): path is string => path !== undefined);
-        if (!existing.length) continue;
-        const hashes = await pi.exec("git", ["hash-object", "--no-filters", "--", ...existing], options);
-        if (hashes.code !== 0) return undefined;
-        content.update(
-          existing.map((path, index) => `${path}\0${hashes.stdout.split(/\r?\n/)[index] ?? ""}\0`).join(""),
-        );
-      }
-      return { id: content.digest("hex").slice(0, 16), dirty: Boolean(status.stdout.trim()), status: status.stdout };
-    } catch {
-      return undefined;
-    }
+  const worktreeState = (cwd: string, signal?: AbortSignal) => verificationWorktreeState(pi.exec.bind(pi), cwd, signal);
+  const changedPaths = async (cwd: string, signal?: AbortSignal) => {
+    const options = { cwd, signal, timeout: 15_000 };
+    const [tracked, untracked] = await Promise.all([
+      pi.exec("git", ["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"], options),
+      pi.exec("git", ["ls-files", "--others", "--exclude-standard", "-z"], options),
+    ]).catch(() => []);
+    if (!tracked || !untracked || tracked.code !== 0 || untracked.code !== 0) return undefined;
+    return [...new Set(`${tracked.stdout}\0${untracked.stdout}`.split("\0").filter(Boolean))].sort();
   };
   const runHygiene = async (cwd: string, status: string, signal?: AbortSignal): Promise<Hygiene> => {
     const started = Date.now();
@@ -334,10 +302,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
     name: "verify",
     label: "Verify",
     description:
-      "Run bounded changed-set hygiene, then detect and run existing project verification commands. Discovers immediate child packages when root declares no checks. Scope changed skips clean Git worktrees; project always runs. Optionally select up to six stable check IDs.",
+      "Run bounded hygiene and detected checks. Changed scope selects affected workspace packages and falls back to full checks when ownership is uncertain; project scope runs default project checks even when Git is clean. Optionally select up to six stable check IDs.",
     promptSnippet: "Run detected project checks and return bounded failures",
     promptGuidelines: [
-      "Use verify only after all code changes are final—never mid-task while more edits remain, and never in the same assistant message as other tool calls. Call Verify in a tool-only assistant turn with no user-facing prose, wait for its result, then write exactly one evidence-aware final response. After failed, stale, cancelled, or error results, stop without another tool call. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits and project for broad refactors or release checks. Verify never installs dependencies.",
+      "Use verify only after all code changes are final—never mid-task while more edits remain, and never in the same assistant message as other tool calls. Call Verify in a tool-only assistant turn with no user-facing prose, wait for its result, then write exactly one evidence-aware final response. After failed, stale, cancelled, or error results, stop without another tool call. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits: it selects checks for affected workspace packages and falls back to full checks for root, shared, unknown, or ambiguous paths. Use project for broad refactors or release checks. Verify never installs dependencies.",
     ],
     parameters: Type.Object(
       {
@@ -409,11 +377,16 @@ export default function verifyExtension(pi: ExtensionAPI) {
         const skipped = `Unknown check ID(s): ${unknown.join(", ")}. Available: ${available}.`;
         return finish("error", { text: skipped, status: "Verify: invalid selection", skipped, hygiene });
       }
+      const automatic =
+        !selectedPolicy && !requested.length && params.scope === "changed"
+          ? checksForChangedPaths(ctx.cwd, detection, (await changedPaths(ctx.cwd, signal)) ?? [])
+          : undefined;
       const checks =
         selectedPolicy || requested.length
           ? requested.map((id: string) => detection.available.find(check => check.id === id)!)
-          : detection.checks;
-      const omittedChecks = selectedPolicy || requested.length ? [] : detection.omitted.map(check => check.id);
+          : (automatic ?? detection).checks;
+      const omittedChecks =
+        selectedPolicy || requested.length ? [] : (automatic ?? detection).omitted.map(check => check.id);
       if (!checks.length) {
         const skipped = "No declared verification commands detected.";
         return finish("no_checks", {

@@ -1,6 +1,7 @@
 import { IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import type { ExtensionListSnapshot, NativeExtensionReadModel } from "../shared/protocol/snapshots";
+import { OverviewOrb } from "./overview-primitives";
 
 export function ExtensionSettingsFields({
   snapshot,
@@ -59,9 +60,12 @@ export function ExtensionSettingsFields({
 
   return (
     <div className="extension-settings">
-      <p className="settings-note">
-        <strong>Security:</strong> Extensions execute arbitrary server-side code. Global resources live in Pylon’s agent
-        directory, not the separate Pi CLI directory.
+      <p className="settings-callout">
+        <OverviewOrb state="attention" label="Security notice" />
+        <span>
+          <strong>Extensions execute arbitrary server-side code.</strong>
+          Global resources live in Pylon’s agent directory, not the separate Pi CLI directory.
+        </span>
       </p>
 
       {snapshot.projectTrustRequired && (

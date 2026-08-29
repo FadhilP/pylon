@@ -10,7 +10,13 @@ export type CheckpointRecord = Snapshot & {
   continuationEntryId: string;
   createdAt: string;
   changes?: Pick<TimelineChangeSet, "fileCount" | "additions" | "deletions" | "binaryCount">;
-  verification?: { runId: string; state: "passed"; scope: "changed" | "project"; worktreeId: string; checks: string[] };
+  verification?: {
+    runId: string;
+    state: "passed" | "failed";
+    scope: "changed" | "project";
+    worktreeId: string;
+    checks: string[];
+  };
 };
 
 /** A checkpoint record paired with the prompt and session it belongs to. */

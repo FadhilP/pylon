@@ -317,12 +317,23 @@ test("state snapshots reject stale revisions and policy unregister removes owner
           createdAt: new Date(0).toISOString(),
           verified: true,
         },
+        {
+          id: "checkpoint-2",
+          title: "Failed prompt",
+          ownerSessionId: "session",
+          createdAt: new Date(1).toISOString(),
+          verified: false,
+          verificationState: "failed",
+        },
       ],
     },
     [],
     "session",
   );
   assert.equal(state.timeline.checkpoints[0]?.id, "checkpoint-1");
+  assert.equal(state.timeline.checkpoints[0]?.verificationState, "passed");
+  assert.equal(state.timeline.checkpoints[1]?.verificationState, "failed");
+  assert.equal(state.timeline.checkpoints[1]?.verified, false);
 
   state = applyOperationalEvent(state, "pylon:tool-policy", {
     version: 1,

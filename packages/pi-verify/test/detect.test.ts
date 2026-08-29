@@ -145,6 +145,32 @@ test("discovers all immediate non-hidden child directories with the same detecto
   );
 });
 
+test("inventories npm workspace checks without replacing root defaults", async () => {
+  const root = await fixture("workspaces");
+  const packageA = join(root, "packages", "a");
+  const web = join(root, "platform", "web");
+  await mkdir(packageA, { recursive: true });
+  await mkdir(web, { recursive: true });
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { test: "node root.js" }, workspaces: ["packages/*", "platform/web"] }),
+  );
+  await writeFile(join(packageA, "package.json"), JSON.stringify({ scripts: { test: "node a.js" } }));
+  await writeFile(join(web, "package.json"), JSON.stringify({ scripts: { check: "node web.js" } }));
+
+  const detected = await detectChecks(root);
+  assert.deepEqual(
+    detected.checks.map(check => check.id),
+    ["npm:test"],
+  );
+  assert.deepEqual(
+    detected.available.map(check => check.id),
+    ["npm:test", "packages/a/npm:test", "platform/web/npm:check"],
+  );
+  assert.ok(detected.packageRoots.includes(packageA));
+  assert.ok(detected.packageRoots.includes(web));
+});
+
 test("reports six-check cap for immediate child packages", async () => {
   const root = await fixture("cap");
   for (const name of ["a", "b", "c", "d"]) {

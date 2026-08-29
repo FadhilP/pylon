@@ -831,6 +831,8 @@ test("history projection retains complete delegated activity with bounded event 
         thinking: "high",
         durationMs: 1_250,
         usage: { input: 10, output: 20, cacheRead: 3, cacheWrite: 0, cost: 0.01 },
+        contextTokens: 25_000,
+        contextLimit: 128_000,
         activity,
       },
     },
@@ -853,6 +855,8 @@ test("history projection retains complete delegated activity with bounded event 
     thinkingLevel: "high",
     durationMs: 1_250,
     usage: { input: 10, output: 20, cacheRead: 3, cacheWrite: 0, cost: 0.01 },
+    contextTokens: 25_000,
+    contextLimit: 128_000,
     activity: activity.map(item => ({ ...item, text: item.text.slice(0, 2_000) })),
   });
   assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);

@@ -402,6 +402,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         let activity: readonly WorkerActivity[] = [];
         let lastUpdateAt = started;
         let attempts = 0;
+        let contextTokens: number | null = null;
+        const contextLimit = model.contextWindow;
         // Every progress frame carries the same identity; only the message and extras differ.
         const progress = (text: string, extra: Record<string, unknown> = {}) =>
           onUpdate?.({
@@ -415,6 +417,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               thinking: params.thinking,
               durationMs: Date.now() - started,
               attempts,
+              contextTokens,
+              contextLimit,
               ...extra,
             },
           });
@@ -428,6 +432,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             configuredMode,
             model: modelName(model),
             thinking: params.thinking,
+            contextTokens,
+            contextLimit,
           },
         });
         heartbeat = setInterval(() => {
@@ -500,6 +506,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
                 lastUpdateAt = Date.now();
                 progress("Grunt usage updated", { usage: addUsage(usage, attemptUsage), activity });
               },
+              onContext: tokens => {
+                contextTokens = tokens;
+                lastUpdateAt = Date.now();
+                progress("Grunt context updated", { usage: addUsage(usage, attemptUsage), activity });
+              },
               onActivity: (_item: WorkerActivity, all: readonly WorkerActivity[]) => {
                 activity = all;
                 lastUpdateAt = Date.now();
@@ -509,6 +520,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
                 });
               },
             });
+            contextTokens = run.contextTokens ?? contextTokens;
             usage.input += run.usage.input;
             usage.output += run.usage.output;
             usage.cacheRead += run.usage.cacheRead;
@@ -530,6 +542,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             if (signal?.aborted || Date.now() >= deadline || usage.cost >= maxCostUsd || totalTurns >= maxTurns)
               return run;
             if ((await parentChangesSinceBaseline(exec, callIsolation ?? retryIsolation!)).length) return run;
+            contextTokens = null;
             progress(
               `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
               { usage: { ...usage } },
@@ -561,6 +574,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           durationMs: run.durationMs,
           attempts,
           usage: run.usage,
+          contextTokens,
+          contextLimit,
           turns: run.turns,
           activity: run.activity,
           stopReason: run.stopReason,

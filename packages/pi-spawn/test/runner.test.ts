@@ -14,7 +14,7 @@ const defaultStats = {
   tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
   cost: 0.1,
 };
-const defaultState = { model: { provider: "fake", id: "model" }, thinkingLevel: "high" };
+const defaultState = { model: { provider: "fake", id: "model", contextWindow: 128_000 }, thinkingLevel: "high" };
 const rpc = (
   body: string,
   stats: typeof defaultStats | null,
@@ -58,12 +58,14 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
   const activity: string[] = [];
   const usage: any[] = [];
   const states: any[] = [];
+  const contexts: Array<number | null> = [];
   const run = await runSpawn([], {
     cwd: child.dir,
     prompt: "hello",
     invocation: child.invocation,
     onActivity: item => activity.push(`${item.id}:${item.kind}:${item.tool}`),
     onUsage: item => usage.push(item),
+    onContext: tokens => contexts.push(tokens),
     onState: state => states.push(state),
   });
   assert.equal(run.text, "reply:hello");
@@ -76,7 +78,10 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
   assert.deepEqual(activity, ["call-read:call:read", "call-read:result:read"]);
   assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
   assert.equal(run.activity[1]?.durationMs !== undefined && run.activity[1].durationMs >= 0, true);
-  assert.deepEqual(states.at(-1), { model: "fake/model", thinking: "high" });
+  assert.deepEqual(states.at(-1), { model: "fake/model", thinking: "high", contextLimit: 128_000 });
+  assert.deepEqual(contexts, [10, 14]);
+  assert.equal(run.contextTokens, 14);
+  assert.equal(run.contextLimit, 128_000);
   assert.equal(run.model, "fake/model");
   assert.equal(run.thinking, "high");
   assert.equal(run.error, undefined);
@@ -103,21 +108,29 @@ test("runner streams bounded assistant text with a message-end fallback", async 
 
 test("runner waits for a Continuity turn triggered after asynchronous compaction", async () => {
   const child = await fake(`if(command.type==='prompt'){
-    emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'toolUse',usage:{}}});
+    emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'toolUse',usage:{input:10,output:2,cacheRead:0,cacheWrite:0}}});
     emit({type:'compaction_start',reason:'manual'});
     emit({type:'agent_settled'});
     setTimeout(()=>{
       emit({type:'compaction_end',reason:'manual',result:{},aborted:false,willRetry:false});
       emit({type:'agent_start'});
-      emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continued'}],stopReason:'stop',usage:{}}});
+      emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continued'}],stopReason:'stop',usage:{input:3,output:1,cacheRead:0,cacheWrite:0}}});
       emit({type:'agent_settled'});
     },25);
     setInterval(()=>{},1000);
   }`);
-  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+  const contexts: Array<number | null> = [];
+  const run = await runSpawn([], {
+    cwd: child.dir,
+    prompt: "x",
+    invocation: child.invocation,
+    onContext: tokens => contexts.push(tokens),
+  });
   assert.equal(run.error, undefined);
   assert.equal(run.text, "continued");
   assert.equal(run.turns, 2);
+  assert.deepEqual(contexts, [12, null, 4]);
+  assert.equal(run.contextTokens, 4);
 });
 
 test("runner recognizes continuation across alternate compaction event ordering and retries", async () => {

@@ -24,6 +24,9 @@
       "./extensions/pi-verify.ts"
     ]
   },
+  "dependencies": {
+    "pylon-core": "0.1.0"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",

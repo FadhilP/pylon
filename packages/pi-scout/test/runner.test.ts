@@ -51,11 +51,19 @@ test("runner submits its prompt and selects final assistant usage", async () => 
     "scout-runner-",
     `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true}); emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'prompt:'+command.message}],model:'fake',stopReason:'stop',usage:{input:2,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}); settled(); setInterval(()=>{},1000);}`,
   );
-  const run = await runPi([], { cwd: child.dir, prompt: "find it", invocation: child.invocation });
+  const contexts: Array<number | null> = [];
+  const run = await runPi([], {
+    cwd: child.dir,
+    prompt: "find it",
+    invocation: child.invocation,
+    onContext: tokens => contexts.push(tokens),
+  });
   assert.equal(run.text, "prompt:find it");
   assert.equal(run.turns.length, 1);
   assert.equal(run.usage.cacheRead, 3);
   assert.equal(run.contextTokens, 8);
+  assert.equal(run.contextWindowTokens, 11);
+  assert.deepEqual(contexts, [11]);
   assert.equal(run.cacheReadTokens, 3);
 });
 

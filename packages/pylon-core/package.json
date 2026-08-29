@@ -25,6 +25,7 @@
     "./token-meter": "./src/token-meter.ts",
     "./session-inventory": "./src/session-inventory.ts",
     "./utf8": "./src/utf8.ts",
+    "./verification-worktree": "./src/verification-worktree.ts",
     "./extensions/*": "./extensions/*",
     "./src/*": "./src/*"
   },

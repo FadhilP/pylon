@@ -43,6 +43,8 @@ test("verify publishes bounded result metadata and session entry", async () => {
     "ls-files --modified --deleted --others --exclude-standard -z",
     "hash-object --no-filters -- file.ts",
     "diff --check HEAD --",
+    "diff --name-only -z --no-renames HEAD --",
+    "ls-files --others --exclude-standard -z",
     "rev-parse HEAD",
     "status --porcelain=v1 --untracked-files=all",
     "diff --cached --raw -z HEAD --",
@@ -276,6 +278,78 @@ test("verify runs checks from independent child-package directories concurrently
     result.details.results.map((item: any) => item.id),
     ["a/npm:test", "b/npm:test"],
   );
+});
+
+test("changed scope selects affected workspace packages and falls back for root changes", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-changed-packages-"));
+  const packageA = join(cwd, "packages", "a");
+  const packageB = join(cwd, "packages", "b");
+  await mkdir(packageA, { recursive: true });
+  await mkdir(packageB, { recursive: true });
+  await writeFile(
+    join(cwd, "package.json"),
+    JSON.stringify({ scripts: { test: "node root.js" }, workspaces: ["packages/*"] }),
+  );
+  await writeFile(join(packageA, "package.json"), JSON.stringify({ scripts: { test: "node a.js" } }));
+  await writeFile(join(packageB, "package.json"), JSON.stringify({ scripts: { test: "node b.js" } }));
+  await writeFile(join(packageA, "source.ts"), "changed");
+  let changedPath = "packages/a/source.ts";
+  let tool: any;
+  const executions: string[] = [];
+  extension({
+    registerTool: (value: any) => {
+      tool = value;
+    },
+    on: () => {},
+    events: { emit: () => {} },
+    appendEntry: () => {},
+    exec: async (command: string, args: string[], options: any) => {
+      if (command !== "git") {
+        executions.push(options.cwd);
+        return { code: 0, stdout: "ok", stderr: "" };
+      }
+      if (args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (args[0] === "status") return { code: 0, stdout: ` M ${changedPath}\n`, stderr: "" };
+      if (args[0] === "hash-object") return { code: 0, stdout: "blob\n", stderr: "" };
+      if (args[0] === "ls-files")
+        return { code: 0, stdout: args[1] === "--others" ? "" : `${changedPath}\0`, stderr: "" };
+      if (args[0] === "diff" && args.includes("--name-only"))
+        return { code: 0, stdout: `${changedPath}\0`, stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  } as any);
+
+  const changed = await tool.execute("changed-package", { scope: "changed" }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.equal(changed.details.state, "passed");
+  assert.deepEqual(
+    changed.details.results.map((result: any) => result.id),
+    ["packages/a/npm:test"],
+  );
+  assert.deepEqual(executions, [packageA]);
+
+  executions.length = 0;
+  changedPath = "package-lock.json";
+  await writeFile(join(cwd, changedPath), "{}");
+  const fallback = await tool.execute("changed-root", { scope: "changed" }, undefined, undefined, {
+    cwd,
+    hasUI: false,
+  });
+  assert.deepEqual(
+    fallback.details.results.map((result: any) => result.id),
+    ["npm:test"],
+  );
+  assert.deepEqual(executions, [cwd]);
+
+  executions.length = 0;
+  const project = await tool.execute("project", { scope: "project" }, undefined, undefined, { cwd, hasUI: false });
+  assert.deepEqual(
+    project.details.results.map((result: any) => result.id),
+    ["npm:test"],
+  );
+  assert.deepEqual(executions, [cwd]);
 });
 
 test("verify reports live elapsed runtime while a check runs", async () => {

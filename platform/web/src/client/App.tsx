@@ -660,12 +660,7 @@ export function App() {
     let recoveredDraft: ComposerDraft | undefined;
     if (!retry) {
       const draft = composerDrafts.latestForProject(project.id);
-      if (draft && draft.sessionId === live.runtime?.sessionId) {
-        setComposerFocusTarget(draft.sessionId);
-        if (mobile) setSidebarOpen(false);
-        return;
-      }
-      if (draft) {
+      if (draft && draft.sessionId !== live.runtime?.sessionId) {
         pendingSessionInFlight.current = true;
         setSessionBusy(draft.sessionId);
         setSessionTransition(true);

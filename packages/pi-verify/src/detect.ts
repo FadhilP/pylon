@@ -1,8 +1,8 @@
-import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
 
 export type Check = { id: string; label: string; command: string; args: string[]; cwd: string };
-export type Detection = { checks: Check[]; available: Check[]; omitted: Check[] };
+export type Detection = { checks: Check[]; available: Check[]; omitted: Check[]; packageRoots: string[] };
 
 const LIMIT = 6;
 const npmScripts = ["verify", "check", "typecheck", "lint", "test"];
@@ -228,16 +228,56 @@ async function checksAt(cwd: string, prefix = ""): Promise<Check[]> {
   return checks;
 }
 
-export async function detectChecks(cwd: string): Promise<Detection> {
-  let available = await checksAt(cwd);
-  if (!available.length) {
-    const entries = await readdir(cwd, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries
-      .filter(item => item.isDirectory() && !item.name.startsWith(".") && !ignoredChildren.has(item.name))
-      .sort((a, b) => a.name.localeCompare(b.name)))
-      available.push(...(await checksAt(join(cwd, entry.name), `${entry.name}/`)));
+async function packageDirectories(cwd: string): Promise<string[]> {
+  const entries = await readdir(cwd, { withFileTypes: true }).catch(() => []);
+  const roots = entries
+    .filter(item => item.isDirectory() && !item.name.startsWith(".") && !ignoredChildren.has(item.name))
+    .map(item => resolve(cwd, item.name));
+  const packageText = await text(join(cwd, "package.json"));
+  if (packageText !== undefined) {
+    try {
+      const value = JSON.parse(packageText)?.workspaces;
+      const patterns: unknown[] = Array.isArray(value) ? value : Array.isArray(value?.packages) ? value.packages : [];
+      for (const pattern of patterns) {
+        if (typeof pattern !== "string") continue;
+        const normalized = pattern.replaceAll("\\", "/").replace(/\/$/, "");
+        const segments = normalized.split("/");
+        if (
+          !normalized ||
+          normalized.startsWith("!") ||
+          segments.some(segment => !segment || segment === "." || segment === "..") ||
+          segments.slice(0, -1).some(segment => segment.includes("*")) ||
+          (segments.at(-1)!.includes("*") && segments.at(-1) !== "*")
+        )
+          continue;
+        if (segments.at(-1) === "*") {
+          const parent = resolve(cwd, ...segments.slice(0, -1));
+          const children = await readdir(parent, { withFileTypes: true }).catch(() => []);
+          roots.push(...children.filter(item => item.isDirectory()).map(item => resolve(parent, item.name)));
+        } else {
+          const root = resolve(cwd, ...segments);
+          if (
+            await stat(root).then(
+              value => value.isDirectory(),
+              () => false,
+            )
+          )
+            roots.push(root);
+        }
+      }
+    } catch {}
   }
+  return [...new Set(roots)].sort((a, b) => a.localeCompare(b));
+}
 
+export async function detectChecks(cwd: string): Promise<Detection> {
+  cwd = resolve(cwd);
+  const rootChecks = await checksAt(cwd);
+  const packageRoots = await packageDirectories(cwd);
+  const packageChecks = (
+    await Promise.all(packageRoots.map(root => checksAt(root, `${relative(cwd, root).replaceAll("\\", "/")}/`)))
+  ).flat();
+  let available = [...rootChecks, ...packageChecks];
   const seen = new Set<string>();
   available = available.filter(check => {
     const key = `${check.cwd}\0${check.command}\0${check.args.join("\0")}`;
@@ -245,5 +285,7 @@ export async function detectChecks(cwd: string): Promise<Detection> {
     seen.add(key);
     return true;
   });
-  return { checks: available.slice(0, LIMIT), available, omitted: available.slice(LIMIT) };
+  const defaults = rootChecks.length ? available.filter(check => check.cwd === cwd) : available;
+  const checks = defaults.slice(0, LIMIT);
+  return { checks, available, omitted: defaults.slice(LIMIT), packageRoots };
 }

@@ -1,4 +1,5 @@
 import type { complete } from "@earendil-works/pi-ai/compat";
+import { contextWindowTokensFromUsage } from "pylon-core/child-process";
 import { redact } from "./redact.ts";
 import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "./retry.ts";
 
@@ -51,7 +52,7 @@ function classifyFailure(input: {
   return input.retryable ? "provider_unavailable" : "invalid_response";
 }
 
-export type ConsultProgress = { note?: string; usage: AdvisorUsage; attempts: number };
+export type ConsultProgress = { note?: string; usage: AdvisorUsage; contextTokens: number | null; attempts: number };
 export type ConsultOptions = {
   complete: typeof complete;
   retryWait: typeof waitForDelegateRetry;
@@ -63,8 +64,15 @@ export type ConsultOptions = {
   onProgress: (progress: ConsultProgress) => void;
 };
 export type ConsultResult =
-  | { ok: true; raw: string; usage: AdvisorUsage; attempts: number }
-  | { ok: false; code: FailureCode; message: string; usage: AdvisorUsage; attempts: number };
+  | { ok: true; raw: string; usage: AdvisorUsage; contextTokens: number | null; attempts: number }
+  | {
+      ok: false;
+      code: FailureCode;
+      message: string;
+      usage: AdvisorUsage;
+      contextTokens: number | null;
+      attempts: number;
+    };
 
 const responseText = (content: readonly any[]) =>
   content
@@ -80,6 +88,7 @@ const responseText = (content: readonly any[]) =>
 export async function runConsultation(options: ConsultOptions): Promise<ConsultResult> {
   const usage = emptyUsage();
   let attempts = 0;
+  let contextTokens: number | null = null;
   // Progress observers must not control provider execution.
   const report = (progress: ConsultProgress) => {
     try {
@@ -91,10 +100,12 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
   const retry = async (retryable: boolean) => {
     if (attempts >= DELEGATE_MAX_ATTEMPTS || usage.cost !== 0 || !retryable) return false;
     if (!(await options.retryWait(attempts, options.signal))) return false;
+    contextTokens = null;
     report({
       note: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
       usage,
       attempts,
+      contextTokens,
     });
     return true;
   };
@@ -104,11 +115,12 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
     try {
       const response = await options.complete(options.model, options.request as any, options.completeOptions as any);
       accumulateUsage(usage, response.usage);
-      report({ usage, attempts });
-
       const raw = responseText(response.content);
       const failed = response.stopReason === "error" || response.stopReason === "aborted" || !raw;
-      if (!failed) return { ok: true, raw, usage, attempts };
+      const latestContextTokens = contextWindowTokensFromUsage(response.usage);
+      contextTokens = !failed && latestContextTokens > 0 ? latestContextTokens : null;
+      report({ usage, contextTokens, attempts });
+      if (!failed) return { ok: true, raw, usage, contextTokens, attempts };
 
       const retryable = response.stopReason === "error" && isTransientProviderFailure(response.errorMessage);
       if (await retry(retryable)) continue;
@@ -126,6 +138,7 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
           raw ? "Provider returned an error without a message." : "Provider returned no text content.",
         ),
         usage,
+        contextTokens,
         attempts,
       };
     } catch (error) {
@@ -142,6 +155,7 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
         }),
         message: failureMessage(error, "Advisor request failed without an Error message."),
         usage,
+        contextTokens,
         attempts,
       };
     }

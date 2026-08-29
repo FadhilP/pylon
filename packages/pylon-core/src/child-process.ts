@@ -85,6 +85,15 @@ export function contextTokensFromUsage(usage: any): number {
   return Math.max(0, parts.reduce((sum, value) => sum + value, 0) - cacheRead);
 }
 
+/** Context-window occupancy: provider total when available, otherwise every billed token component. */
+export function contextWindowTokensFromUsage(usage: any): number {
+  const nativeTotal = Number(usage?.totalTokens);
+  if (Number.isFinite(nativeTotal) && nativeTotal > 0) return nativeTotal;
+  const parts = [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite].map(Number);
+  if (!parts.every(value => Number.isFinite(value) && value >= 0)) return 0;
+  return parts.reduce((sum, value) => sum + value, 0);
+}
+
 export const MAX_ACTIVITY_ITEMS = 100;
 
 /**

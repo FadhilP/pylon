@@ -1,6 +1,7 @@
 import { IconArrowDown, IconArrowUp, IconFileText, IconPencil, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { HookReadModel, HookSettingsReadModel, HookSourceReadModel } from "../shared/protocol/snapshots";
+import { OverviewOrb } from "./overview-primitives";
 
 const MAX_SOURCES = 20;
 const MAX_SOURCE_BYTES = 64 * 1024;
@@ -150,23 +151,28 @@ export function HookSettingsFields({
   return (
     <div className="hooks-editor">
       <aside className="hooks-list" aria-label="Lifecycle hooks">
-        <div className="hooks-list-label">
+        <div className="workbench-index-label">
           <span>Lifecycle hooks</span>
           <span>{HOOKS.filter(item => draft[item.key].enabled).length} enabled</span>
         </div>
-        {HOOKS.map(item => (
-          <button
-            key={item.key}
-            type="button"
-            className={`hook-choice${hookKey === item.key ? " is-selected" : ""}`}
-            onClick={() => setHookKey(item.key)}>
-            <span>
-              <strong>{item.name}</strong>
-              <small>{item.summary}</small>
-            </span>
-            <i className={draft[item.key].enabled ? "is-live" : ""} />
-          </button>
-        ))}
+        {HOOKS.map(item => {
+          const enabled = draft[item.key].enabled;
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-selected={hookKey === item.key}
+              className={`hook-choice${hookKey === item.key ? " is-selected" : ""}`}
+              onClick={() => setHookKey(item.key)}>
+              <OverviewOrb state={enabled ? "done" : "neutral"} label={enabled ? "enabled" : "disabled"} />
+              <span>
+                <strong>{item.name}</strong>
+                <small>{item.summary}</small>
+              </span>
+              <b className={`package-state is-${enabled ? "active" : "disabled"}`}>{enabled ? "on" : "off"}</b>
+            </button>
+          );
+        })}
       </aside>
 
       <div className="hook-detail">
@@ -190,7 +196,8 @@ export function HookSettingsFields({
           <div>
             <strong>Sources</strong>
             <span>
-              {hook.sources.length} source{hook.sources.length === 1 ? "" : "s"} · combined in list order
+              {hook.sources.length} source{hook.sources.length === 1 ? "" : "s"} · combined in list order ·{" "}
+              {totalBytes.toLocaleString()} / {MAX_TOTAL_BYTES.toLocaleString()} bytes
             </span>
           </div>
           <div>
@@ -294,9 +301,11 @@ export function HookSettingsFields({
               </label>
             )}
             <label>
-              Instructions{" "}
-              <span>
-                {bytes(source.content).toLocaleString()} / {MAX_SOURCE_BYTES.toLocaleString()} bytes
+              <span className="hook-source-count">
+                Instructions{" "}
+                <span>
+                  {bytes(source.content).toLocaleString()} / {MAX_SOURCE_BYTES.toLocaleString()} bytes
+                </span>
               </span>
               <textarea
                 value={source.content}

@@ -76,6 +76,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
     let model = policy?.model;
     let thinking = kind === "agent" ? (policy as AgentPolicy | undefined)?.thinking : undefined;
     let activity: readonly SpawnActivity[] = [];
+    let contextTokens: number | null = null;
+    let contextLimit: number | undefined;
     let authorized = beforeRun === undefined;
     const elapsed = () => Date.now() - started;
 
@@ -87,6 +89,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
       state: "running",
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
+      contextTokens,
+      ...(contextLimit ? { contextLimit } : {}),
       ...(background ? { background: true } : {}),
     });
     const report = (text: string, extra: Record<string, unknown>) => {
@@ -136,10 +140,15 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
             },
             onUiRequest,
             onUsage: usage => report(`${name} usage updated`, { durationMs: elapsed(), usage }),
+            onContext: tokens => {
+              contextTokens = tokens;
+              report(`${name} context updated`, { durationMs: elapsed() });
+            },
             onText: text => report("", { durationMs: elapsed(), partialResponse: text }),
             onState: state => {
               model = state.model ?? model;
               thinking = state.thinking ?? thinking;
+              contextLimit = state.contextLimit ?? contextLimit;
               report(`${name} runtime ready`, { durationMs: elapsed() });
             },
             onActivity: (item, all) => {
@@ -164,6 +173,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
           durationMs: run.durationMs,
           usage: run.usage,
           ...(run.sessionUsage ? { sessionUsage: run.sessionUsage } : {}),
+          contextTokens: run.contextTokens,
+          ...(run.contextLimit ? { contextLimit: run.contextLimit } : {}),
           turns: run.turns,
           activity: run.activity,
           stopReason: run.stopReason,

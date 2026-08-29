@@ -1,10 +1,16 @@
 import {
-  IconChevronRight,
+  IconBell,
+  IconContrast,
   IconExternalLink,
   IconKey,
   IconLogout,
+  IconPackages,
+  IconPlugConnected,
+  IconPuzzle,
   IconSettings,
+  IconShield,
   IconStack2,
+  IconWebhook,
   IconX,
 } from "@tabler/icons-react";
 import {
@@ -13,6 +19,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import {
   DEFAULT_GUARD_RULES,
@@ -46,20 +53,39 @@ import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 import { modelKey, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
+import { OverviewOrb, type OverviewState } from "./overview-primitives";
 
 export type SettingsTab =
   "providers" | "models" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
 type SettingsTheme = "light" | "dark";
-const SETTINGS_TABS: SettingsTab[] = [
-  "providers",
-  "models",
-  "packages",
-  "extensions",
-  "hooks",
-  "policy",
-  "notifications",
-  "appearance",
+/* Grouping the eight sections names the thing each one governs; the flat order
+   below stays the roving-tabindex order, so it must match the visual order. */
+const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; icon: ReactNode }[] }[] = [
+  {
+    group: "Accounts",
+    tabs: [
+      { tab: "providers", label: "Providers", icon: <IconPlugConnected size={15} /> },
+      { tab: "models", label: "Models", icon: <IconStack2 size={15} /> },
+    ],
+  },
+  {
+    group: "Capabilities",
+    tabs: [
+      { tab: "packages", label: "Packages", icon: <IconPackages size={15} /> },
+      { tab: "extensions", label: "Extensions", icon: <IconPuzzle size={15} /> },
+      { tab: "hooks", label: "Hooks", icon: <IconWebhook size={15} /> },
+    ],
+  },
+  {
+    group: "Behavior",
+    tabs: [
+      { tab: "policy", label: "Policy", icon: <IconShield size={15} /> },
+      { tab: "notifications", label: "Notifications", icon: <IconBell size={15} /> },
+    ],
+  },
+  { group: "Pylon", tabs: [{ tab: "appearance", label: "Appearance", icon: <IconContrast size={15} /> }] },
 ];
+const SETTINGS_TABS: SettingsTab[] = SETTINGS_NAV.flatMap(group => group.tabs.map(entry => entry.tab));
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
@@ -244,6 +270,18 @@ export function SettingsDialog({
     dialogRef.current?.querySelectorAll<HTMLButtonElement>("[role='tab']")[next]?.focus();
   };
 
+  const hookKeys = ["sessionStart", "beforeAgentStart"] as const;
+  const navCounts: Partial<Record<SettingsTab, string>> = {
+    providers: providers.length
+      ? `${providers.filter(provider => provider.configured).length}/${providers.length}`
+      : "",
+    models: models.length ? String(models.length) : "",
+    packages: packages.length ? String(packages.length) : "",
+    extensions: extensions ? String(extensions.extensions.length) : "",
+    hooks: hookSettings ? `${hookKeys.filter(key => hookSettings[key].enabled).length}/${hookKeys.length}` : "",
+  };
+  const isWorkbenchTab = activeTab === "packages" || activeTab === "hooks";
+
   const selectedPackage = filteredPackages.find(item => item.id === selectedPackageId) ?? filteredPackages[0];
   const selectedToolPolicy = selectedPackage
     ? toolPolicies.find(policy => policy.owner === selectedPackage.id)
@@ -276,24 +314,38 @@ export function SettingsDialog({
         <div className="settings-layout">
           <nav className="settings-nav" aria-label="Settings sections">
             <div role="tablist">
-              {SETTINGS_TABS.map((tab, index) => (
-                <button
-                  key={tab}
-                  id={`settings-tab-${tab}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === tab}
-                  aria-controls={`settings-panel-${tab}`}
-                  tabIndex={activeTab === tab ? 0 : -1}
-                  onClick={() => setActiveTab(tab)}
-                  onKeyDown={event => onTabKeyDown(event, index)}>
-                  {tab}
-                </button>
+              {SETTINGS_NAV.map(group => (
+                // Presentational so the tabs stay the tablist's own children.
+                <div className="settings-nav-group" role="presentation" key={group.group}>
+                  <span className="section-kicker" aria-hidden="true">
+                    {group.group}
+                  </span>
+                  {group.tabs.map(entry => (
+                    <button
+                      key={entry.tab}
+                      id={`settings-tab-${entry.tab}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === entry.tab}
+                      aria-controls={`settings-panel-${entry.tab}`}
+                      tabIndex={activeTab === entry.tab ? 0 : -1}
+                      onClick={() => setActiveTab(entry.tab)}
+                      onKeyDown={event => onTabKeyDown(event, SETTINGS_TABS.indexOf(entry.tab))}>
+                      {entry.icon}
+                      {entry.label}
+                      {navCounts[entry.tab] && <b>{navCounts[entry.tab]}</b>}
+                    </button>
+                  ))}
+                </div>
               ))}
             </div>
+            <p>
+              Settings apply to every project on this machine unless a project or session overrides them.
+              <b>Changes save immediately.</b>
+            </p>
           </nav>
 
-          <div className={`settings-content${activeTab === "packages" ? " is-packages" : ""}`}>
+          <div className={`settings-content${isWorkbenchTab ? " is-workbench" : ""}`}>
             <section
               id="settings-panel-providers"
               className="settings-pane"
@@ -488,6 +540,12 @@ export function SettingsDialog({
               {selectedPackage && (
                 <div className="package-workbench">
                   <aside className="package-workbench-index" aria-label="Packages">
+                    <div className="workbench-index-label">
+                      <span>
+                        {filteredPackages.length} package{filteredPackages.length === 1 ? "" : "s"}
+                      </span>
+                      <span>{filteredPackages.filter(item => item.active).length} active</span>
+                    </div>
                     {filteredPackages.map(item => {
                       const state = item.error
                         ? "failed"
@@ -496,16 +554,19 @@ export function SettingsDialog({
                           : item.enabled
                             ? "unavailable"
                             : "disabled";
+                      const tools = toolPolicies.find(policy => policy.owner === item.id)?.managedTools.length ?? 0;
                       return (
                         <button
                           type="button"
+                          aria-selected={item.id === selectedPackage.id}
                           className={item.id === selectedPackage.id ? "is-selected" : ""}
                           onClick={() => setSelectedPackageId(item.id)}
                           key={item.id}>
+                          <OverviewOrb state={packageOrbState(state)} label={state} />
                           <span>
                             <strong>{item.name}</strong>
                             <small>
-                              {toolPolicies.find(policy => policy.owner === item.id)?.managedTools.length ?? 0} tools
+                              {tools} tool{tools === 1 ? "" : "s"}
                             </small>
                           </span>
                           <b className={`package-state is-${state}`}>{state}</b>
@@ -585,14 +646,16 @@ export function SettingsDialog({
                             const override = runtimePolicy?.global.toolOverrides?.[tool];
                             const effective = capable ? (override ?? packageDefault) : "disabled";
                             const locked = tool === "search_tools";
+                            const rowClasses = ["workbench-tool-row", override && "is-override", locked && "is-locked"];
                             return (
-                              <label className="workbench-tool-row" data-effective={effective} key={tool}>
+                              <label
+                                className={rowClasses.filter(Boolean).join(" ")}
+                                data-effective={effective}
+                                key={tool}>
+                                <OverviewOrb state={toolOrbState(effective)} label={`Current setting: ${effective}`} />
                                 <span>
                                   <strong>{tool}</strong>
-                                </span>
-                                <span className="workbench-tool-effective" aria-label={`Current setting: ${effective}`}>
-                                  <i aria-hidden="true" />
-                                  <strong>{effective}</strong>
+                                  <small>{locked ? "always on" : effective}</small>
                                 </span>
                                 <select
                                   value={override ?? "inherit"}
@@ -699,7 +762,7 @@ export function SettingsDialog({
                   <p>Preview the cues Pylon uses when work finishes or needs your attention.</p>
                 </div>
               </div>
-              <h3>Sound cues</h3>
+              <span className="settings-kicker">Sound cues</span>
               <div className="settings-option-list">
                 <div>
                   <span>
@@ -780,15 +843,15 @@ export function SettingsDialog({
                             const key = `${item.provider}/${item.id}`;
                             return (
                               <label className="settings-model-row" key={key}>
+                                <span>
+                                  <strong>{item.name}</strong>
+                                  <small>{item.id}</small>
+                                </span>
                                 <input
                                   type="checkbox"
                                   checked={!hiddenModelKeys.has(key)}
                                   onChange={event => setHiddenModelVisible(key, event.target.checked)}
                                 />
-                                <span>
-                                  <strong>{item.name}</strong>
-                                  <small>{item.id}</small>
-                                </span>
                               </label>
                             );
                           })}
@@ -812,7 +875,7 @@ export function SettingsDialog({
                   <p>Choose the color theme used throughout Pylon.</p>
                 </div>
               </div>
-              <h3>Color theme</h3>
+              <span className="settings-kicker">Color theme</span>
               <div className="settings-theme-options">
                 {(["dark", "light"] as const).map(option => (
                   <label key={option}>
@@ -826,6 +889,7 @@ export function SettingsDialog({
                     <span className={`theme-preview is-${option}`} aria-hidden="true">
                       <i />
                       <i />
+                      <i />
                     </span>
                     <strong>{option}</strong>
                   </label>
@@ -834,15 +898,19 @@ export function SettingsDialog({
             </section>
           </div>
         </div>
-        <footer>
-          <span>Changes save immediately</span>
-          <button type="button" onClick={onClose}>
-            Done
-          </button>
-        </footer>
       </div>
     </div>
   );
+}
+
+function packageOrbState(state: string): OverviewState {
+  if (state === "failed") return "failed";
+  return state === "active" ? "done" : "neutral";
+}
+
+function toolOrbState(effective: string): OverviewState {
+  if (effective === "active") return "done";
+  return effective === "deferred" ? "attention" : "neutral";
 }
 
 function AndroidToolingSettings({
@@ -1147,6 +1215,147 @@ function GlobalPolicySettings({
   );
 }
 
+/* One setting per row, with its explanation as the row's own description. The
+   older two-column grid treated every child as a cell, so an explanatory note
+   could land beside an unrelated field. */
+function PackageRow({
+  label,
+  description,
+  stacked = false,
+  children,
+}: {
+  label: string;
+  description?: string;
+  stacked?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`package-row${stacked ? " is-stacked" : ""}`}>
+      <span>
+        <strong>{label}</strong>
+        {description && <small>{description}</small>}
+      </span>
+      {stacked ? children : <span className="package-row-control">{children}</span>}
+    </div>
+  );
+}
+
+function PackageSubgroup({ label, description }: { label: string; description: string }) {
+  return (
+    <div className="package-subgroup">
+      <strong>{label}</strong>
+      <small>{description}</small>
+    </div>
+  );
+}
+
+function PackageSwitch({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="package-switch">
+      <span className="sr-only">{label}</span>
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={event => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
+function PackageNumber({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  unit,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit: string;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <>
+      <input
+        key={value}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        defaultValue={value}
+        disabled={disabled}
+        aria-label={label}
+        onBlur={event => {
+          const next = Number(event.target.value);
+          if (Number.isSafeInteger(next) && next >= min && next <= max) {
+            if (next !== value) onChange(next);
+            return;
+          }
+          event.currentTarget.value = String(value);
+        }}
+      />
+      <span className="unit">{unit}</span>
+    </>
+  );
+}
+
+/* Multi-select sets were stacked checkbox fieldsets a full row tall each; chips
+   carry the same choices without the row losing shape. At least one stays on. */
+function PackageChips({
+  label,
+  description,
+  options,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  options: { value: string; label: string }[];
+  value: string[];
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <PackageRow label={label} description={description} stacked>
+      <div className="package-chips">
+        {options.map(option => (
+          <label className="package-chip" key={option.value}>
+            <input
+              type="checkbox"
+              checked={value.includes(option.value)}
+              disabled={disabled || (value.length === 1 && value[0] === option.value)}
+              onChange={event =>
+                onChange(event.target.checked ? [...value, option.value] : value.filter(item => item !== option.value))
+              }
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+    </PackageRow>
+  );
+}
+
 function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
   return Boolean(settings && settings.kind !== "timeline");
 }
@@ -1166,104 +1375,77 @@ function PackageFields({
 }) {
   if (settings.kind === "pylon-core") {
     return (
-      <div className="package-fields">
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
+      <div className="package-list">
+        <PackageRow
+          label="Revision-guarded numbered edits"
+          description="Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price. Lower-ratio models keep Pi's native read and edit for that session; missing pricing keeps numbered edits.">
+          <PackageSwitch
+            label="Toggle revision-guarded numbered edits"
             checked={settings.lineEditEnabled}
             disabled={disabled}
-            onChange={event => onUpdate({ ...settings, lineEditEnabled: event.target.checked })}
+            onChange={lineEditEnabled => onUpdate({ ...settings, lineEditEnabled })}
           />
-          Revision-guarded numbered edits
-        </label>
-        <p className="settings-policy-note">
-          Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price.
-          Lower-ratio models automatically keep Pi's native read and edit for that session; missing pricing keeps
-          numbered edits. Disable to always use the native tools.
-        </p>
+        </PackageRow>
       </div>
     );
   }
-  if (settings.kind === "advisor") {
+  if (settings.kind === "advisor" || settings.kind === "scout") {
+    const noun = settings.kind === "advisor" ? "the advisor" : "both scouts";
     const levels = thinkingLevels(
       settings.mode === "model" ? settings.model : undefined,
       models,
       sessionThinkingLevels,
     );
     return (
-      <div className="package-fields">
-        <ModelModeField
-          value={settings.mode === "model" ? settings.model! : settings.mode}
-          models={models}
-          disabled={disabled}
-          onChange={value => {
-            const mode = value === "disabled" || value === "session" ? value : "model";
-            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
-          }}
-        />
-        <ThinkingField
-          value={settings.thinking}
-          levels={levels}
-          disabled={disabled || settings.mode === "disabled"}
-          onChange={thinking => onUpdate({ ...settings, thinking })}
-        />
-      </div>
-    );
-  }
-  if (settings.kind === "scout") {
-    const levels = thinkingLevels(
-      settings.mode === "model" ? settings.model : undefined,
-      models,
-      sessionThinkingLevels,
-    );
-    return (
-      <div className="package-fields">
-        <ModelModeField
-          value={settings.mode === "model" ? settings.model! : settings.mode}
-          models={models}
-          disabled={disabled}
-          onChange={value => {
-            const mode = value === "disabled" || value === "session" ? value : "model";
-            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
-          }}
-        />
-        <ThinkingField
-          value={settings.thinking}
-          levels={levels}
-          disabled={disabled || settings.mode === "disabled"}
-          onChange={thinking => onUpdate({ ...settings, thinking })}
-        />
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
-            checked={settings.webSearch === true}
+      <div className="package-list">
+        <PackageRow label="Model" description={`Disabled turns ${noun} off for every session.`}>
+          <ModelModeSelect
+            label={`${settings.kind} model`}
+            value={settings.mode === "model" ? settings.model! : settings.mode}
+            models={models}
             disabled={disabled}
-            onChange={event => onUpdate({ ...settings, webSearch: event.target.checked })}
+            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
           />
-          OpenAI / Exa search for Web Scout
-        </label>
-        <p className="settings-policy-note">
-          Optional. Search uses an existing OpenAI/Codex subscription or API key when available, otherwise Exa; result
-          pages still open through the isolated Helios browser.
-        </p>
+        </PackageRow>
+        <PackageRow label="Thinking" description="Inherits the session level unless set here.">
+          <ThinkingSelect
+            label={`${settings.kind} thinking`}
+            value={settings.thinking}
+            levels={levels}
+            disabled={disabled || settings.mode === "disabled"}
+            onChange={thinking => onUpdate({ ...settings, thinking })}
+          />
+        </PackageRow>
+        {settings.kind === "scout" && (
+          <PackageRow
+            label="OpenAI / Exa search for Web Scout"
+            description="Optional. Search uses an existing OpenAI or Codex subscription when available, otherwise Exa; result pages still open through the isolated Helios browser.">
+            <PackageSwitch
+              label="Toggle web search"
+              checked={settings.webSearch === true}
+              disabled={disabled}
+              onChange={webSearch => onUpdate({ ...settings, webSearch })}
+            />
+          </PackageRow>
+        )}
       </div>
     );
   }
   if (settings.kind === "grunt") {
     return (
-      <div className="package-fields">
-        <ModelModeField
-          value={settings.mode === "model" ? settings.model! : settings.mode}
-          models={models}
-          disabled={disabled}
-          onChange={value => {
-            const mode = value === "disabled" || value === "session" ? value : "model";
-            onUpdate({ ...settings, mode, ...(mode === "model" ? { model: value } : { model: undefined }) });
-          }}
-        />
-        <label>
-          Execution mode
+      <div className="package-list">
+        <PackageRow label="Model" description="Disabled turns the grunt off for every session.">
+          <ModelModeSelect
+            label="Grunt model"
+            value={settings.mode === "model" ? settings.model! : settings.mode}
+            models={models}
+            disabled={disabled}
+            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
+          />
+        </PackageRow>
+        <PackageRow label="Execution mode" description="Isolated runs in a scratch workspace; direct runs in place.">
           <select
+            aria-label="Execution mode"
             value={settings.executionMode}
             disabled={disabled}
             onChange={event =>
@@ -1273,112 +1455,101 @@ function PackageFields({
             <option value="direct">Direct</option>
             <option value="dynamic">Dynamic</option>
           </select>
-        </label>
-        <label>
-          Maximum tool-call turns
-          <input
-            key={settings.maxTurns}
-            type="number"
+        </PackageRow>
+        <PackageRow
+          label="Maximum tool-call turns"
+          description="The grunt stops after this many tool calls in one run.">
+          <PackageNumber
+            label="Maximum tool-call turns"
+            value={settings.maxTurns}
             min={1}
-            step={1}
-            defaultValue={settings.maxTurns}
+            max={1_000}
+            unit="turns"
             disabled={disabled}
-            onBlur={event => {
-              const maxTurns = Number(event.target.value);
-              if (Number.isSafeInteger(maxTurns) && maxTurns >= 1) {
-                if (maxTurns !== settings.maxTurns) onUpdate({ ...settings, maxTurns });
-              } else event.currentTarget.value = String(settings.maxTurns);
-            }}
+            onChange={maxTurns => onUpdate({ ...settings, maxTurns })}
           />
-        </label>
-        <ThinkingChoices
+        </PackageRow>
+        <PackageChips
           label="Eligible thinking levels"
+          description="Levels a grunt run may use. At least one stays selected."
+          options={thinkingChipOptions()}
           value={settings.thinkingLevels}
           disabled={disabled}
-          onChange={thinkingLevels => onUpdate({ ...settings, thinkingLevels })}
+          onChange={levels => onUpdate({ ...settings, thinkingLevels: levels as ThinkingLevelReadModel[] })}
         />
       </div>
     );
   }
   if (settings.kind === "continuity") {
     return (
-      <div className="package-fields continuity-fields">
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
+      <div className="package-list">
+        <PackageRow label="Durable memory" description="Keep project notes and papercuts across sessions.">
+          <PackageSwitch
+            label="Toggle durable memory"
             checked={settings.memoryEnabled}
             disabled={disabled}
-            onChange={event => onUpdate({ ...settings, memoryEnabled: event.target.checked })}
+            onChange={memoryEnabled => onUpdate({ ...settings, memoryEnabled })}
           />
-          Durable memory
-        </label>
-        <label>
-          Automatic compaction reserve (global)
-          <input
-            key={settings.reserveTokens}
-            type="number"
+        </PackageRow>
+        <PackageRow
+          label="Automatic compaction reserve"
+          description="Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi settings can override it.">
+          <PackageNumber
+            label="Automatic compaction reserve"
+            value={settings.reserveTokens}
             min={1_000}
             max={1_000_000}
             step={1_000}
-            defaultValue={settings.reserveTokens}
+            unit="tokens"
             disabled={disabled}
-            onBlur={event => {
-              const reserveTokens = Number(event.target.value);
-              if (Number.isSafeInteger(reserveTokens) && reserveTokens >= 1_000 && reserveTokens <= 1_000_000) {
-                if (reserveTokens !== settings.reserveTokens) onUpdate({ ...settings, reserveTokens });
-              } else event.currentTarget.value = String(settings.reserveTokens);
-            }}
+            onChange={reserveTokens => onUpdate({ ...settings, reserveTokens })}
           />
-        </label>
-        <p className="settings-policy-note">
-          Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi
-          settings can override it.
-        </p>
-        <label>
-          Continuity retained tokens
-          <input
-            key={settings.keepRecentTokens}
-            type="number"
+        </PackageRow>
+        <PackageRow
+          label="Continuity retained tokens"
+          description="Recent raw history kept by Continuity compaction. Overrides Pi's retained-token value only for Continuity-owned compactions.">
+          <PackageNumber
+            label="Continuity retained tokens"
+            value={settings.keepRecentTokens}
             min={1_000}
             max={50_000}
             step={1_000}
-            defaultValue={settings.keepRecentTokens}
+            unit="tokens"
             disabled={disabled}
-            onBlur={event => {
-              const keepRecentTokens = Number(event.target.value);
-              if (Number.isSafeInteger(keepRecentTokens) && keepRecentTokens >= 1_000 && keepRecentTokens <= 50_000) {
-                if (keepRecentTokens !== settings.keepRecentTokens) onUpdate({ ...settings, keepRecentTokens });
-              } else event.currentTarget.value = String(settings.keepRecentTokens);
-            }}
+            onChange={keepRecentTokens => onUpdate({ ...settings, keepRecentTokens })}
           />
-        </label>
-        <p className="settings-policy-note">
-          Recent raw history kept by Continuity compaction. This overrides Pi&apos;s retained-token value only for
-          Continuity-owned compactions.
-        </p>
-        <ProfileFields
+        </PackageRow>
+        <PackageSubgroup
+          label="Agent profiles"
+          description="Each profile picks a model and a thinking level. Unset profiles fall back to the session model."
+        />
+        <ProfileRow
           label="Planner"
+          description="Breaks a goal into the task list."
           profile={settings.planner}
           models={models}
           disabled={disabled}
           onChange={planner => onUpdate({ ...settings, planner })}
         />
-        <ProfileFields
+        <ProfileRow
           label="Executor"
+          description="Carries out each task in the list."
           profile={settings.executor}
           models={models}
           disabled={disabled}
           onChange={executor => onUpdate({ ...settings, executor })}
         />
-        <ProfileFields
+        <ProfileRow
           label="Memory reviewer"
+          description="Approves memories before they are stored."
           profile={settings.memoryReviewer}
           models={models}
           disabled={disabled}
           onChange={memoryReviewer => onUpdate({ ...settings, memoryReviewer })}
         />
-        <ProfileFields
+        <ProfileRow
           label="Compaction reviewer"
+          description="Checks the summary before history is dropped."
           profile={settings.compactionReviewer}
           models={models}
           disabled={disabled}
@@ -1389,19 +1560,20 @@ function PackageFields({
   }
   if (settings.kind === "sieve") {
     return (
-      <div className="package-fields">
-        <label className="checkbox-field">
-          <input
-            type="checkbox"
+      <div className="package-list">
+        <PackageRow label="Active pruning" description="Remove stale tool results from context as the session runs.">
+          <PackageSwitch
+            label="Toggle active pruning"
             checked={settings.activePruning}
             disabled={disabled}
-            onChange={event => onUpdate({ ...settings, activePruning: event.target.checked })}
+            onChange={activePruning => onUpdate({ ...settings, activePruning })}
           />
-          Active pruning
-        </label>
-        <label>
-          Projection mode
+        </PackageRow>
+        <PackageRow
+          label="Projection mode"
+          description="Stable is experimental and enables the rollover multipliers below.">
           <select
+            aria-label="Projection mode"
             value={settings.projectionMode}
             disabled={disabled}
             onChange={event =>
@@ -1411,97 +1583,90 @@ function PackageFields({
             <option value="legacy">Standard V1 (legacy)</option>
             <option value="stable">Stable (experimental)</option>
           </select>
-        </label>
-        <label>
-          Pruning threshold
-          <input
-            key={settings.threshold}
-            type="number"
+        </PackageRow>
+        <PackageRow label="Pruning threshold" description="Results larger than this are eligible for pruning.">
+          <PackageNumber
+            label="Pruning threshold"
+            value={settings.threshold}
             min={1_000}
             max={50_000}
             step={1_000}
-            defaultValue={settings.threshold}
+            unit="characters"
             disabled={disabled}
-            onBlur={event => {
-              const threshold = Number(event.target.value);
-              if (
-                Number.isSafeInteger(threshold) &&
-                threshold >= 1_000 &&
-                threshold <= 50_000 &&
-                threshold !== settings.threshold
-              ) {
-                onUpdate({ ...settings, threshold });
-              }
-            }}
+            onChange={threshold => onUpdate({ ...settings, threshold })}
           />
-        </label>
+        </PackageRow>
         {settings.projectionMode === "stable" && (
           <>
-            <label>
-              Rollover high multiplier
-              <input
-                key={settings.rolloverHighMultiplier}
-                type="number"
-                min={2}
+            <PackageSubgroup
+              label="Rollover"
+              description="Stable projection only. The high multiplier must stay above the target."
+            />
+            <PackageRow
+              label="High multiplier"
+              description="Rollover begins once retained content passes this multiple of the threshold.">
+              <PackageNumber
+                label="Rollover high multiplier"
+                value={settings.rolloverHighMultiplier}
+                min={settings.rolloverLowMultiplier + 1}
                 max={64}
-                step={1}
-                defaultValue={settings.rolloverHighMultiplier}
+                unit="×"
                 disabled={disabled}
-                onBlur={event => {
-                  const high = Number(event.target.value);
-                  if (
-                    Number.isSafeInteger(high) &&
-                    high > settings.rolloverLowMultiplier &&
-                    high <= 64 &&
-                    high !== settings.rolloverHighMultiplier
-                  ) {
-                    onUpdate({ ...settings, rolloverHighMultiplier: high });
-                  }
-                }}
+                onChange={rolloverHighMultiplier => onUpdate({ ...settings, rolloverHighMultiplier })}
               />
-            </label>
-            <label>
-              Rollover target multiplier
-              <input
-                key={settings.rolloverLowMultiplier}
-                type="number"
+            </PackageRow>
+            <PackageRow
+              label="Target multiplier"
+              description="Rollover stops once retained content falls to this multiple.">
+              <PackageNumber
+                label="Rollover target multiplier"
+                value={settings.rolloverLowMultiplier}
                 min={1}
-                max={63}
-                step={1}
-                defaultValue={settings.rolloverLowMultiplier}
+                max={settings.rolloverHighMultiplier - 1}
+                unit="×"
                 disabled={disabled}
-                onBlur={event => {
-                  const low = Number(event.target.value);
-                  if (
-                    Number.isSafeInteger(low) &&
-                    low >= 1 &&
-                    low < settings.rolloverHighMultiplier &&
-                    low !== settings.rolloverLowMultiplier
-                  ) {
-                    onUpdate({ ...settings, rolloverLowMultiplier: low });
-                  }
-                }}
+                onChange={rolloverLowMultiplier => onUpdate({ ...settings, rolloverLowMultiplier })}
               />
-            </label>
+            </PackageRow>
           </>
         )}
       </div>
     );
   }
   if (settings.kind === "spawn") {
+    const available = models.map(model => ({ value: modelKey(model), label: model.name }));
+    const eligible = settings.models;
+    const options = [
+      ...available,
+      ...(eligible ?? [])
+        .filter(ref => !available.some(model => model.value === ref))
+        .map(ref => ({ value: ref, label: ref })),
+    ];
     return (
-      <div className="package-fields">
-        <ModelChoices
-          value={settings.models}
-          models={models}
-          disabled={disabled}
-          onChange={eligible => onUpdate({ ...settings, models: eligible })}
+      <div className="package-list">
+        <PackageRow label="All available models" description="Let private agents use every model the session can see.">
+          <PackageSwitch
+            label="Toggle all available models"
+            checked={eligible === undefined}
+            disabled={disabled || !available.length}
+            onChange={all => onUpdate({ ...settings, models: all ? undefined : available.map(model => model.value) })}
+          />
+        </PackageRow>
+        <PackageChips
+          label="Eligible models"
+          description="Models a private agent may be spawned with. At least one stays selected."
+          options={options}
+          value={eligible ?? []}
+          disabled={disabled || eligible === undefined}
+          onChange={next => onUpdate({ ...settings, models: next })}
         />
-        <ThinkingChoices
+        <PackageChips
           label="Private-agent thinking"
+          description="Thinking levels a private agent may be spawned with."
+          options={thinkingChipOptions()}
           value={settings.agentThinkingLevels}
           disabled={disabled}
-          onChange={agentThinkingLevels => onUpdate({ ...settings, agentThinkingLevels })}
+          onChange={levels => onUpdate({ ...settings, agentThinkingLevels: levels as ThinkingLevelReadModel[] })}
         />
       </div>
     );
@@ -1509,103 +1674,39 @@ function PackageFields({
   if (settings.kind === "timeline") return null;
   if (settings.kind !== "helios") return null;
   return (
-    <div className="package-fields">
-      <label>
-        Future owned browsers
+    <div className="package-list">
+      <PackageRow label="Future owned browsers" description="Whether browsers Helios launches from now on are visible.">
         <select
+          aria-label="Future owned browsers"
           value={settings.headed ? "shown" : "headless"}
           disabled={disabled}
           onChange={event => onUpdate({ ...settings, headed: event.target.value === "shown" })}>
           <option value="shown">Shown</option>
           <option value="headless">Headless</option>
         </select>
-      </label>
+      </PackageRow>
     </div>
   );
 }
 
-function ThinkingChoices({
+function thinkingChipOptions(): { value: string; label: string }[] {
+  return PACKAGE_THINKING_LEVELS.map(level => ({ value: level, label: thinkingLabel(level) }));
+}
+
+/* "disabled" and "session" are modes; anything else is a model reference. */
+function modelModeUpdate(value: string): { mode: "disabled" | "session" | "model"; model?: string } {
+  if (value === "disabled" || value === "session") return { mode: value, model: undefined };
+  return { mode: "model", model: value };
+}
+
+function ModelModeSelect({
   label,
   value,
+  models,
   disabled,
   onChange,
 }: {
   label: string;
-  value: ThinkingLevelReadModel[];
-  disabled: boolean;
-  onChange: (value: ThinkingLevelReadModel[]) => void;
-}) {
-  return (
-    <fieldset>
-      <legend>{label}</legend>
-      {PACKAGE_THINKING_LEVELS.map(level => (
-        <label className="checkbox-field" key={level}>
-          <input
-            type="checkbox"
-            checked={value.includes(level)}
-            disabled={disabled || (value.length === 1 && value[0] === level)}
-            onChange={event =>
-              onChange(event.target.checked ? [...value, level] : value.filter(item => item !== level))
-            }
-          />
-          {thinkingLabel(level)}
-        </label>
-      ))}
-    </fieldset>
-  );
-}
-
-function ModelChoices({
-  value,
-  models,
-  disabled,
-  onChange,
-}: {
-  value?: string[];
-  models: ModelOptionReadModel[];
-  disabled: boolean;
-  onChange: (value?: string[]) => void;
-}) {
-  const available = models.map(model => ({ ref: `${model.provider}/${model.id}`, name: model.name }));
-  const choices = [
-    ...available,
-    ...(value ?? []).filter(ref => !available.some(model => model.ref === ref)).map(ref => ({ ref, name: ref })),
-  ];
-  return (
-    <fieldset>
-      <legend>Eligible models</legend>
-      <label className="checkbox-field">
-        <input
-          type="checkbox"
-          checked={value === undefined}
-          disabled={disabled || !available.length}
-          onChange={event => onChange(event.target.checked ? undefined : available.map(model => model.ref))}
-        />
-        All available models
-      </label>
-      {choices.map(model => (
-        <label className="checkbox-field" key={model.ref}>
-          <input
-            type="checkbox"
-            checked={value?.includes(model.ref) ?? false}
-            disabled={disabled || value === undefined || (value.length === 1 && value[0] === model.ref)}
-            onChange={event =>
-              onChange(event.target.checked ? [...(value ?? []), model.ref] : value?.filter(item => item !== model.ref))
-            }
-          />
-          {model.name}
-        </label>
-      ))}
-    </fieldset>
-  );
-}
-
-function ModelModeField({
-  value,
-  models,
-  disabled,
-  onChange,
-}: {
   value: string;
   models: ModelOptionReadModel[];
   disabled: boolean;
@@ -1616,29 +1717,29 @@ function ModelModeField({
   const selected = models.find(model => modelKey(model) === value);
   if (selected && !options.some(model => modelKey(model) === value)) options.push(selected);
   return (
-    <label>
-      Model
-      <select value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
-        <option value="disabled">Disabled</option>
-        <option value="session">Use session model</option>
-        {options.map(model => (
-          <option value={modelKey(model)} key={modelKey(model)}>
-            {model.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <select aria-label={label} value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
+      <option value="disabled">Disabled</option>
+      <option value="session">Use session model</option>
+      {options.map(model => (
+        <option value={modelKey(model)} key={modelKey(model)}>
+          {model.name}
+        </option>
+      ))}
+    </select>
   );
 }
 
-function ProfileFields({
+/* A profile is a model plus a thinking level: two controls, one row. */
+function ProfileRow({
   label,
+  description,
   profile,
   models,
   disabled,
   onChange,
 }: {
   label: string;
+  description: string;
   profile?: { model: string; thinking?: ThinkingLevelReadModel };
   models: ModelOptionReadModel[];
   disabled: boolean;
@@ -1646,58 +1747,62 @@ function ProfileFields({
 }) {
   const levels = thinkingLevels(profile?.model, models, []);
   return (
-    <fieldset>
-      <legend>{label}</legend>
-      <label>
-        Model
+    <div className="package-row">
+      <span>
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+      <span className="package-row-control is-pair">
         <select
+          aria-label={`${label} model`}
           value={profile?.model ?? ""}
           disabled={disabled}
           onChange={event => onChange(event.target.value ? { model: event.target.value } : undefined)}>
           <option value="">Not configured</option>
           {models.map(model => (
-            <option value={`${model.provider}/${model.id}`} key={`${model.provider}/${model.id}`}>
+            <option value={modelKey(model)} key={modelKey(model)}>
               {model.name}
             </option>
           ))}
         </select>
-      </label>
-      <ThinkingField
-        value={profile?.thinking}
-        levels={levels}
-        disabled={disabled || !profile}
-        onChange={thinking => profile && onChange({ ...profile, thinking })}
-      />
-    </fieldset>
+        <ThinkingSelect
+          label={`${label} thinking`}
+          value={profile?.thinking}
+          levels={levels}
+          disabled={disabled || !profile}
+          onChange={thinking => profile && onChange({ ...profile, thinking })}
+        />
+      </span>
+    </div>
   );
 }
 
-function ThinkingField({
+function ThinkingSelect({
+  label,
   value,
   levels,
   disabled,
   onChange,
 }: {
+  label: string;
   value?: ThinkingLevelReadModel;
   levels: ThinkingLevelReadModel[];
   disabled: boolean;
   onChange: (value?: ThinkingLevelReadModel) => void;
 }) {
   return (
-    <label>
-      Thinking
-      <select
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={event => onChange(event.target.value ? (event.target.value as ThinkingLevelReadModel) : undefined)}>
-        <option value="">Inherit session thinking</option>
-        {levels.map(level => (
-          <option value={level} key={level}>
-            {thinkingLabel(level)}
-          </option>
-        ))}
-      </select>
-    </label>
+    <select
+      aria-label={label}
+      value={value ?? ""}
+      disabled={disabled}
+      onChange={event => onChange(event.target.value ? (event.target.value as ThinkingLevelReadModel) : undefined)}>
+      <option value="">Inherit session thinking</option>
+      {levels.map(level => (
+        <option value={level} key={level}>
+          {thinkingLabel(level)}
+        </option>
+      ))}
+    </select>
   );
 }
 

@@ -253,7 +253,7 @@ test("Advisor retries transient failures and only successful consultations consu
       return {
         content: [{ type: "text", text: `advice ${providerCalls}` }],
         stopReason: "stop",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+        usage: { input: 10, output: 2, cacheRead: 4, cacheWrite: 0, cost: { total: 0 } },
       };
     }) as any,
     async () => true,
@@ -281,6 +281,8 @@ test("Advisor retries transient failures and only successful consultations consu
     const retried = await tool.execute("retry", { request: "review" }, undefined, undefined, ctx);
     assert.equal(retried.details.callNumber, 1);
     assert.equal(retried.details.attempts, 2);
+    assert.equal(retried.details.contextTokens, 16);
+    assert.equal(retried.details.contextLimit, 32_000);
     assert.equal(providerCalls, 2);
 
     mode = "fail";

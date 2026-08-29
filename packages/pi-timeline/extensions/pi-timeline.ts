@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { verificationWorktreeState } from "pylon-core/verification-worktree";
 import { capture, makePortable, worktreeFingerprint, type Snapshot } from "../src/snapshot.ts";
 import { restore } from "../src/restore.ts";
 import { classifyCompatibility, type GitState } from "../src/compatibility.ts";
@@ -154,6 +155,7 @@ export default function timelineExtension(
         createdAt: bound.record.createdAt,
         ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
         verified: bound.record.verification?.state === "passed",
+        verificationState: bound.record.verification?.state ?? "unverified",
         ownerSessionId: bound.record.ownerSessionId,
         ...((bound.record.changes ?? checkpoints.changeCache.get(id))
           ? { changes: bound.record.changes ?? checkpoints.changeCache.get(id) }
@@ -475,13 +477,7 @@ export default function timelineExtension(
       pi.setSessionName(name);
     }
   };
-  const worktreeId = async (cwd: string) => {
-    const [head, status] = await Promise.all([
-      git(cwd, ["rev-parse", "HEAD"]),
-      git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]),
-    ]);
-    return hash(`${head}\n${status}`).slice(0, 16);
-  };
+  const worktreeId = async (cwd: string) => (await verificationWorktreeState(pi.exec.bind(pi), cwd))?.id;
   const loadEntries = (entries: readonly any[], sessionId: string, sessionPath?: string, timelineId?: string) => {
     const byId = new Map(entries.map((entry: any) => [entry.id, entry]));
     // A version-3 record superseded by a portable rewrite of the same snapshot is skipped.
@@ -592,7 +588,9 @@ export default function timelineExtension(
       currentGit = snap;
       const identity = await worktreeId(ctx.cwd),
         verification =
-          latestVerification?.worktreeId === identity && latestVerification.state === "passed"
+          identity !== undefined &&
+          latestVerification?.worktreeId === identity &&
+          (latestVerification.state === "passed" || latestVerification.state === "failed")
             ? {
                 runId: latestVerification.runId,
                 state: latestVerification.state,

@@ -3,6 +3,7 @@ import {
   activityRecorder,
   cacheReadTokensFromUsage,
   contextTokensFromUsage,
+  contextWindowTokensFromUsage,
   emptyUsage,
   getPiInvocation,
   lineBuffer,
@@ -40,7 +41,8 @@ export type ScoutRun = {
   omittedEvidence?: EvidenceAnchor[];
   exitCode: number;
   activity: ScoutActivity[];
-  contextTokens: number;
+  contextTokens: number | null;
+  contextWindowTokens?: number | null;
   cacheReadTokens: number;
 };
 
@@ -64,6 +66,7 @@ export type RunPiOptions = {
   concurrent?: boolean;
   onActivity?: (activity: ScoutActivity, all: readonly ScoutActivity[]) => void;
   onUsage?: (usage: ChildUsage) => void;
+  onContext?: (tokens: number | null) => void;
 };
 
 export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
@@ -112,9 +115,18 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   let agentSettled = false;
   let controlledCompletion = false;
   let budgetExceeded = false;
-  let contextTokens = 0,
+  let contextTokens: number | null = null,
+    contextWindowTokens: number | null = null,
     cacheReadTokens = 0,
     reportedCost = 0;
+  const reportContext = (tokens: number | null) => {
+    contextWindowTokens = tokens;
+    try {
+      options.onContext?.(tokens);
+    } catch {
+      /* Progress observers must not control the child. */
+    }
+  };
   let commandId = 0;
 
   /**
@@ -174,14 +186,12 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     messages.push(message);
     const rawUsage = message.usage ?? {};
     const latestContextTokens = contextTokensFromUsage(rawUsage);
+    const latestContextWindowTokens = contextWindowTokensFromUsage(rawUsage);
     const latestCacheReadTokens = cacheReadTokensFromUsage(rawUsage);
-    if (
-      message.stopReason !== "aborted" &&
-      message.stopReason !== "error" &&
-      (latestContextTokens > 0 || latestCacheReadTokens > 0)
-    ) {
-      contextTokens = latestContextTokens;
-      cacheReadTokens = latestCacheReadTokens;
+    if (message.stopReason !== "aborted" && message.stopReason !== "error") {
+      if (latestContextTokens > 0) contextTokens = latestContextTokens;
+      if (latestContextWindowTokens > 0) reportContext(latestContextWindowTokens);
+      if (latestCacheReadTokens > 0) cacheReadTokens = latestCacheReadTokens;
     }
     const turn = {
       input: validTokens(rawUsage.input),
@@ -236,6 +246,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
         terminate(child);
         return;
       }
+      if (event.type === "compaction_start") return reportContext(null);
       if (event.type === "tool_execution_start") return recorder.start(event);
       if (event.type === "tool_execution_end") return recorder.end(event);
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;
@@ -331,6 +342,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     exitCode,
     activity: recorder.items,
     contextTokens,
+    contextWindowTokens,
     cacheReadTokens,
   };
 }

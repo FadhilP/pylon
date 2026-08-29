@@ -39,6 +39,8 @@ type Details = {
   durationMs: number;
   usage: AdvisorUsage;
   thinking?: string;
+  contextTokens?: number | null;
+  contextLimit?: number;
   callNumber: 1 | 2 | 3;
   snapshotEstimatedTokens: number;
   redactionCount: number;
@@ -351,11 +353,16 @@ export default function advisorExtension(
         if (!prepared.ok) return prepared.result;
         const { started, named, base, model, auth, snapshot, budget, thinking, userMessage, cacheRetention } =
           prepared.call;
+        let contextTokens: number | null = null;
+        const contextLimit = model.contextWindow;
 
         if (ctx.hasUI) ctx.ui.setStatus("pi-advisor", `advisor: consulting ${modelName(model)}…`);
         const { usage: _usage, ...runningDetails } = base;
         const running = (text: string, extra: Record<string, unknown> = {}) =>
-          onUpdate?.({ content: [{ type: "text", text }], details: { ...runningDetails, state: "running", ...extra } });
+          onUpdate?.({
+            content: [{ type: "text", text }],
+            details: { ...runningDetails, state: "running", contextTokens, contextLimit, ...extra },
+          });
         running(`Consulting ${modelName(model)}…`, snapshotDetails(snapshot));
 
         try {
@@ -385,12 +392,14 @@ export default function advisorExtension(
                 },
                 signal: lifecycle.signal,
                 isTimedOut: lifecycle.isTimedOut,
-                onProgress: ({ note, usage, attempts }) =>
+                onProgress: ({ note, usage, contextTokens: latestContextTokens, attempts }) => {
+                  contextTokens = latestContextTokens;
                   running(note ?? "Advisor usage updated", {
                     durationMs: Date.now() - started,
                     usage: { ...usage },
                     attempts,
-                  }),
+                  });
+                },
               }),
           );
 
@@ -398,6 +407,8 @@ export default function advisorExtension(
             ...base,
             durationMs: Date.now() - started,
             usage: result.usage,
+            contextTokens,
+            contextLimit,
             ...snapshotDetails(snapshot),
             attempts: result.attempts,
           };

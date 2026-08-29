@@ -507,6 +507,9 @@ function updateDelegatedRun(
   const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
   const usage = delegatedUsage(details.usage);
   const sessionUsage = delegatedUsage(details.sessionUsage);
+  const contextTokens = details.contextTokens === null ? null : boundedNumber(details.contextTokens);
+  const rawContextLimit = boundedNumber(details.contextLimit);
+  const contextLimit = rawContextLimit && rawContextLimit > 0 ? rawContextLimit : undefined;
   return {
     ...previous,
     id,
@@ -523,6 +526,8 @@ function updateDelegatedRun(
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage } : {}),
     ...(sessionUsage ? { sessionUsage } : {}),
+    ...(contextTokens === undefined ? {} : { contextTokens }),
+    ...(contextLimit === undefined ? {} : { contextLimit }),
     activity,
   };
 }
@@ -554,6 +559,13 @@ function mergeDelegatedRun(
   const usage = terminal.usage ?? live.usage ?? transcript.usage;
   const sessionUsage = terminal.sessionUsage ?? live.sessionUsage ?? transcript.sessionUsage;
   const durationMs = terminal.durationMs ?? live.durationMs ?? transcript.durationMs;
+  const contextTokens =
+    terminal.contextTokens !== undefined
+      ? terminal.contextTokens
+      : live.contextTokens !== undefined
+        ? live.contextTokens
+        : transcript.contextTokens;
+  const contextLimit = terminal.contextLimit ?? live.contextLimit ?? transcript.contextLimit;
   return {
     id: transcript.id,
     kind: transcript.kind,
@@ -576,6 +588,8 @@ function mergeDelegatedRun(
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage: { ...usage } } : {}),
     ...(sessionUsage ? { sessionUsage: { ...sessionUsage } } : {}),
+    ...(contextTokens === undefined ? {} : { contextTokens }),
+    ...(contextLimit === undefined ? {} : { contextLimit }),
   };
 }
 

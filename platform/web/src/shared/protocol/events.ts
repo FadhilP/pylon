@@ -127,6 +127,8 @@ export interface DelegatedAgentRunReadModel {
   durationMs?: number;
   usage?: DelegatedAgentUsageReadModel;
   sessionUsage?: DelegatedAgentUsageReadModel;
+  contextTokens?: number | null;
+  contextLimit?: number;
   activity: DelegatedAgentActivityReadModel[];
 }
 
@@ -421,6 +423,7 @@ export interface TimelineCheckpointReadModel {
   createdAt: string;
   branch?: string;
   verified: boolean;
+  verificationState: "passed" | "failed" | "unverified";
   ownerSessionId: string;
   changes?: { fileCount: number; additions: number; deletions: number; binaryCount: number };
 }

@@ -3,6 +3,7 @@ import { truncateUtf8 } from "pylon-core/utf8";
 import {
   activityRecorder,
   contextTokensFromUsage,
+  contextWindowTokensFromUsage,
   emptyUsage,
   getPiInvocation,
   lineBuffer,
@@ -30,6 +31,7 @@ export type WorkerRun = {
   stderr: string;
   durationMs: number;
   usage: ChildUsage;
+  contextTokens?: number | null;
   turns: number;
   truncated: boolean;
   exitCode: number;
@@ -45,6 +47,7 @@ type RunOptions = {
   invocation?: Invocation;
   onActivity?: (activity: WorkerActivity, all: readonly WorkerActivity[]) => void;
   onUsage?: (usage: ChildUsage) => void;
+  onContext?: (tokens: number | null) => void;
 };
 
 function capText(text: string, maxBytes = 16 * 1024): { text: string; truncated: boolean } {
@@ -74,6 +77,15 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     protocolMalformed = false;
   let budgetExceeded = "",
     contextExceeded = "";
+  let contextTokens: number | null = null;
+  const reportContext = (tokens: number | null) => {
+    contextTokens = tokens;
+    try {
+      options.onContext?.(tokens);
+    } catch {
+      /* Progress observers must not control the child. */
+    }
+  };
 
   const observeTurn = (message: any) => {
     messages.push(message);
@@ -88,9 +100,12 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     } catch {
       /* Progress observers must not control the child. */
     }
-    const contextTokens = contextTokensFromUsage(turnUsage);
-    if (contextTokens > GRUNT_CONTEXT_LIMIT)
-      contextExceeded = `Worker exceeded context limit (${contextTokens} > ${GRUNT_CONTEXT_LIMIT} tokens).`;
+    const latestContextTokens = contextTokensFromUsage(turnUsage);
+    const latestContextWindowTokens = contextWindowTokensFromUsage(turnUsage);
+    if (message.stopReason !== "aborted" && message.stopReason !== "error" && latestContextWindowTokens > 0)
+      reportContext(latestContextWindowTokens);
+    if (latestContextTokens > GRUNT_CONTEXT_LIMIT)
+      contextExceeded = `Worker exceeded context limit (${latestContextTokens} > ${GRUNT_CONTEXT_LIMIT} tokens).`;
     else if (message.stopReason === "toolUse" && options.maxTurns !== undefined && messages.length >= options.maxTurns)
       budgetExceeded = `Worker reached turn limit (${options.maxTurns}).`;
     else if (message.stopReason === "toolUse" && options.maxCostUsd !== undefined && usage.cost >= options.maxCostUsd)
@@ -102,6 +117,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     if (!line.trim()) return;
     try {
       const event = JSON.parse(line);
+      if (event.type === "compaction_start") return reportContext(null);
       if (event.type === "tool_execution_start") return recorder.start(event);
       if (event.type === "tool_execution_end") return recorder.end(event);
       if (event.type !== "message_end" || event.message?.role !== "assistant") return;
@@ -184,6 +200,7 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     stderr: stderr.text,
     durationMs: Date.now() - started,
     usage,
+    contextTokens,
     turns: messages.length,
     truncated: capped.truncated,
     exitCode,

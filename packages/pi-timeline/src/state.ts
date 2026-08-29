@@ -1,4 +1,5 @@
 export const TIMELINE_STATE_VERSION = 4 as const;
+export type TimelineVerificationState = "passed" | "failed" | "unverified";
 
 export interface TimelineCheckpointChanges {
   fileCount: number;
@@ -13,6 +14,7 @@ export interface TimelineCheckpointState {
   createdAt: string;
   branch?: string;
   verified: boolean;
+  verificationState: TimelineVerificationState;
   ownerSessionId: string;
   changes?: TimelineCheckpointChanges;
 }
@@ -64,6 +66,7 @@ export function timelineStateSnapshot(
         createdAt: item.createdAt,
         ...(item.branch ? { branch: item.branch.slice(0, 200) } : {}),
         verified: item.verified,
+        verificationState: item.verificationState,
         ownerSessionId: item.ownerSessionId.slice(0, 128),
         ...(item.changes
           ? {

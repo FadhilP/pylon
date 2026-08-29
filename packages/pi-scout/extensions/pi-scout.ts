@@ -362,13 +362,23 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       let attempts = 0;
+      let contextTokens: number | null = null;
+      const contextLimit = model.contextWindow;
       const sessionDirs: string[] = [];
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       // Every progress frame carries the same identity; only the message and extras differ.
       const progress = (text: string, extra: Record<string, unknown> = {}) =>
         onUpdate?.({
           content: [{ type: "text", text }],
-          details: { ...agent, model: modelName(model), thinking, state: "running", ...extra },
+          details: {
+            ...agent,
+            model: modelName(model),
+            thinking,
+            state: "running",
+            contextTokens,
+            contextLimit,
+            ...extra,
+          },
         });
       try {
         if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: searching repository…");
@@ -398,6 +408,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           let run!: ScoutRun;
           for (;;) {
             attempts++;
+            contextTokens = null;
             attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
             const sessionDir = await repoSessionDir();
             sessionDirs.push(sessionDir);
@@ -442,6 +453,16 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
                   attempts,
                 });
               },
+              onContext: tokens => {
+                contextTokens = tokens;
+                lastUpdateAt = Date.now();
+                progress("Scout context updated", {
+                  durationMs: lastUpdateAt - started,
+                  usage: addUsage(usage, attemptUsage),
+                  activity,
+                  attempts,
+                });
+              },
               onActivity: (_item, all) => {
                 lastUpdateAt = Date.now();
                 activity = all;
@@ -469,6 +490,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             if (!canRetry || !(await retryWait(attempts, signal))) return run;
             if (signal?.aborted || Date.now() >= deadline || (maxCostUsd !== undefined && usage.cost >= maxCostUsd))
               return run;
+            contextTokens = null;
             progress(`Scout provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`, {
               durationMs: Date.now() - started,
               usage: { ...usage },
@@ -491,7 +513,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
             callNumber,
-            contextTokens: run.contextTokens,
+            contextTokens: run.contextWindowTokens ?? null,
+            contextLimit,
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
             thinking,
@@ -616,11 +639,21 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       const agent = { agentName: delegatedName(pi, "web_scout", id), startedAt: new Date(started).toISOString() };
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
+      let contextTokens: number | null = null;
+      const contextLimit = model.contextWindow;
       // Every progress frame carries the same identity; only the message and extras differ.
       const progress = (text: string, extra: Record<string, unknown> = {}) =>
         onUpdate?.({
           content: [{ type: "text", text }],
-          details: { ...agent, model: modelName(model), thinking, state: "running", ...extra },
+          details: {
+            ...agent,
+            model: modelName(model),
+            thinking,
+            state: "running",
+            contextTokens,
+            contextLimit,
+            ...extra,
+          },
         });
       if (ctx.hasUI) ctx.ui.setStatus("pi-scout", "scout: researching public web…");
       progress("Web Scout launching isolated browser…");
@@ -674,6 +707,11 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             lastUpdateAt = Date.now();
             progress("Web Scout usage updated", { durationMs: lastUpdateAt - started, usage, activity });
           },
+          onContext: tokens => {
+            contextTokens = tokens;
+            lastUpdateAt = Date.now();
+            progress("Web Scout context updated", { durationMs: lastUpdateAt - started, activity });
+          },
           onActivity: (_item, all) => {
             lastUpdateAt = Date.now();
             activity = all;
@@ -696,6 +734,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             thinking,
             durationMs: run.durationMs,
             usage: run.usage,
+            contextTokens: run.contextWindowTokens ?? null,
+            contextLimit,
             turns: run.turns,
             stopReason: run.stopReason,
             truncated: run.truncated,

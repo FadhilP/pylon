@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getPackageDir, truncateHead } from "@earendil-works/pi-coding-agent";
+import { contextWindowTokensFromUsage } from "pylon-core/child-process";
 import { createSettlement } from "./settlement.ts";
 import { boundedString, deniedUiResponse, dialogMethods, parseUiRequest, validUiResponse } from "./ui-request.ts";
 
@@ -35,6 +36,8 @@ export type SpawnRun = {
   durationMs: number;
   usage: SpawnUsage;
   sessionUsage?: SpawnUsage;
+  contextTokens?: number | null;
+  contextLimit?: number;
   turns: number;
   truncated: boolean;
   activity: SpawnActivity[];
@@ -51,8 +54,9 @@ export type RunSpawnOptions = {
   env?: NodeJS.ProcessEnv;
   onActivity?: (item: SpawnActivity, all: readonly SpawnActivity[]) => void;
   onUsage?: (usage: SpawnUsage) => void;
+  onContext?: (tokens: number | null) => void;
   onText?: (text: string) => void;
-  onState?: (state: { model?: string; thinking?: string }) => void;
+  onState?: (state: { model?: string; thinking?: string; contextLimit?: number }) => void;
   onUiRequest?: (request: SpawnUiRequest, signal: AbortSignal) => Promise<SpawnUiResponse>;
 };
 
@@ -78,14 +82,20 @@ const sessionUsage = (value: unknown): SpawnUsage | undefined => {
   };
 };
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-const sessionState = (value: unknown): { model?: string; thinking?: string } | undefined => {
+const sessionState = (value: unknown): { model?: string; thinking?: string; contextLimit?: number } | undefined => {
   const state = value && typeof value === "object" ? (value as Record<string, any>) : {};
   const model = state.model && typeof state.model === "object" ? (state.model as Record<string, unknown>) : {};
   const modelRef =
     typeof model.provider === "string" && typeof model.id === "string" ? `${model.provider}/${model.id}` : undefined;
   const thinking = thinkingLevels.has(String(state.thinkingLevel)) ? String(state.thinkingLevel) : undefined;
-  return modelRef || thinking
-    ? { ...(modelRef ? { model: modelRef } : {}), ...(thinking ? { thinking } : {}) }
+  const rawContextLimit = Number(model.contextWindow);
+  const contextLimit = Number.isSafeInteger(rawContextLimit) && rawContextLimit > 0 ? rawContextLimit : undefined;
+  return modelRef || thinking || contextLimit
+    ? {
+        ...(modelRef ? { model: modelRef } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(contextLimit ? { contextLimit } : {}),
+      }
     : undefined;
 };
 
@@ -172,7 +182,8 @@ type RunState = {
   activity: SpawnActivity[];
   usage: SpawnUsage;
   cumulativeUsage?: SpawnUsage;
-  effectiveState?: { model?: string; thinking?: string };
+  contextTokens: number | null;
+  effectiveState?: { model?: string; thinking?: string; contextLimit?: number };
   streamedText: string;
   stderr: string;
   commandError: string;
@@ -208,6 +219,8 @@ function buildRun(state: RunState): SpawnRun {
     durationMs: Date.now() - state.startedAt,
     usage: state.usage,
     ...(state.cumulativeUsage ? { sessionUsage: state.cumulativeUsage } : {}),
+    contextTokens: state.contextTokens,
+    ...(state.effectiveState?.contextLimit ? { contextLimit: state.effectiveState.contextLimit } : {}),
     turns: state.messages.length,
     truncated: capped.truncated,
     activity: state.activity,
@@ -231,7 +244,8 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const activityStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
   const usage = emptyUsage();
   let cumulativeUsage: SpawnUsage | undefined;
-  let effectiveState: { model?: string; thinking?: string } | undefined;
+  let contextTokens: number | null = null;
+  let effectiveState: { model?: string; thinking?: string; contextLimit?: number } | undefined;
   let stderr = "",
     commandError = "",
     timedOut = false,
@@ -247,6 +261,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const emitUsage = observer(options.onUsage);
   const emitText = observer(options.onText);
   const emitState = observer(options.onState);
+  const emitContext = observer(options.onContext);
 
   const settlement = createSettlement({
     child,
@@ -332,7 +347,11 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       }
     },
 
-    compaction_start: () => settlement.compactionStarted(),
+    compaction_start: () => {
+      contextTokens = null;
+      emitContext(null);
+      settlement.compactionStarted();
+    },
     compaction_end: event => settlement.compactionEnded(!!event.result || event.willRetry === true),
     agent_start: () => settlement.agentStarted(),
     agent_settled: () => settlement.agentSettled(),
@@ -387,6 +406,13 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       usage.cacheRead += validNumber(item.cacheRead);
       usage.cacheWrite += validNumber(item.cacheWrite);
       usage.cost += validNumber(item.cost?.total);
+      if (message.stopReason !== "aborted" && message.stopReason !== "error") {
+        const latestContextTokens = contextWindowTokensFromUsage(item);
+        if (latestContextTokens > 0) {
+          contextTokens = latestContextTokens;
+          emitContext(contextTokens);
+        }
+      }
       emitUsage({ ...usage });
     },
   };
@@ -457,6 +483,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
     activity,
     usage,
     cumulativeUsage,
+    contextTokens,
     effectiveState,
     streamedText,
     stderr,
