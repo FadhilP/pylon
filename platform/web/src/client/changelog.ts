@@ -2,6 +2,23 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.0.0",
+    date: "Aug 30, 2026",
+    title: "A new workspace for files, sessions, and usage",
+    summary:
+      "Pylon 2.0 reorganizes the web workspace around projects and files, adds detailed usage metering, and makes inspection, delegation, checkpoints, and verification faster and more reliable.",
+    notes: [
+      "Introduced a new project-first layout with dedicated workspace navigation, session surfaces, and a docked reference rail for Overview, Policy, Timeline, Memory, and Tools, plus responsive overlays for navigation, Explorer, and session details on smaller screens.",
+      "Added a workspace Explorer with searchable Files and Changes views, tree navigation, loading and truncation feedback, and per-session file tabs backed by incrementally refreshed inventories for both Git repositories and plain directories.",
+      "Added a Usage workspace with configurable date ranges and project, provider, model, and agent filters; cost and token totals; cache and session metrics; time-series breakdowns; ranked line items; and CSV export, including usage attributed to delegated agents.",
+      "Redesigned Settings and the session inspector so inherited runtime, tool, verification, Timeline, Guard, workspace, and timeout policies are easier to understand and manage across global, project, and session scopes.",
+      "Made Repo Scout run independent searches concurrently in isolated sessions, reserve parent context for explicit follow-ups, and retry transient provider failures in fresh sessions while preserving combined usage accounting.",
+      "Linked Timeline checkpoints to verification outcomes only when they match the checkpoint's exact worktree state, and made prompt-history restoration reversible with mutation-aware checkpoint navigation.",
+      "Strengthened Verify by detecting content changes in already-dirty worktrees, selecting checks for affected workspace packages, and running independent package checks concurrently.",
+    ],
+  },
+
+  {
     version: "1.12.1",
     date: "Aug 25, 2026",
     title: "Provider sign-in reliability",
