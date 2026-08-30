@@ -1,6 +1,6 @@
 {
   "name": "@fadhilp/pylon",
-  "version": "1.12.1",
+  "version": "2.0.0",
   "workspaces": [
     "packages/*",
     "platform/web"
