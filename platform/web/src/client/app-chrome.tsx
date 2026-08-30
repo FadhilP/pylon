@@ -26,6 +26,9 @@ type Runtime = RuntimeStoreSnapshot["runtime"];
  * navigation.ts and owns no state of its own.
  */
 
+/** One icon size for both rails, so the scope and reference sides stay level. */
+const RAIL_ICON_SIZE = 19;
+
 /** Icon-only rail control. The label is the accessible name and the tooltip. */
 function RailButton({
   label,
@@ -61,7 +64,7 @@ function RailButton({
       aria-pressed={active ?? false}
       aria-controls={ariaControls}
       onClick={onClick}>
-      <Icon size={17} />
+      <Icon size={RAIL_ICON_SIZE} />
       {badge?.count ? <small>{badge.count}</small> : undefined}
     </button>
   );

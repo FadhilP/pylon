@@ -361,6 +361,25 @@ function delegatedAgentKind(value: unknown, input?: unknown): DelegatedAgentKind
   return kind;
 }
 
+function settledToolStatus(
+  name: string,
+  raw: Record<string, unknown>,
+): Exclude<ToolActivityReadModel["status"], "running"> {
+  if (raw.isError === true || raw.failed === true || raw.error) return "failed";
+  if (name !== "verify") return "completed";
+  const details = object(object(raw.result ?? raw).details);
+  const results = Array.isArray(details.results) ? details.results.map(object) : [];
+  if (details.state === "stale") return results.some(result => result.code !== 0) ? "failed" : "attention";
+  if (details.state === "error") return "failed";
+  if (details.state !== "failed") return "completed";
+  const mixed =
+    results.length > 1 &&
+    results.every(result => typeof result.code === "number" && Number.isFinite(result.code)) &&
+    results.some(result => result.code === 0) &&
+    results.some(result => result.code !== 0);
+  return mixed ? "attention" : "failed";
+}
+
 function boundedNumber(value: unknown, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(maximum, value) : undefined;
 }
@@ -636,14 +655,15 @@ interface ConversationScan {
 }
 
 /** Final status of every tool call that has a result anywhere in history. */
-function collectToolStatuses(messages: unknown[]): Map<string, "completed" | "failed"> {
-  const statuses = new Map<string, "completed" | "failed">();
+function collectToolStatuses(messages: unknown[]): Map<string, Exclude<ToolActivityReadModel["status"], "running">> {
+  const statuses = new Map<string, Exclude<ToolActivityReadModel["status"], "running">>();
   for (const message of messages) {
     const raw = object(message);
     if (role(raw.role) !== "tool" || typeof raw.toolCallId !== "string") continue;
-    // A failure anywhere wins, so never downgrade a call already marked failed.
-    if (raw.isError !== true && statuses.get(raw.toolCallId) === "failed") continue;
-    statuses.set(raw.toolCallId, raw.isError === true ? "failed" : "completed");
+    const status = settledToolStatus(text(raw.toolName, 200), raw);
+    // A terminal non-success anywhere wins, so never downgrade it to completed.
+    if (status === "completed" && statuses.get(raw.toolCallId) !== undefined) continue;
+    statuses.set(raw.toolCallId, status);
   }
   return statuses;
 }
@@ -657,7 +677,7 @@ function scanAssistantToolCalls(
     userTurn: number;
     projected: boolean;
     projectedToolResultIds: Set<string>;
-    completedToolStatuses: Map<string, "completed" | "failed">;
+    completedToolStatuses: Map<string, Exclude<ToolActivityReadModel["status"], "running">>;
     toolDurations?: ReadonlyMap<string, number>;
   },
 ): MessageReadModel[] {
@@ -825,7 +845,7 @@ export function projectConversation(
           id: toolId,
           name,
           input: browserJson(call?.rawInput),
-          status: raw.isError === true ? "failed" : "completed",
+          status: settledToolStatus(name, raw),
           ...(options.toolDurations?.get(toolId) === undefined
             ? {}
             : { durationMs: options.toolDurations.get(toolId) }),
@@ -1522,7 +1542,7 @@ export class RuntimeProjection {
       id: toolId,
       name,
       input: old?.input ?? browserJson(input),
-      status: raw.isError === true || raw.failed === true || raw.error ? "failed" : "completed",
+      status: settledToolStatus(name, raw),
       summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined,
       ...(startedAt ? { startedAt } : {}),
       ...(durationMs === undefined ? {} : { durationMs }),

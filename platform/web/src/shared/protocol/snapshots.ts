@@ -421,6 +421,56 @@ export interface SessionListSnapshot {
   projects: SessionProjectPage[];
 }
 
+export type UsageAgent = "main" | "advisor" | "grunt" | "scout" | "private" | "unknown";
+
+export interface UsageQuery {
+  days?: 7 | 30 | 90;
+}
+
+export interface UsageRecord {
+  day: string;
+  sessionId: string;
+  projectId: string;
+  projectLabel: string;
+  provider: string;
+  model: string;
+  agent: UsageAgent;
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  costKnown: boolean;
+}
+
+export interface UsageSessionSummary {
+  id: string;
+  projectId: string;
+  projectLabel: string;
+  title: string;
+  createdAt: string;
+  modifiedAt: string;
+  elapsedMs: number;
+}
+
+export interface UsageSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  generatedAt: string;
+  fromInclusive: string;
+  toExclusive: string;
+  records: UsageRecord[];
+  sessions: UsageSessionSummary[];
+  diagnostics: {
+    unreadableFiles: number;
+    conflictingDuplicates: number;
+    unknownCostRecords: number;
+    unknownAttributionRecords: number;
+    truncated: boolean;
+  };
+}
+
 export interface ArchivedProjectSummary {
   id: string;
   label: string;

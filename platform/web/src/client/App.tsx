@@ -90,7 +90,12 @@ import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
 type FileNavigation = "explorer" | "sessions";
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
-type SelectedAttachment = { sessionId: string; attachment: MessageAttachmentReadModel; trigger: HTMLButtonElement };
+type SelectedAttachment = {
+  sessionId: string;
+  attachments: MessageAttachmentReadModel[];
+  index: number;
+  trigger: HTMLButtonElement;
+};
 type PendingSession = {
   requestId: number;
   project: SessionProject;
@@ -597,7 +602,9 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [inspectorOverlay, live.pendingUi?.owned, mobile, workspaceView]);
 
-  const switchSession = async (session: SessionSummary) => {
+  const switchSession = async (
+    session: Pick<SessionSummary, "id"> & Partial<Pick<SessionSummary, "active" | "runningUnderParentSessionId">>,
+  ) => {
     setWorkspaceView(null);
     if (sessionBusy || sessionDeleting) {
       if (mobile) setSidebarOpen(false);
@@ -1013,10 +1020,10 @@ export function App() {
       () => runtimeStore.setExtensionEnabled(extension.id, enabled),
       "Unable to update extension",
     );
-  const installExtensionPackage = (source: string, scope: "user" | "project") =>
+  const installExtensionPackage = (source: string, scope: "user" | "project", projectId?: string) =>
     manageExtension(
       `install:${source}`,
-      () => runtimeStore.installExtensionPackage(source, scope),
+      () => runtimeStore.installExtensionPackage(source, scope, projectId),
       "Unable to install extension package",
     );
   const removeExtensionPackage = (source: string, scope: "user" | "project") =>
@@ -1210,6 +1217,8 @@ export function App() {
           ? {
               phase: pendingSession.phase,
               projectLabel: pendingSession.project.label,
+              cwd: pendingSession.project.cwd,
+              connected: live.connection === "connected",
               error: pendingSession.error,
               onRetry: () => void newSession(pendingSession.project, true),
             }
@@ -1258,10 +1267,18 @@ export function App() {
         setSelectedCompaction({ sessionId, message });
         setReference("compaction");
       }}
-      onOpenAttachment={(attachment, trigger) => {
+      openAttachment={
+        reference === "attachment" && selectedAttachment
+          ? {
+              sourceEntryId: selectedAttachment.attachments[selectedAttachment.index]?.sourceEntryId ?? "",
+              index: selectedAttachment.attachments[selectedAttachment.index]?.index ?? -1,
+            }
+          : undefined
+      }
+      onOpenAttachment={(attachments, index, trigger) => {
         const sessionId = live.runtime?.sessionId;
         if (!sessionId) return;
-        setSelectedAttachment({ sessionId, attachment, trigger });
+        setSelectedAttachment({ sessionId, attachments, index, trigger });
         setReference("attachment");
       }}
       agentColors={agentColors}
@@ -1331,13 +1348,16 @@ export function App() {
         <CompactionPanel
           key={`compaction:${selectedCompaction.message.id}`}
           message={selectedCompaction.message}
+          contextLimit={live.runtime?.metrics.contextLimit}
           onClose={() => setReference(null)}
         />
       )}
       {reference === "attachment" && selectedAttachment && selectedAttachment.sessionId === live.runtime?.sessionId && (
         <AttachmentPanel
-          key={`attachment:${selectedAttachment.attachment.sourceEntryId}:${selectedAttachment.attachment.index}`}
-          attachment={selectedAttachment.attachment}
+          key={`attachment:${selectedAttachment.attachments[0]?.sourceEntryId ?? ""}`}
+          attachments={selectedAttachment.attachments}
+          index={selectedAttachment.index}
+          onSelect={index => setSelectedAttachment(current => (current ? { ...current, index } : current))}
           onClose={() => setReference(null)}
         />
       )}
@@ -1560,7 +1580,11 @@ export function App() {
       {workspaceView ? (
         <main className="content-card is-workspace-view" id="main-content">
           <WorkspaceViewHeader view={workspaceView} onClose={() => setWorkspaceView(null)} />
-          <div className="workspace-view-body">{workspaceView === "usage" && <UsageView />}</div>
+          <div className="workspace-view-body">
+            {workspaceView === "usage" && (
+              <UsageView onSelectSession={id => void switchSession({ id, active: live.runtime?.sessionId === id })} />
+            )}
+          </div>
         </main>
       ) : surface !== "files" ? (
         <main className="content-card" id="main-content">
@@ -1670,6 +1694,7 @@ export function App() {
           providerAuth={live.runtime?.providerAuth}
           pendingUi={live.pendingUi}
           packages={packages}
+          projects={projects.map(({ id, label }) => ({ id, label }))}
           extensions={extensions}
           hookSettings={hookSettings}
           runtimePolicy={live.runtime?.runtimePolicy}

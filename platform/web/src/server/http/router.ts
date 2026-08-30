@@ -107,6 +107,7 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions")
         return await this.sessionList(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/usage") return await this.usage(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history")
         return await this.conversationHistory(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-attachment")
@@ -352,6 +353,20 @@ export class ServerTransport {
     const result = await this.driver.listSessions({ projectId, cursor, query, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing sessions");
+    this.send(response, 200, result);
+  }
+
+  private async usage(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const values = url.searchParams.getAll("days");
+    if (values.length > 1) throw httpError(400, "invalid days");
+    const rawDays = values[0];
+    const days =
+      rawDays === undefined ? 30 : rawDays === "7" ? 7 : rawDays === "30" ? 30 : rawDays === "90" ? 90 : undefined;
+    if (days === undefined) throw httpError(400, "invalid days");
+    const result = await this.driver.usage({ days });
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while loading usage");
     this.send(response, 200, result);
   }
 
@@ -951,7 +966,7 @@ export class ServerTransport {
         if (!this.driver.installExtensionPackage)
           return Promise.reject(httpError(409, "native extensions are unavailable"));
         return this.driver
-          .installExtensionPackage({ source: command.source, scope: command.scope })
+          .installExtensionPackage({ source: command.source, scope: command.scope, projectId: command.projectId })
           .then(result => accepted(result.sessionGeneration));
       case "removeExtensionPackage":
         if (!this.driver.removeExtensionPackage)

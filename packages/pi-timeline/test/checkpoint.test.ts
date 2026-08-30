@@ -126,7 +126,6 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
   }
 });
 
-
 test("first checkpoint changes use the persisted session-start baseline", async () => {
   const { root } = await repository();
   await writeFile(join(root, "tracked.txt"), "dirty before session\n");
@@ -228,7 +227,6 @@ test("first checkpoint changes use the persisted session-start baseline", async 
     await rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("read-only persistent sessions retire unused baseline refs on quit", async () => {
   const { root, git } = await repository();
@@ -826,7 +824,6 @@ test("restore validates objects before mutation", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("checkpoint titles are generated after capture and survive reload", async () => {
   const { root } = await repository();

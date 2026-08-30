@@ -88,6 +88,8 @@ import type {
   PapercutMutationResult,
   PapercutStatusReadModel,
   RuntimeDiagnostic,
+  UsageQuery,
+  UsageSnapshot,
   RuntimePolicyReadModel,
   RuntimeSnapshot,
   SessionListQuery,
@@ -826,6 +828,31 @@ function supportedThinkingLevels(model: {
   return THINKING_LEVELS.filter(level => model.thinkingLevelMap?.[level] !== null);
 }
 
+/**
+ * Catalogue numbers the composer shows beside each model. A catalogue entry can carry anything —
+ * a placeholder -1 context window, a missing rate — so each fact is dropped unless it satisfies
+ * the protocol, rather than trusting the upstream type.
+ */
+export function modelCatalogFacts(model: { contextWindow?: unknown; cost?: unknown }): {
+  contextWindow?: number;
+  cost?: { input: number; output: number };
+} {
+  const size = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 && value <= Number.MAX_SAFE_INTEGER
+      ? Math.floor(value)
+      : undefined;
+  const rate = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const cost = (model.cost ?? {}) as { input?: unknown; output?: unknown };
+  const contextWindow = size(model.contextWindow);
+  const input = rate(cost.input);
+  const output = rate(cost.output);
+  return {
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(input === undefined || output === undefined ? {} : { cost: { input, output } }),
+  };
+}
+
 export interface SessionRuntimeOptions {
   dialogTimeoutMs?: number;
   extensionFactories?: InlineExtension[];
@@ -1217,6 +1244,16 @@ export class SessionRuntime implements PiDriver {
         firstMessage: "",
         allMessagesText: "",
       },
+    });
+  }
+
+  async usage(input: UsageQuery = {}): Promise<UsageSnapshot> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    return this.sessionIndex.usage(input, {
+      activeId: runtime.session.sessionId,
+      generation: this.gate.generation,
+      stateFor: sessionId => (sessionId === runtime.session.sessionId ? "idle" : "sleeping"),
     });
   }
 
@@ -2655,7 +2692,13 @@ export class SessionRuntime implements PiDriver {
     if (!thinkingLevels.includes(input.thinkingLevel)) {
       throw new Error("thinking level is unavailable for this model");
     }
-    return { provider: model.provider, id: model.id, name: model.name, thinkingLevels: [...thinkingLevels] };
+    return {
+      provider: model.provider,
+      id: model.id,
+      name: model.name,
+      thinkingLevels: [...thinkingLevels],
+      ...modelCatalogFacts(model),
+    };
   }
 
   hasActiveAgentRun(): boolean {
@@ -3474,6 +3517,7 @@ export class SessionRuntime implements PiDriver {
         id: item.id,
         name: item.name,
         thinkingLevels: [...supportedThinkingLevels(item)],
+        ...modelCatalogFacts(item),
       }))
       .sort((left, right) => left.provider.localeCompare(right.provider) || left.name.localeCompare(right.name));
     const commands = runtime.services.resourceLoader

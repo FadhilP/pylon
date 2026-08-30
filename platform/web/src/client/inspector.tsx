@@ -199,6 +199,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
           <InspectorSection
             title="Verification"
             meta={operational.verification.scope ? `${operational.verification.scope} scope` : "No run"}
+            indicator={verificationSummary(operational.verification)}
             className="verification-panel">
             <Verification verification={operational.verification} />
           </InspectorSection>
@@ -209,17 +210,32 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   );
 }
 
-function Verification({ verification }: { verification: VerificationReadModel }) {
-  const running = verification.state === "running";
-  const startedAt = verification.startedAt ? Date.parse(verification.startedAt) : Number.NaN;
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (verification.availability !== "available" || !running || Number.isNaN(startedAt)) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [running, startedAt, verification.availability]);
+function verificationSummary(verification: VerificationReadModel): { state: OverviewState; label: string } | undefined {
+  const passed = verification.checks.filter(check => check.status === "passed").length;
+  const failed = verification.checks.length - passed;
+  switch (verification.state) {
+    case "running":
+      return { state: "running", label: "Running" };
+    case "passed":
+      return { state: "done", label: "Passed" };
+    case "failed":
+      return passed > 0 && failed > 0 ? { state: "attention", label: "Partial" } : { state: "failed", label: "Failed" };
+    case "stale":
+      return failed > 0 ? { state: "failed", label: "Failed" } : { state: "attention", label: "Stale" };
+    case "cancelled":
+      return { state: "attention", label: "Cancelled" };
+    case "error":
+      return { state: "failed", label: "Error" };
+    case "clean":
+      return { state: "neutral", label: "Clean" };
+    case "no_checks":
+      return { state: "neutral", label: "No checks" };
+    default:
+      return undefined;
+  }
+}
 
+function Verification({ verification }: { verification: VerificationReadModel }) {
   if (verification.availability !== "available") {
     return (
       <div className="empty-state">
@@ -230,20 +246,8 @@ function Verification({ verification }: { verification: VerificationReadModel })
     );
   }
 
-  const elapsed = Number.isNaN(startedAt) ? (verification.durationMs ?? 0) : Math.max(0, now - startedAt);
   return (
     <div className="overview-list">
-      {running && (
-        <div className="overview-list-row">
-          <OverviewOrb state="running" label="Running" />
-          <div role="status">
-            <strong>Verification</strong>
-            <small className="mono">{verification.scope ? `${verification.scope} scope` : "Checking project"}</small>
-          </div>
-          <OverviewStateLabel state="running">Running</OverviewStateLabel>
-          <time className="mono">{formatWorkDuration(elapsed)}</time>
-        </div>
-      )}
       {verification.checks.map(check => {
         const state: OverviewState = check.status === "passed" ? "done" : "failed";
         return (
@@ -258,11 +262,11 @@ function Verification({ verification }: { verification: VerificationReadModel })
           </div>
         );
       })}
-      {!running && verification.checks.length === 0 && (
+      {verification.checks.length === 0 && (
         <div className="empty-state">
           <IconCheck size={20} />
-          <strong>No verification run yet</strong>
-          <span>Results will appear after Verify runs.</span>
+          <strong>No verification checks</strong>
+          <span>{verification.message || "Results will appear after Verify runs."}</span>
         </div>
       )}
     </div>
@@ -2286,7 +2290,9 @@ function oneLine(value: string, max = 120): string {
   return normalized.length > max ? `${normalized.slice(0, max - 1).trimEnd()}…` : normalized;
 }
 function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
-  const [expanded, setExpanded] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const usageContentId = useId();
   const [usageListRef, ledCells] = useResponsiveUsageLedCells();
   const toolUsage = [...(metrics?.toolUsage ?? [])].sort(
     (left, right) => right.tokens - left.tokens || right.calls - left.calls || left.name.localeCompare(right.name),
@@ -2299,7 +2305,7 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
   const inputPercent = inputOutputTokens > 0 ? (inputTokens / inputOutputTokens) * 100 : 50;
   const outputPercent = inputOutputTokens > 0 ? (outputTokens / inputOutputTokens) * 100 : 50;
   const cacheHitRate = formatCacheHitRate(inputTokens, cacheReadTokens, cacheWriteTokens);
-  const visibleUsage = expanded ? toolUsage : toolUsage.slice(0, 5);
+  const visibleUsage = showAll ? toolUsage : toolUsage.slice(0, 5);
   const maxToolTokens = toolUsage[0]?.tokens ?? 0;
   return (
     <InspectorSection title="Session usage" meta={`${metrics?.userMessages ?? 0} turns`} className="session-tool-usage">
@@ -2340,54 +2346,61 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
           </div>
         </div>
       </div>
-      <div className="session-tool-usage-heading">
+      <button
+        className="session-tool-usage-heading"
+        type="button"
+        aria-expanded={usageOpen}
+        aria-controls={usageContentId}
+        onClick={() => setUsageOpen(value => !value)}>
         <strong>Usage by tool</strong>
         <span title="Token volume is logarithmically scaled relative to the busiest tool; LED count adapts to panel width">
-          Tokens / calls
+          Tokens / calls <IconChevronDown size={14} />
         </span>
-      </div>
-      {visibleUsage.length ? (
-        <div className="session-tool-usage-list" ref={usageListRef}>
-          {visibleUsage.map(usage => {
-            const scaledTotal = maxToolTokens > 0 ? (Math.log1p(usage.tokens) / Math.log1p(maxToolTokens)) * 100 : 0;
-            const inputShare = usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
-            const outputShare = usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
-            return (
-              <div className="session-tool-usage-row" key={usage.name}>
-                <div>
-                  <strong>{usage.name}</strong>
-                  <LedBar
-                    a={scaledTotal * inputShare}
-                    b={scaledTotal * outputShare}
-                    cells={ledCells}
-                    thin
-                    label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens; log-scaled relative volume`}
-                  />
+      </button>
+      <div id={usageContentId} hidden={!usageOpen}>
+        {visibleUsage.length ? (
+          <div className="session-tool-usage-list" ref={usageListRef}>
+            {visibleUsage.map(usage => {
+              const scaledTotal = maxToolTokens > 0 ? (Math.log1p(usage.tokens) / Math.log1p(maxToolTokens)) * 100 : 0;
+              const inputShare = usage.tokens > 0 ? usage.inputTokens / usage.tokens : 0;
+              const outputShare = usage.tokens > 0 ? usage.outputTokens / usage.tokens : 0;
+              return (
+                <div className="session-tool-usage-row" key={usage.name}>
+                  <div>
+                    <strong>{usage.name}</strong>
+                    <LedBar
+                      a={scaledTotal * inputShare}
+                      b={scaledTotal * outputShare}
+                      cells={ledCells}
+                      thin
+                      label={`${formatCompactNumber(usage.inputTokens)} input tokens and ${formatCompactNumber(usage.outputTokens)} output tokens; log-scaled relative volume`}
+                    />
+                  </div>
+                  <span className="mono">
+                    ~{formatCompactNumber(usage.tokens)}
+                    <small>tok</small>
+                  </span>
+                  <span className="mono">
+                    {formatCompactNumber(usage.calls)}
+                    <small>calls</small>
+                  </span>
                 </div>
-                <span className="mono">
-                  ~{formatCompactNumber(usage.tokens)}
-                  <small>tok</small>
-                </span>
-                <span className="mono">
-                  {formatCompactNumber(usage.calls)}
-                  <small>calls</small>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="session-tool-usage-empty">No completed tool calls in this session.</div>
-      )}
-      {toolUsage.length > 5 && (
-        <button
-          className="session-usage-expand"
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded(value => !value)}>
-          {expanded ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} />
-        </button>
-      )}
+              );
+            })}
+          </div>
+        ) : (
+          <div className="session-tool-usage-empty">No completed tool calls in this session.</div>
+        )}
+        {toolUsage.length > 5 && (
+          <button
+            className="session-usage-expand"
+            type="button"
+            aria-expanded={showAll}
+            onClick={() => setShowAll(value => !value)}>
+            {showAll ? "Show less" : `Show ${toolUsage.length - 5} more`} <IconChevronDown size={14} />
+          </button>
+        )}
+      </div>
     </InspectorSection>
   );
 }
@@ -2800,12 +2813,14 @@ function HeartbeatJobs({ jobs }: { jobs: JobReadModel[] }) {
 function InspectorSection({
   title,
   meta,
+  indicator,
   className = "",
   defaultOpen = true,
   children,
 }: {
   title: string;
   meta?: string;
+  indicator?: { state: OverviewState; label: string };
   className?: string;
   defaultOpen?: boolean;
   children: ReactNode;
@@ -2819,6 +2834,7 @@ function InspectorSection({
       <summary>
         <span>
           <strong>{title}</strong>
+          {indicator && <OverviewOrb state={indicator.state} label={indicator.label} />}
           {meta && <small>{meta}</small>}
         </span>
         <IconChevronDown size={15} aria-hidden="true" />

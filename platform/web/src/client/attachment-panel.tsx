@@ -1,16 +1,30 @@
-import { IconDownload, IconFileText, IconPhoto, IconRefresh, IconX } from "@tabler/icons-react";
+import {
+  IconChevronLeft,
+  IconChevronRight,
+  IconDownload,
+  IconFileText,
+  IconPhoto,
+  IconRefresh,
+  IconX,
+} from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { MessageAttachmentReadModel } from "../shared/protocol/events";
 import type { ConversationAttachmentContent } from "../shared/protocol/snapshots";
 import { runtimeStore } from "./runtime/event-store";
+import { AttachmentThumbnail } from "./conversation-panel";
 
 export function AttachmentPanel({
-  attachment,
+  attachments,
+  index,
+  onSelect,
   onClose,
 }: {
-  attachment: MessageAttachmentReadModel;
+  attachments: MessageAttachmentReadModel[];
+  index: number;
+  onSelect: (index: number) => void;
   onClose: () => void;
 }) {
+  const attachment = attachments[index]!;
   const [content, setContent] = useState<ConversationAttachmentContent>();
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -27,6 +41,22 @@ export function AttachmentPanel({
       });
     return () => controller.abort();
   }, [attachment.sourceEntryId, attachment.index, retry]);
+
+  /** The arrows are the primary way through a message's files, so the arrow
+      keys drive them too — unless the person is typing. */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true']")) return;
+      const next = index + (event.key === "ArrowRight" ? 1 : -1);
+      if (next < 0 || next >= attachments.length) return;
+      event.preventDefault();
+      onSelect(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [index, attachments.length, onSelect]);
 
   const download = () => {
     if (!content) return;
@@ -47,27 +77,78 @@ export function AttachmentPanel({
       <header>
         <div>
           {attachment.kind === "image" ? <IconPhoto size={18} /> : <IconFileText size={18} />}
-          <strong id="attachment-title">Attachment details</strong>
+          <strong id="attachment-title">Attachment</strong>
         </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close attachment details">
-          <IconX size={17} />
-        </button>
+        <div>
+          <button
+            className="icon-button"
+            type="button"
+            onClick={download}
+            disabled={!content}
+            title="Download"
+            aria-label="Download attachment">
+            <IconDownload size={17} />
+          </button>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close attachment details">
+            <IconX size={17} />
+          </button>
+        </div>
       </header>
+
       <div className="attachment-panel-body">
-        <div className="attachment-panel-heading">
-          <div>
-            <strong title={attachment.name}>{attachment.name}</strong>
-            <span>
-              {attachment.mimeType} · {formatBytes(attachment.size)}
+        <div className="attachment-head">
+          <strong title={attachment.name}>{attachment.name}</strong>
+          <span className="mono">
+            {attachment.mimeType} · {formatBytes(attachment.size)}
+          </span>
+          {attachments.length > 1 && (
+            <span className="attachment-nav">
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => onSelect(index - 1)}
+                disabled={index === 0}
+                title="Previous attachment"
+                aria-label="Previous attachment">
+                <IconChevronLeft size={15} />
+              </button>
+              <span className="attachment-count">
+                {index + 1} of {attachments.length}
+              </span>
+              <button
+                className="icon-button"
+                type="button"
+                onClick={() => onSelect(index + 1)}
+                disabled={index === attachments.length - 1}
+                title="Next attachment"
+                aria-label="Next attachment">
+                <IconChevronRight size={15} />
+              </button>
             </span>
-          </div>
-          {content && (
-            <button className="secondary-button" type="button" onClick={download}>
-              <IconDownload size={14} />
-              Download
-            </button>
           )}
         </div>
+
+        {/* Jumping straight to one, when going in order is the long way round. */}
+        {attachments.length > 1 && (
+          <div className="attachment-strip" aria-label="Attachments in this message">
+            {attachments.map((item, itemIndex) => (
+              <button
+                type="button"
+                key={`${item.sourceEntryId}:${item.index}`}
+                onClick={() => onSelect(itemIndex)}
+                aria-current={itemIndex === index}
+                title={item.name}
+                aria-label={item.name}>
+                {item.kind === "image" ? (
+                  <AttachmentThumbnail attachment={item} reloadKey="panel" />
+                ) : (
+                  <IconFileText size={15} />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
         {!content && !error && (
           <div className="attachment-panel-loading" role="status" aria-label="Loading attachment">
             <span />

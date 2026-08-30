@@ -43,8 +43,6 @@ type ToolParams = {
 
 const isListStatus = (value: unknown): value is ListStatus => (STATUSES as readonly unknown[]).includes(value);
 
-// --- Formatting -------------------------------------------------------------
-
 const shortId = (id: string) => id.slice(0, 8);
 const outcomeLine = (record: PapercutRecord) => {
   if (record.status === "resolved" && record.resolution) return `\n  Resolution: ${record.resolution}`;
@@ -59,8 +57,6 @@ const formatList = (records: PapercutRecord[], status: string) =>
   records.length
     ? `Papercuts (${status}, ${records.length}):\n${records.map(recordLine).join("\n")}`
     : `No ${status === "all" ? "stored" : status} papercuts.`;
-
-// --- Tool parameter rules ---------------------------------------------------
 
 const FIELD_RULES: Record<ToolAction, { allowed: readonly string[]; whileDoing: string }> = {
   capture: { allowed: ["message"], whileDoing: "capturing a papercut" },
@@ -78,8 +74,6 @@ function assertOnlyAllowedFields(action: ToolAction, params: ToolParams) {
   if (extra.length)
     throw new Error(`${extra.join(", ")} ${extra.length === 1 ? "is" : "are"} not valid when ${whileDoing}`);
 }
-
-// --- Pylon request parsing --------------------------------------------------
 
 function parseListRequest(request: any) {
   const invalid = () => new Error("invalid papercut list request");
@@ -118,8 +112,6 @@ export default function papercutExtension(pi: ExtensionAPI) {
   let stateRevision = 0;
   let currentState: PapercutState | undefined;
 
-  // --- Published state snapshot ---------------------------------------------
-
   const counts = (state?: PapercutState) => ({
     open: state?.records.filter(record => record.status === "open").length ?? 0,
     resolved: state?.records.filter(record => record.status === "resolved").length ?? 0,
@@ -140,14 +132,10 @@ export default function papercutExtension(pi: ExtensionAPI) {
     if (publish) pi.events.emit("pi-papercut:state-change", stateSnapshot());
   };
 
-  // --- Request guards -------------------------------------------------------
-
   const isForBoundSession = (request: any) =>
     Boolean(request) && request.version === 1 && request.sessionId === boundSessionId;
   const canRespond = (request: any) => typeof request.respond === "function";
   const claims = (request: any) => typeof request.claim === "function" && request.claim();
-
-  // --- Store access ---------------------------------------------------------
 
   const sourceFor = (ctx: ToolContext): CaptureSource => ({
     sessionId: ctx.sessionManager?.getSessionId?.(),
@@ -176,8 +164,6 @@ export default function papercutExtension(pi: ExtensionAPI) {
     if (isBoundSession(ctx)) adoptState(saved.state, true, true);
     return saved.result;
   };
-
-  // --- Pylon request handlers -----------------------------------------------
 
   const runListRequest = async (request: any) => {
     const { status, query, offset, limit } = parseListRequest(request);
@@ -229,8 +215,6 @@ export default function papercutExtension(pi: ExtensionAPI) {
     request.respond(runMutationRequest(request, boundSessionId, boundCwd));
   });
 
-  // --- Session lifecycle ----------------------------------------------------
-
   pi.on("session_start", async (_event, ctx) => {
     const sessionId = ctx.sessionManager.getSessionId();
     const cwd = ctx.cwd;
@@ -266,8 +250,6 @@ export default function papercutExtension(pi: ExtensionAPI) {
     boundCwd = "";
     currentState = undefined;
   });
-
-  // --- Tool actions ---------------------------------------------------------
 
   const captureAction = async (ctx: ToolContext, params: ToolParams) => {
     if (!params.message?.trim()) throw new Error("message is required when capturing a papercut");

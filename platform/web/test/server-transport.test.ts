@@ -20,6 +20,8 @@ import type {
   RuntimeSnapshot,
   SessionListSnapshot,
   StateQLSnapshot,
+  UsageQuery,
+  UsageSnapshot,
 } from "../src/shared/protocol/snapshots.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
@@ -176,6 +178,7 @@ class FakeDriver implements PiDriver {
   stateqlHistoryLimits: number[] = [];
   stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
   papercutMutations: PapercutMutationInput[] = [];
+  usageDays: number[] = [];
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   deferDialog = false;
   private pendingDialog?: DriverEvent;
@@ -237,6 +240,26 @@ class FakeDriver implements PiDriver {
       projects: [
         { id: "project-workspace", label: "workspace", cwd: process.cwd(), totalCount: 1, sessions: [session] },
       ],
+    });
+  }
+  usage(input: UsageQuery = {}): Promise<UsageSnapshot> {
+    this.usageDays.push(input.days ?? 30);
+    const now = new Date().toISOString();
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      generatedAt: now,
+      fromInclusive: now,
+      toExclusive: now,
+      records: [],
+      sessions: [],
+      diagnostics: {
+        unreadableFiles: 0,
+        conflictingDuplicates: 0,
+        unknownCostRecords: 0,
+        unknownAttributionRecords: 0,
+        truncated: false,
+      },
     });
   }
   listArchived(): Promise<ArchiveListSnapshot> {
@@ -1280,6 +1303,32 @@ test(
         headers: { cookie, "x-pylon-tab-id": "unknown-tab" },
       });
       assert.equal(unauthorizedInvalidCursor.status, 403);
+      const usage = await fetch(`${origin}/api/v1/usage?days=7`, { headers: { cookie, "x-pylon-tab-id": tab } });
+      assert.equal(usage.status, 200);
+      assert.equal((await body(usage)).sessionGeneration, 1);
+      assert.deepEqual(driver.usageDays, [7]);
+      const defaultUsage = await fetch(`${origin}/api/v1/usage`, { headers: { cookie, "x-pylon-tab-id": tab } });
+      assert.equal(defaultUsage.status, 200);
+      assert.deepEqual(driver.usageDays, [7, 30]);
+      const originalUsage = driver.usage.bind(driver);
+      driver.usage = async input => ({ ...(await originalUsage(input)), sessionGeneration: 2 });
+      assert.equal(
+        (await fetch(`${origin}/api/v1/usage?days=30`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
+        409,
+      );
+      driver.usage = originalUsage;
+      assert.equal(
+        (await fetch(`${origin}/api/v1/usage?days=8`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
+        400,
+      );
+      assert.equal(
+        (await fetch(`${origin}/api/v1/usage?days=7&days=30`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
+        400,
+      );
+      assert.equal(
+        (await fetch(`${origin}/api/v1/usage`, { headers: { cookie, "x-pylon-tab-id": "unknown-tab" } })).status,
+        403,
+      );
       const history = await fetch(
         `${origin}/api/v1/conversation-history?cursor=${encodeHistoryCursor(100)}&generation=1`,
         { headers: { cookie, "x-pylon-tab-id": tab } },

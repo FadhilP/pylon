@@ -1,6 +1,6 @@
 import test, { after } from "node:test";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ after(async () => {
 function namingHarness(
   entries: any[],
   completeTitle: any = async () => ({ content: [{ type: "text", text: "Semantic Timeline Session" }] }),
+  configPath?: string,
 ) {
   const handlers = new Map<string, Function[]>(),
     names: string[] = [],
@@ -37,12 +38,15 @@ function namingHarness(
     setSessionName: (name: string) => names.push(name),
   };
   const artifactRoot = join(tmpdir(), `pi-timeline-naming-${randomUUID()}`);
-  extension(pi, completeTitle, { artifactRoot });
+  extension(pi, completeTitle, { artifactRoot, configPath });
   const ctx: any = {
     cwd: join(tmpdir(), "pi-timeline-naming-test"),
     hasUI: false,
     model: { provider: "test", id: "title-model" },
-    modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {}, env: {} }) },
+    modelRegistry: {
+      find: (provider: string, id: string) => ({ provider, id }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
+    },
     sessionManager: {
       getBranch: () => entries,
       getEntries: () => entries,
@@ -98,6 +102,9 @@ test("settled unnamed session launches a background semantic title call", async 
   assert.match(calls[0][1].messages[0].content[0].text, /Implemented session naming/);
   assert.equal(calls[0][2].maxTokens, 32);
   assert.equal(telemetry.length, 1);
+  assert.equal(telemetry[0].version, 2);
+  assert.equal(telemetry[0].provider, "test");
+  assert.equal(telemetry[0].model, "title-model");
   assert.deepEqual(telemetry[0].usage, { turns: 1, input: 12, output: 3, cacheRead: 4, cacheWrite: 0, cost: 0.002 });
   assert.equal(telemetry[0].context.request.characters, 35);
   assert.equal(telemetry[0].context.result.characters, 27);
@@ -105,6 +112,37 @@ test("settled unnamed session launches a background semantic title call", async 
   assert.equal(JSON.stringify(telemetry[0]).includes("Can we add session name"), false);
   assert.equal(handlers.has("before_agent_start"), false);
   assert.equal(handlers.has("message_end"), false);
+});
+
+test("explicit checkpoint title model also names the session", async () => {
+  const path = join(isolatedAgentDir, `title-model-${randomUUID()}.json`);
+  await writeFile(
+    path,
+    JSON.stringify({ version: 1, editRollbackDefault: false, checkpointTitleModel: "cheap/provider-model" }),
+  );
+  const calls: any[] = [];
+  const entries = [
+    { type: "message", id: "user-1", message: { role: "user", content: "Use one naming model everywhere" } },
+    {
+      type: "message",
+      id: "assistant-1",
+      message: { role: "assistant", content: "Configured shared Timeline naming." },
+    },
+  ];
+  const { handlers, names, ctx } = namingHarness(
+    entries,
+    async (model: any) => {
+      calls.push(model);
+      return { content: [{ type: "text", text: "Shared Timeline Naming Model" }] };
+    },
+    path,
+  );
+
+  await handlers.get("session_start")![0]({}, ctx);
+  await settleTurn(handlers, ctx);
+
+  assert.deepEqual(calls, [{ provider: "cheap", id: "provider-model" }]);
+  assert.deepEqual(names, ["Shared Timeline Naming Model"]);
 });
 
 test("fresh Continuity executor kickoff triggers automatic session naming", async () => {

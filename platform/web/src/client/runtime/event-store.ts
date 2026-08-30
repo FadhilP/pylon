@@ -43,6 +43,8 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  UsageQuery,
+  UsageSnapshot,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -67,6 +69,7 @@ import {
   isPackageListSnapshot,
   isPapercutListPage,
   isSessionListSnapshot,
+  isUsageSnapshot,
   isStateQLRowsPage,
   isStateQLSnapshot,
   isWebEvent,
@@ -76,7 +79,7 @@ import {
 } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
-import { drainWorkspaceFiles, workspaceInventoryCacheIsFresh } from "../../shared/workspace-file-pages";
+import { drainWorkspaceFiles, workspaceInventoryCacheState } from "../../shared/workspace-file-pages";
 import {
   liveToolMessage,
   replaceConversationMessage,
@@ -196,6 +199,7 @@ const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 
 interface CachedWorkspaceInventory {
   generation: number;
+  mode: WorkspacePolicyMode | "non-git" | undefined;
   revision?: string;
   expiresAt: number;
   files: WorkspaceFileReadModel[];
@@ -484,6 +488,14 @@ export class RuntimeEventStore {
     return sessions;
   }
 
+  async usage(input: UsageQuery = {}, signal?: AbortSignal): Promise<UsageSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const usage = await this.api.usage(input, signal);
+    if (!isUsageSnapshot(usage) || usage.sessionGeneration !== runtime.sessionGeneration)
+      throw new Error("Usage snapshot is stale or invalid");
+    return usage;
+  }
+
   async updateRuntimePolicy(
     scope: "global" | "project" | "session",
     verify: VerifyPolicyReadModel | "inherit",
@@ -577,10 +589,17 @@ export class RuntimeEventStore {
     const runtime = this.requireReadyRuntime();
     const revision = runtime.workspace?.revision;
     const cached = this.workspaceInventories.get(runtime.sessionId);
-    if (!refresh && cached?.generation === runtime.sessionGeneration) {
-      // Stale-while-revalidate: keep the existing tree visible while a newer revision loads.
+    const cacheState = cached
+      ? workspaceInventoryCacheState(cached, {
+          generation: runtime.sessionGeneration,
+          mode: runtime.workspace?.mode,
+          revision,
+        })
+      : "hidden";
+    if (!refresh && cached && cacheState !== "hidden") {
+      // Keep this session's last known tree visible while its current generation loads.
       publish(cached.files, cached.truncated);
-      if (workspaceInventoryCacheIsFresh(cached.revision, cached.expiresAt, runtime.workspace?.revision)) {
+      if (cacheState === "fresh") {
         progress(cached.files.length, cached.files.length);
         return cached;
       }
@@ -601,6 +620,7 @@ export class RuntimeEventStore {
     }
     const inventory = {
       generation: runtime.sessionGeneration,
+      mode: runtime.workspace?.mode,
       revision,
       expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
       files,
@@ -983,12 +1003,13 @@ export class RuntimeEventStore {
     });
   }
 
-  async installExtensionPackage(source: string, scope: "user" | "project"): Promise<void> {
+  async installExtensionPackage(source: string, scope: "user" | "project", projectId?: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
       type: "installExtensionPackage",
       source,
       scope,
+      ...(projectId ? { projectId } : {}),
       confirmed: true,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,

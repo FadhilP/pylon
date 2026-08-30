@@ -252,6 +252,8 @@ test("running spawn updates expose the selected model", async () => {
         );
       assert.equal(updates[0]?.details.state, "running");
       assert.equal(updates[0]?.details.model, "fake/model");
+      assert.equal(updates[0]?.details.provider, "fake");
+      assert.equal(updates[0]?.details.modelId, "model");
       assert.equal(
         updates.find(update => update.content?.[0]?.text.endsWith("runtime ready"))?.details.thinking,
         "high",
@@ -264,6 +266,8 @@ test("running spawn updates expose the selected model", async () => {
         cost: 0.1,
       });
       assert.equal(result.details.thinking, "high");
+      assert.equal(result.details.provider, "fake");
+      assert.equal(result.details.modelId, "model");
       assert.deepEqual(result.details.sessionUsage, { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 1 });
       assert.deepEqual(result.usage, {
         input: 1,

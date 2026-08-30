@@ -63,6 +63,7 @@ import type {
   WorkspaceReadModel,
 } from "../shared/protocol/snapshots";
 import { displayTime } from "./format";
+import { referenceDefinition } from "./navigation";
 import { copyText } from "./clipboard";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
@@ -290,10 +291,11 @@ export function FilesPanel({
   const visible = tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
   const fileCopyState = copyFeedback?.path === selectedPath ? (copyFeedback?.state ?? "idle") : "idle";
   const workspace = runtime?.workspace;
+  const canCompare = workspace?.mode === "worktree" || workspace?.mode === "checkout" || workspace?.mode === "local";
   return (
     <>
       <aside id="changes-panel" className="inspector files-panel is-open" aria-labelledby="changes-title">
-        <header>
+        <header className="inspector-header">
           <div>
             <IconFiles size={18} />
             <strong id="changes-title">Changes</strong>
@@ -310,6 +312,7 @@ export function FilesPanel({
             </button>
           </span>
         </header>
+        <p className="inspector-description">{referenceDefinition("changes")?.description}</p>
         <div className="files-workspace-bar">
           <span
             title={
@@ -453,7 +456,7 @@ export function FilesPanel({
                 <div className="file-viewer-toolbar">
                   <code title={selectedPath}>{selectedPath}</code>
                   <span>
-                    {workspace?.mode === "worktree" && (
+                    {canCompare && (
                       <>
                         <button className={view === "diff" ? "is-active" : ""} onClick={() => setView("diff")}>
                           <IconGitCompare size={14} />
@@ -461,7 +464,11 @@ export function FilesPanel({
                         </button>
                         <button
                           className={view === "base" ? "is-active" : ""}
-                          title="Show the file from the session baseline"
+                          title={
+                            workspace?.mode === "local"
+                              ? "Show the file from HEAD"
+                              : "Show the file from the session baseline"
+                          }
                           onClick={() => setView("base")}>
                           <IconArrowBackUp size={14} />
                           Baseline
@@ -471,7 +478,7 @@ export function FilesPanel({
                     <button
                       className={view === "current" ? "is-active" : ""}
                       title="Show the current file on disk"
-                      onClick={() => setView("current")}>
+                      onClick={() => setView(current => (current === "current" && canCompare ? "diff" : "current"))}>
                       Working copy
                     </button>
                     <button

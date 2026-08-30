@@ -1,239 +1,41 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCompactNumber } from "../shared/format";
+import type { UsageSnapshot } from "../shared/protocol/snapshots";
+import { runtimeStore, useRuntimeStore } from "./runtime/event-store";
+import {
+  buildUsageSeries,
+  filterUsageRecords,
+  groupUsage,
+  measureUsage,
+  topUsageSessions,
+  usageCsv,
+  usageDayKeys,
+  usageFacetOptions,
+  USAGE_AGENT_ORDER,
+  USAGE_FACETS,
+  type UsageFacet,
+  type UsageFacetOption,
+  type UsageFilters,
+  type UsageGroup,
+  type UsageMetric,
+  type UsageSeriesData,
+  type UsageSplit,
+} from "../shared/usage-data";
 
-/**
- * Metered draw across every project, agent and provider in the workspace.
- *
- * The figures below are SAMPLE DATA. Real usage is per-session today —
- * SessionMetricsReadModel carries model, provider, tokens and cost, but only
- * for the live runtime — so a cross-session aggregate needs a server-side
- * sweep that does not exist yet. Swapping `RECORDS` and `SESSIONS` for a
- * fetch is the whole of that change; nothing below them knows the difference.
- */
+type Facet = UsageFacet;
+type Metric = UsageMetric;
+type Group = UsageGroup;
+type Filters = UsageFilters;
+type Days = 7 | 30 | 90;
+type State = { filters: Filters; range: Days; metric: Metric; split: UsageSplit };
+type Dimensions = Record<Facet, UsageFacetOption[]>;
+type Series = UsageSeriesData & { color: string };
 
-type Record = {
-  project: string;
-  provider: string;
-  model: string;
-  agent: string;
-  sessions: number;
-  input: number;
-  output: number;
-  cost: number;
-  cache: number;
-};
-
-const RECORDS: Record[] = [
-  {
-    project: "Pylon",
-    provider: "Anthropic",
-    model: "claude-opus-5",
-    agent: "Advisor",
-    sessions: 38,
-    input: 2180000,
-    output: 604000,
-    cost: 25.42,
-    cache: 51.4,
-  },
-  {
-    project: "Pylon",
-    provider: "OpenAI",
-    model: "gpt-5.2",
-    agent: "Scout",
-    sessions: 24,
-    input: 1420000,
-    output: 418000,
-    cost: 20.83,
-    cache: 38.7,
-  },
-  {
-    project: "Pylon",
-    provider: "Anthropic",
-    model: "claude-sonnet-5",
-    agent: "Grunt",
-    sessions: 13,
-    input: 704000,
-    output: 272000,
-    cost: 7.84,
-    cache: 45.2,
-  },
-  {
-    project: "pi-coding-agent",
-    provider: "OpenAI",
-    model: "gpt-5.2",
-    agent: "Main agent",
-    sessions: 16,
-    input: 680000,
-    output: 156000,
-    cost: 6.44,
-    cache: 41.8,
-  },
-  {
-    project: "pi-coding-agent",
-    provider: "Google",
-    model: "gemini-3.1-pro",
-    agent: "Private agents",
-    sessions: 11,
-    input: 682000,
-    output: 174000,
-    cost: 5.92,
-    cache: 29.1,
-  },
-  {
-    project: "Continuity",
-    provider: "Anthropic",
-    model: "claude-sonnet-5",
-    agent: "Scout",
-    sessions: 7,
-    input: 328000,
-    output: 88000,
-    cost: 2.65,
-    cache: 51.6,
-  },
-  {
-    project: "Continuity",
-    provider: "Anthropic",
-    model: "claude-haiku-4-5",
-    agent: "Grunt",
-    sessions: 5,
-    input: 236000,
-    output: 84000,
-    cost: 2.44,
-    cache: 39.6,
-  },
-  {
-    project: "Helios",
-    provider: "Google",
-    model: "gemini-3.1-pro",
-    agent: "Private agents",
-    sessions: 5,
-    input: 246000,
-    output: 62000,
-    cost: 2.02,
-    cache: 31.3,
-  },
-  {
-    project: "Helios",
-    provider: "Anthropic",
-    model: "claude-opus-5",
-    agent: "Advisor",
-    sessions: 3,
-    input: 154000,
-    output: 46000,
-    cost: 1.26,
-    cache: 35.5,
-  },
-];
-
-type SessionRecord = Omit<Record, "sessions" | "cache"> & { title: string; minutes: number; daysAgo: number };
-
-/** A top-N subset rather than a breakdown, so it need not sum to the total. */
-const SESSIONS: SessionRecord[] = [
-  {
-    title: "Refactor the advisor budget guard",
-    project: "Pylon",
-    provider: "Anthropic",
-    model: "claude-opus-5",
-    agent: "Advisor",
-    input: 412000,
-    output: 96000,
-    cost: 4.82,
-    minutes: 74,
-    daysAgo: 1,
-  },
-  {
-    title: "Migrate the worktree handoff path",
-    project: "Pylon",
-    provider: "OpenAI",
-    model: "gpt-5.2",
-    agent: "Scout",
-    input: 366000,
-    output: 88000,
-    cost: 4.11,
-    minutes: 96,
-    daysAgo: 3,
-  },
-  {
-    title: "Rebuild the inspector prototypes",
-    project: "Pylon",
-    provider: "Anthropic",
-    model: "claude-opus-5",
-    agent: "Advisor",
-    input: 298000,
-    output: 132000,
-    cost: 3.94,
-    minutes: 128,
-    daysAgo: 2,
-  },
-  {
-    title: "Trace the sieve rollover regression",
-    project: "Pylon",
-    provider: "Anthropic",
-    model: "claude-sonnet-5",
-    agent: "Grunt",
-    input: 244000,
-    output: 71000,
-    cost: 2.18,
-    minutes: 41,
-    daysAgo: 6,
-  },
-  {
-    title: "Port the extension loader to Pi",
-    project: "pi-coding-agent",
-    provider: "OpenAI",
-    model: "gpt-5.2",
-    agent: "Main agent",
-    input: 208000,
-    output: 54000,
-    cost: 1.96,
-    minutes: 63,
-    daysAgo: 5,
-  },
-  {
-    title: "Survey the papercut backlog",
-    project: "pi-coding-agent",
-    provider: "Google",
-    model: "gemini-3.1-pro",
-    agent: "Private agents",
-    input: 186000,
-    output: 48000,
-    cost: 1.62,
-    minutes: 37,
-    daysAgo: 12,
-  },
-  {
-    title: "Wire memory activation into run",
-    project: "Continuity",
-    provider: "Anthropic",
-    model: "claude-sonnet-5",
-    agent: "Scout",
-    input: 154000,
-    output: 42000,
-    cost: 1.31,
-    minutes: 52,
-    daysAgo: 9,
-  },
-  {
-    title: "Audit the browser sandbox flags",
-    project: "Helios",
-    provider: "Google",
-    model: "gemini-3.1-pro",
-    agent: "Private agents",
-    input: 132000,
-    output: 31000,
-    cost: 1.08,
-    minutes: 29,
-    daysAgo: 21,
-  },
-];
-
-type Facet = "project" | "provider" | "model";
-type Metric = "total" | "input" | "output" | "cost";
-const FACETS: Facet[] = ["project", "provider", "model"];
+const FACETS = USAGE_FACETS;
 const RANGES = [
-  ["7", "7d"],
-  ["30", "30d"],
-  ["90", "90d"],
+  [7, "7d"],
+  [30, "30d"],
+  [90, "90d"],
 ] as const;
 const MEASURES: [Metric, string][] = [
   ["total", "Input + output"],
@@ -241,77 +43,35 @@ const MEASURES: [Metric, string][] = [
   ["output", "Output"],
   ["cost", "Cost"],
 ];
-const SPLITS = [
+const SPLITS: [UsageSplit, string][] = [
   ["none", "Combined"],
   ["provider", "By provider"],
   ["model", "By model"],
-] as const;
-
-const DAILY_SHAPE = [0.62, 0.78, 0.7, 0.89, 1.03, 0.84, 0.63, 0.94, 1.16, 1.08, 1.21, 1.39, 1.17, 1.24];
-/** Agents run in role order so a band keeps its reading whatever the filters do. */
-const AGENT_ORDER = ["Main agent", "Scout", "Grunt", "Advisor", "Private agents"];
-
-const unique = (key: keyof Record) => [...new Set(RECORDS.map(row => String(row[key])))];
-const DIMENSIONS: Record_<Facet, string[]> = {
-  project: unique("project"),
-  provider: unique("provider"),
-  model: unique("model"),
-};
-type Record_<K extends string, V> = { [key in K]: V };
-const AGENTS = [...AGENT_ORDER, ...unique("agent").filter(name => !AGENT_ORDER.includes(name))];
-
-/** Colours pin to a fixed order per dimension, so a provider keeps its colour. */
-function tone(kind: Facet | "agent", name: string): string {
-  const list = kind === "agent" ? AGENTS : DIMENSIONS[kind];
-  return `var(--c${(Math.max(0, list.indexOf(name)) % 5) + 1})`;
-}
+];
 
 const money = (value: number) => `$${value.toFixed(2)}`;
 const percent = (part: number, whole: number) => (whole ? (part / whole) * 100 : 0);
-
-type Group = { name: string; sessions: number; input: number; output: number; cost: number; cache: number };
-type Filters = { project: Set<string>; provider: Set<string>; model: Set<string> };
-type State = { filters: Filters; range: string; metric: Metric; split: string };
-
-function scopedRecords(state: State): Record[] {
-  const factor = state.range === "7" ? 0.28 : state.range === "90" ? 2.55 : 1;
-  return RECORDS.filter(row =>
-    FACETS.every(key => state.filters[key].size === 0 || state.filters[key].has(row[key])),
-  ).map(row => ({
-    ...row,
-    sessions: Math.max(1, Math.round(row.sessions * factor)),
-    input: Math.round(row.input * factor),
-    output: Math.round(row.output * factor),
-    cost: row.cost * factor,
-  }));
-}
-
-function aggregate(rows: Record[], key?: keyof Record): Group[] {
-  const groups = new Map<string, Group & { weighted: number }>();
-  for (const row of rows) {
-    const name = key ? String(row[key]) : "Total";
-    const item = groups.get(name) ?? { name, sessions: 0, input: 0, output: 0, cost: 0, cache: 0, weighted: 0 };
-    item.sessions += row.sessions;
-    item.input += row.input;
-    item.output += row.output;
-    item.cost += row.cost;
-    item.weighted += row.cache * row.input;
-    groups.set(name, item);
-  }
-  return [...groups.values()].map(item => ({ ...item, cache: item.input ? item.weighted / item.input : 0 }));
-}
-
-const EMPTY: Group = { name: "Total", sessions: 0, input: 0, output: 0, cost: 0, cache: 0 };
-const measureOf = (metric: Metric) => (row: { input: number; output: number; cost: number }) =>
-  metric === "input"
-    ? row.input
-    : metric === "output"
-      ? row.output
-      : metric === "cost"
-        ? row.cost
-        : row.input + row.output;
+const EMPTY: Group = {
+  value: "total",
+  name: "Total",
+  sessions: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  costKnown: true,
+  cache: 0,
+};
+const emptyFilters = (): Filters => ({ project: new Set(), provider: new Set(), model: new Set() });
 const formatMeasure = (metric: Metric) => (value: number) =>
   metric === "cost" ? money(value) : formatCompactNumber(value);
+
+/** Colours pin to a fixed order per dimension, so a provider keeps its colour. */
+function tone(kind: Facet | "agent", value: string, dimensions: Dimensions): string {
+  const list: readonly string[] = kind === "agent" ? USAGE_AGENT_ORDER : dimensions[kind].map(option => option.value);
+  return `var(--c${(Math.max(0, list.indexOf(value)) % 5) + 1})`;
+}
 
 /** Round the axis to a step a person would say out loud. */
 function axisScale(peak: number) {
@@ -320,59 +80,8 @@ function axisScale(peak: number) {
   return { step, steps: Math.max(1, Math.ceil(peak / step)) };
 }
 
-type Series = {
-  label: string;
-  amount: number;
-  dash: boolean;
-  color: string;
-  values: number[];
-  sessions: number;
-  cache: number;
-};
-
-function buildSeries(state: State): Series[] {
-  const paired = state.metric === "total";
-  const key = state.split === "none" ? undefined : (state.split as Facet);
-  const measure = measureOf(state.metric);
-  const groups = aggregate(scopedRecords(state), key).sort((a, b) => measure(b) - measure(a));
-  const curve = (amount: number, seed: number) =>
-    DAILY_SHAPE.map((shape, day) => (amount / DAILY_SHAPE.length) * shape * (1 + Math.sin((day + 1) * seed) * 0.055));
-  if (!paired)
-    return groups.map((group, index) => ({
-      label: group.name,
-      amount: measure(group),
-      dash: false,
-      color: key ? tone(key, group.name) : "var(--c1)",
-      values: curve(measure(group), index + 2),
-      sessions: group.sessions,
-      cache: group.cache,
-    }));
-  return groups.flatMap((group, index) =>
-    (
-      [
-        ["Input", group.input, false],
-        ["Output", group.output, true],
-      ] as const
-    ).map(([part, amount, dash], slot) => ({
-      label: key ? `${group.name} · ${part.toLowerCase()}` : part,
-      amount,
-      dash,
-      color: key ? tone(key, group.name) : `var(--c${slot + 1})`,
-      values: curve(amount, index + 2 + slot * 0.8),
-      sessions: group.sessions,
-      cache: group.cache,
-    })),
-  );
-}
-
-function dateTicks(range: string): string[] {
-  const span = Number(range);
-  const end = new Date();
-  return DAILY_SHAPE.map((_, index) => {
-    const day = new Date(end);
-    day.setDate(end.getDate() - Math.round(((DAILY_SHAPE.length - 1 - index) * span) / (DAILY_SHAPE.length - 1)));
-    return day.toLocaleDateString("en", { month: "short", day: "numeric" });
-  });
+function dateTick(day: string): string {
+  return new Date(`${day}T00:00:00.000Z`).toLocaleDateString("en", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /**
@@ -380,7 +89,7 @@ function dateTicks(range: string): string[] {
  * one CSS pixel — a fixed box gets scaled by the container, which would scale
  * the tick text with it.
  */
-function Chart({ series, range, metric }: { series: Series[]; range: string; metric: Metric }) {
+function Chart({ series, days, metric }: { series: Series[]; days: string[]; metric: Metric }) {
   const ref = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(760);
   useEffect(() => {
@@ -399,12 +108,11 @@ function Chart({ series, range, metric }: { series: Series[]; range: string; met
   const peak = Math.max(...series.flatMap(item => item.values), 1);
   const { step, steps } = axisScale(peak);
   const top = step * steps;
-  const count = series[0]?.values.length ?? DAILY_SHAPE.length;
-  const x = (index: number) => plot.left + (index * (plot.right - plot.left)) / (count - 1);
+  const count = Math.max(days.length, 1);
+  const x = (index: number) => plot.left + (index * (plot.right - plot.left)) / Math.max(1, count - 1);
   const y = (value: number) => plot.bottom - (value / top) * (plot.bottom - plot.top);
-  const stamps = dateTicks(range);
-  const anchors: { [index: number]: "start" | "end" } = { 0: "start", 13: "end" };
-
+  const labelIndexes = [...new Set([0, Math.round((count - 1) / 3), Math.round(((count - 1) * 2) / 3), count - 1])];
+  const anchors: { [index: number]: "start" | "end" } = { 0: "start", [count - 1]: "end" };
   return (
     <svg
       ref={ref}
@@ -414,8 +122,8 @@ function Chart({ series, range, metric }: { series: Series[]; range: string; met
       role="img"
       aria-label="Usage over time">
       {series.length === 0 ? (
-        <text className="tick" x={plot.left} y={110}>
-          No usage matches this scope.
+        <text className="chart-empty" x="50%" y={118} textAnchor="middle">
+          No draw in this range
         </text>
       ) : (
         <>
@@ -451,9 +159,9 @@ function Chart({ series, range, metric }: { series: Series[]; range: string; met
               </g>
             );
           })}
-          {[0, 4, 9, 13].map(index => (
+          {labelIndexes.map(index => (
             <text key={index} className="tick" x={x(index)} y={plot.labelY} textAnchor={anchors[index] ?? "middle"}>
-              {stamps[index]}
+              {days[index] ? dateTick(days[index]) : ""}
             </text>
           ))}
         </>
@@ -470,14 +178,16 @@ function Band({
   kind,
   groups,
   total,
+  dimensions,
   selected,
   onToggle,
 }: {
   kind: Facet | "agent";
   groups: Group[];
   total: number;
+  dimensions: Dimensions;
   selected?: Set<string>;
-  onToggle?: (name: string) => void;
+  onToggle?: (value: string) => void;
 }) {
   if (groups.length === 0)
     return (
@@ -495,13 +205,15 @@ function Band({
           const cells = Math.max(1, Math.round((share / 100) * BAND_CELLS));
           return (
             <button
-              key={row.name}
+              key={row.value}
               type="button"
-              style={{ "--seg": tone(kind, row.name), flex: `0 0 ${share.toFixed(2)}%` } as React.CSSProperties}
+              style={
+                { "--seg": tone(kind, row.value, dimensions), flex: `0 0 ${share.toFixed(2)}%` } as React.CSSProperties
+              }
               disabled={!onToggle}
-              aria-pressed={selected?.has(row.name) ?? false}
+              aria-pressed={selected?.has(row.value) ?? false}
               title={`${row.name} · ${money(row.cost)} · ${share.toFixed(1)}%`}
-              onClick={() => onToggle?.(row.name)}>
+              onClick={() => onToggle?.(row.value)}>
               <span className="sr-only">{`${row.name} ${money(row.cost)}`}</span>
               {Array.from({ length: cells }, (_, index) => (
                 <i key={index} />
@@ -512,7 +224,7 @@ function Band({
       </div>
       <div className="usage-band-key">
         {groups.map(row => (
-          <div key={row.name} style={{ "--seg": tone(kind, row.name) } as React.CSSProperties}>
+          <div key={row.value} style={{ "--seg": tone(kind, row.value, dimensions) } as React.CSSProperties}>
             <i />
             <b>{row.name}</b>
             <span>{`${money(row.cost)} · ${percent(row.cost, total).toFixed(1)}%`}</span>
@@ -523,7 +235,15 @@ function Band({
   );
 }
 
-function Facets({ state, onChange }: { state: State; onChange: (next: State) => void }) {
+function Facets({
+  state,
+  dimensions,
+  onChange,
+}: {
+  state: State;
+  dimensions: Dimensions;
+  onChange: (next: State) => void;
+}) {
   const setFilter = (kind: Facet, value: string) => {
     const next = new Set(state.filters[kind]);
     if (next.has(value)) next.delete(value);
@@ -535,10 +255,11 @@ function Facets({ state, onChange }: { state: State; onChange: (next: State) => 
       {FACETS.map(kind => {
         const chosen = [...state.filters[kind]];
         const fallback = `${kind[0].toUpperCase()}${kind.slice(1)}s`;
+        const chosenLabel = dimensions[kind].find(option => option.value === chosen[0])?.label ?? chosen[0];
         return (
           <details key={kind} className="usage-facet">
             <summary>
-              <span>{chosen.length === 1 ? chosen[0] : fallback}</span>
+              <span>{chosen.length === 1 ? chosenLabel : fallback}</span>
               {chosen.length > 1 && <span className="usage-facet-count">{chosen.length}</span>}
             </summary>
             <div className="usage-facet-menu">
@@ -550,17 +271,15 @@ function Facets({ state, onChange }: { state: State; onChange: (next: State) => 
                   Clear
                 </button>
               </div>
-              {DIMENSIONS[kind].map(value => (
-                <label key={value} className="usage-facet-option">
+              {dimensions[kind].map(option => (
+                <label key={option.value} className="usage-facet-option">
                   <input
                     type="checkbox"
-                    checked={state.filters[kind].has(value)}
-                    onChange={() => setFilter(kind, value)}
+                    checked={state.filters[kind].has(option.value)}
+                    onChange={() => setFilter(kind, option.value)}
                   />
-                  <span>{value}</span>
-                  <small>
-                    {RECORDS.filter(row => row[kind] === value).reduce((sum, row) => sum + row.sessions, 0)} sessions
-                  </small>
+                  <span>{option.label}</span>
+                  <small>{option.sessions} sessions</small>
                 </label>
               ))}
             </div>
@@ -571,94 +290,158 @@ function Facets({ state, onChange }: { state: State; onChange: (next: State) => 
   );
 }
 
-export function UsageView() {
-  const [state, setState] = useState<State>({
-    filters: { project: new Set(), provider: new Set(), model: new Set() },
-    range: "30",
-    metric: "total",
-    split: "none",
-  });
+type LoadState = {
+  snapshot?: UsageSnapshot;
+  snapshotRange?: Days;
+  requestedRange: Days;
+  loading: boolean;
+  error?: string;
+};
 
-  const data = useMemo(() => {
-    const rows = scopedRecords(state);
-    const measure = measureOf(state.metric);
-    const byMeasure = (a: Group, b: Group) => measure(b) - measure(a);
-    return {
-      total: aggregate(rows)[0] ?? EMPTY,
-      byProject: aggregate(rows, "project").sort(byMeasure),
-      byProvider: aggregate(rows, "provider").sort((a, b) => b.cost - a.cost),
-      byAgent: aggregate(rows, "agent").sort((a, b) => AGENTS.indexOf(a.name) - AGENTS.indexOf(b.name)),
-      byModel: aggregate(rows, "model").sort(byMeasure),
-      topSessions: SESSIONS.filter(
-        row =>
-          row.daysAgo <= Number(state.range) &&
-          FACETS.every(key => state.filters[key].size === 0 || state.filters[key].has(row[key])),
-      )
-        .sort((a, b) => measure(b) - measure(a))
-        .slice(0, 6),
-      series: buildSeries(state),
+export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: string) => void }) {
+  const live = useRuntimeStore();
+  const [state, setState] = useState<State>({ filters: emptyFilters(), range: 30, metric: "total", split: "none" });
+  const [load, setLoad] = useState<LoadState>({ requestedRange: 30, loading: true });
+  const [retry, setRetry] = useState(0);
+  const generation = live.runtime?.sessionGeneration;
+  const runtimeReady = live.runtime?.ready;
+  const assistantMessages = live.runtime?.metrics.assistantMessages;
+
+  useEffect(() => {
+    if (!runtimeReady || !generation) {
+      setLoad(current => ({
+        ...current,
+        requestedRange: state.range,
+        loading: false,
+        error: "Usage is available when the runtime is ready.",
+      }));
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setLoad(current => ({ ...current, requestedRange: state.range, loading: true, error: undefined }));
+    void runtimeStore
+      .usage({ days: state.range }, controller.signal)
+      .then(snapshot => {
+        if (!active) return;
+        setLoad({ snapshot, snapshotRange: state.range, requestedRange: state.range, loading: false });
+      })
+      .catch(cause => {
+        if (!active || controller.signal.aborted) return;
+        const message = cause instanceof Error ? cause.message : "Unable to load usage";
+        setLoad(current => ({ ...current, requestedRange: state.range, loading: false, error: message }));
+      });
+    return () => {
+      active = false;
+      controller.abort();
     };
-  }, [state]);
+  }, [assistantMessages, generation, retry, runtimeReady, state.range]);
 
-  const measure = measureOf(state.metric);
+  const snapshot = load.snapshotRange === state.range ? load.snapshot : undefined;
+  const records = snapshot?.records ?? [];
+  const colorDimensions = useMemo(() => usageFacetOptions(records, emptyFilters()), [records]);
+  const dimensions = useMemo(() => usageFacetOptions(records, state.filters), [records, state.filters]);
+  const data = useMemo(() => {
+    const rows = filterUsageRecords(records, state.filters);
+    const byMeasure = (left: Group, right: Group) =>
+      measureUsage(state.metric, right) - measureUsage(state.metric, left);
+    const days = snapshot ? usageDayKeys(snapshot) : [];
+    const series = buildUsageSeries(rows, days, state.metric, state.split).map(item => ({
+      ...item,
+      color: item.kind
+        ? tone(item.kind, item.value, colorDimensions)
+        : state.metric === "total"
+          ? `var(--c${item.dash ? 2 : 1})`
+          : "var(--c1)",
+    }));
+    return {
+      rows,
+      days,
+      total: groupUsage(rows)[0] ?? EMPTY,
+      byProject: groupUsage(rows, "project").sort(byMeasure),
+      byProvider: groupUsage(rows, "provider").sort((left, right) => right.cost - left.cost),
+      byAgent: groupUsage(rows, "agent").sort(
+        (left, right) =>
+          USAGE_AGENT_ORDER.findIndex(agent => agent === left.value) -
+          USAGE_AGENT_ORDER.findIndex(agent => agent === right.value),
+      ),
+      byModel: groupUsage(rows, "model").sort(byMeasure),
+      topSessions: topUsageSessions(rows, snapshot?.sessions ?? [], state.metric),
+      series,
+    };
+  }, [colorDimensions, records, snapshot, state.filters, state.metric, state.split]);
+
+  const measure = (value: Pick<Group, "input" | "output" | "cost">) => measureUsage(state.metric, value);
   const format = formatMeasure(state.metric);
   const { total } = data;
-  const chips = FACETS.flatMap(kind => [...state.filters[kind]].map(value => ({ kind, value })));
+  const chips = FACETS.flatMap(kind =>
+    [...state.filters[kind]].map(value => ({
+      kind,
+      value,
+      label: colorDimensions[kind].find(option => option.value === value)?.label ?? value,
+    })),
+  );
   const modelPeak = Math.max(...data.byModel.map(measure), 1);
-  const duration = (minutes: number) =>
-    minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+  const duration = (elapsedMs: number) => {
+    const minutes = Math.round(elapsedMs / 60_000);
+    if (!minutes) return "—";
+    return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
+  };
   const dropChip = (kind: Facet, value: string) => {
     const next = new Set(state.filters[kind]);
     next.delete(value);
     setState({ ...state, filters: { ...state.filters, [kind]: next } });
   };
-  const toggleProvider = (name: string) => {
+  const toggleProvider = (value: string) => {
     const next = new Set(state.filters.provider);
-    if (next.has(name)) next.delete(name);
-    else next.add(name);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
     setState({ ...state, filters: { ...state.filters, provider: next } });
   };
   const exportCsv = () => {
-    const header = ["project", "provider", "model", "agent", "sessions", "input", "output", "cache_pct", "est_cost"];
-    const body = scopedRecords(state).map(row =>
-      [
-        row.project,
-        row.provider,
-        row.model,
-        row.agent,
-        row.sessions,
-        row.input,
-        row.output,
-        row.cache,
-        row.cost.toFixed(2),
-      ].join(","),
-    );
-    const blob = new Blob([[header.join(","), ...body].join("\n")], { type: "text/csv" });
+    const blob = new Blob([usageCsv(data.rows)], { type: "text/csv;charset=utf-8" });
     const link = Object.assign(document.createElement("a"), {
       href: URL.createObjectURL(blob),
       download: "pylon-usage.csv",
     });
     link.click();
-    URL.revokeObjectURL(link.href);
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 0);
   };
+  const error = load.requestedRange === state.range ? load.error : undefined;
+  const diagnostics = snapshot?.diagnostics;
+  const partialHistory = Boolean(
+    diagnostics && (diagnostics.truncated || diagnostics.unreadableFiles || diagnostics.conflictingDuplicates),
+  );
+  const incompleteAttribution = Boolean(diagnostics?.unknownAttributionRecords);
+  const issued =
+    error && !snapshot
+      ? "Usage unavailable"
+      : load.loading
+        ? snapshot
+          ? "Refreshing usage"
+          : "Loading usage"
+        : partialHistory
+          ? "Partial history"
+          : incompleteAttribution
+            ? "Attribution incomplete"
+            : "Usage current";
 
   return (
     <div className="usage-sheet">
       <header className="usage-head">
         <div>
           <h1>Usage</h1>
-          <p>Metered draw across every project, agent and provider in this workspace.</p>
         </div>
         <div className="usage-issued">
-          Sample data
-          <br />
-          Estimated pricing
+          {/* {issued}
+          <br /> */}
+          {total.costKnown ? "Reported pricing" : "Partial pricing"}
         </div>
       </header>
 
       <section className="usage-scope" aria-label="Scope">
         <span className="section-kicker">Meter</span>
-        <Facets state={state} onChange={setState} />
+        <Facets state={state} dimensions={dimensions} onChange={setState} />
         <div className="usage-range" role="group" aria-label="Period">
           {RANGES.map(([value, label]) => (
             <button
@@ -673,27 +456,34 @@ export function UsageView() {
       </section>
 
       <div className="usage-chips">
-        {chips.length === 0 ? (
-          <span>Metering every project, provider and model.</span>
+        {error ? (
+          <span role="alert">
+            {error}{" "}
+            <button className="usage-clear" type="button" onClick={() => setRetry(value => value + 1)}>
+              Retry
+            </button>
+          </span>
+        ) : chips.length === 0 ? (
+          <span>
+            {load.loading && !snapshot ? "Loading metered usage…" : "Metering every project, provider and model."}
+          </span>
         ) : (
           <>
-            <span className="section-kicker">Metering</span>
+            <span className="usage-label">Metering</span>
             {chips.map(chip => (
               <button
                 key={`${chip.kind}:${chip.value}`}
                 className="usage-chip"
                 type="button"
                 onClick={() => dropChip(chip.kind, chip.value)}>
-                {chip.value}
+                {chip.label}
                 <span aria-hidden="true">×</span>
               </button>
             ))}
             <button
               className="usage-clear"
               type="button"
-              onClick={() =>
-                setState({ ...state, filters: { project: new Set(), provider: new Set(), model: new Set() } })
-              }>
+              onClick={() => setState({ ...state, filters: emptyFilters() })}>
               Clear all
             </button>
           </>
@@ -702,30 +492,31 @@ export function UsageView() {
 
       <section className="usage-hero">
         <div>
-          <span className="section-kicker">Total draw · {state.range} days</span>
+          <span className="usage-label">Total draw · {state.range} days</span>
           <div className="usage-total">
             {money(total.cost)}
-            <small>estimated</small>
+            <small>{total.costKnown ? "reported" : "partial"}</small>
           </div>
           <div className="usage-band-block">
             <div className="usage-band-title">
-              <span className="section-kicker">Draw by provider</span>
+              <span className="usage-band-name">Draw by provider</span>
               <em>Select a segment to meter that provider only</em>
             </div>
             <Band
               kind="provider"
               groups={data.byProvider}
               total={total.cost}
+              dimensions={colorDimensions}
               selected={state.filters.provider}
               onToggle={toggleProvider}
             />
           </div>
           <div className="usage-band-block">
             <div className="usage-band-title">
-              <span className="section-kicker">Draw by Pylon agent</span>
+              <span className="usage-band-name">Draw by Pylon agent</span>
               <em>Includes delegated subagent work</em>
             </div>
-            <Band kind="agent" groups={data.byAgent} total={total.cost} />
+            <Band kind="agent" groups={data.byAgent} total={total.cost} dimensions={colorDimensions} />
           </div>
         </div>
         <dl className="usage-figures">
@@ -761,7 +552,7 @@ export function UsageView() {
           <h2>Draw over time</h2>
           <div className="usage-controls">
             <div>
-              <span className="section-kicker">Measure</span>
+              <span className="usage-label">Measure</span>
               <span className="usage-segbar">
                 {MEASURES.map(([value, label]) => (
                   <button
@@ -775,7 +566,7 @@ export function UsageView() {
               </span>
             </div>
             <div>
-              <span className="section-kicker">Lines</span>
+              <span className="usage-label">Lines</span>
               <span className="usage-segbar">
                 {SPLITS.map(([value, label]) => (
                   <button
@@ -790,11 +581,11 @@ export function UsageView() {
             </div>
           </div>
         </div>
-        <Chart series={data.series} range={state.range} metric={state.metric} />
+        <Chart series={data.series} days={data.days} metric={state.metric} />
         <div className="usage-series">
           {data.series.length === 0 ? (
             <div>
-              <small>No usage matches this scope.</small>
+              <small>Widen the range, or clear a filter on the meter.</small>
             </div>
           ) : (
             data.series.map(item => (
@@ -809,6 +600,7 @@ export function UsageView() {
             ))
           )}
         </div>
+        <p className="usage-note">Daily buckets use UTC.</p>
       </section>
 
       <section className="usage-section">
@@ -837,11 +629,11 @@ export function UsageView() {
                 </tr>
               ) : (
                 data.byProject.map(row => (
-                  <tr key={row.name}>
+                  <tr key={row.value}>
                     <td>
                       <span
                         className="usage-cell-name"
-                        style={{ "--seg": tone("project", row.name) } as React.CSSProperties}>
+                        style={{ "--seg": tone("project", row.value, colorDimensions) } as React.CSSProperties}>
                         <i />
                         {row.name}
                       </span>
@@ -872,9 +664,9 @@ export function UsageView() {
             const lit = Math.round((measure(row) / modelPeak) * RANK_CELLS);
             return (
               <div
-                key={row.name}
+                key={row.value}
                 className="usage-rank"
-                style={{ "--seg": tone("model", row.name) } as React.CSSProperties}>
+                style={{ "--seg": tone("model", row.value, colorDimensions) } as React.CSSProperties}>
                 <div>
                   <b>{row.name}</b>
                   <span className="usage-rank-bar">
@@ -895,16 +687,25 @@ export function UsageView() {
           </div>
           {data.topSessions.map(row => (
             <div
-              key={row.title}
+              key={row.id}
               className="usage-session"
-              style={{ "--seg": tone("project", row.project) } as React.CSSProperties}>
+              style={{ "--seg": tone("project", row.projectId, colorDimensions) } as React.CSSProperties}
+              role={onSelectSession ? "button" : undefined}
+              tabIndex={onSelectSession ? 0 : undefined}
+              onClick={() => onSelectSession?.(row.id)}
+              onKeyDown={event => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectSession?.(row.id);
+                }
+              }}>
               <i />
               <strong>{row.title}</strong>
               <span>
                 <span>{row.project}</span>
                 <span>{row.model}</span>
                 <span>{row.agent}</span>
-                <span>{duration(row.minutes)}</span>
+                <span>{duration(row.elapsedMs)}</span>
               </span>
               <b>{format(measure(row))}</b>
             </div>

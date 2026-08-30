@@ -42,7 +42,7 @@ Ordinary untracked files are included; common credential paths such as `.env*`, 
 
 ### Session Titles
 
-After the first settled turn, Timeline launches one bounded title-only model request using short excerpts from the first prompt and final response. The request runs in the background, so it does not extend turn completion. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
+After the first settled turn, Timeline launches one bounded title-only model request using short excerpts from the first prompt and final response. An explicitly configured Timeline title model is used for both checkpoint and session titles; otherwise session titles use the active session model. The request runs in the background, so it does not extend turn completion. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
 
 ## Integrations
 

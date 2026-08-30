@@ -21,6 +21,7 @@ import type {
   PapercutListPage,
   RuntimeSnapshot,
   SessionListSnapshot,
+  UsageSnapshot,
   StateQLRowsPage,
   StateQLSnapshot,
   WorkspaceFileContent,
@@ -57,7 +58,8 @@ const delegatedAgentKinds = new Set(["advisor", "grunt", "repo_scout", "web_scou
 const workspaceModes = new Set(["checkout", "worktree", "local"]);
 const sessionWorkspaceModes = new Set(["worktree", "checkout", "local", "non-git"]);
 const inheritedWorkspaceModes = new Set(["inherit", "checkout", "worktree", "local"]);
-const toolStatuses = new Set(["running", "completed", "failed"]);
+const toolStatuses = new Set(["running", "completed", "failed", "attention"]);
+const delegatedRunStatuses = new Set(["running", "completed", "failed"]);
 const healthStatuses = new Set(["healthy", "degraded", "unavailable"]);
 const policyToggles = new Set(["inherit", "enabled", "disabled"]);
 const sieveModes = new Set(["enabled", "observe", "disabled"]);
@@ -65,6 +67,7 @@ const sieveLatestModes = new Set(["enabled", "observe"]);
 const sieveProjectionModes = new Set(["stable", "legacy", "standard-v2"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
+const usageAgents = new Set(["main", "advisor", "grunt", "scout", "private", "unknown"]);
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -481,6 +484,8 @@ function commandPackageError(value: Record<string, unknown>, type: string): stri
   }
   if (type === "installExtensionPackage" || type === "removeExtensionPackage") {
     if (value.scope !== "user" && value.scope !== "project") return "invalid extension package scope";
+    if (value.scope === "project" ? !identifier(value.projectId) : value.projectId !== undefined)
+      return "invalid extension package project";
     if (
       value.confirmed !== true ||
       typeof value.source !== "string" ||
@@ -783,6 +788,80 @@ export function isSessionListSnapshot(value: unknown): value is SessionListSnaps
       Array.isArray(project.sessions) &&
       project.sessions.length <= 100 &&
       project.sessions.every(session => validSessionSummary(session, project.id as string)),
+  );
+}
+
+export function isUsageSnapshot(value: unknown): value is UsageSnapshot {
+  if (
+    !record(value) ||
+    value.protocolVersion !== PROTOCOL_VERSION ||
+    !generation(value.sessionGeneration) ||
+    typeof value.generatedAt !== "string" ||
+    Number.isNaN(Date.parse(value.generatedAt)) ||
+    typeof value.fromInclusive !== "string" ||
+    Number.isNaN(Date.parse(value.fromInclusive)) ||
+    typeof value.toExclusive !== "string" ||
+    Number.isNaN(Date.parse(value.toExclusive)) ||
+    !Array.isArray(value.records) ||
+    value.records.length > 50_000 ||
+    !Array.isArray(value.sessions) ||
+    value.sessions.length > 10_000 ||
+    !record(value.diagnostics)
+  )
+    return false;
+  if (Date.parse(value.fromInclusive) >= Date.parse(value.toExclusive)) return false;
+  const metric = (item: unknown) => typeof item === "number" && Number.isFinite(item) && item >= 0;
+  if (
+    !value.records.every(
+      item =>
+        record(item) &&
+        typeof item.day === "string" &&
+        /^\d{4}-\d{2}-\d{2}$/.test(item.day) &&
+        identifier(item.sessionId) &&
+        identifier(item.projectId) &&
+        boundedString(item.projectLabel, 256) &&
+        boundedString(item.provider, 256) &&
+        boundedString(item.model, 256) &&
+        usageAgents.has(String(item.agent)) &&
+        Number.isSafeInteger(item.calls) &&
+        (item.calls as number) > 0 &&
+        metric(item.input) &&
+        metric(item.output) &&
+        metric(item.cacheRead) &&
+        metric(item.cacheWrite) &&
+        metric(item.cost) &&
+        typeof item.costKnown === "boolean",
+    )
+  )
+    return false;
+  if (
+    !value.sessions.every(
+      item =>
+        record(item) &&
+        identifier(item.id) &&
+        identifier(item.projectId) &&
+        boundedString(item.projectLabel, 256) &&
+        boundedString(item.title, 500) &&
+        typeof item.createdAt === "string" &&
+        !Number.isNaN(Date.parse(item.createdAt)) &&
+        typeof item.modifiedAt === "string" &&
+        !Number.isNaN(Date.parse(item.modifiedAt)) &&
+        Number.isSafeInteger(item.elapsedMs) &&
+        (item.elapsedMs as number) >= 0,
+    )
+  )
+    return false;
+  const diagnostics = value.diagnostics;
+  return (
+    Number.isSafeInteger(diagnostics.unreadableFiles) &&
+    (diagnostics.unreadableFiles as number) >= 0 &&
+    Number.isSafeInteger(diagnostics.conflictingDuplicates) &&
+    (diagnostics.conflictingDuplicates as number) >= 0 &&
+    Number.isSafeInteger(diagnostics.unknownCostRecords) &&
+    (diagnostics.unknownCostRecords as number) >= 0 &&
+    Number.isSafeInteger(diagnostics.unknownAttributionRecords) &&
+    (diagnostics.unknownAttributionRecords as number) >= 0 &&
+    typeof diagnostics.truncated === "boolean"
   );
 }
 
@@ -1113,7 +1192,7 @@ function validDelegatedRun(value: unknown): boolean {
     !delegatedAgentKinds.has(String(value.kind)) ||
     !Number.isSafeInteger(value.turn) ||
     (value.turn as number) < 0 ||
-    !toolStatuses.has(String(value.status)) ||
+    !delegatedRunStatuses.has(String(value.status)) ||
     !Array.isArray(value.activity)
   )
     return false;
@@ -1661,6 +1740,7 @@ function validSessionControls(controls: unknown): boolean {
       ))
   )
     return false;
+  const rate = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const model = (value: unknown) =>
     record(value) &&
     boundedString(value.provider) &&
@@ -1669,7 +1749,10 @@ function validSessionControls(controls: unknown): boolean {
     (value.thinkingLevels === undefined ||
       (Array.isArray(value.thinkingLevels) &&
         value.thinkingLevels.length <= 7 &&
-        value.thinkingLevels.every(level => thinkingLevels.has(String(level)))));
+        value.thinkingLevels.every(level => thinkingLevels.has(String(level))))) &&
+    (value.contextWindow === undefined ||
+      (Number.isSafeInteger(value.contextWindow) && (value.contextWindow as number) >= 0)) &&
+    (value.cost === undefined || (record(value.cost) && rate(value.cost.input) && rate(value.cost.output)));
   if (!controls.models.every(model) || (controls.model !== undefined && !model(controls.model))) return false;
   if (
     controls.pending !== undefined &&

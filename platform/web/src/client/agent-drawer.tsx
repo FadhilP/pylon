@@ -1,24 +1,15 @@
 import { IconArrowLeft, IconBotId, IconTool, IconX } from "@tabler/icons-react";
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  formatCacheHitRate,
-  formatCompactNumber,
-  formatToolDuration,
-  formatWorkDuration,
-  modelLabel,
-} from "../shared/format";
+import { formatCacheHitRate, formatCompactNumber, formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
-import { MarkdownContent, WorkTimer } from "./conversation-panel";
+import { CopyMessageButton, MarkdownContent, WorkTimer } from "./conversation-panel";
 import { thinkingLabel } from "./format";
 import { agentColor, type AgentColorMap } from "./agent-color";
-import { AnimatedDetails } from "./animated-details";
+import { referenceDefinition } from "./navigation";
+import { ToolCallGroup } from "./tool-calls";
 import { LedBar, OverviewOrb, useResponsiveUsageLedCells, type OverviewState } from "./overview-primitives";
-import {
-  aggregatePairedAgentTiming,
-  pairAgentActivity,
-  pairedAgentToolDuration,
-  pairedAgentToolStatus,
-} from "../shared/agent-activity";
+import { pairAgentActivity } from "../shared/agent-activity";
+import { pairedToolCallViews } from "../shared/tool-calls";
 
 type AgentRunStatus = DelegatedAgentRunReadModel["status"];
 
@@ -64,7 +55,7 @@ export function AgentPanel({
       className={`inspector agents-panel is-open${selected ? " has-selection" : ""}`}
       aria-labelledby="agents-title"
       style={selected ? agentColor(selected, colors) : undefined}>
-      <header>
+      <header className="inspector-header">
         <div>
           {selected && (
             <button
@@ -82,6 +73,7 @@ export function AgentPanel({
           <IconX size={17} />
         </button>
       </header>
+      <p className="inspector-description">{referenceDefinition("agents")?.description}</p>
       {selected ? (
         <AgentDetails run={selected} threadRuns={threadRuns} models={models} />
       ) : (
@@ -187,7 +179,6 @@ function AgentRunRow({
         <span className="agent-run-name">
           <AgentIdentity run={run} />
         </span>
-        <b className="agent-run-cost">{run.usage ? `$${run.usage.cost.toFixed(4)}` : "—"}</b>
         <span className="agent-run-task" title={request}>
           {request}
         </span>
@@ -199,8 +190,11 @@ function AgentRunRow({
             </span>
           )}
         </span>
-        <span className="agent-run-duration">{hasDuration ? <AgentDuration run={run} /> : <time>—</time>}</span>
       </div>
+      <span className="agent-run-values">
+        <b className="agent-run-cost">{run.usage ? `$${run.usage.cost.toFixed(4)}` : "—"}</b>
+        <span className="agent-run-duration">{hasDuration ? <AgentDuration run={run} /> : <time>—</time>}</span>
+      </span>
     </button>
   );
 }
@@ -260,35 +254,10 @@ function SpawnedAgentDetails({
         run={run}
         callsLabel={`${runs.length} ${runs.length === 1 ? "turn" : "turns"} · ${toolCount} ${toolCount === 1 ? "tool" : "tools"}`}
       />
-      <div className="agent-body agent-conversation-details">
-        <section className="agent-conversation" aria-label={`${agentLabel(run.kind)} conversation`}>
-          {runs.map(turn => (
-            <div className="agent-chat-turn" key={turn.id}>
-              {turn.request && (
-                <article className="agent-chat-message role-user">
-                  <MarkdownContent text={turn.request} />
-                </article>
-              )}
-              <AgentActivity run={turn} childRuntime now={toolNow} />
-              {(turn.response || turn.status === "running") && (
-                <article className={`agent-chat-message role-assistant is-${turn.status}`}>
-                  {turn.response && <MarkdownContent text={spawnResponse(turn)} />}
-                  <footer>
-                    {(turn.startedAt || turn.durationMs !== undefined) && (
-                      <WorkTimer
-                        key={turn.id}
-                        startedAt={turn.status === "running" ? turn.startedAt : undefined}
-                        durationMs={turn.status === "running" ? undefined : turn.durationMs}
-                        modelName={turn.modelName ? modelLabel(turn.modelName, models) : undefined}
-                        thinkingLevel={turn.thinkingLevel}
-                      />
-                    )}
-                  </footer>
-                </article>
-              )}
-            </div>
-          ))}
-        </section>
+      <div className="agent-body" aria-label={`${agentLabel(run.kind)} conversation`}>
+        {runs.map(turn => (
+          <AgentExchange key={turn.id} turn={turn} models={models} now={toolNow} childRuntime />
+        ))}
       </div>
     </div>
   );
@@ -302,21 +271,91 @@ function SpecialistDetails({ run, models }: { run: DelegatedAgentRunReadModel; m
       <AgentStat run={run} models={models} detail={run.startedAt ? `started ${clockTime(run.startedAt)}` : undefined} />
       <AgentUsage run={run} callsLabel={`${toolCount} tool ${toolCount === 1 ? "call" : "calls"}`} />
       <div className="agent-body">
-        {run.request && (
-          <section className="agent-section">
-            <h2>Request</h2>
-            <pre>{run.request}</pre>
-          </section>
-        )}
-        <AgentActivity run={run} now={toolNow} />
-        {run.response && (
-          <section className="agent-section agent-response">
-            <h2>Response</h2>
-            <MarkdownContent text={run.response} />
-          </section>
-        )}
+        <AgentExchange turn={run} models={models} now={toolNow} />
       </div>
     </div>
+  );
+}
+
+/** One handoff, read down a single rail: the brief that went out, the work it
+    took, and the outcome that came back — only the outcome is raised. */
+function AgentExchange({
+  turn,
+  models,
+  now,
+  childRuntime = false,
+}: {
+  turn: DelegatedAgentRunReadModel;
+  models: ModelOptionReadModel[];
+  now?: number;
+  childRuntime?: boolean;
+}) {
+  const running = turn.status === "running";
+  const response = childRuntime ? spawnResponse(turn) : turn.response;
+  // A specialist runs once, so its turn number says nothing the panel does not
+  // already say; a thread's turns are what the reader is counting.
+  const note = childRuntime ? `turn ${turn.turn}` : undefined;
+  const cost = turn.usage?.cost;
+  return (
+    <>
+      {turn.request && (
+        <article className="exchange-node">
+          <span className="exchange-rail">
+            <OverviewOrb state="neutral" label="request" />
+          </span>
+          <div className="exchange-card">
+            <header>
+              <span className="section-kicker">Request</span>
+              {note && <span className="exchange-note">{note}</span>}
+            </header>
+            <pre className="exchange-request">{turn.request}</pre>
+          </div>
+        </article>
+      )}
+      {(turn.activity.length > 0 || !childRuntime) && (
+        <article className="exchange-node">
+          <span className="exchange-rail">
+            <OverviewOrb state="step" label="tool activity" />
+          </span>
+          <AgentActivity run={turn} childRuntime={childRuntime} now={now} />
+        </article>
+      )}
+      {(response || running) && (
+        <article className="exchange-node is-outcome">
+          <span className="exchange-rail">
+            <OverviewOrb state={ORB_STATE[turn.status]} label={turn.status} />
+          </span>
+          <div className={`exchange-card is-${turn.status}`}>
+            <header>
+              <span className={`section-kicker is-${turn.status}`}>
+                {turn.status === "failed" ? "Failed" : "Response"}
+              </span>
+              {note && <span className="exchange-note">{note}</span>}
+              {response && !childRuntime && <CopyMessageButton text={response} label="Copy response" />}
+            </header>
+            {response && (
+              <div className={`exchange-body${running ? " is-running" : ""}`}>
+                <MarkdownContent text={response} />
+              </div>
+            )}
+            {(turn.startedAt || turn.durationMs !== undefined || cost !== undefined) && (
+              <div className="exchange-foot">
+                {(turn.startedAt || turn.durationMs !== undefined) && (
+                  <WorkTimer
+                    key={turn.id}
+                    startedAt={running ? turn.startedAt : undefined}
+                    durationMs={running ? undefined : turn.durationMs}
+                    modelName={turn.modelName ? modelLabel(turn.modelName, models) : undefined}
+                    thinkingLevel={turn.thinkingLevel}
+                  />
+                )}
+                {cost !== undefined && <span className="mono push">${cost.toFixed(4)}</span>}
+              </div>
+            )}
+          </div>
+        </article>
+      )}
+    </>
   );
 }
 
@@ -423,79 +462,16 @@ function AgentActivity({
   now?: number;
 }) {
   const tools = useMemo(() => pairAgentActivity(run.activity), [run.activity]);
-  const toolNames = [...new Set(tools.map(tool => tool.tool))];
   const runRunning = run.status === "running";
-  const timing = aggregatePairedAgentTiming(tools, runRunning, now);
-  const toolStatus = runRunning ? "running" : tools.some(tool => tool.failed) ? "failed" : "completed";
-  if (!tools.length)
+  const calls = pairedToolCallViews(tools, runRunning, now);
+  if (!calls.length)
     return childRuntime ? null : (
-      <div className="agent-activity-empty">
+      <div className="tool-call-empty">
         <IconTool size={16} />
         <span>No tool activity recorded.</span>
       </div>
     );
-  return (
-    <AnimatedDetails
-      className={`agent-tool-group is-${toolStatus}`}
-      summary={
-        <>
-          <IconTool size={15} />
-          <strong>
-            {tools.length} tool {tools.length === 1 ? "call" : "calls"}
-          </strong>
-          <span>
-            {toolNames.slice(0, 3).join(", ")}
-            {toolNames.length > 3 ? "…" : ""}
-          </span>
-          {timing && (
-            <time
-              className={`tool-group-duration is-${timing.status}`}
-              dateTime={`PT${timing.durationMs / 1_000}S`}
-              aria-label={`${timing.status} tool duration ${formatToolDuration(timing.durationMs)}`}>
-              {formatToolDuration(timing.durationMs)}
-            </time>
-          )}
-        </>
-      }>
-      <div className="agent-tools">
-        {tools.map((tool, index) => {
-          const status = pairedAgentToolStatus(tool, runRunning);
-          const durationMs = pairedAgentToolDuration(tool, runRunning, now);
-          return (
-            <details className={`tool-disclosure is-${status}`} key={tool.id ?? `${tool.tool}-${index}`}>
-              <summary>
-                <IconTool size={15} />
-                <span className="tool-summary-copy">
-                  <strong>{tool.tool}</strong>
-                  {tool.input && <code>{tool.input.replace(/\s+/g, " ").trim()}</code>}
-                </span>
-                <span className="tool-status">
-                  {durationMs === undefined ? (
-                    status
-                  ) : (
-                    <>
-                      <span className="sr-only">{status}, </span>
-                      <time dateTime={`PT${durationMs / 1_000}S`}>{formatToolDuration(durationMs)}</time>
-                    </>
-                  )}
-                </span>
-              </summary>
-              <div className="tool-details">
-                <section>
-                  <small>Input</small>
-                  <pre>{tool.input || "No input"}</pre>
-                </section>
-                <section>
-                  <small>Output</small>
-                  <pre>{tool.output || (status === "running" ? "Waiting for output…" : "No output")}</pre>
-                </section>
-              </div>
-            </details>
-          );
-        })}
-      </div>
-    </AnimatedDetails>
-  );
+  return <ToolCallGroup calls={calls} running={runRunning} />;
 }
 
 function AgentDuration({ run }: { run: DelegatedAgentRunReadModel }) {

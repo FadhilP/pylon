@@ -21,6 +21,8 @@ import type {
   PapercutStatusReadModel,
   SessionListQuery,
   SessionListSnapshot,
+  UsageQuery,
+  UsageSnapshot,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -113,6 +115,18 @@ export class ApiClient {
     if (input.limit) query.set("limit", String(input.limit));
     return json<SessionListSnapshot>(
       await fetch(`/api/v1/sessions${query.size ? `?${query}` : ""}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
+  }
+
+  async usage(input: UsageQuery = {}, signal?: AbortSignal): Promise<UsageSnapshot> {
+    const query = new URLSearchParams();
+    if (input.days) query.set("days", String(input.days));
+    return json<UsageSnapshot>(
+      await fetch(`/api/v1/usage${query.size ? `?${query}` : ""}`, {
         headers: { "x-pylon-tab-id": this.tabId },
         credentials: "same-origin",
         signal,

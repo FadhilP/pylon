@@ -36,6 +36,8 @@ type Details = {
   agentName?: string;
   startedAt?: string;
   advisorModel?: string;
+  provider?: string;
+  model?: string;
   durationMs: number;
   usage: AdvisorUsage;
   thinking?: string;
@@ -234,6 +236,8 @@ export default function advisorExtension(
       agentName,
       startedAt: new Date(started).toISOString(),
       advisorModel: model ? modelName(model) : undefined,
+      provider: model?.provider,
+      model: model?.id,
       thinking,
       durationMs: 0,
       usage: emptyUsage(),

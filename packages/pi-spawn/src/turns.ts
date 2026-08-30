@@ -31,6 +31,13 @@ export type TurnRequest = {
   background?: boolean;
 };
 
+function modelAttribution(ref: string | undefined): { provider: string; modelId: string } | undefined {
+  if (!ref) return;
+  const slash = ref.indexOf("/");
+  if (slash < 1 || slash === ref.length - 1) return;
+  return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) };
+}
+
 export function childArgs(kind: SpawnKind, path: string, policy?: AgentPolicy | SpawnMarker): string[] {
   const args = ["--mode", "rpc", "--session", path];
   if (kind === "session") {
@@ -87,7 +94,7 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
       agentName,
       startedAt: new Date(started).toISOString(),
       state: "running",
-      ...(model ? { model } : {}),
+      ...(model ? { model, ...modelAttribution(model) } : {}),
       ...(thinking ? { thinking } : {}),
       contextTokens,
       ...(contextLimit ? { contextLimit } : {}),
@@ -159,6 +166,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
         },
         signal,
       );
+      const effectiveModel = run.model ?? model;
+
       return {
         content: [{ type: "text" as const, text: runText(kind, id, agentName, run) }],
         details: {
@@ -167,7 +176,7 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
           agentName,
           startedAt: new Date(started).toISOString(),
           status: signal?.aborted ? "cancelled" : run.error ? "failed" : "completed",
-          model: run.model ?? model,
+          ...(effectiveModel ? { model: effectiveModel, ...modelAttribution(effectiveModel) } : {}),
           ...(background ? { background: true } : {}),
           ...((run.thinking ?? thinking) ? { thinking: run.thinking ?? thinking } : {}),
           durationMs: run.durationMs,

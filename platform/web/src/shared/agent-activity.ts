@@ -63,22 +63,3 @@ export function pairedAgentToolDuration(
   const startedAt = tool.startedAt ? Date.parse(tool.startedAt) : Number.NaN;
   return Number.isNaN(startedAt) ? tool.durationMs : Math.max(0, now - startedAt);
 }
-
-export function aggregatePairedAgentTiming(
-  tools: PairedAgentActivity[],
-  runRunning: boolean,
-  now = Date.now(),
-): { durationMs: number; status: AgentToolStatus } | undefined {
-  const running = tools.flatMap(tool => {
-    if (pairedAgentToolStatus(tool, runRunning) !== "running") return [];
-    const durationMs = pairedAgentToolDuration(tool, runRunning, now);
-    return durationMs === undefined ? [] : [{ durationMs, status: "running" as const }];
-  });
-  if (running.length) return running.reduce((longest, item) => (item.durationMs > longest.durationMs ? item : longest));
-  for (let index = tools.length - 1; index >= 0; index--) {
-    const tool = tools[index]!;
-    const durationMs = pairedAgentToolDuration(tool, runRunning, now);
-    if (durationMs !== undefined) return { durationMs, status: pairedAgentToolStatus(tool, runRunning) };
-  }
-  return undefined;
-}

@@ -65,7 +65,7 @@ export interface MessageReadModel {
     id: string;
     name: string;
     input?: string;
-    status: "running" | "completed" | "failed";
+    status: "running" | "completed" | "failed" | "attention";
     startedAt?: string;
     durationMs?: number;
   };
@@ -84,7 +84,7 @@ export interface ToolActivityReadModel {
   id: string;
   name: string;
   input?: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "attention";
   summary?: string;
   startedAt?: string;
   durationMs?: number;
@@ -222,6 +222,9 @@ export interface ModelOptionReadModel {
   id: string;
   name: string;
   thinkingLevels?: ThinkingLevelReadModel[];
+  contextWindow?: number;
+  /** USD per million tokens, as advertised by the provider. */
+  cost?: { input: number; output: number };
 }
 
 export interface SessionControlsReadModel {

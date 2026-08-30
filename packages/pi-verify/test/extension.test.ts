@@ -370,9 +370,11 @@ test("changed scope selects affected workspace packages and falls back for root 
     cwd,
     hasUI: false,
   });
-  assert.deepEqual(aggregate.details.results.map((result: any) => result.id), ["npm:test"]);
+  assert.deepEqual(
+    aggregate.details.results.map((result: any) => result.id),
+    ["npm:test"],
+  );
   assert.deepEqual(executions, [cwd]);
-
 
   executions.length = 0;
   await writeFile(join(cwd, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));

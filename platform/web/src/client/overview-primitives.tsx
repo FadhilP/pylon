@@ -2,7 +2,8 @@
    Keep these in sync with prototypes/panel-kit.css (.orb, .orb-cell, .slabel, .bar). */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-export type OverviewState = "neutral" | "done" | "running" | "failed" | "attention";
+/** "step" is a hollow orb: a marker on a rail that carries no state of its own. */
+export type OverviewState = "neutral" | "done" | "running" | "failed" | "attention" | "step" | "set";
 
 export function LedBar({
   a,

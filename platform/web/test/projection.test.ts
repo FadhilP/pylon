@@ -14,6 +14,8 @@ import {
   RuntimeProjection,
 } from "../src/server/pi/projections.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
+import { modelCatalogFacts } from "../src/server/pi/session-runtime.ts";
+import { isRuntimeSnapshot } from "../src/shared/protocol/validation.ts";
 
 function runtime(): RuntimeSnapshot {
   return {
@@ -565,6 +567,24 @@ test("history projection pairs bounded redacted tool inputs with results", () =>
     status: "completed",
   });
   assert.equal(messages[3]?.text, "done");
+});
+
+test("history projection marks mixed verify checks for attention", () => {
+  const messages = projectMessages([
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "verify-mixed", name: "verify", arguments: { scope: "changed" } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "verify-mixed",
+      toolName: "verify",
+      content: [{ type: "text", text: "Verification failed." }],
+      details: { state: "failed", results: [{ code: 0 }, { code: 1 }] },
+      isError: false,
+    },
+  ]);
+  assert.equal(messages.at(-1)?.tool?.status, "attention");
 });
 
 test("new attachment projection exposes metadata while legacy entries remain count-only", () => {
@@ -2221,4 +2241,60 @@ test("projection disposal cancels delayed stream publication", async () => {
   projection.dispose();
   await new Promise(resolve => setTimeout(resolve, 25));
   assert.deepEqual(published, ["message.start"]);
+});
+
+test("projection reads verification outcomes out of the verify result", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  const end = (id: string, state: string, results: Array<{ code: number | null }> = []) =>
+    projection.apply(
+      session({
+        type: "tool_execution_end",
+        toolCallId: `verify-${id}`,
+        toolName: "verify",
+        result: { content: [], details: { state, results } },
+        isError: false,
+      }),
+    );
+  end("failed", "failed", [{ code: 1 }, { code: 2 }]);
+  end("mixed", "failed", [{ code: 0 }, { code: 1 }]);
+  end("error", "error");
+  end("stale-failed", "stale", [{ code: 1 }]);
+  end("stale", "stale", [{ code: 0 }]);
+  end("passed", "passed", [{ code: 0 }, { code: 0 }]);
+  projection.apply(
+    session({ type: "tool_execution_end", toolCallId: "read", toolName: "read", result: {}, isError: false }),
+  );
+  assert.deepEqual(
+    published.filter(item => item.type === "tool.end").map(item => item.payload.status),
+    ["failed", "attention", "failed", "failed", "attention", "completed", "completed"],
+  );
+  projection.dispose();
+});
+
+test("model catalogue facts only survive when the protocol accepts them", () => {
+  assert.deepEqual(modelCatalogFacts({ contextWindow: 200_000, cost: { input: 15, output: 75 } }), {
+    contextWindow: 200_000,
+    cost: { input: 15, output: 75 },
+  });
+  // Placeholder and partial catalogue entries are dropped rather than sent and rejected.
+  assert.deepEqual(modelCatalogFacts({ contextWindow: -1, cost: { input: 3 } }), {});
+  assert.deepEqual(modelCatalogFacts({ contextWindow: "200000", cost: { input: -1, output: 5 } }), {});
+  assert.deepEqual(modelCatalogFacts({ contextWindow: 1_048_576.5 }), { contextWindow: 1_048_576 });
+  assert.deepEqual(modelCatalogFacts({}), {});
+
+  const snapshot = runtime();
+  snapshot.sessionControls = {
+    models: [
+      {
+        provider: "anthropic",
+        id: "opus",
+        name: "Opus",
+        thinkingLevels: ["off"],
+        ...modelCatalogFacts({ contextWindow: 200_000, cost: { input: 15, output: 75 } }),
+      },
+    ],
+    thinkingLevels: ["off"],
+  };
+  assert.equal(isRuntimeSnapshot(snapshot), true);
 });

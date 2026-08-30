@@ -103,6 +103,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.deepEqual(maxTokens, [8_000, 8_000]);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
+    assert.equal(results[0].details.provider, "test");
+    assert.equal(results[0].details.model, "model");
     assert.equal(Object.hasOwn(results[0].details, "failureMessage"), false);
     assert.deepEqual(results[0].details.duplicateTelemetry, { records: 0, chars: 0 });
     assert.match(prompts[1], /Prior guidance:\n\nadvice 1/);

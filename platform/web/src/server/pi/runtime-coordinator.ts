@@ -53,6 +53,8 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  UsageQuery,
+  UsageSnapshot,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -68,6 +70,7 @@ import type {
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
+import { PiExtensionManager } from "./pi-extension-manager.ts";
 import { createPylonModelRuntime } from "./runtime-factory.ts";
 import type {
   DeleteSessionInput,
@@ -497,6 +500,21 @@ export class RuntimeCoordinator implements PiDriver {
         }),
       });
       if (selectedId === this.selectedId && generation === this.generation) return result;
+    }
+    return result!;
+  }
+
+  async usage(input: UsageQuery = {}): Promise<UsageSnapshot> {
+    let result: UsageSnapshot | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const selected = this.selected();
+      const generation = this.generation;
+      result = await this.sessionIndex.usage(input, {
+        activeId: selected.id,
+        generation,
+        stateFor: sessionId => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
+      });
+      if (selected.id === this.selectedId && generation === this.generation) return result;
     }
     return result!;
   }
@@ -1505,11 +1523,25 @@ export class RuntimeCoordinator implements PiDriver {
     );
   }
   async installExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
-    return this.withExtensionLifecycle(
-      () =>
-        this.selected().driver.installExtensionPackage?.(input) ??
-        Promise.reject(new Error("native extensions are unavailable")),
-    );
+    return this.withExtensionLifecycle(async () => {
+      if (input.scope === "user") {
+        if (input.projectId) throw new Error("global extension packages cannot target a project");
+        await (this.selected().driver.installExtensionPackage?.(input) ??
+          Promise.reject(new Error("native extensions are unavailable")));
+        return this.replacement(false);
+      }
+      if (!input.projectId) throw new Error("project extension packages require a project");
+      const project = this.registry().get(input.projectId);
+      if (!project || project.archivedAt) throw new Error("project is unavailable");
+      const awake = [...this.slots.values()].find(slot => this.projectIdForSlot(slot) === project.id);
+      if (awake) {
+        await (awake.driver.installExtensionPackage?.(input) ??
+          Promise.reject(new Error("native extensions are unavailable")));
+      } else {
+        await new PiExtensionManager(project.cwd, this.baseTarget().agentDir).install(input.source, "project");
+      }
+      return this.replacement(false);
+    });
   }
   async removeExtensionPackage(input: ExtensionPackageInput): Promise<ReplacementResult> {
     return this.withExtensionLifecycle(

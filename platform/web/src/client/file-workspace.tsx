@@ -64,10 +64,15 @@ export function FileWorkspace({
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
+  const canCompare =
+    runtime?.workspace?.mode === "worktree" ||
+    runtime?.workspace?.mode === "checkout" ||
+    runtime?.workspace?.mode === "local";
   const sessionId = runtime?.sessionId ?? "";
   const [ui, setUi] = useState<FileWorkspaceState>(() => workspaceStateForSession(stateStore.current, sessionId));
   const currentUi = ui.sessionId === sessionId ? ui : workspaceStateForSession(stateStore.current, sessionId);
   const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
+  const [inventorySessionId, setInventorySessionId] = useState(sessionId);
   const [loadedContent, setLoadedContent] = useState<{
     key: string;
     value: WorkspaceFileContent | WorkspaceFileDiff;
@@ -107,6 +112,7 @@ export function FileWorkspace({
         controller.signal,
         (next, wasTruncated) => {
           if (revision !== requestRevision.current) return;
+          setInventorySessionId(sessionId);
           setFiles(next);
           setTruncated(wasTruncated);
         },
@@ -218,10 +224,14 @@ export function FileWorkspace({
     runtime?.workspace?.revision,
   ]);
 
+  const currentFiles = useMemo(
+    () => (inventorySessionId === sessionId ? files : []),
+    [files, inventorySessionId, sessionId],
+  );
   const matchingFiles = useMemo(() => {
     const normalized = currentUi.query.trim().toLocaleLowerCase();
-    return normalized ? files.filter(file => file.path.toLocaleLowerCase().includes(normalized)) : files;
-  }, [files, currentUi.query]);
+    return normalized ? currentFiles.filter(file => file.path.toLocaleLowerCase().includes(normalized)) : currentFiles;
+  }, [currentFiles, currentUi.query]);
   const visibleFiles = currentUi.tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
 
   const selectFile = (path: string, view: FileView) => updateUi(current => openFileTab(current, path, view));
@@ -268,10 +278,10 @@ export function FileWorkspace({
             </button>
           </nav>
           <div className="files-list">
-            {inventoryLoading && !files.length && !inventoryProgress && (
+            {inventoryLoading && !currentFiles.length && !inventoryProgress && (
               <span className="files-empty">Indexing workspace…</span>
             )}
-            {inventoryLoading && !files.length && inventoryProgress && (
+            {inventoryLoading && !currentFiles.length && inventoryProgress && (
               <span className="files-progress">
                 Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
               </span>
@@ -298,7 +308,9 @@ export function FileWorkspace({
                 onSelect={path => selectFile(path, "current")}
               />
             )}
-            {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
+            {inventorySessionId === sessionId && truncated && (
+              <span className="files-truncated">Showing first 10,000 files</span>
+            )}
           </div>
         </aside>
       )}
@@ -344,10 +356,12 @@ export function FileWorkspace({
                       </button>
                       <button
                         className={currentUi.view === "current" ? "is-active" : ""}
-                        onClick={() => setSelectedView("current")}>
+                        onClick={() =>
+                          setSelectedView(currentUi.view === "current" && canCompare ? "diff" : "current")
+                        }>
                         Working copy
                       </button>
-                      {runtime?.workspace?.mode === "worktree" && (
+                      {canCompare && (
                         <button
                           className={currentUi.view === "base" ? "is-active" : ""}
                           onClick={() => setSelectedView("base")}>

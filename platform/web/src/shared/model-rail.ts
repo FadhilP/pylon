@@ -10,23 +10,26 @@ export const THINKING_LEVEL_ORDER: readonly ThinkingLevelReadModel[] = [
   "max",
 ];
 
-function supportedLevels(model: ModelOptionReadModel): ThinkingLevelReadModel[] {
+/** The levels a model can actually run, in axis order. */
+export function modelThinkingLevels(model: ModelOptionReadModel): ThinkingLevelReadModel[] {
   const supported = new Set(model.thinkingLevels?.length ? model.thinkingLevels : ["off"]);
   return THINKING_LEVEL_ORDER.filter(level => supported.has(level));
 }
 
-export function matrixThinkingAxis(models: ModelOptionReadModel[]): ThinkingLevelReadModel[] {
-  const supported = new Set(models.flatMap(model => supportedLevels(model)));
+/** The shared axis every rail is drawn against: the levels some model supports. */
+export function railThinkingAxis(models: ModelOptionReadModel[]): ThinkingLevelReadModel[] {
+  const supported = new Set(models.flatMap(model => modelThinkingLevels(model)));
   const axis = THINKING_LEVEL_ORDER.filter(level => supported.has(level));
   return axis.length ? axis : ["off"];
 }
 
+/** The closest level a model supports, so moving between rails never lands on a gap. */
 export function nearestModelThinkingLevel(
   model: ModelOptionReadModel,
   axis: ThinkingLevelReadModel[],
   targetIndex: number,
 ): ThinkingLevelReadModel {
-  const available = supportedLevels(model);
+  const available = modelThinkingLevels(model);
   let nearest = available[0] ?? "off";
   let nearestDistance = Number.POSITIVE_INFINITY;
   for (const level of available) {
@@ -41,22 +44,8 @@ export function nearestModelThinkingLevel(
   return nearest;
 }
 
-export function matrixSelectionAtPoint(
-  models: ModelOptionReadModel[],
-  axis: ThinkingLevelReadModel[],
-  xRatio: number,
-  yRatio: number,
-): { modelIndex: number; model: ModelOptionReadModel; level: ThinkingLevelReadModel } | undefined {
-  if (!models.length || !axis.length) return undefined;
-  const x = Math.max(0, Math.min(1, xRatio));
-  const y = Math.max(0, Math.min(1, yRatio));
-  const modelIndex = Math.min(models.length - 1, Math.floor(y * models.length));
-  const targetIndex = Math.round(x * (axis.length - 1));
-  const model = models[modelIndex];
-  return { modelIndex, model, level: nearestModelThinkingLevel(model, axis, targetIndex) };
-}
-
-export function moveMatrixSelection(
+/** Up and down move between models; left and right move along one model's rail. */
+export function moveRailSelection(
   models: ModelOptionReadModel[],
   axis: ThinkingLevelReadModel[],
   modelIndex: number,
@@ -71,7 +60,7 @@ export function moveMatrixSelection(
     const targetIndex = Math.max(0, axis.indexOf(level));
     return { modelIndex: nextModelIndex, model, level: nearestModelThinkingLevel(model, axis, targetIndex) };
   }
-  const available = supportedLevels(model);
+  const available = modelThinkingLevels(model);
   const currentIndex = Math.max(0, available.indexOf(level));
   const nextLevelIndex = Math.max(0, Math.min(available.length - 1, currentIndex + levelOffset));
   return { modelIndex: nextModelIndex, model, level: available[nextLevelIndex] ?? "off" };

@@ -4,11 +4,12 @@ import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
+import { UsageHistoryAccumulator, type PersistedUsageAtom } from "./usage-history.ts";
 
-const VERSION = 1;
+const VERSION = 3;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 const CONCURRENCY = 16;
-const CACHE_FILE = "session-summaries-v1.json";
+const CACHE_FILE = "session-summaries-v3.json";
 const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 
 export interface SessionOwner {
@@ -51,6 +52,7 @@ interface CacheRecord {
   session: PersistedSessionInfo;
   userMessageCount: number;
   owner?: SessionOwner;
+  usage: PersistedUsageAtom[];
 }
 
 interface CacheFile {
@@ -61,6 +63,7 @@ interface CacheFile {
 export interface IndexedSession {
   session: SessionInfo;
   metadata: SessionFileMetadata;
+  usage: PersistedUsageAtom[];
 }
 
 function finite(value: unknown): value is number {
@@ -92,6 +95,40 @@ function parseFingerprint(value: unknown): Fingerprint | undefined {
     : undefined;
 }
 
+function parseUsageAtom(value: unknown): PersistedUsageAtom | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const item = value as Record<string, unknown>;
+  const tokens = (candidate: unknown) => Number.isSafeInteger(candidate) && Number(candidate) >= 0;
+  const cost = (candidate: unknown) =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 && candidate <= 1_000_000;
+  if (
+    !validText(item.identity, 64) ||
+    !/^[a-f0-9]{64}$/.test(item.identity) ||
+    !validText(item.signature, 64) ||
+    !/^[a-f0-9]{64}$/.test(item.signature) ||
+    !validText(item.sessionId, 128) ||
+    !item.sessionId ||
+    !validText(item.timestamp, 100) ||
+    Number.isNaN(Date.parse(item.timestamp)) ||
+    !validText(item.provider, 256) ||
+    !item.provider ||
+    !validText(item.model, 256) ||
+    !item.model ||
+    !["main", "advisor", "grunt", "scout", "private", "unknown"].includes(String(item.agent)) ||
+    !Number.isSafeInteger(item.calls) ||
+    Number(item.calls) < 1 ||
+    !tokens(item.input) ||
+    !tokens(item.output) ||
+    !tokens(item.cacheRead) ||
+    !tokens(item.cacheWrite) ||
+    !cost(item.cost) ||
+    typeof item.costKnown !== "boolean" ||
+    !["assistant", "compaction", "branch-summary", "delegated", "telemetry"].includes(String(item.source))
+  )
+    return;
+  return item as unknown as PersistedUsageAtom;
+}
+
 function parseRecord(value: unknown): CacheRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const item = value as Record<string, unknown>;
@@ -121,6 +158,9 @@ function parseRecord(value: unknown): CacheRecord | undefined {
     return;
   const owner = item.owner === undefined ? undefined : parseOwner(item.owner);
   if (item.owner !== undefined && !owner) return;
+  if (!Array.isArray(item.usage) || item.usage.length > 100_000) return;
+  const usage = item.usage.map(parseUsageAtom);
+  if (usage.some(atom => !atom)) return;
   return {
     fingerprint,
     session: {
@@ -137,6 +177,7 @@ function parseRecord(value: unknown): CacheRecord | undefined {
     },
     userMessageCount: Number(item.userMessageCount),
     ...(owner ? { owner } : {}),
+    usage: usage as PersistedUsageAtom[],
   };
 }
 
@@ -152,6 +193,7 @@ function hydrate(record: CacheRecord): IndexedSession {
       userMessageCount: record.userMessageCount,
       ...(record.owner ? { owner: record.owner } : {}),
     },
+    usage: record.usage,
   };
 }
 
@@ -265,6 +307,7 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
   let lastActivityTime: number | undefined;
   const allMessages: string[] = [];
   const owners: Array<SessionOwner | undefined> = [];
+  let usage: UsageHistoryAccumulator | undefined;
   try {
     const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
     for await (const line of lines) {
@@ -278,8 +321,10 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
       if (!header) {
         if (entry.type !== "session") return;
         header = entry;
+        usage = typeof entry.id === "string" && entry.id ? new UsageHistoryAccumulator(entry.id) : undefined;
         continue;
       }
+      usage?.accept(entry);
       if (entry.type === "session_info")
         name = typeof entry.name === "string" ? entry.name.trim() || undefined : undefined;
       if (entry.type === "custom" && entry.customType === "pi-spawn-session") owners.push(ownerMarker(entry.data));
@@ -332,6 +377,7 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
       },
       userMessageCount,
       ...(consistentOwner ? { owner: consistentOwner } : {}),
+      usage: usage?.result() ?? [],
     };
   } catch {
     return;
@@ -342,6 +388,7 @@ export class SessionSummaryCache {
   private readonly cachePath: string;
   private readonly sessionsRoot: string;
   private records = new Map<string, CacheRecord>();
+  private unreadablePaths = new Set<string>();
   private loaded = false;
 
   constructor(private readonly agentDir: string) {
@@ -356,12 +403,15 @@ export class SessionSummaryCache {
     const previous = this.records;
     const next = new Map<string, CacheRecord>();
     let changed = files.length !== previous.size;
+    const unreadablePaths = new Set<string>();
     const parsed = await mapLimit(files, async file => {
       const key = canonicalPath(file.path);
       const cached = previous.get(key);
       if (cached && sameFingerprint(cached.fingerprint, file.fingerprint)) return cached;
       changed = true;
-      return (await parseSession(file.path, file.fingerprint)) ?? cached;
+      const record = await parseSession(file.path, file.fingerprint);
+      if (!record) unreadablePaths.add(key);
+      return record ?? cached;
     });
     const byId = new Map<string, { key: string; record: CacheRecord }>();
     for (let index = 0; index < files.length; index++) {
@@ -380,8 +430,13 @@ export class SessionSummaryCache {
     }
     for (const { key, record } of byId.values()) next.set(key, record);
     this.records = next;
+    this.unreadablePaths = unreadablePaths;
     if (changed) await this.save();
     return [...next.values()].map(hydrate);
+  }
+
+  unreadableFileCount(): number {
+    return this.unreadablePaths.size;
   }
 
   async refresh(sessionId: string, path: string): Promise<IndexedSession | undefined> {
@@ -397,9 +452,11 @@ export class SessionSummaryCache {
       // Missing files remove the prior record for this session below.
     }
     if (exists && !record) {
+      this.unreadablePaths.add(key);
       const previous = this.records.get(key) ?? [...this.records.values()].find(item => item.session.id === sessionId);
       return previous ? hydrate(previous) : undefined;
     }
+    this.unreadablePaths.delete(key);
     for (const [candidate, value] of this.records) {
       if (candidate === key || value.session.id === sessionId || (record && value.session.id === record.session.id))
         this.records.delete(candidate);

@@ -30,44 +30,12 @@ export function groupConversationMessages(messages: MessageReadModel[]): Convers
   return blocks;
 }
 
-export function latestUniqueToolNames(tools: MessageReadModel[], limit = 3): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
-  for (let index = tools.length - 1; index >= 0 && names.length < Math.max(0, limit); index--) {
-    const name = tools[index]!.tool?.name || "Tool";
-    if (seen.has(name)) continue;
-    seen.add(name);
-    names.unshift(name);
-  }
-  return names;
-}
-
 export function toolElapsedDuration(tool: MessageReadModel, now = Date.now()): number | undefined {
   const activity = tool.tool;
   if (!activity) return undefined;
   if (activity.status !== "running") return activity.durationMs;
   const startedAt = activity.startedAt ? Date.parse(activity.startedAt) : Number.NaN;
   return Number.isNaN(startedAt) ? activity.durationMs : Math.max(0, now - startedAt);
-}
-
-export function aggregateToolTiming(
-  tools: MessageReadModel[],
-  now = Date.now(),
-): { durationMs: number; status: "running" | "completed" | "failed" } | undefined {
-  const running = tools.flatMap(tool => {
-    if (tool.tool?.status !== "running") return [];
-    const durationMs = toolElapsedDuration(tool, now);
-    return durationMs === undefined ? [] : [{ durationMs, status: "running" as const }];
-  });
-  if (running.length) return running.reduce((longest, item) => (item.durationMs > longest.durationMs ? item : longest));
-  for (let index = tools.length - 1; index >= 0; index--) {
-    const tool = tools[index]!;
-    const durationMs = toolElapsedDuration(tool, now);
-    if (durationMs !== undefined && tool.tool?.status && tool.tool.status !== "running") {
-      return { durationMs, status: tool.tool.status };
-    }
-  }
-  return undefined;
 }
 
 export function terminalActivityStatus(
@@ -78,10 +46,9 @@ export function terminalActivityStatus(
   return kind === "error" || info.willRetry === true ? "failed" : "completed";
 }
 
-function settledTool<T extends { status: "running" | "completed" | "failed"; startedAt?: string; durationMs?: number }>(
-  tool: T,
-  status: "completed" | "failed",
-): T {
+function settledTool<
+  T extends { status: "running" | "completed" | "failed" | "attention"; startedAt?: string; durationMs?: number },
+>(tool: T, status: "completed" | "failed"): T {
   if (tool.status !== "running") return tool;
   const startedAt = tool.startedAt ? Date.parse(tool.startedAt) : Number.NaN;
   return {

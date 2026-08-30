@@ -1,4 +1,5 @@
 import {
+  IconAlertTriangle,
   IconArrowBackUp,
   IconArrowUp,
   IconBotId,
@@ -15,9 +16,9 @@ import {
   IconPencil,
   IconPhoto,
   IconPlus,
+  IconRefresh,
   IconSearch,
   IconSquareFilled,
-  IconTool,
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
@@ -36,19 +37,16 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  aggregateToolTiming,
   groupConversationMessages,
   includeLatestLoadedTurn,
-  latestUniqueToolNames,
   liveToolMessage,
   reconcileToolActivity,
-  toolElapsedDuration,
   turnIdsInViewport,
 } from "../shared/transcript";
-import { formatCompactNumber, formatToolDuration, formatWorkDuration } from "../shared/format";
+import { messageToolCallViews } from "../shared/tool-calls";
+import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import {
@@ -75,8 +73,10 @@ import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../sh
 import { thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor, type AgentColorMap } from "./agent-color";
-import { matrixSelectionAtPoint, matrixThinkingAxis, moveMatrixSelection } from "../shared/model-matrix";
+import { modelThinkingLevels, moveRailSelection, railThinkingAxis } from "../shared/model-rail";
 import { AnimatedDetails } from "./animated-details";
+import { ToolCallGroup, ToolCallList } from "./tool-calls";
+import { RunSeam, SeamDisclosure, SeamLink } from "./run-seam";
 import { UiDialog } from "./ui-dialog";
 import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
 
@@ -137,6 +137,9 @@ interface PromptFork {
 interface PendingSessionView {
   phase: "preparing" | "failed";
   projectLabel: string;
+  cwd: string;
+  /** Live socket state: setup stalls when it drops, and the step says so. */
+  connected: boolean;
   error?: string;
   onRetry: () => void;
 }
@@ -177,6 +180,7 @@ export function ConversationPanel({
   onOpenLogin,
   onOpenCompaction,
   onOpenAttachment,
+  openAttachment,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
@@ -190,7 +194,8 @@ export function ConversationPanel({
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
   onOpenCompaction: (message: MessageReadModel) => void;
-  onOpenAttachment: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
+  onOpenAttachment: (attachments: MessageAttachmentReadModel[], index: number, trigger: HTMLButtonElement) => void;
+  openAttachment?: { sourceEntryId: string; index: number };
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -353,6 +358,11 @@ export function ConversationPanel({
         ?.id
     : undefined;
   const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
+  /** The prompt a failed request can be sent from again. */
+  const lastPrompt = useMemo(
+    () => [...visibleMessages].reverse().find(item => item.role === "user" && item.entryId),
+    [transcriptMessages],
+  );
   const userTurns = useMemo(
     () => visibleMessages.filter(item => item.role === "user" && item.entryId),
     [transcriptMessages],
@@ -714,6 +724,18 @@ export function ConversationPanel({
       attachmentCount: item.attachmentCount ?? 0,
     });
   };
+  /** Re-runs a prompt unchanged, which is what editing it without an edit does. */
+  const resendPrompt = async (item: MessageReadModel) => {
+    if (!item.entryId) return;
+    setSubmitting(true);
+    try {
+      await runtimeStore.editPrompt(item.entryId, item.text, [], false);
+    } catch {
+      // The store routes the failure through the application toast.
+    } finally {
+      setSubmitting(false);
+    }
+  };
   const submitEdit = async () => {
     if (!edit || (!edit.text.trim() && edit.images.length === 0)) return;
     setRailPage(undefined);
@@ -860,16 +882,16 @@ export function ConversationPanel({
               {conversationBlocks.map(block => {
                 if ("tools" in block) {
                   return (
-                    <ToolTurnGroup
+                    <ToolCallGroup
                       key={block.id}
-                      tools={block.tools}
+                      calls={messageToolCallViews(block.tools, toolNow)}
                       running={block.id === activeToolGroupId}
-                      now={toolNow}
                       onExpand={toolBlocksBeforeLaterPrompt.has(block.id) ? undefined : forceTranscriptBottom}
                     />
                   );
                 }
-                if (block.role === "tool") return <ToolDisclosure key={block.id} message={block} now={toolNow} />;
+                if (block.role === "tool")
+                  return <ToolCallList key={block.id} calls={messageToolCallViews([block], toolNow)} />;
                 if (block.compaction)
                   return <CompactionDisclosure key={block.id} message={block} onOpen={onOpenCompaction} />;
                 if (block.role === "system") return <SystemDisclosure key={block.id} message={block} />;
@@ -907,12 +929,17 @@ export function ConversationPanel({
                           onSubmit={() => void submitEdit()}
                         />
                       ) : (
-                        <>
-                          {block.text && <MarkdownContent text={block.text} />}
-                          <MessageAttachments message={block} onOpen={onOpenAttachment} />
-                        </>
+                        block.text && <MarkdownContent text={block.text} />
                       )}
                     </article>
+                    {!editing && (
+                      <MessageAttachments
+                        message={block}
+                        thumbnailReloadKey={`${live.connection}:${runtime?.sessionGeneration ?? ""}`}
+                        openAttachment={openAttachment}
+                        onOpen={onOpenAttachment}
+                      />
+                    )}
                     {block.role === "assistant" && Boolean(block.changedFiles?.length) && (
                       <ChangedFiles files={block.changedFiles!} entryId={block.entryId} />
                     )}
@@ -985,13 +1012,19 @@ export function ConversationPanel({
                 );
               })}
               {runtime.conversation.retry.active && (
-                <TranscriptActivity
-                  kind="retry"
-                  attempt={runtime.conversation.retry.attempt}
-                  maxAttempts={runtime.conversation.retry.maxAttempts}
+                <RunSeam
+                  state="attention"
+                  label="Retrying request"
+                  value={retryLabel(runtime.conversation.retry.attempt, runtime.conversation.retry.maxAttempts)}
                 />
               )}
-              {runtime.conversation.compaction.active && <TranscriptActivity kind="compaction" />}
+              {runtime.conversation.compaction.active && (
+                <RunSeam
+                  state="running"
+                  label="Compacting context"
+                  value={`${formatCompactNumber(runtime.metrics.contextTokens)} used · ${Math.round(runtime.metrics.contextPercent)}% of the window`}
+                />
+              )}
               {runtime.conversation.workStartedAt ? (
                 <WorkTimer
                   startedAt={runtime.conversation.workStartedAt}
@@ -1009,10 +1042,38 @@ export function ConversationPanel({
                 )
               )}
               {runtime.conversation.agentError && (
-                <div className="agent-error" role="alert">
-                  <strong>Model request failed</strong>
-                  <span>{runtime.conversation.agentError}</span>
-                </div>
+                <SeamDisclosure
+                  state="failed"
+                  label="Request failed"
+                  action="Error"
+                  actions={
+                    <>
+                      {lastPrompt && (
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="Send again"
+                          aria-label="Send again"
+                          disabled={submitting}
+                          onClick={() => void resendPrompt(lastPrompt)}>
+                          <IconRefresh size={14} />
+                        </button>
+                      )}
+                      {lastPrompt && (
+                        <button
+                          className="icon-button"
+                          type="button"
+                          title="Edit prompt"
+                          aria-label="Edit prompt"
+                          onClick={() => startEdit(lastPrompt)}>
+                          <IconPencil size={14} />
+                        </button>
+                      )}
+                      <CopyMessageButton text={runtime.conversation.agentError} label="Copy error" />
+                    </>
+                  }>
+                  <pre className="seam-error">{runtime.conversation.agentError}</pre>
+                </SeamDisclosure>
               )}
               {live.historyWindow?.laterCursor && (
                 <div className="history-loader is-later">
@@ -1113,14 +1174,8 @@ export function ConversationPanel({
       <RetainedUiDialog request={draftingOnly ? undefined : live.pendingUi} />
       {pendingSession && (
         <div className={`pending-session-draft-note is-${pendingSession.phase}`} role="status">
-          <strong>
-            {pendingSession.phase === "failed"
-              ? "Setup failed. Your draft is safe"
-              : "You can write while setup finishes"}
-          </strong>
-          <span>
-            {pendingSession.phase === "failed" ? "Retry without losing your text" : "Draft stays in this tab"}
-          </span>
+          <strong>{pendingSession.phase === "failed" ? "Setup failed" : "Write while setup finishes"}</strong>
+          <span>Draft is kept</span>
         </div>
       )}
       <form
@@ -1267,35 +1322,62 @@ export function ConversationPanel({
   );
 }
 
-function PendingSessionShell({ pending }: { pending: PendingSessionView }) {
-  if (pending.phase === "failed")
-    return (
-      <div className="pending-session-shell is-failed" role="alert">
-        <span className="pending-session-symbol" aria-hidden="true">
-          <IconX size={18} />
-        </span>
-        <h2>Workspace setup failed</h2>
-        <p>{pending.error || "Pylon could not prepare this session. Your draft is still available below."}</p>
-        <button type="button" onClick={pending.onRetry}>
-          Retry setup
-        </button>
-      </div>
-    );
+/** Counts up while setup runs, so the wait shows a real number. */
+function useElapsedSeconds(running: boolean) {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setSeconds(value => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  return seconds;
+}
 
+function elapsedLabel(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * What a new session can actually report while it opens: the project it is
+ * opening in, how long it has taken, and the one step that is running. The
+ * screen used to centre a scanning bar that measured nothing.
+ */
+function PendingSessionShell({ pending }: { pending: PendingSessionView }) {
+  const failed = pending.phase === "failed";
+  const elapsed = useElapsedSeconds(!failed);
+  const state = failed ? "is-failed" : pending.connected ? "is-running" : "is-attention";
+  const stateLabel = failed ? "failed" : pending.connected ? "working" : "stalled";
   return (
-    <div className="pending-session-shell is-preparing" role="status" aria-live="polite">
-      <span className="pending-session-symbol" aria-hidden="true">
-        <img src="/pylon-mark.svg" alt="" />
-      </span>
-      <h2>Preparing your workspace</h2>
-      <p>This session is open now. Start writing while Pylon creates the workspace and loads the runtime.</p>
-      <div className="pending-session-progress" aria-hidden="true">
-        <span />
+    <div className="pending-session-shell" role={failed ? "alert" : "status"} aria-live="polite">
+      <div className="pending-session-head">
+        <span className="pending-session-mark" aria-hidden="true">
+          <img src="/pylon-mark.svg" alt="" />
+        </span>
+        <div>
+          <span className="section-kicker">New session</span>
+          <h2>{pending.projectLabel}</h2>
+        </div>
+        {!failed && <time className="pending-session-elapsed">{elapsedLabel(elapsed)}</time>}
       </div>
-      <div className="pending-session-progress-copy">
-        <strong>Preparing {pending.projectLabel}</strong>
-        <span>Usually a few seconds</span>
+      <code className="pending-session-path">{pending.cwd}</code>
+      <div className="pending-session-step">
+        <span className={`status-orb ${state}`} aria-hidden="true" />
+        <strong>Loading the runtime</strong>
+        <span className={`pending-session-state ${state}`}>{stateLabel}</span>
       </div>
+      {failed ? (
+        <>
+          <p className="pending-session-error">{pending.error || "Pylon could not prepare this session."}</p>
+          <button type="button" onClick={pending.onRetry}>
+            Retry
+          </button>
+        </>
+      ) : (
+        <p className="pending-session-note">
+          {pending.connected ? "Your first message sends once the runtime is ready." : "Connection lost. Retrying."}
+        </p>
+      )}
     </div>
   );
 }
@@ -1423,11 +1505,37 @@ function PlusMenu({
   );
 }
 
-function matrixThinkingLabel(level: ThinkingLevelReadModel): string {
+function railThinkingLabel(level: ThinkingLevelReadModel): string {
   if (level === "minimal") return "Min";
   if (level === "medium") return "Med";
-  if (level === "xhigh") return "XH";
+  if (level === "xhigh") return "X-Hi";
   return thinkingLabel(level);
+}
+
+function contextLabel(tokens?: number): string {
+  if (!tokens) return "—";
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`;
+  return `${Math.round(tokens / 1_000)}K`;
+}
+
+/** USD per million tokens, input then output, trimmed of trailing zeros. */
+function priceLabel(cost?: { input: number; output: number }): string {
+  if (!cost) return "—";
+  const money = (value: number) =>
+    value < 1 ? value.toFixed(2).replace(/0$/, "") : String(Math.round(value * 100) / 100);
+  return `${money(cost.input)} / ${money(cost.output)}`;
+}
+
+/** Percentages that stop the rail's track at the first and last level the model runs. */
+function railTrackStyle(model: ModelOptionReadModel, axis: ThinkingLevelReadModel[]): CSSProperties {
+  const supported = modelThinkingLevels(model);
+  const half = 100 / axis.length / 2;
+  const first = Math.max(0, axis.indexOf(supported[0]));
+  const last = Math.max(0, axis.indexOf(supported[supported.length - 1]));
+  return {
+    "--rail-from": `${(first / axis.length) * 100 + half}%`,
+    "--rail-to": `${100 - ((last / axis.length) * 100 + half)}%`,
+  } as CSSProperties;
 }
 
 function ModelControl({
@@ -1449,17 +1557,13 @@ function ModelControl({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const matrixRef = useRef<HTMLDivElement>(null);
-  const matrixBodyRef = useRef<HTMLDivElement>(null);
-  const thumbRef = useRef<HTMLSpanElement>(null);
-  const dragStartRef = useRef<{ modelKey: string; level: ThinkingLevelReadModel } | undefined>(undefined);
+  const listRef = useRef<HTMLDivElement>(null);
   const applyingRef = useRef(false);
   const queuedSelectionRef = useRef<{ model: ModelOptionReadModel; level: ThinkingLevelReadModel } | undefined>(
     undefined,
   );
   const [modelKey, setModelKey] = useState("");
   const [level, setLevel] = useState<ThinkingLevelReadModel>("off");
-  const [dragging, setDragging] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
   const hiddenModels = useHiddenModels();
   const models = useMemo(() => {
@@ -1473,18 +1577,28 @@ function ModelControl({
     const query = modelQuery.trim().toLowerCase();
     if (!query) return base;
     const matched = base.filter(model => `${model.provider} ${model.id} ${model.name}`.toLowerCase().includes(query));
-    const selected = base.find(model => `${model.provider}/${model.id}` === modelKey);
+    const selected = base.find(model => toModelKey(model) === modelKey);
     if (selected && !matched.includes(selected)) matched.push(selected);
     return matched;
   }, [controls?.models, controls?.model, controls?.pending?.model, hiddenModels, modelKey, modelQuery]);
-  const axisLevels = useMemo(() => matrixThinkingAxis(models), [controls?.models, hiddenModels, modelQuery]);
+  const axisLevels = useMemo(() => railThinkingAxis(models), [models]);
+  /* The provider is the group heading, so it never repeats on a row. */
+  const groups = useMemo(() => {
+    const built: { provider: string; models: ModelOptionReadModel[] }[] = [];
+    for (const model of models) {
+      const last = built[built.length - 1];
+      if (last && last.provider === model.provider) last.models.push(model);
+      else built.push({ provider: model.provider, models: [model] });
+    }
+    return built;
+  }, [models]);
   const selectedModelIndex = Math.max(
     0,
-    models.findIndex(model => `${model.provider}/${model.id}` === modelKey),
+    models.findIndex(model => toModelKey(model) === modelKey),
   );
   const selectedModel = models[selectedModelIndex];
   const selectedLevelIndex = Math.max(0, axisLevels.indexOf(level));
-  const selectedCellId = `model-matrix-cell-${selectedModelIndex}-${selectedLevelIndex}`;
+  const selectedStopId = `model-stop-${selectedModelIndex}-${selectedLevelIndex}`;
 
   useEffect(() => {
     if (!open) {
@@ -1492,13 +1606,13 @@ function ModelControl({
       return;
     }
     const selectedControls = controls?.pending ?? controls;
-    const currentKey = selectedControls?.model ? `${selectedControls.model.provider}/${selectedControls.model.id}` : "";
-    const currentModel = models.find(model => `${model.provider}/${model.id}` === currentKey) ?? models[0];
+    const currentKey = selectedControls?.model ? toModelKey(selectedControls.model) : "";
+    const currentModel = models.find(model => toModelKey(model) === currentKey) ?? models[0];
     const availableLevels = currentModel?.thinkingLevels ?? [];
     const currentLevel = availableLevels.includes(selectedControls?.thinkingLevel ?? "off")
       ? (selectedControls?.thinkingLevel ?? "off")
       : (availableLevels[0] ?? "off");
-    setModelKey(currentModel ? `${currentModel.provider}/${currentModel.id}` : "");
+    setModelKey(currentModel ? toModelKey(currentModel) : "");
     setLevel(currentLevel);
     const pointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) onClose();
@@ -1511,41 +1625,16 @@ function ModelControl({
     };
     document.addEventListener("pointerdown", pointerDown);
     document.addEventListener("keydown", keyDown);
-    requestAnimationFrame(() => {
-      rootRef.current?.querySelector<HTMLElement>('[data-active-model="true"]')?.scrollIntoView({ block: "nearest" });
-      matrixRef.current?.focus();
-    });
+    requestAnimationFrame(() => listRef.current?.focus());
     return () => {
       document.removeEventListener("pointerdown", pointerDown);
       document.removeEventListener("keydown", keyDown);
     };
   }, [open]);
 
-  useLayoutEffect(() => {
-    if (!open || !thumbRef.current || !matrixBodyRef.current) return;
-    const positionThumb = () => {
-      const cell = document.getElementById(selectedCellId);
-      const thumb = thumbRef.current;
-      const body = matrixBodyRef.current;
-      if (!cell || !thumb || !body) return;
-      if (!dragging) cell.scrollIntoView({ block: "nearest", inline: "nearest" });
-      const cellRect = cell.getBoundingClientRect();
-      const bodyRect = body.getBoundingClientRect();
-      const transform = `translate3d(${cellRect.left - bodyRect.left + cellRect.width / 2}px, ${cellRect.top - bodyRect.top + cellRect.height / 2}px, 0) translate(-50%, -50%)`;
-      if (!thumb.dataset.positioned) {
-        thumb.style.transition = "none";
-        thumb.style.transform = transform;
-        thumb.dataset.positioned = "true";
-        requestAnimationFrame(() => thumb.style.removeProperty("transition"));
-        return;
-      }
-      thumb.style.transform = transform;
-    };
-    positionThumb();
-    const resize = new ResizeObserver(positionThumb);
-    resize.observe(matrixBodyRef.current);
-    return () => resize.disconnect();
-  }, [dragging, open, selectedCellId]);
+  useEffect(() => {
+    if (open) document.getElementById(selectedStopId)?.scrollIntoView({ block: "nearest" });
+  }, [open, selectedStopId]);
 
   const applySelection = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel) => {
     queuedSelectionRef.current = { model, level: nextLevel };
@@ -1567,32 +1656,10 @@ function ModelControl({
       }
     })();
   };
-  const select = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel, apply: boolean) => {
-    setModelKey(`${model.provider}/${model.id}`);
+  const select = (model: ModelOptionReadModel, nextLevel: ThinkingLevelReadModel) => {
+    setModelKey(toModelKey(model));
     setLevel(nextLevel);
-    if (apply) applySelection(model, nextLevel);
-  };
-  const selectionFromPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const body = matrixBodyRef.current;
-    if (!body) return undefined;
-    const rect = body.getBoundingClientRect();
-    const firstCell = document.getElementById("model-matrix-cell-0-0")?.getBoundingClientRect();
-    const lastCell = document.getElementById(`model-matrix-cell-0-${axisLevels.length - 1}`)?.getBoundingClientRect();
-    if (!firstCell || !lastCell) return undefined;
-    return matrixSelectionAtPoint(
-      models,
-      axisLevels,
-      (event.clientX - firstCell.left) / (lastCell.right - firstCell.left),
-      (event.clientY - rect.top) / rect.height,
-    );
-  };
-  const cancelDrag = () => {
-    const start = dragStartRef.current;
-    dragStartRef.current = undefined;
-    setDragging(false);
-    if (!start) return;
-    const model = models.find(item => `${item.provider}/${item.id}` === start.modelKey);
-    if (model) select(model, start.level, false);
+    applySelection(model, nextLevel);
   };
   const moveSelection = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const moves: Record<string, [number, number]> = {
@@ -1604,28 +1671,25 @@ function ModelControl({
     const move = moves[event.key];
     if (!move || !selectedModel) return;
     event.preventDefault();
-    const next = moveMatrixSelection(models, axisLevels, selectedModelIndex, level, move[0], move[1]);
+    const next = moveRailSelection(models, axisLevels, selectedModelIndex, level, move[0], move[1]);
     if (!next) return;
-    const nextKey = `${next.model.provider}/${next.model.id}`;
-    if (nextKey !== modelKey || next.level !== level) select(next.model, next.level, true);
+    if (toModelKey(next.model) !== modelKey || next.level !== level) select(next.model, next.level);
   };
 
+  const appliedLevel = controls?.pending?.thinkingLevel ?? controls?.thinkingLevel;
   return (
     <div ref={rootRef} className="composer-popover-root model-control">
       <button
         ref={triggerRef}
         className="model-trigger"
+        data-thinking={appliedLevel}
         type="button"
         disabled={disabled || !models.length}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={onToggle}>
-        <span>
-          {controls?.pending ? `Next: ${controls.pending.model.name}` : (controls?.model?.name ?? "No model")}
-        </span>
-        {(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel) && (
-          <small>{thinkingLabel(controls?.pending?.thinkingLevel ?? controls?.thinkingLevel ?? "off")}</small>
-        )}
+        <span>{(controls?.pending?.model ?? controls?.model)?.name ?? "No model"}</span>
+        {appliedLevel && <small>{railThinkingLabel(appliedLevel)}</small>}
         <IconChevronDown size={14} />
       </button>
       {open && (
@@ -1646,129 +1710,113 @@ function ModelControl({
               </button>
             )}
           </div>
+          {/* One rail per model, drawn only across the levels it runs, against a shared axis. */}
           <div
-            ref={matrixRef}
-            className={`model-matrix${dragging ? " is-dragging" : ""}`}
+            ref={listRef}
+            className="model-list"
             role="grid"
             tabIndex={0}
             aria-label="Model and thinking selector"
             aria-rowcount={models.length + 1}
             aria-colcount={axisLevels.length + 1}
-            aria-activedescendant={selectedCellId}
-            aria-describedby="model-matrix-help"
-            style={{ "--matrix-level-count": axisLevels.length } as CSSProperties}
+            aria-activedescendant={selectedStopId}
+            aria-describedby="model-rail-help"
+            style={{ "--rail-stop-count": axisLevels.length } as CSSProperties}
             onKeyDown={moveSelection}>
-            <div className="model-matrix-header" role="row">
+            <div className="model-axis" role="row">
               <span role="columnheader">Model</span>
-              {axisLevels.map(item => (
-                <span role="columnheader" key={item} title={thinkingLabel(item)}>
-                  {matrixThinkingLabel(item)}
-                </span>
-              ))}
+              <span role="columnheader">Context</span>
+              <span role="columnheader" title="US dollars per million tokens, input then output">
+                $/M in · out
+              </span>
+              <div className="model-rail-scale">
+                {axisLevels.map(item => (
+                  <span role="columnheader" key={item} title={thinkingLabel(item)}>
+                    {railThinkingLabel(item)}
+                  </span>
+                ))}
+              </div>
             </div>
             {!models.length && (
-              <p className="model-matrix-empty">
+              <p className="model-list-empty">
                 No matching models. Clear the filter or hide fewer models in Settings → Models.
               </p>
             )}
-            <div
-              ref={matrixBodyRef}
-              className="model-matrix-body"
-              role="rowgroup"
-              onPointerDown={event => {
-                if ((event.target as HTMLElement).closest(".model-matrix-name")) return;
-                if (event.pointerType === "mouse" && event.button !== 0) return;
-                event.preventDefault();
-                const next = selectionFromPointer(event);
-                if (!next) return;
-                dragStartRef.current = { modelKey, level };
-                setDragging(true);
-                matrixRef.current?.focus();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                select(next.model, next.level, false);
-              }}
-              onPointerMove={event => {
-                if (!dragStartRef.current) return;
-                const next = selectionFromPointer(event);
-                if (next) select(next.model, next.level, false);
-              }}
-              onPointerUp={event => {
-                if (!dragStartRef.current) return;
-                const next = selectionFromPointer(event);
-                const start = dragStartRef.current;
-                dragStartRef.current = undefined;
-                setDragging(false);
-                if (event.currentTarget.hasPointerCapture(event.pointerId))
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                if (!next) return;
-                select(next.model, next.level, false);
-                if (`${next.model.provider}/${next.model.id}` !== start.modelKey || next.level !== start.level)
-                  applySelection(next.model, next.level);
-              }}
-              onPointerCancel={cancelDrag}
-              onLostPointerCapture={() => {
-                if (dragStartRef.current) cancelDrag();
-              }}>
-              {models.map((model, modelIndex) => {
-                const key = `${model.provider}/${model.id}`;
-                return (
-                  <div className="model-matrix-row" role="row" key={key} data-active-model={key === modelKey}>
-                    <span className="model-matrix-name" role="rowheader">
-                      <strong>{model.name}</strong>
-                      <small>{model.provider}</small>
-                    </span>
-                    {axisLevels.map((item, axisIndex) => {
-                      const available = model.thinkingLevels?.includes(item) ?? item === "off";
-                      const active = key === modelKey && item === level;
-                      return (
-                        <span
-                          className={`model-matrix-cell${available ? "" : " is-unavailable"}${active ? " is-active" : ""}`}
-                          role="gridcell"
-                          id={`model-matrix-cell-${modelIndex}-${axisIndex}`}
-                          aria-selected={active}
-                          aria-disabled={!available}
-                          aria-label={
-                            available
-                              ? `${model.name}, ${thinkingLabel(item)} thinking`
-                              : `${model.name}, ${thinkingLabel(item)} thinking unavailable`
-                          }
-                          title={
-                            available
-                              ? `${model.name}, ${thinkingLabel(item)}`
-                              : `${thinkingLabel(item)} unavailable for ${model.name}`
-                          }
-                          key={item}
-                        />
-                      );
-                    })}
-                  </div>
-                );
-              })}
-              <span ref={thumbRef} className="model-matrix-thumb" aria-hidden="true" />
-            </div>
+            {groups.map(group => (
+              <div className="model-group" role="rowgroup" aria-label={group.provider} key={group.provider}>
+                <p className="model-group-name" role="presentation">
+                  {group.provider}
+                </p>
+                {group.models.map(model => {
+                  const key = toModelKey(model);
+                  const modelIndex = models.indexOf(model);
+                  const supported = modelThinkingLevels(model);
+                  return (
+                    <div className="model-row" role="row" key={key} data-active-model={key === modelKey}>
+                      <span className="model-row-name" role="rowheader">
+                        {model.name}
+                      </span>
+                      <span className="model-row-fact">{contextLabel(model.contextWindow)}</span>
+                      <span className="model-row-fact">{priceLabel(model.cost)}</span>
+                      <div className="model-rail" style={railTrackStyle(model, axisLevels)}>
+                        {axisLevels.map((item, axisIndex) => {
+                          const available = supported.includes(item);
+                          const active = key === modelKey && item === level;
+                          return (
+                            <span
+                              className={`model-stop${available ? "" : " is-empty"}${active ? " is-on" : ""}`}
+                              data-thinking={item}
+                              role="gridcell"
+                              id={`model-stop-${modelIndex}-${axisIndex}`}
+                              aria-selected={active}
+                              aria-disabled={!available}
+                              aria-label={
+                                available
+                                  ? `${model.name}, ${thinkingLabel(item)} thinking`
+                                  : `${model.name}, ${thinkingLabel(item)} thinking unavailable`
+                              }
+                              title={available ? `${model.name}, ${thinkingLabel(item)}` : undefined}
+                              onClick={available ? () => select(model, item) : undefined}
+                              key={item}>
+                              {available && (active ? <b>{railThinkingLabel(item)}</b> : <i />)}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
-          <div className="model-matrix-footer" aria-live="polite">
+          {controls?.pending && (
+            <p className="model-note">
+              <IconAlertTriangle size={13} />
+              Applies to your next message. This turn finishes on {controls.model?.name ?? "the current model"}.
+            </p>
+          )}
+          <div className="model-foot" aria-live="polite">
             <span>
-              <strong>{selectedModel?.name ?? "No model"}</strong> with <strong>{thinkingLabel(level)}</strong> thinking
+              <strong>{selectedModel?.name ?? "No model"}</strong>{" "}
+              {level === "off" ? "without thinking" : `with ${thinkingLabel(level)} thinking`}
             </span>
-            <small>
-              {dragging
-                ? "Release to apply"
-                : busy
-                  ? "Applying"
-                  : controls?.pending
-                    ? "Applies after current response"
-                    : "Current session"}
-            </small>
+            <small>{busy ? "Applying" : "Current session"}</small>
           </div>
-          <p className="model-matrix-help" id="model-matrix-help">
-            Drag across thinking and between models. Arrow keys move one option at a time.
+          <p className="model-help" id="model-rail-help">
+            Pick a stop to set model and thinking together. Arrow keys move one option at a time.
           </p>
         </div>
       )}
     </div>
   );
 }
+
+const comparableRailText = (value: string) =>
+  value
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.!?]+$/, "")
+    .toLocaleLowerCase();
 
 function HistoryRail({
   page,
@@ -1807,13 +1855,7 @@ function HistoryRail({
     const buttonRect = element.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
     const middle = buttonRect.top + buttonRect.height / 2 - containerRect.top;
-    setTooltip({
-      top: Math.max(52, Math.min(containerRect.height - 52, middle)),
-      preview,
-      label,
-      createdAt,
-      promptId,
-    });
+    setTooltip({ top: Math.max(52, Math.min(containerRect.height - 52, middle)), preview, label, createdAt, promptId });
   };
   const hideTooltip = () => setTooltip(undefined);
   return (
@@ -1846,7 +1888,7 @@ function HistoryRail({
           </button>
         )}
         {turns.map(turn => {
-          const timestamp = formatMessageTime(turn.createdAt);
+          const timestamp = formatMessageDateTime(turn.createdAt);
           const checkpoint = checkpoints.get(turn.promptId);
           const accessibleTitle = checkpoint ? `${checkpoint.title}. Prompt: ${turn.preview}` : turn.preview;
           return (
@@ -1900,36 +1942,33 @@ function HistoryRail({
           className="history-rail-tooltip"
           role="tooltip"
           aria-label={
-            tooltipCheckpoint
-              ? `Checkpoint: ${tooltipCheckpoint.title}. Prompt: ${tooltip.preview}`
-              : tooltip.label
+            tooltipCheckpoint ? `Checkpoint: ${tooltipCheckpoint.title}. Prompt: ${tooltip.preview}` : tooltip.label
           }
           style={{ top: `${tooltip.top}px` }}>
           <strong>{tooltipCheckpoint?.title ?? tooltip.preview}</strong>
-          {tooltipCheckpoint && tooltipCheckpoint.title !== tooltip.preview && (
+          {tooltipCheckpoint && comparableRailText(tooltipCheckpoint.title) !== comparableRailText(tooltip.preview) && (
             <span className="history-rail-prompt">Prompt: {tooltip.preview}</span>
           )}
-          {tooltipCheckpoint &&
-            (tooltipCheckpoint.changes || tooltipCheckpoint.verificationState !== "unverified") && (
-              <span className="history-rail-metrics">
-                {tooltipCheckpoint.changes && (
-                  <>
-                    <span>
-                      {formatCompactNumber(tooltipCheckpoint.changes.fileCount)}{" "}
-                      {tooltipCheckpoint.changes.fileCount === 1 ? "file · " : "files ·"}
-                    </span>
-                    <span className="is-addition">+{formatCompactNumber(tooltipCheckpoint.changes.additions)}</span>
-                    <span className="is-deletion">-{formatCompactNumber(tooltipCheckpoint.changes.deletions)}</span> ·
-                    {tooltipCheckpoint.changes.binaryCount > 0 && (
-                      <span>{formatCompactNumber(tooltipCheckpoint.changes.binaryCount)} binary · </span>
-                    )}
-                  </>
-                )}
-                {tooltipCheckpoint.verificationState === "passed" && <span className="is-verified">Verified</span>}
-                {tooltipCheckpoint.verificationState === "failed" && <span className="is-failed">Checks failed</span>}
-              </span>
-            )}
-          {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageTime(tooltip.createdAt)}</time>}
+          {tooltipCheckpoint && (tooltipCheckpoint.changes || tooltipCheckpoint.verificationState !== "unverified") && (
+            <span className="history-rail-metrics">
+              {tooltipCheckpoint.changes && (
+                <>
+                  <span>
+                    {formatCompactNumber(tooltipCheckpoint.changes.fileCount)}{" "}
+                    {tooltipCheckpoint.changes.fileCount === 1 ? "file · " : "files ·"}
+                  </span>
+                  <span className="is-addition">+{formatCompactNumber(tooltipCheckpoint.changes.additions)}</span>
+                  <span className="is-deletion">-{formatCompactNumber(tooltipCheckpoint.changes.deletions)}</span> ·
+                  {tooltipCheckpoint.changes.binaryCount > 0 && (
+                    <span>{formatCompactNumber(tooltipCheckpoint.changes.binaryCount)} binary · </span>
+                  )}
+                </>
+              )}
+              {tooltipCheckpoint.verificationState === "passed" && <span className="is-verified">Verified</span>}
+              {tooltipCheckpoint.verificationState === "failed" && <span className="is-failed">Checks failed</span>}
+            </span>
+          )}
+          {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageDateTime(tooltip.createdAt)}</time>}
         </div>
       )}
     </>
@@ -2247,7 +2286,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
   return <div className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
-function CopyMessageButton({ text, label }: { text: string; label: string }) {
+export function CopyMessageButton({ text, label }: { text: string; label: string }) {
   const [state, setState] = useState<"idle" | "copied" | "error">("idle");
   const copy = async () => {
     try {
@@ -2341,6 +2380,13 @@ function formatMessageTime(value?: string): string {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
 }
 
+function formatMessageDateTime(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
 function sameStringSet(left: Set<string>, right: Set<string>): boolean {
   return left.size === right.size && [...left].every(value => right.has(value));
 }
@@ -2405,47 +2451,55 @@ function TurnDiffView({ entryId }: { entryId: string }) {
 }
 
 function ChangedFiles({ files, entryId }: { files: NonNullable<MessageReadModel["changedFiles"]>; entryId?: string }) {
-  const [expanded, setExpanded] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
-  const visible = expanded ? files : files.slice(0, 3);
-  const remaining = files.length - 3;
+  const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
+  const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
   return (
-    <section className="changed-files" aria-label="Files changed in this turn">
-      {visible.map(file => (
-        <button
-          className="changed-file"
-          type="button"
-          key={file.path}
-          onClick={() =>
-            window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: { path: file.path, view: "diff" } }))
-          }>
-          <code>{file.path}</code>
-          <span>
-            {file.binary ? (
-              <small>binary</small>
-            ) : (
-              <>
-                <ins>+{file.additions ?? 0}</ins>
-                <del>-{file.deletions ?? 0}</del>
-              </>
-            )}
-          </span>
-        </button>
-      ))}
-      {files.length > 3 && (
-        <button type="button" onClick={() => setExpanded(current => !current)}>
-          {expanded ? "Show less" : `Show ${remaining} more`}
-          <IconChevronDown className={expanded ? "is-expanded" : ""} size={14} />
-        </button>
-      )}
+    <SeamDisclosure
+      state="set"
+      label={`${files.length} ${files.length === 1 ? "file" : "files"} changed`}
+      value={
+        <>
+          <ins>+{additions}</ins>
+          <del>-{deletions}</del>
+        </>
+      }
+      action="Files">
+      <div className="file-list" aria-label="Files changed in this turn">
+        {files.map(file => (
+          <button
+            className="file-row"
+            type="button"
+            key={file.path}
+            onClick={() =>
+              window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: { path: file.path, view: "diff" } }))
+            }>
+            <code>{file.path}</code>
+            <span>
+              {file.binary ? (
+                <small>binary</small>
+              ) : (
+                <>
+                  <ins>+{file.additions ?? 0}</ins>
+                  <del>-{file.deletions ?? 0}</del>
+                </>
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
       {entryId && (
-        <button type="button" aria-expanded={showDiff} onClick={() => setShowDiff(current => !current)}>
+        <button
+          className="seam-toggle"
+          type="button"
+          aria-expanded={showDiff}
+          onClick={() => setShowDiff(current => !current)}>
           {showDiff ? "Hide turn diff" : "Show turn diff"}
-          <IconChevronDown className={showDiff ? "is-expanded" : ""} size={14} />
+          <IconChevronDown className={showDiff ? "is-expanded" : ""} size={13} />
         </button>
       )}
       {showDiff && entryId && <TurnDiffView entryId={entryId} />}
-    </section>
+    </SeamDisclosure>
   );
 }
 
@@ -2565,59 +2619,16 @@ function agentKindLabel(kind: DelegatedAgentKind): string {
   return kind === "advisor" ? "Advisor" : "Grunt";
 }
 
-function ToolTurnGroup({
-  tools,
-  running,
-  now,
-  onExpand,
-}: {
-  tools: MessageReadModel[];
-  running: boolean;
-  now: number;
-  onExpand?: () => void;
-}) {
-  const names = latestUniqueToolNames(tools);
-  const timing = aggregateToolTiming(tools, now);
-  const timingLabel =
-    timing?.status === "running"
-      ? "Longest running tool duration"
-      : `Latest ${timing?.status ?? "completed"} tool duration`;
-  return (
-    <AnimatedDetails
-      className={`tool-turn-group${running ? " is-running" : ""}`}
-      summary={
-        <>
-          <IconTool size={15} />
-          <strong>
-            {tools.length} tool {tools.length === 1 ? "call" : "calls"}
-          </strong>
-          <span>{names.join(", ")}</span>
-          {timing && (
-            <time
-              className={`tool-group-duration is-${timing.status}`}
-              dateTime={`PT${timing.durationMs / 1_000}S`}
-              aria-label={`${timingLabel} ${formatToolDuration(timing.durationMs)}`}>
-              {formatToolDuration(timing.durationMs)}
-            </time>
-          )}
-        </>
-      }
-      onExpand={onExpand}>
-      <div className="tool-turn-items">
-        {tools.map(tool => (
-          <ToolDisclosure key={tool.id} message={tool} now={now} />
-        ))}
-      </div>
-    </AnimatedDetails>
-  );
-}
-
 function MessageAttachments({
   message,
+  thumbnailReloadKey,
+  openAttachment,
   onOpen,
 }: {
   message: MessageReadModel;
-  onOpen: (attachment: MessageAttachmentReadModel, trigger: HTMLButtonElement) => void;
+  thumbnailReloadKey: string;
+  openAttachment?: { sourceEntryId: string; index: number };
+  onOpen: (attachments: MessageAttachmentReadModel[], index: number, trigger: HTMLButtonElement) => void;
 }) {
   const attachments = message.attachments ?? [];
   const imageDescriptors = attachments.filter(attachment => attachment.kind === "image").length;
@@ -2628,14 +2639,17 @@ function MessageAttachments({
     <>
       {attachments.length > 0 && (
         <div className="message-attachment-list" aria-label={`${attachments.length} viewable attachments`}>
-          {attachments.map(attachment => (
+          {attachments.map((attachment, index) => (
             <button
               className="message-attachment-row"
               type="button"
               key={`${attachment.sourceEntryId}:${attachment.index}`}
-              onClick={event => onOpen(attachment, event.currentTarget)}
+              onClick={event => onOpen(attachments, index, event.currentTarget)}
+              aria-current={
+                openAttachment?.sourceEntryId === attachment.sourceEntryId && openAttachment.index === attachment.index
+              }
               aria-label={`Open ${attachment.name}`}>
-              <AttachmentThumbnail attachment={attachment} />
+              <AttachmentThumbnail attachment={attachment} reloadKey={thumbnailReloadKey} />
               <span className="message-attachment-copy">
                 <strong title={attachment.name}>{attachment.name}</strong>
                 <small>
@@ -2663,7 +2677,13 @@ function MessageAttachments({
   );
 }
 
-function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentReadModel }) {
+export function AttachmentThumbnail({
+  attachment,
+  reloadKey,
+}: {
+  attachment: MessageAttachmentReadModel;
+  reloadKey: string;
+}) {
   const elementRef = useRef<HTMLSpanElement>(null);
   const [source, setSource] = useState("");
 
@@ -2696,7 +2716,7 @@ function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentRead
       observer.disconnect();
       controller.abort();
     };
-  }, [attachment.kind, attachment.sourceEntryId, attachment.index]);
+  }, [attachment.kind, attachment.sourceEntryId, attachment.index, reloadKey]);
 
   return (
     <span ref={elementRef} className={`message-attachment-kind${source ? " has-preview" : ""}`}>
@@ -2711,34 +2731,9 @@ function AttachmentThumbnail({ attachment }: { attachment: MessageAttachmentRead
   );
 }
 
-function TranscriptActivity({
-  kind,
-  attempt,
-  maxAttempts,
-}: {
-  kind: "compaction" | "retry";
-  attempt?: number;
-  maxAttempts?: number;
-}) {
-  const retry = kind === "retry";
-  const attemptLabel = attempt ? `Attempt ${attempt}${maxAttempts ? ` of ${maxAttempts}` : ""}` : "Retrying";
-  return (
-    <section className={`transcript-activity is-${kind}`} role="status" aria-live="polite">
-      <span className="transcript-activity-glyph" aria-hidden="true">
-        <IconLoader2 size={16} />
-      </span>
-      <span className="transcript-activity-copy">
-        <strong>{retry ? "Retrying model request" : "Compacting context"}</strong>
-        <span>
-          {retry
-            ? `${attempt ? `${attemptLabel}. ` : ""}The previous request failed temporarily.`
-            : "Summarizing earlier messages. The conversation will continue automatically."}
-        </span>
-      </span>
-      <span className="transcript-activity-meta">{retry ? attemptLabel : "Working"}</span>
-      <span className="transcript-activity-progress" aria-hidden="true" />
-    </section>
-  );
+function retryLabel(attempt?: number, maxAttempts?: number): string {
+  if (!attempt) return "retrying";
+  return `attempt ${attempt}${maxAttempts ? ` of ${maxAttempts}` : ""}`;
 }
 
 function CompactionDisclosure({
@@ -2749,36 +2744,30 @@ function CompactionDisclosure({
   onOpen: (message: MessageReadModel) => void;
 }) {
   const compaction = message.compaction!;
-  const timestamp = formatMessageTime(message.createdAt);
   const facts = [
-    `~${formatCompactNumber(compaction.contextAfterTokens)} tokens after`,
-    compaction.sourceEntryCount !== undefined ? `${compaction.sourceEntryCount.toLocaleString()} source entries` : "",
+    compaction.contextBeforeTokens === undefined
+      ? `${formatCompactNumber(compaction.contextAfterTokens)} after`
+      : `${formatCompactNumber(compaction.contextBeforeTokens)} → ${formatCompactNumber(compaction.contextAfterTokens)}`,
+    formatMessageTime(message.createdAt),
   ]
     .filter(Boolean)
     .join(" · ");
   return (
-    <button className="compaction-disclosure" type="button" onClick={() => onOpen(message)}>
-      <span className="compaction-disclosure-chevron" aria-hidden="true">
-        <IconChevronDown size={14} />
-      </span>
-      <span className="compaction-disclosure-title">
-        <strong>Context compacted</strong>
-        <span>{facts} · View details</span>
-      </span>
-      {timestamp && <time dateTime={message.createdAt}>{timestamp}</time>}
-    </button>
+    <SeamLink
+      state="neutral"
+      label="Context compacted"
+      value={facts}
+      action="Details"
+      onClick={() => onOpen(message)}
+    />
   );
 }
 
 function SystemDisclosure({ message }: { message: MessageReadModel }) {
   return (
-    <details className="system-disclosure">
-      <summary>
-        <strong>System context</strong>
-        {message.systemSource && <span>{message.systemSource}</span>}
-      </summary>
-      <p>{message.text}</p>
-    </details>
+    <SeamDisclosure state="neutral" label="System context" value={message.systemSource} action="Text">
+      <pre className="seam-text">{message.text}</pre>
+    </SeamDisclosure>
   );
 }
 
@@ -2891,47 +2880,6 @@ function fileBase64(file: File): Promise<string> {
     reader.onload = () => resolve(String(reader.result).split(",", 2)[1] ?? "");
     reader.readAsDataURL(file);
   });
-}
-
-function ToolDisclosure({ message, now }: { message: MessageReadModel; now: number }) {
-  const name = message.tool?.name || "Tool";
-  const status = message.tool?.status || "completed";
-  const input = message.tool?.input;
-  const output = message.text;
-  const inputPreview = input?.replace(/\s+/g, " ").trim();
-  const durationMs = toolElapsedDuration(message, now);
-
-  return (
-    <details className={`tool-disclosure is-${status}`}>
-      <summary>
-        <IconTool size={15} />
-        <span className="tool-summary-copy">
-          <strong>{name}</strong>
-          {inputPreview && <code>{inputPreview}</code>}
-        </span>
-        <span className="tool-status">
-          {durationMs === undefined ? (
-            status
-          ) : (
-            <>
-              <span className="sr-only">{status}, </span>
-              <time dateTime={`PT${durationMs / 1_000}S`}>{formatToolDuration(durationMs)}</time>
-            </>
-          )}
-        </span>
-      </summary>
-      <div className="tool-details">
-        <section>
-          <small>Input</small>
-          <pre>{input || "No input"}</pre>
-        </section>
-        <section>
-          <small>Output</small>
-          <pre>{output || (status === "running" ? "Waiting for output…" : "No output")}</pre>
-        </section>
-      </div>
-    </details>
-  );
 }
 
 function ExtensionUiSurface({ runtime }: { runtime: NonNullable<RuntimeStoreSnapshot["runtime"]> }) {

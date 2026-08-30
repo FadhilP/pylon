@@ -411,7 +411,14 @@ export default function timelineExtension(
       })(),
     );
   });
-  type ModelCall = { eventId: string; started: number; request: string; result: string };
+  type ModelCall = {
+    eventId: string;
+    started: number;
+    request: string;
+    result: string;
+    provider: string;
+    model: string;
+  };
   type ModelUsage = {
     input?: number;
     output?: number;
@@ -423,10 +430,12 @@ export default function timelineExtension(
   /** One telemetry payload shape for both the completed and failed naming calls. */
   const emitModelCall = (call: ModelCall, status: "completed" | "failed", usage: ModelUsage = {}) =>
     emitTelemetry({
-      version: 1,
+      version: 2,
       eventId: call.eventId,
       package: "pi-timeline",
       kind: "model_call",
+      provider: call.provider,
+      model: call.model,
       status,
       durationMs: Date.now() - call.started,
       usage: {
@@ -443,16 +452,30 @@ export default function timelineExtension(
       },
     });
 
+  const checkpointTitleModel = (ctx: any) => {
+    if (timelineConfig.useSessionModelForCheckpointTitles) return ctx.model;
+    if (!timelineConfig.checkpointTitleModel) return undefined;
+    const ref = parseModelRef(timelineConfig.checkpointTitleModel);
+    return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
+  };
+
   /** Asks the model for a session title, falling back to the first prompt's own text. */
   const generateTitle = async (ctx: any, generation: number, firstUser: any, finalAssistant: any) => {
-    const model = ctx.model;
+    const model = timelineConfig.checkpointTitleModel ? checkpointTitleModel(ctx) : ctx.model;
     if (!model) return undefined;
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok || !auth.apiKey) return undefined;
     const request = promptText(firstUser.message);
     const result = finalAssistant ? promptText(finalAssistant.message) : "";
     const sessionId = ctx.sessionManager.getSessionId();
-    const call: ModelCall = { eventId: hash(`${sessionId}:${generation}`), started: Date.now(), request, result };
+    const call: ModelCall = {
+      eventId: hash(`${sessionId}:${generation}`),
+      started: Date.now(),
+      request,
+      result,
+      provider: model.provider,
+      model: model.id,
+    };
     try {
       const message: Message = {
         role: "user",
@@ -503,13 +526,6 @@ export default function timelineExtension(
     }
   };
 
-  const checkpointTitleModel = (ctx: any) => {
-    if (timelineConfig.useSessionModelForCheckpointTitles) return ctx.model;
-    if (!timelineConfig.checkpointTitleModel) return undefined;
-    const ref = parseModelRef(timelineConfig.checkpointTitleModel);
-    return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
-  };
-
   const nameCheckpoint = async (
     ctx: any,
     recordKey: string,
@@ -536,6 +552,8 @@ export default function timelineExtension(
       started: Date.now(),
       request,
       result,
+      provider: model.provider,
+      model: model.id,
     };
     try {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
@@ -543,10 +561,7 @@ export default function timelineExtension(
       const message: Message = {
         role: "user",
         content: [
-          {
-            type: "text",
-            text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>`,
-          },
+          { type: "text", text: `<user-request>\n${request}\n</user-request>\n<result>\n${result}\n</result>` },
         ],
         timestamp: Date.now(),
       };
@@ -671,11 +686,7 @@ export default function timelineExtension(
     );
     for (const entry of [...entries].reverse()) {
       const baseline = customEntryData(entry, "pi-timeline-baseline", [1]);
-      if (
-        !consumed.has(entry.id) &&
-        baseline?.ownerSessionId === sessionId &&
-        validBaselineSnapshot(baseline)
-      )
+      if (!consumed.has(entry.id) && baseline?.ownerSessionId === sessionId && validBaselineSnapshot(baseline))
         return { entryId: entry.id, snapshot: baseline as Snapshot };
     }
     return undefined;
@@ -800,9 +811,7 @@ export default function timelineExtension(
           continuationEntryId: continuation,
           ...snap,
           createdAt: new Date().toISOString(),
-          ...(sessionBaseline
-            ? { baseline: sessionBaseline.snapshot, baselineEntryId: sessionBaseline.entryId }
-            : {}),
+          ...(sessionBaseline ? { baseline: sessionBaseline.snapshot, baselineEntryId: sessionBaseline.entryId } : {}),
           ...(verification ? { verification } : {}),
         };
       const temporary: Bound = {
@@ -840,14 +849,7 @@ export default function timelineExtension(
       const finalAssistant = branchAfterCapture
         .slice(userIndex + 1)
         .findLast((entry: any) => entry.type === "message" && entry.message.role === "assistant");
-      void nameCheckpoint(
-        ctx,
-        key(sessionId, checkpointEntryId),
-        checkpointEntryId,
-        user,
-        finalAssistant,
-        changes,
-      );
+      void nameCheckpoint(ctx, key(sessionId, checkpointEntryId), checkpointEntryId, user, finalAssistant, changes);
       return record;
     } catch (e: any) {
       if (snap) await deleteRefs(snap).catch(() => {});

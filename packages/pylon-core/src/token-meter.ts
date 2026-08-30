@@ -66,7 +66,7 @@ interface ToolResultLike {
 }
 
 export type TelemetryEvent = {
-  version: 1;
+  version: 1 | 2;
   eventId: string;
   package: "pi-timeline";
   kind: "model_call";
@@ -74,6 +74,8 @@ export type TelemetryEvent = {
   durationMs: number;
   usage: ProviderUsage;
   context: Record<string, { characters: number; hash: string }>;
+  provider?: string;
+  model?: string;
 };
 
 const emptyProviderUsage = (): ProviderUsage => ({
@@ -227,9 +229,13 @@ export function recordToolResult(meter: TokenMeter, result: ToolResultLike): voi
 
 export function parseTelemetryEvent(value: unknown): TelemetryEvent | undefined {
   const event = value as any;
-  if (!event || Object.keys(event).sort().join(",") !== "context,durationMs,eventId,kind,package,status,usage,version")
-    return;
-  if (event.version !== 1 || event.package !== "pi-timeline" || event.kind !== "model_call") return;
+  if (!event || (event.version !== 1 && event.version !== 2)) return;
+  const expectedKeys =
+    event.version === 1
+      ? "context,durationMs,eventId,kind,package,status,usage,version"
+      : "context,durationMs,eventId,kind,model,package,provider,status,usage,version";
+  if (Object.keys(event).sort().join(",") !== expectedKeys) return;
+  if (event.package !== "pi-timeline" || event.kind !== "model_call") return;
   if (typeof event.eventId !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(event.eventId)) return;
   if (
     !["completed", "failed"].includes(event.status) ||
@@ -238,6 +244,10 @@ export function parseTelemetryEvent(value: unknown): TelemetryEvent | undefined 
     event.durationMs > 86_400_000
   )
     return;
+  if (event.version === 2) {
+    for (const value of [event.provider, event.model])
+      if (typeof value !== "string" || !value.length || value.length > 256 || value.trim() !== value) return;
+  }
   if (!event.usage || Object.keys(event.usage).sort().join(",") !== "cacheRead,cacheWrite,cost,input,output,turns")
     return;
   for (const key of ["turns", "input", "output", "cacheRead", "cacheWrite"])
@@ -264,7 +274,7 @@ export function parseTelemetryEvent(value: unknown): TelemetryEvent | undefined 
     context[key] = { characters: item.characters, hash: item.hash };
   }
   return {
-    version: 1,
+    version: event.version,
     eventId: event.eventId,
     package: "pi-timeline",
     kind: "model_call",
@@ -272,6 +282,7 @@ export function parseTelemetryEvent(value: unknown): TelemetryEvent | undefined 
     durationMs: event.durationMs,
     usage: event.usage,
     context,
+    ...(event.version === 2 ? { provider: event.provider, model: event.model } : {}),
   };
 }
 

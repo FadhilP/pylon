@@ -125,7 +125,13 @@ export type WebCommand =
   | ({ type: "setPackageEnabled"; packageId: string; enabled: boolean } & CommandBase)
   | ({ type: "updatePackageSettings"; packageId: string; settings: PackageSettingsReadModel } & CommandBase)
   | ({ type: "setExtensionEnabled"; extensionId: string; enabled: boolean } & CommandBase)
-  | ({ type: "installExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
+  | ({
+      type: "installExtensionPackage";
+      source: string;
+      scope: "user" | "project";
+      projectId?: string;
+      confirmed: true;
+    } & CommandBase)
   | ({ type: "removeExtensionPackage"; source: string; scope: "user" | "project"; confirmed: true } & CommandBase)
   | ({ type: "setProjectTrust"; trusted: boolean; confirmed: true } & CommandBase)
   | ({ type: "reloadExtensions"; confirmed: true } & CommandBase)

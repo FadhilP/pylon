@@ -753,15 +753,18 @@ test("validates, deduplicates, persists, and reports direct model telemetry", as
   };
   runtime.events.emit("pylon:telemetry", event);
   runtime.events.emit("pylon:telemetry", event);
+  const attributed = { ...event, version: 2, eventId: "timeline-call-2", provider: "test", model: "title-model" };
+  runtime.events.emit("pylon:telemetry", attributed);
   runtime.events.emit("pylon:telemetry", {
     ...event,
     eventId: "bad id",
     context: { request: { characters: 40, hash: "raw prompt" } },
   });
-  runtime.events.emit("pylon:telemetry", { ...event, eventId: "timeline-call-2", rawPrompt: "must reject" });
+  runtime.events.emit("pylon:telemetry", { ...event, eventId: "timeline-call-3", rawPrompt: "must reject" });
 
-  assert.equal(runtime.entries.length, 1);
+  assert.equal(runtime.entries.length, 2);
   assert.deepEqual(runtime.entries[0], { customType: "pylon-telemetry", data: event });
+  assert.deepEqual(runtime.entries[1], { customType: "pylon-telemetry", data: attributed });
   let report = "";
   await runtime.commands.get("tokens").handler("", {
     ui: {
@@ -770,8 +773,8 @@ test("validates, deduplicates, persists, and reports direct model telemetry", as
       },
     },
   });
-  assert.match(report, /pi-timeline: 1 calls/);
-  assert.match(report, /Total session model cost: \$0\.0100/);
+  assert.match(report, /pi-timeline: 2 calls/);
+  assert.match(report, /Total session model cost: \$0\.0200/);
   assert.doesNotMatch(report, /raw prompt/);
 });
 

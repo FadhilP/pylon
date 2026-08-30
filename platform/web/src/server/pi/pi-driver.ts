@@ -32,6 +32,8 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  UsageQuery,
+  UsageSnapshot,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -227,6 +229,7 @@ export interface SetExtensionEnabledInput {
 export interface ExtensionPackageInput {
   source: string;
   scope: "user" | "project";
+  projectId?: string;
 }
 export interface SetProjectTrustInput {
   trusted: boolean;
@@ -347,6 +350,7 @@ export interface PiDriver {
   heliosBrowser?(input: HeliosBrowserInput): Promise<HeliosBrowserResult>;
   heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
+  usage(input?: UsageQuery): Promise<UsageSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
   listExtensions?(): Promise<ExtensionListSnapshot>;

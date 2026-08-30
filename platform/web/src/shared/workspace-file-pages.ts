@@ -1,4 +1,4 @@
-import type { WorkspaceFilePage, WorkspaceFileReadModel } from "./protocol/snapshots.ts";
+import type { WorkspaceFilePage, WorkspaceFileReadModel, WorkspaceReadModel } from "./protocol/snapshots.ts";
 
 export function workspaceInventoryCacheIsFresh(
   cachedRevision: string | undefined,
@@ -7,6 +7,18 @@ export function workspaceInventoryCacheIsFresh(
   now = Date.now(),
 ): boolean {
   return expiresAt > now && cachedRevision === workspaceRevision;
+}
+
+export function workspaceInventoryCacheState(
+  cached: { generation: number; mode: WorkspaceReadModel["mode"] | undefined; revision?: string; expiresAt: number },
+  current: { generation: number; mode: WorkspaceReadModel["mode"] | undefined; revision?: string },
+  now = Date.now(),
+): "hidden" | "stale" | "fresh" {
+  if (cached.mode !== current.mode) return "hidden";
+  return cached.generation === current.generation &&
+    workspaceInventoryCacheIsFresh(cached.revision, cached.expiresAt, current.revision, now)
+    ? "fresh"
+    : "stale";
 }
 export async function drainWorkspaceFiles(
   fetchPage: (cursor?: string) => Promise<WorkspaceFilePage>,

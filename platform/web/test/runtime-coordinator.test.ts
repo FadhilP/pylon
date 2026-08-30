@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
+import { validateCommand } from "../src/shared/protocol/validation.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { initialOperational } from "../src/server/pi/operational-projections.ts";
 import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
@@ -443,7 +444,7 @@ test("session index reuses its persisted cache and rebuilds corrupt or outdated 
   const session = SessionManager.create(cwd);
   let added: SessionManager | undefined;
   persistSession(session, "Persisted cache source");
-  const cachePath = join(isolatedAgentDir, "pylon-web", "session-summaries-v1.json");
+  const cachePath = join(isolatedAgentDir, "pylon-web", "session-summaries-v3.json");
   const options = { activeId: session.getSessionId(), generation: 1, stateFor: () => "sleeping" as const };
 
   try {
@@ -2416,4 +2417,81 @@ test("disposing the coordinator aborts and clears an open directory picker", { t
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("extension package installs target the chosen registered project without changing selection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-extension-target-"));
+  const selectedCwd = join(root, "selected");
+  const targetCwd = join(root, "target");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(selectedCwd), mkdir(targetCwd), mkdir(agentDir)]);
+  const registry = new ProjectRegistry(join(agentDir, "pylon-web", "projects.json"), root);
+  await registry.load([]);
+  const selectedProject = await registry.add(selectedCwd);
+  const targetProject = await registry.add(targetCwd);
+  const coordinator = new RuntimeCoordinator({ projectRegistry: registry });
+  const internal = coordinator as any;
+  internal.generation = 7;
+  internal.projectRegistry = registry;
+  const installs: { slot: string; input: unknown }[] = [];
+  const makeSlot = (id: string, cwd: string, projectId: string) => ({
+    id,
+    target: { cwd, agentDir, repositoryRoot: root, projectId },
+    queuedPrompts: [],
+    displayPendingPrompts: [],
+    driver: {
+      canSleep: () => true,
+      runtimeDetails: () => ({ cwd }),
+      installExtensionPackage: async (input: unknown) => {
+        installs.push({ slot: id, input });
+        return { cancelled: false, sessionId: id, sessionGeneration: 1 };
+      },
+    },
+  });
+  internal.selectedId = "selected-session";
+  internal.slots.set("selected-session", makeSlot("selected-session", selectedCwd, selectedProject.id));
+  internal.slots.set("target-session", makeSlot("target-session", targetCwd, targetProject.id));
+
+  try {
+    const targeted = await coordinator.installExtensionPackage({
+      source: "npm:example",
+      scope: "project",
+      projectId: targetProject.id,
+    });
+    assert.deepEqual(targeted, { cancelled: false, sessionId: "selected-session", sessionGeneration: 7 });
+    assert.equal(installs[0]?.slot, "target-session");
+
+    await coordinator.installExtensionPackage({ source: "npm:example", scope: "user" });
+    assert.equal(installs[1]?.slot, "selected-session");
+    await assert.rejects(
+      coordinator.installExtensionPackage({ source: "npm:example", scope: "project", projectId: "missing" }),
+      /project is unavailable/,
+    );
+    await assert.rejects(
+      coordinator.installExtensionPackage({ source: "npm:example", scope: "user", projectId: targetProject.id }),
+      /global extension packages cannot target a project/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("extension package commands require a project only for project scope", () => {
+  const command = {
+    type: "installExtensionPackage",
+    source: "npm:example",
+    confirmed: true,
+    commandId: "install-extension",
+    expectedGeneration: 1,
+  };
+  assert.equal(validateCommand({ ...command, scope: "user" }).ok, true);
+  assert.equal(validateCommand({ ...command, scope: "project", projectId: "project-example" }).ok, true);
+  assert.deepEqual(validateCommand({ ...command, scope: "project" }), {
+    ok: false,
+    error: "invalid extension package project",
+  });
+  assert.deepEqual(validateCommand({ ...command, scope: "user", projectId: "project-example" }), {
+    ok: false,
+    error: "invalid extension package project",
+  });
 });

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { WorkspaceFilePage } from "../src/shared/protocol/snapshots.ts";
-import { drainWorkspaceFiles, workspaceInventoryCacheIsFresh } from "../src/shared/workspace-file-pages.ts";
+import {
+  drainWorkspaceFiles,
+  workspaceInventoryCacheIsFresh,
+  workspaceInventoryCacheState,
+} from "../src/shared/workspace-file-pages.ts";
 import { isWorkspaceFilePage } from "../src/shared/protocol/validation.ts";
 
 test("workspace file pages drain, deduplicate, batch, and report truncation", async () => {
@@ -64,4 +68,20 @@ test("workspace inventory cache is fresh only for a live matching revision", () 
   assert.equal(workspaceInventoryCacheIsFresh("same", 2_000, "same", 1_000), true);
   assert.equal(workspaceInventoryCacheIsFresh("old", 2_000, "new", 1_000), false);
   assert.equal(workspaceInventoryCacheIsFresh("same", 1_000, "same", 1_000), false);
+});
+
+test("workspace inventory cache stays visible but refreshes after a session generation change", () => {
+  const cached = { generation: 1, mode: "worktree" as const, revision: "same", expiresAt: 2_000 };
+  assert.equal(
+    workspaceInventoryCacheState(cached, { generation: 1, mode: "worktree", revision: "same" }, 1_000),
+    "fresh",
+  );
+  assert.equal(
+    workspaceInventoryCacheState(cached, { generation: 2, mode: "worktree", revision: "same" }, 1_000),
+    "stale",
+  );
+  assert.equal(
+    workspaceInventoryCacheState(cached, { generation: 2, mode: "checkout", revision: "same" }, 1_000),
+    "hidden",
+  );
 });

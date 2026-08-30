@@ -6,21 +6,29 @@ import type {
   MessageReadModel,
 } from "../shared/protocol/events";
 import { MarkdownContent } from "./conversation-panel";
+import { LedBar, OverviewOrb, type OverviewState } from "./overview-primitives";
 
-export function CompactionPanel({ message, onClose }: { message: MessageReadModel; onClose: () => void }) {
+export function CompactionPanel({
+  message,
+  contextLimit,
+  onClose,
+}: {
+  message: MessageReadModel;
+  contextLimit?: number;
+  onClose: () => void;
+}) {
   const compaction = message.compaction;
   if (!compaction) return null;
   const display = compaction.display;
   const timestamp = message.createdAt ? new Date(message.createdAt) : undefined;
   const validTimestamp = timestamp && !Number.isNaN(timestamp.getTime()) ? timestamp : undefined;
-  const hasSourceDetails = Boolean(
-    display &&
-    (display.records.length ||
-      display.failedTools.length ||
-      display.toolResults.length ||
-      display.history.modified.length ||
-      display.history.read.length),
-  );
+  const before = compaction.contextBeforeTokens;
+  const ratio = before
+    ? { label: "Kept", percent: Math.min(100, Math.round((compaction.contextAfterTokens / before) * 100)) }
+    : contextLimit
+      ? { label: "Window", percent: Math.min(100, Math.round((compaction.contextAfterTokens / contextLimit) * 100)) }
+      : undefined;
+  const folded = display ? foldedGroups(display) : [];
   const hasMetadata = Boolean(validTimestamp || message.entryId);
 
   return (
@@ -28,63 +36,79 @@ export function CompactionPanel({ message, onClose }: { message: MessageReadMode
       <header>
         <div>
           <IconFileText size={18} />
-          <strong id="compaction-title">Compaction details</strong>
+          <span className="section-kicker" id="compaction-title">
+            Compaction
+          </span>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="Close compaction details">
           <IconX size={17} />
         </button>
       </header>
       <div className="compaction-panel-body">
-        <dl className="compaction-panel-facts">
-          {compaction.contextBeforeTokens !== undefined && (
-            <div>
-              <dt>Context before</dt>
-              <dd>~{formatCompactNumber(compaction.contextBeforeTokens)} tokens</dd>
-            </div>
-          )}
-          <div>
-            <dt>Context after</dt>
-            <dd>~{formatCompactNumber(compaction.contextAfterTokens)} tokens</dd>
+        <div className="session-tool-summary">
+          <div className="session-tool-call-total is-cost">
+            <small>Context after</small>
+            <strong className="mono">{formatCompactNumber(compaction.contextAfterTokens)}</strong>
+            <span>{before === undefined ? "tokens" : `was ${formatCompactNumber(before)}`}</span>
           </div>
-          {compaction.sourceEntryCount !== undefined && (
-            <div>
-              <dt>Source entries</dt>
-              <dd>{compaction.sourceEntryCount.toLocaleString()}</dd>
+          <div className="session-token-composition">
+            {ratio && (
+              <>
+                <div>
+                  <small>{ratio.label}</small>
+                  <strong className="mono">{ratio.percent}%</strong>
+                </div>
+                <LedBar a={ratio.percent} cells={26} label={`${ratio.percent}% ${ratio.label.toLowerCase()}`} />
+              </>
+            )}
+            <div className="session-token-key">
+              <span>
+                <strong>Folded</strong>{" "}
+                {compaction.sourceEntryCount === undefined
+                  ? "—"
+                  : `${compaction.sourceEntryCount.toLocaleString()} entries`}
+              </span>
+              {validTimestamp && (
+                <span>
+                  <strong>At</strong> {validTimestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
             </div>
-          )}
-        </dl>
+          </div>
+        </div>
 
-        <section className="compaction-panel-section" aria-labelledby="compacted-context-title">
-          <h2 id="compacted-context-title">Compacted context</h2>
-          <MarkdownContent text={message.text} />
-        </section>
+        <details className="inspector-section compaction-kept">
+          <summary>
+            <span>
+              <strong>Kept in context</strong>
+              <small>the summary the model now reads</small>
+            </span>
+            <IconChevronDown size={14} aria-hidden="true" />
+          </summary>
+          <div className="compaction-kept-body">
+            <MarkdownContent text={message.text} />
+          </div>
+        </details>
 
-        {display && hasSourceDetails && (
-          <section className="compaction-panel-section" aria-labelledby="compaction-sources-title">
-            <h2 id="compaction-sources-title">Available source details</h2>
-            <div className="compaction-display">
-              {display.records.map((record, index) => (
-                <article
-                  className={`compaction-record is-${record.role}`}
-                  key={`${record.sourceEntryId}:${record.role}:${index}`}>
-                  <header>
-                    <strong>{record.role === "user" ? "User" : "Assistant"}</strong>
-                    <code title={record.sourceEntryId}>{record.sourceEntryId}</code>
-                  </header>
-                  <pre>{record.text}</pre>
-                </article>
-              ))}
-              <CompactionToolGroup title="Failed tool calls" records={display.failedTools} failed />
-              <CompactionToolGroup title="Tool results" records={display.toolResults} />
-              <CompactionFileActivity history={display.history} />
-            </div>
+        {folded.length > 0 && (
+          <section className="compaction-folded" aria-labelledby="compaction-folded-title">
+            <header>
+              <strong id="compaction-folded-title">Folded in</strong>
+              <span>what the summary replaced</span>
+            </header>
+            {folded.map(group => (
+              <FoldedGroup key={group.label} group={group} />
+            ))}
           </section>
         )}
 
         {hasMetadata && (
-          <details className="compaction-panel-metadata">
+          <details className="inspector-section compaction-source">
             <summary>
-              <strong>Metadata</strong>
+              <span>
+                <strong>Source entry</strong>
+                {message.entryId && <small>{message.entryId}</small>}
+              </span>
               <IconChevronDown size={14} aria-hidden="true" />
             </summary>
             <dl>
@@ -112,26 +136,74 @@ export function CompactionPanel({ message, onClose }: { message: MessageReadMode
   );
 }
 
-function CompactionToolGroup({
-  title,
-  records,
-  failed = false,
-}: {
-  title: string;
+type FoldedGroup = {
+  label: string;
+  state: OverviewState;
+  detail: string;
+  count: number;
   records: CompactionDisplaySourceReadModel[];
-  failed?: boolean;
-}) {
-  if (!records.length) return null;
+};
+
+function foldedGroups(display: CompactionDisplayReadModel): FoldedGroup[] {
+  const prompts = display.records.filter(record => record.role === "user");
+  const replies = display.records.filter(record => record.role === "assistant");
+  const files = [
+    ...display.history.modified.map(record => ({ ...record, label: "Modified" })),
+    ...display.history.read.map(record => ({ ...record, label: "Read" })),
+  ];
+  const groups: FoldedGroup[] = [
+    { label: "Your messages", state: "set", detail: "prompts", count: prompts.length, records: prompts },
+    {
+      label: "Assistant replies",
+      state: "neutral",
+      detail: "summarised above",
+      count: replies.length,
+      records: replies,
+    },
+    {
+      label: "Tool results",
+      state: "done",
+      detail: "returned to the model",
+      count: display.toolResults.length,
+      records: display.toolResults,
+    },
+    {
+      label: "Failed tool calls",
+      state: "failed",
+      detail: "errors and denials",
+      count: display.failedTools.length,
+      records: display.failedTools,
+    },
+    {
+      label: "Files touched",
+      state: "attention",
+      detail: files
+        .slice(0, 3)
+        .map(file => file.path.split("/").at(-1))
+        .join(", "),
+      count: files.length,
+      records: files.map(file => ({
+        sourceEntryId: file.sourceEntryId ?? file.path,
+        text: `${file.label} ${file.path}`,
+      })),
+    },
+  ];
+  return groups.filter(group => group.count > 0);
+}
+
+function FoldedGroup({ group }: { group: FoldedGroup }) {
   return (
-    <details className={`compaction-tool-group${failed ? " is-failed" : ""}`}>
+    <details className="fold">
       <summary>
-        <strong>
-          {title} ({records.length})
-        </strong>
-        <IconChevronDown size={14} aria-hidden="true" />
+        <OverviewOrb state={group.state} label={group.label} />
+        <span>
+          <strong>{group.label}</strong>
+          <small>{group.detail}</small>
+        </span>
+        <span className="fold-count mono">{group.count.toLocaleString()}</span>
       </summary>
-      <div>
-        {records.map((record, index) => (
+      <div className="fold-body">
+        {group.records.map((record, index) => (
           <article key={`${record.sourceEntryId}:${index}`}>
             <code title={record.sourceEntryId}>{record.sourceEntryId}</code>
             <pre>{record.text}</pre>
@@ -139,27 +211,5 @@ function CompactionToolGroup({
         ))}
       </div>
     </details>
-  );
-}
-
-function CompactionFileActivity({ history }: { history: CompactionDisplayReadModel["history"] }) {
-  const items = [
-    ...history.modified.map(record => ({ ...record, label: "Modified" })),
-    ...history.read.map(record => ({ ...record, label: "Read" })),
-  ];
-  if (!items.length) return null;
-  return (
-    <section className="compaction-file-activity">
-      <strong>Observed file activity</strong>
-      <ul>
-        {items.map((item, index) => (
-          <li key={`${item.label}:${item.path}:${item.sourceEntryId ?? index}`}>
-            <span>{item.label}</span>
-            <code title={item.path}>{item.path}</code>
-            {item.sourceEntryId && <small title={item.sourceEntryId}>Entry {item.sourceEntryId}</small>}
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }

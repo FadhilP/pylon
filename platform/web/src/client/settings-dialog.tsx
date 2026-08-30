@@ -95,6 +95,7 @@ interface SettingsDialogProps {
   providerAuth?: ProviderAuthReadModel;
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
+  projects: { id: string; label: string }[];
   extensions?: ExtensionListSnapshot;
   hookSettings?: HookSettingsReadModel;
   runtimePolicy?: RuntimePolicyReadModel;
@@ -121,7 +122,7 @@ interface SettingsDialogProps {
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
   onToggleExtension: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
-  onInstallExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
+  onInstallExtensionPackage: (source: string, scope: "user" | "project", projectId?: string) => Promise<void>;
   onRemoveExtensionPackage: (source: string, scope: "user" | "project") => Promise<void>;
   onSetProjectTrust: (trusted: boolean) => Promise<void>;
   onReloadExtensions: () => Promise<void>;
@@ -141,6 +142,7 @@ export function SettingsDialog({
   providerAuth,
   pendingUi,
   packages,
+  projects,
   extensions,
   hookSettings,
   runtimePolicy,
@@ -570,7 +572,9 @@ export function SettingsDialog({
                               {tools} tool{tools === 1 ? "" : "s"}
                             </small>
                           </span>
-                          <b className={`package-state is-${state}`}>{state}</b>
+                          {/* The orb already carries "active", and the list header counts
+                              them, so only an exception spends a word on its state. */}
+                          {state !== "active" && <b className={`package-state is-${state}`}>{state}</b>}
                         </button>
                       );
                     })}
@@ -709,6 +713,7 @@ export function SettingsDialog({
               </div>
               <ExtensionSettingsFields
                 snapshot={extensions}
+                projects={projects}
                 loading={extensionLoading}
                 disabled={extensionBusy || policyDisabled}
                 onToggle={onToggleExtension}
@@ -1394,10 +1399,10 @@ function PackageFields({
     return (
       <div className="package-list">
         <PackageRow
-          label="Checkpoint titles"
-          description="Generate short semantic titles after checkpoints are safely captured. Disabled keeps the original prompt labels.">
+          label="Timeline titles"
+          description="Generate short semantic checkpoint titles. An explicitly selected model also names new sessions; Disabled keeps original checkpoint prompt labels.">
           <ModelModeSelect
-            label="checkpoint title model"
+            label="Timeline title model"
             value={
               settings.checkpointTitleMode === "model" ? settings.checkpointTitleModel! : settings.checkpointTitleMode
             }

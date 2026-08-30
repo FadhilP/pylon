@@ -11,10 +11,14 @@ import type {
   SessionListSnapshot,
   SessionProjectPage,
   SessionSummary,
+  UsageQuery,
+  UsageSnapshot,
 } from "../../shared/protocol/snapshots.ts";
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
 import { SessionSummaryCache, type SessionFileMetadata } from "./session-summary-cache.ts";
+import { aggregateUsage } from "./usage-aggregation.ts";
+import type { PersistedUsageAtom } from "./usage-history.ts";
 
 const REFRESH_MS = 60_000;
 const SPAWN_SESSION_MARKER = "pi-spawn-session";
@@ -89,6 +93,7 @@ export interface SessionIndexOptions {
 export class SessionIndex {
   private sessions: SessionInfo[] = [];
   private metadata = new Map<string, SessionFileMetadata>();
+  private usageBySession = new Map<string, PersistedUsageAtom[]>();
   private dirtySessions = new Map<string, { path: string; cwd: string }>();
   private scannedAt = 0;
   private scan?: Promise<void>;
@@ -105,6 +110,7 @@ export class SessionIndex {
     this.cache = new SessionSummaryCache(agentDir);
     this.sessions = [];
     this.metadata.clear();
+    this.usageBySession.clear();
     this.dirtySessions.clear();
     this.invalidate();
   }
@@ -122,6 +128,25 @@ export class SessionIndex {
   async all(): Promise<SessionInfo[]> {
     await this.refresh();
     return [...this.sessions];
+  }
+
+  async usage(input: UsageQuery, options: SessionIndexOptions): Promise<UsageSnapshot> {
+    await this.refresh();
+    const workspaceProjectIds = new Map(
+      this.registry?.listSessionWorkspaces().map(record => [record.sessionId, record.projectId]),
+    );
+    return aggregateUsage(
+      this.sessions.map(session => ({ session, usage: this.usageBySession.get(session.id) ?? [] })),
+      input,
+      options.generation,
+      (sessionId, cwd) => {
+        const id = workspaceProjectIds.get(sessionId) ?? projectIdForCwd(cwd);
+        const project = this.registry?.get(id);
+        return { id, label: project?.label ?? (basename(cwd) || "Workspace") };
+      },
+      new Date(),
+      this.cache?.unreadableFileCount() ?? 0,
+    );
   }
 
   invalidate(): void {
@@ -144,6 +169,7 @@ export class SessionIndex {
     if (current) this.dirtySessions.set(sessionId, { path: current.path, cwd: current.cwd });
     this.sessions = this.sessions.filter(session => session.id !== sessionId);
     this.metadata.delete(sessionId);
+    this.usageBySession.delete(sessionId);
   }
 
   async list(input: SessionListQuery, options: SessionIndexOptions): Promise<SessionListSnapshot> {
@@ -309,8 +335,10 @@ export class SessionIndex {
           if (cache !== this.cache) continue;
           this.sessions = indexed.map(item => item.session);
           this.metadata = new Map(indexed.map(item => [item.session.id, item.metadata]));
+          this.usageBySession = new Map(indexed.map(item => [item.session.id, item.usage]));
         } else {
           this.sessions = await SessionManager.listAll();
+          this.usageBySession.clear();
         }
         this.scannedAt = Date.now();
         continue;
@@ -327,6 +355,7 @@ export class SessionIndex {
           this.sessions = [...this.sessions.filter(session => !previousIds.includes(session.id)), ...sessions];
           const currentIds = new Set(sessions.map(session => session.id));
           for (const id of previousIds) if (!currentIds.has(id)) this.metadata.delete(id);
+          for (const id of previousIds) this.usageBySession.delete(id);
           continue;
         }
         const cache = this.cache;
@@ -338,9 +367,11 @@ export class SessionIndex {
           .map(session => session.id);
         this.sessions = this.sessions.filter(session => !removedIds.includes(session.id));
         for (const id of removedIds) this.metadata.delete(id);
+        for (const id of removedIds) this.usageBySession.delete(id);
         if (indexed) {
           this.sessions.push(indexed.session);
           this.metadata.set(indexed.session.id, indexed.metadata);
+          this.usageBySession.set(indexed.session.id, indexed.usage);
         }
       }
     }

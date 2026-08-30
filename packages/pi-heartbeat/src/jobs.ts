@@ -158,7 +158,7 @@ export class JobManager {
         if (j.file.closed) resolve();
         else {
           j.file.once("close", resolve);
-          j.file.once("error", resolve);
+          j.file.once("error", () => resolve());
         }
       }).then(() => {
         this.prune();

@@ -27,10 +27,6 @@ import type { RuntimeStoreSnapshot } from "./runtime/event-store";
  *   reference   what is docked beside it
  *   ambient     always-available chrome
  *
- * Keeping them in one file is the point: before this they were spread across
- * a mode list, a panel list, the Inspector's own tab array and a settings
- * nav, which is how "Files" ended up being two different things and the
- * conversation ended up with two homes nobody had named.
  */
 
 type IconComponent = typeof IconDatabase;
@@ -50,21 +46,12 @@ export type NavContext = {
   papercutEnabled: boolean;
 };
 
-/* ------------------------------------------------------------------ *
- * Workspace — about the workspace rather than the selected session.
- * ------------------------------------------------------------------ */
-
 export type WorkspaceViewId = "sessions" | "archive" | "usage";
 /** null means the session workspace is showing. */
 export type ActiveWorkspaceView = WorkspaceViewId | null;
 
 export type WorkspaceViewDefinition = { id: WorkspaceViewId; label: string; icon: IconComponent; ariaId: string };
 
-/**
- * Sessions first because it is the one reached for most, archive as its
- * overflow, then usage — reference rather than navigation, so it sits
- * furthest from the session tabs it is not about.
- */
 export const WORKSPACE_VIEWS: WorkspaceViewDefinition[] = [
   { id: "sessions", label: "All sessions", icon: IconList, ariaId: "workspace-sessions" },
   { id: "archive", label: "Archive", icon: IconArchive, ariaId: "workspace-archive" },
@@ -74,11 +61,6 @@ export const WORKSPACE_VIEWS: WorkspaceViewDefinition[] = [
 export function workspaceViewDefinition(view: ActiveWorkspaceView): WorkspaceViewDefinition | undefined {
   return view ? WORKSPACE_VIEWS.find(item => item.id === view) : undefined;
 }
-
-/* ------------------------------------------------------------------ *
- * Ambient — always reachable, ordered so the most-used sits in the
- * screen corner and the one nobody hunts for sits furthest from it.
- * ------------------------------------------------------------------ */
 
 export type AmbientId = "theme" | "settings" | "changelog" | "terminal";
 
@@ -90,10 +72,6 @@ export const AMBIENT: AmbientDefinition[] = [
   { id: "changelog", label: "Changelog", icon: IconBook },
   { id: "terminal", label: "Terminal", icon: IconTerminal2 },
 ];
-
-/* ------------------------------------------------------------------ *
- * Surfaces — what fills the main area.
- * ------------------------------------------------------------------ */
 
 export type SurfaceId = "chat" | "files" | "database" | "browser";
 
@@ -110,22 +88,9 @@ export type SurfaceDefinition = {
   badge?: (runtime: Runtime, context: NavContext) => NavBadge;
 };
 
-/**
- * Database and Browser were panels until they outgrew the shape: Database
- * carried its own 920px width slot against a 380px shared default, and
- * Browser is a full screenshot-backed viewport with pointer, keyboard and
- * navigation controls. Both are panes.
- */
 export const SURFACES: SurfaceDefinition[] = [
   { id: "chat", label: "Chat", icon: IconMessageCircle },
-  {
-    id: "files",
-    label: "Files",
-    icon: IconFiles,
-    requiresSession: true,
-    // No count here: the changed set belongs to the Changes reference, and
-    // showing it twice made the tab look like it was counting something else.
-  },
+  { id: "files", label: "Files", icon: IconFiles, requiresSession: true },
   {
     id: "database",
     label: "Database",
@@ -159,10 +124,6 @@ export function displacesConversation(surface: SurfaceId): boolean {
   return surface !== "chat";
 }
 
-/* ------------------------------------------------------------------ *
- * Reference — what is docked beside the surface.
- * ------------------------------------------------------------------ */
-
 export type ReferenceId =
   "chat" | "overview" | "policy" | "timeline" | "memory" | "tools" | "changes" | "agents" | "compaction" | "attachment";
 export type ActiveReference = ReferenceId | null;
@@ -178,11 +139,6 @@ export type ReferenceDefinition = {
   icon: IconComponent;
   ariaId: string;
   group: ReferenceGroup;
-  /**
-   * Colour the icon takes while this view is active. The five session views
-   * carried these as Inspector tabs; the conversation and the run group get
-   * their own so every reference is identifiable by colour alone.
-   */
   tone?: string;
   /** Reference views needing more room than the shared width bring their own. */
   width?: PanelWidth;
@@ -190,15 +146,6 @@ export type ReferenceDefinition = {
   badge?: (runtime: Runtime, context: NavContext) => NavBadge;
 };
 
-/**
- * Flat, because the Inspector had stopped earning its container: once
- * Database and Browser became surfaces its only remaining sibling was
- * Agents, and its own five tabs already overflowed a 300px panel.
- *
- * "compaction" and "attachment" are deliberately absent — they open from a
- * message in the conversation rather than the rail, so they have no entry
- * here and fall back to the shared width.
- */
 export const REFERENCES: ReferenceDefinition[] = [
   {
     id: "chat",
@@ -301,10 +248,6 @@ export function referenceRailItems(context: NavContext): Array<ReferenceDefiniti
   const items = REFERENCES.filter(item => item.available?.(context) ?? true);
   return items.flatMap((item, index) => (index > 0 && item.group !== items[index - 1].group ? [null, item] : [item]));
 }
-
-/* ------------------------------------------------------------------ *
- * Panel widths.
- * ------------------------------------------------------------------ */
 
 /** Storage slot for a panel width. Panels sharing a slot share a width. */
 export type PanelWidth = { key: string; default: number };

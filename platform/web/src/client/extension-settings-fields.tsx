@@ -5,6 +5,7 @@ import { OverviewOrb } from "./overview-primitives";
 
 export function ExtensionSettingsFields({
   snapshot,
+  projects,
   loading,
   disabled,
   onToggle,
@@ -14,16 +15,17 @@ export function ExtensionSettingsFields({
   onReload,
 }: {
   snapshot?: ExtensionListSnapshot;
+  projects: { id: string; label: string }[];
   loading: boolean;
   disabled: boolean;
   onToggle: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
-  onInstall: (source: string, scope: "user" | "project") => Promise<void>;
+  onInstall: (source: string, scope: "user" | "project", projectId?: string) => Promise<void>;
   onRemove: (source: string, scope: "user" | "project") => Promise<void>;
   onTrust: (trusted: boolean) => Promise<void>;
   onReload: () => Promise<void>;
 }) {
   const [source, setSource] = useState("");
-  const [scope, setScope] = useState<"user" | "project">("user");
+  const [target, setTarget] = useState("user");
   const [error, setError] = useState("");
 
   const run = async (action: () => Promise<void>) => {
@@ -41,7 +43,8 @@ export function ExtensionSettingsFields({
     if (!window.confirm(`Install ${value}? Pi extensions execute arbitrary code with Pylon server permissions.`))
       return;
     void run(async () => {
-      await onInstall(value, scope);
+      const projectId = target.startsWith("project:") ? target.slice("project:".length) : undefined;
+      await onInstall(value, projectId ? "project" : "user", projectId);
       setSource("");
     });
   };
@@ -90,7 +93,7 @@ export function ExtensionSettingsFields({
         <header>
           <div>
             <h4>Install Pi package</h4>
-            <p>Supports npm: and Pi-compatible git sources.</p>
+            <p>Choose whether to install globally or into one registered project.</p>
           </div>
         </header>
         <form className="extension-install" onSubmit={install}>
@@ -102,14 +105,16 @@ export function ExtensionSettingsFields({
             placeholder="npm:@scope/package@1.0.0"
           />
           <select
-            aria-label="Install scope"
-            value={scope}
+            aria-label="Install target"
+            value={target}
             disabled={disabled}
-            onChange={event => setScope(event.target.value as "user" | "project")}>
+            onChange={event => setTarget(event.target.value)}>
             <option value="user">Global to Pylon</option>
-            <option value="project" disabled={!snapshot.projectTrusted}>
-              This project
-            </option>
+            {projects.map(project => (
+              <option key={project.id} value={`project:${project.id}`}>
+                {project.label}
+              </option>
+            ))}
           </select>
           <button type="submit" disabled={disabled || !source.trim()}>
             <IconPlus size={14} /> Install
