@@ -421,7 +421,7 @@ export interface SessionListSnapshot {
   projects: SessionProjectPage[];
 }
 
-export type UsageAgent = "main" | "advisor" | "grunt" | "scout" | "private" | "unknown";
+export type UsageAgent = "main" | "advisor" | "grunt" | "scout" | "private" | "other" | "unknown";
 
 export interface UsageQuery {
   days?: 7 | 30 | 90;

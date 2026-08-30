@@ -4,6 +4,7 @@ import { applyOperationalEvent, initialOperational } from "../src/server/pi/oper
 
 test("Verify running lifecycle exposes active checks before they finish", () => {
   const startedAt = new Date(1_000).toISOString();
+  const checkStartedAt = new Date(2_000).toISOString();
   const state = applyOperationalEvent(initialOperational(["verify"], []), "pi-verify:lifecycle", {
     version: 1,
     state: "running",
@@ -11,7 +12,7 @@ test("Verify running lifecycle exposes active checks before they finish", () => 
     scope: "changed",
     startedAt,
     results: [],
-    activeChecks: [{ id: "npm:test", label: "npm test", command: "npm test" }],
+    activeChecks: [{ id: "npm:test", label: "npm test", command: "npm test", startedAt: checkStartedAt }],
   });
 
   assert.equal(state.verification.availability, "available");
@@ -25,6 +26,7 @@ test("Verify running lifecycle exposes active checks before they finish", () => 
       command: "npm test",
       status: "running",
       durationMs: 0,
+      startedAt: checkStartedAt,
       truncated: false,
     },
   ]);

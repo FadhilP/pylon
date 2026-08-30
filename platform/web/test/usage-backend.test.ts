@@ -150,8 +150,8 @@ test("usage history normalizes every persisted billable source", () => {
       ["delegated", "private"],
       ["compaction", "main"],
       ["branch-summary", "main"],
-      ["telemetry", "private"],
-      ["telemetry", "private"],
+      ["telemetry", "other"],
+      ["telemetry", "other"],
     ],
   );
   assert.equal(result[0]?.model, "claude-response");

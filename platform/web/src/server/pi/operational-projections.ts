@@ -461,7 +461,18 @@ function verification(value: unknown, redact: (value: string) => string): Verifi
     const id = identifier(item.id) ?? `active-check-${index + 1}`;
     const label = string(item.label, 200) ?? id;
     const command = redact(string(item.command, 500) ?? "").slice(0, 500);
-    return [{ id, label, command, status: "running" as const, durationMs: 0, truncated: false }];
+    const startedAt = timestamp(item.startedAt);
+    return [
+      {
+        id,
+        label,
+        command,
+        status: "running" as const,
+        durationMs: 0,
+        ...(startedAt ? { startedAt } : {}),
+        truncated: false,
+      },
+    ];
   });
   const rawResults = Array.isArray(input.results) ? input.results : [];
   let outputBudget = 16 * 1024;

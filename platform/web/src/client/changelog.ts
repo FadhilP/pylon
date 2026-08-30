@@ -2,6 +2,19 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.1.1",
+    date: "Aug 30, 2026",
+    title: "Live verification timing and clearer usage attribution",
+    summary:
+      "A maintenance release improves live Verify timing and separates non-agent telemetry from private-agent usage.",
+    notes: [
+      "Added per-check start times to Verify lifecycle events and kept running-check durations updating live in the web Overview.",
+      "Classified non-agent telemetry as Other instead of Private agents in usage history, with a versioned session-summary cache rebuild for existing data.",
+    ],
+  },
+
+
+  {
     version: "2.1.0",
     date: "Aug 30, 2026",
     title: "Turn-level diffs and clearer live workflow feedback",

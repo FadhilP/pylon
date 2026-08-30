@@ -63,6 +63,7 @@ test("verify publishes bounded result metadata and session entry", async () => {
       event.value.activeChecks?.some((check: { id: string }) => check.id === "npm:test"),
   )?.value;
   assert.equal(running.activeChecks[0].label, "npm test");
+  assert.equal(Number.isNaN(Date.parse(running.activeChecks[0].startedAt)), false);
   assert.equal(entries[0]?.type, "pi-verify-result");
   assert.equal("output" in entries[0]!.data.results[0], false);
   assert.equal("output" in entries[0]!.data.hygiene, false);

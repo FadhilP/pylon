@@ -236,6 +236,14 @@ function verificationSummary(verification: VerificationReadModel): { state: Over
 }
 
 function Verification({ verification }: { verification: VerificationReadModel }) {
+  const hasRunningChecks = verification.checks.some(check => check.status === "running");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasRunningChecks) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [hasRunningChecks]);
   if (verification.availability !== "available") {
     return (
       <div className="empty-state">
@@ -251,6 +259,9 @@ function Verification({ verification }: { verification: VerificationReadModel })
       {verification.checks.map(check => {
         const state: OverviewState =
           check.status === "running" ? "running" : check.status === "passed" ? "done" : "failed";
+        const startedAt = check.startedAt ? Date.parse(check.startedAt) : Number.NaN;
+        const durationMs =
+          check.status === "running" && Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : check.durationMs;
         return (
           <div className="overview-list-row" key={check.id}>
             <OverviewOrb state={state} label={check.status} />
@@ -259,7 +270,7 @@ function Verification({ verification }: { verification: VerificationReadModel })
               <small className="mono">{check.command || check.status}</small>
             </div>
             <OverviewStateLabel state={state}>{check.status}</OverviewStateLabel>
-            <time className="mono">{formatDuration(check.durationMs)}</time>
+            <time className="mono">{formatDuration(durationMs)}</time>
           </div>
         );
       })}

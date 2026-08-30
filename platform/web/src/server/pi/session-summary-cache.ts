@@ -6,10 +6,10 @@ import { randomUUID } from "node:crypto";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { UsageHistoryAccumulator, type PersistedUsageAtom } from "./usage-history.ts";
 
-const VERSION = 3;
+const VERSION = 4;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 const CONCURRENCY = 16;
-const CACHE_FILE = "session-summaries-v3.json";
+const CACHE_FILE = "session-summaries-v4.json";
 const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 
 export interface SessionOwner {
@@ -114,7 +114,7 @@ function parseUsageAtom(value: unknown): PersistedUsageAtom | undefined {
     !item.provider ||
     !validText(item.model, 256) ||
     !item.model ||
-    !["main", "advisor", "grunt", "scout", "private", "unknown"].includes(String(item.agent)) ||
+    !["main", "advisor", "grunt", "scout", "private", "other", "unknown"].includes(String(item.agent)) ||
     !Number.isSafeInteger(item.calls) ||
     Number(item.calls) < 1 ||
     !tokens(item.input) ||

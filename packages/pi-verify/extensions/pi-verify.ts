@@ -409,7 +409,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
           .slice()
           .sort((a, b) => a.index - b.index)
           .map(item => item.result);
-      const activeChecks = new Map<string, { id: string; label: string; command: string }>();
+      const activeChecks = new Map<string, { id: string; label: string; command: string; startedAt: string }>();
       const publishRunning = () => {
         pi.events.emit("pi-verify:lifecycle", {
           version: 1,
@@ -437,18 +437,19 @@ export default function verifyExtension(pi: ExtensionAPI) {
       const runCheck = async (check: (typeof checks)[number]) => {
         const displayIndex = ++startedChecks;
         const progress = `Verify: Running ${displayIndex}/${checks.length}`;
+        const started = Date.now();
         if (ctx.hasUI) ctx.ui.setStatus("pi-verify", progress);
         activeChecks.set(check.id, {
           id: check.id,
           label: check.label,
           command: [check.command, ...check.args].join(" "),
+          startedAt: new Date(started).toISOString(),
         });
         publishRunning();
         onUpdate?.({
           content: [{ type: "text", text: `Running ${displayIndex}/${checks.length}: ${check.label}` }],
           details: runningDetails(),
         });
-        const started = Date.now();
         const heartbeat = setInterval(() => {
           const durationMs = Date.now() - runStarted;
           if (ctx.hasUI) ctx.ui.setStatus("pi-verify", `${progress} · ${(durationMs / 1000).toFixed(0)}s`);

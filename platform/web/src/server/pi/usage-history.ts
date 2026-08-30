@@ -155,7 +155,7 @@ export class UsageHistoryAccumulator {
             timestamp(entry),
             event.provider,
             event.model,
-            "private",
+            "other",
             normalizeUsage(event.usage, event.usage.turns),
           )
         : undefined;

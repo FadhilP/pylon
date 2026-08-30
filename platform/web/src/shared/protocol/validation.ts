@@ -67,7 +67,7 @@ const sieveLatestModes = new Set(["enabled", "observe"]);
 const sieveProjectionModes = new Set(["stable", "legacy", "standard-v2"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
-const usageAgents = new Set(["main", "advisor", "grunt", "scout", "private", "unknown"]);
+const usageAgents = new Set(["main", "advisor", "grunt", "scout", "private", "other", "unknown"]);
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function record(value: unknown): value is Record<string, unknown> {

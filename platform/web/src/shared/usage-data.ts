@@ -50,7 +50,7 @@ export interface UsageSessionRow {
 }
 
 export const USAGE_FACETS: UsageFacet[] = ["project", "provider", "model"];
-export const USAGE_AGENT_ORDER: UsageAgent[] = ["main", "scout", "grunt", "advisor", "private", "unknown"];
+export const USAGE_AGENT_ORDER: UsageAgent[] = ["main", "scout", "grunt", "advisor", "private", "other", "unknown"];
 
 const USAGE_AGENT_LABELS: Record<UsageAgent, string> = {
   main: "Main agent",
@@ -58,6 +58,7 @@ const USAGE_AGENT_LABELS: Record<UsageAgent, string> = {
   grunt: "Grunt",
   advisor: "Advisor",
   private: "Private agents",
+  other: "Other",
   unknown: "Unknown",
 };
 export const usageAgentLabel = (agent: UsageAgent): string => USAGE_AGENT_LABELS[agent];

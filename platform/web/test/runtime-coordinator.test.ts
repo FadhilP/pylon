@@ -444,7 +444,7 @@ test("session index reuses its persisted cache and rebuilds corrupt or outdated 
   const session = SessionManager.create(cwd);
   let added: SessionManager | undefined;
   persistSession(session, "Persisted cache source");
-  const cachePath = join(isolatedAgentDir, "pylon-web", "session-summaries-v3.json");
+  const cachePath = join(isolatedAgentDir, "pylon-web", "session-summaries-v4.json");
   const options = { activeId: session.getSessionId(), generation: 1, stateFor: () => "sleeping" as const };
 
   try {

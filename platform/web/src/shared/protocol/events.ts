@@ -319,6 +319,7 @@ export interface VerificationCheckReadModel {
   command: string;
   status: "running" | "passed" | "failed" | "error";
   durationMs: number;
+  startedAt?: string;
   output?: string;
   truncated: boolean;
 }
