@@ -17,7 +17,11 @@ import {
 import { git } from "../src/git.ts";
 import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry } from "../src/run.ts";
-import { TIMELINE_STATE_VERSION, timelineStateSnapshot } from "../src/state.ts";
+import {
+  TIMELINE_STATE_VERSION,
+  timelineStateSnapshot,
+  type TimelineCheckpointFailureState,
+} from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
 import { defaultConfig, loadConfig, parseModelRef, type TimelineConfig } from "../src/config.ts";
 import {
@@ -56,6 +60,8 @@ export default function timelineExtension(
     changeBases: new Map<string, Snapshot | null>(),
     /** Checkpoint ids the UI already confirmed a fork for. */
     confirmedForks: new Set<string>(),
+    /** Session-scoped capture failures, keyed by their prompt entry. */
+    failures: new Map<string, TimelineCheckpointFailureState>(),
   };
 
   /** Session-title generation; `generation` invalidates a naming call that outlived its session. */
@@ -121,6 +127,10 @@ export default function timelineExtension(
   });
   const artifactRoot = options.artifactRoot ?? join(getAgentDir(), "pi-timeline");
   const key = (sessionId: string, entryId: string) => `${sessionId}:${entryId}`;
+  const failureReason = (error: unknown, cwd: string) => {
+    const message = (error instanceof Error ? error.message : String(error)).replaceAll(cwd, ".");
+    return message.replace(/\s+/g, " ").trim().slice(0, 500) || "Unknown checkpoint capture error";
+  };
   const mutationDetails = (cwd: string, operation: string) => ({
     version: 1,
     cwd,
@@ -182,6 +192,7 @@ export default function timelineExtension(
       undoPromptEntryIds,
       forkPromptEntryIds,
       forkPromptCheckpoints,
+      [...checkpoints.failures.values()],
     );
   };
   const publishState = (available = true) => {
@@ -842,6 +853,7 @@ export default function timelineExtension(
       });
       if (record.baselineEntryId) sessionBaseline = undefined;
       checkpoints.paired = true;
+      checkpoints.failures.delete(user.id);
       refresh(ctx);
       publishState();
       const branchAfterCapture = ctx.sessionManager.getBranch();
@@ -851,9 +863,18 @@ export default function timelineExtension(
         .findLast((entry: any) => entry.type === "message" && entry.message.role === "assistant");
       void nameCheckpoint(ctx, key(sessionId, checkpointEntryId), checkpointEntryId, user, finalAssistant, changes);
       return record;
-    } catch (e: any) {
+    } catch (error: unknown) {
       if (snap) await deleteRefs(snap).catch(() => {});
-      if (ctx.hasUI) ctx.ui.notify(`Timeline checkpoint skipped: ${e.message}`, "warning");
+      const reason = failureReason(error, ctx.cwd);
+      checkpoints.failures.set(user.id, {
+        id: `failure:${hash(`${sessionId}:${user.id}`).slice(0, 24)}`,
+        promptEntryId: user.id,
+        title: promptText(user.message).split(/\r?\n/, 1)[0] || "Checkpoint",
+        createdAt: new Date().toISOString(),
+        reason,
+      });
+      publishState();
+      if (ctx.hasUI) ctx.ui.notify(`Timeline checkpoint skipped: ${reason}`, "warning");
     }
   }
   const disposeVerify = pi.events.on("pi-verify:result", (event: any) => {
@@ -900,6 +921,7 @@ export default function timelineExtension(
     mutations.denied.clear();
     mutations.heartbeatJobs.clear();
     checkpoints.confirmedForks.clear();
+    checkpoints.failures.clear();
     mutations.automatic = false;
     mutations.generation = 0;
     session.agentRunning = false;
@@ -1111,6 +1133,7 @@ export default function timelineExtension(
     };
     pi.appendEntry("pi-timeline-clear", cleared);
     for (const [id] of owned) checkpoints.records.delete(id);
+    checkpoints.failures.clear();
     refresh(ctx);
     publishState();
     await establishSessionBaseline(ctx);

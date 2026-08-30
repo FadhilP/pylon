@@ -1217,7 +1217,7 @@ test("text-only final response automatically completes ready work", async () => 
   }
 });
 
-test("automatic completion waits for required verification", async () => {
+test("automatic completion waits for required verification but accepts a stale result", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-auto-verify-"));
   const cwd = join(root, "repo");
@@ -1274,8 +1274,8 @@ test("automatic completion waits for required verification", async () => {
       version: 1,
       sessionId: ctx.sessionManager.getSessionId(),
       cwd,
-      state: "passed",
-      runId: "run",
+      state: "stale",
+      runId: "stale",
       results: [],
     });
     await app.handlers.get("message_end")?.[0]?.(finalMessage, ctx);
@@ -1288,7 +1288,7 @@ test("automatic completion waits for required verification", async () => {
   }
 });
 
-test("verification clears only its own blocker state", async () => {
+test("issues clear on their owning lifecycle transitions", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-verify-issue-"));
   const cwd = join(root, "repo");
@@ -1305,7 +1305,13 @@ test("verification clears only its own blocker state", async () => {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
     const tool = app.tools.get("continuity_update");
-    await tool.execute("plan", { action: "set_plan", goal: "Change", todos: ["Ship"] }, undefined, undefined, ctx);
+    await tool.execute(
+      "plan",
+      { action: "set_plan", goal: "Change", todos: ["Ship", "Verify"] },
+      undefined,
+      undefined,
+      ctx,
+    );
     const context = async () => (await app.handlers.get("context")?.[0]({ messages: [] }, ctx)).messages.at(-1).content;
 
     app.emit("pi-verify:result", {
@@ -1336,7 +1342,30 @@ test("verification clears only its own blocker state", async () => {
     assert.match(await context(), /Blocked: Manual blocker/);
     assert.match(await context(), /Next: Wait for user/);
 
-    await tool.execute("clear", { action: "state", latestFailure: "", nextAction: "" }, undefined, undefined, ctx);
+    await tool.execute(
+      "advance",
+      { action: "todo", todoId: "todo_1", status: "done", nextTodoId: "todo_2" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.doesNotMatch(await context(), /Manual blocker|Wait for user/);
+
+    await tool.execute(
+      "manual-again",
+      { action: "state", latestFailure: "Superseded blocker", nextAction: "Old next action" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    await tool.execute(
+      "replace-plan",
+      { action: "set_plan", goal: "Finish", todos: ["Finish", "Verify"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.doesNotMatch(await context(), /Superseded blocker|Old next action/);
     app.emit("pi-verify:result", {
       version: 1,
       sessionId: ctx.sessionManager.getSessionId(),
@@ -1345,6 +1374,14 @@ test("verification clears only its own blocker state", async () => {
       runId: "failed-again",
       results: [],
     });
+    assert.match(await context(), /Verification failed/);
+    await tool.execute(
+      "progress-after-verification-failure",
+      { action: "todo", todoId: "todo_1", status: "done", nextTodoId: "todo_2" },
+      undefined,
+      undefined,
+      ctx,
+    );
     assert.match(await context(), /Verification failed/);
     app.emit("pi-verify:result", {
       version: 1,
@@ -1362,7 +1399,7 @@ test("verification clears only its own blocker state", async () => {
       cwd,
       state: "failed",
       id: "job-1",
-      todoId: "todo_1",
+      todoId: "todo_2",
     });
     assert.match(await context(), /Background job job-1 failed/);
     app.emit("pi-heartbeat:job", {
@@ -1371,7 +1408,7 @@ test("verification clears only its own blocker state", async () => {
       cwd,
       state: "completed",
       id: "job-1",
-      todoId: "todo_1",
+      todoId: "todo_2",
     });
     assert.doesNotMatch(await context(), /Background job job-1 failed/);
   } finally {

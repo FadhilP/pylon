@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { applyOperationalEvent, initialOperational } from "../src/server/pi/operational-projections.ts";
 
-test("Verify running lifecycle exposes timer metadata before checks finish", () => {
+test("Verify running lifecycle exposes active checks before they finish", () => {
   const startedAt = new Date(1_000).toISOString();
   const state = applyOperationalEvent(initialOperational(["verify"], []), "pi-verify:lifecycle", {
     version: 1,
@@ -11,13 +11,23 @@ test("Verify running lifecycle exposes timer metadata before checks finish", () 
     scope: "changed",
     startedAt,
     results: [],
+    activeChecks: [{ id: "npm:test", label: "npm test", command: "npm test" }],
   });
 
   assert.equal(state.verification.availability, "available");
   assert.equal(state.verification.state, "running");
   assert.equal(state.verification.startedAt, startedAt);
   assert.equal(state.verification.scope, "changed");
-  assert.deepEqual(state.verification.checks, []);
+  assert.deepEqual(state.verification.checks, [
+    {
+      id: "npm:test",
+      label: "npm test",
+      command: "npm test",
+      status: "running",
+      durationMs: 0,
+      truncated: false,
+    },
+  ]);
 });
 
 test("operational projections structurally share unchanged branches and ignore stale snapshots", () => {
@@ -328,6 +338,16 @@ test("state snapshots reject stale revisions and policy unregister removes owner
           verificationState: "failed",
         },
       ],
+      failures: [
+        {
+          id: "failure-1",
+          promptEntryId: "user-3",
+          title: "Third prompt",
+          createdAt: new Date(2).toISOString(),
+          reason: "Git operation in progress: .",
+        },
+        { id: "invalid failure" },
+      ],
     },
     [],
     "session",
@@ -337,6 +357,15 @@ test("state snapshots reject stale revisions and policy unregister removes owner
   assert.equal(state.timeline.checkpoints[0]?.verificationState, "passed");
   assert.equal(state.timeline.checkpoints[1]?.verificationState, "failed");
   assert.equal(state.timeline.checkpoints[1]?.verified, false);
+  assert.deepEqual(state.timeline.failures, [
+    {
+      id: "failure-1",
+      promptEntryId: "user-3",
+      title: "Third prompt",
+      createdAt: new Date(2).toISOString(),
+      reason: "Git operation in progress: .",
+    },
+  ]);
 
   state = applyOperationalEvent(state, "pylon:tool-policy", {
     version: 1,

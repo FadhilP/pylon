@@ -20,12 +20,21 @@ export interface TimelineCheckpointState {
   changes?: TimelineCheckpointChanges;
 }
 
+export interface TimelineCheckpointFailureState {
+  id: string;
+  promptEntryId: string;
+  title: string;
+  createdAt: string;
+  reason: string;
+}
+
 export interface TimelineStateSnapshot {
   version: typeof TIMELINE_STATE_VERSION;
   revision: number;
   sessionId: string;
   available: boolean;
   checkpoints: TimelineCheckpointState[];
+  failures: TimelineCheckpointFailureState[];
   undoPromptEntryIds: string[];
   forkPromptEntryIds: string[];
   forkPromptCheckpoints: Array<{ promptEntryId: string; checkpointId: string }>;
@@ -45,6 +54,7 @@ export function timelineStateSnapshot(
   undoPromptEntryIds: string[] = [],
   forkPromptEntryIds: string[] = [],
   forkPromptCheckpoints: Array<{ promptEntryId: string; checkpointId: string }> = [],
+  failures: TimelineCheckpointFailureState[] = [],
 ): TimelineStateSnapshot {
   return {
     version: TIMELINE_STATE_VERSION,
@@ -58,6 +68,15 @@ export function timelineStateSnapshot(
       .map(item => ({
         promptEntryId: item.promptEntryId.slice(0, 128),
         checkpointId: item.checkpointId.slice(0, 128),
+      })),
+    failures: failures
+      .slice(-20)
+      .map(item => ({
+        id: item.id.slice(0, 128),
+        promptEntryId: item.promptEntryId.slice(0, 128),
+        title: item.title.slice(0, 500),
+        createdAt: item.createdAt,
+        reason: item.reason.slice(0, 500),
       })),
     checkpoints: checkpoints
       .slice(-100)

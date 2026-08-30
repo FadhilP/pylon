@@ -67,7 +67,7 @@ export function initialOperational(
     guard: { availability: loaded.has("pi-guard.ts") ? "available" : "unavailable", blocked: 0, confirmed: 0 },
     continuity: { availability: "unavailable", revision: 0, memory: [], globalMemory: [], v4MigrationAvailable: false },
     papercuts: { availability: "unavailable", revision: 0, counts: { open: 0, resolved: 0, dismissed: 0, total: 0 } },
-    timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
+    timeline: { availability: "unavailable", revision: 0, checkpoints: [], failures: [] },
     tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
     sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
     health: { status: "healthy", issues: [] },
@@ -121,7 +121,11 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
         : undefined,
     },
     papercuts: { ...value.papercuts, counts: { ...value.papercuts.counts } },
-    timeline: { ...value.timeline, checkpoints: value.timeline.checkpoints.map(item => ({ ...item })) },
+    timeline: {
+      ...value.timeline,
+      checkpoints: value.timeline.checkpoints.map(item => ({ ...item })),
+      failures: (value.timeline.failures ?? []).map(item => ({ ...item })),
+    },
     tools: {
       ...value.tools,
       policies: value.tools.policies.map(item => ({
@@ -450,9 +454,18 @@ function verification(value: unknown, redact: (value: string) => string): Verifi
   const input = record(value);
   if (!input || input.version !== 1 || !verificationStates.has(String(input.state)))
     return { availability: "unavailable", checks: [] };
+  const rawActiveChecks = Array.isArray(input.activeChecks) ? input.activeChecks : [];
+  const activeChecks = rawActiveChecks.slice(0, 20).flatMap((value, index) => {
+    const item = record(value);
+    if (!item) return [];
+    const id = identifier(item.id) ?? `active-check-${index + 1}`;
+    const label = string(item.label, 200) ?? id;
+    const command = redact(string(item.command, 500) ?? "").slice(0, 500);
+    return [{ id, label, command, status: "running" as const, durationMs: 0, truncated: false }];
+  });
   const rawResults = Array.isArray(input.results) ? input.results : [];
   let outputBudget = 16 * 1024;
-  const checks = rawResults.slice(0, 20).flatMap((value, index) => {
+  const checks = rawResults.slice(0, 20 - activeChecks.length).flatMap((value, index) => {
     const item = record(value);
     if (!item) return [];
     const id = identifier(item.id) ?? `check-${index + 1}`;
@@ -487,7 +500,7 @@ function verification(value: unknown, redact: (value: string) => string): Verifi
     ...(string(input.startedAt, 64) ? { startedAt: string(input.startedAt, 64) } : {}),
     ...(string(input.finishedAt, 64) ? { finishedAt: string(input.finishedAt, 64) } : {}),
     ...(typeof input.durationMs === "number" ? { durationMs: Math.max(0, number(input.durationMs)) } : {}),
-    checks,
+    checks: [...activeChecks, ...checks],
     ...(string(input.skipped, 1_000) ? { message: string(input.skipped, 1_000) } : {}),
   };
 }
@@ -798,11 +811,13 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
     !Number.isSafeInteger(input.revision) ||
     (input.revision as number) <= old.revision
   )
-    return input?.version === 4 ? old : { availability: "unavailable", revision: old.revision, checkpoints: [] };
+    return input?.version === 4
+      ? old
+      : { availability: "unavailable", revision: old.revision, checkpoints: [], failures: [] };
   if (input.available !== true)
-    return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
+    return { availability: "unavailable", revision: input.revision as number, checkpoints: [], failures: [] };
   if (!Array.isArray(input.checkpoints))
-    return { availability: "unavailable", revision: input.revision as number, checkpoints: [] };
+    return { availability: "unavailable", revision: input.revision as number, checkpoints: [], failures: [] };
   const checkpoints = input.checkpoints.slice(-100).flatMap(value => {
     const item = record(value);
     const id = identifier(item?.id);
@@ -844,7 +859,18 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
       },
     ];
   });
-  return { availability: "available", revision: input.revision as number, checkpoints };
+  const failures = (Array.isArray(input.failures) ? input.failures : []).slice(-20).flatMap(value => {
+    const item = record(value);
+    const id = identifier(item?.id);
+    const promptEntryId = identifier(item?.promptEntryId);
+    const title = string(item?.title, 500);
+    const createdAt = string(item?.createdAt, 64);
+    const reason = string(item?.reason, 500);
+    return item && id && promptEntryId && title && createdAt && reason
+      ? [{ id, promptEntryId, title, createdAt, reason }]
+      : [];
+  });
+  return { availability: "available", revision: input.revision as number, checkpoints, failures };
 }
 
 function toolPolicy(old: ToolsReadModel, value: unknown): ToolsReadModel {

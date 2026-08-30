@@ -317,7 +317,7 @@ export interface VerificationCheckReadModel {
   id: string;
   label: string;
   command: string;
-  status: "passed" | "failed" | "error";
+  status: "running" | "passed" | "failed" | "error";
   durationMs: number;
   output?: string;
   truncated: boolean;
@@ -433,10 +433,19 @@ export interface TimelineCheckpointReadModel {
   changes?: { fileCount: number; additions: number; deletions: number; binaryCount: number };
 }
 
+export interface TimelineCheckpointFailureReadModel {
+  id: string;
+  promptEntryId: string;
+  title: string;
+  createdAt: string;
+  reason: string;
+}
+
 export interface TimelineReadModel {
   availability: FeatureState;
   revision: number;
   checkpoints: TimelineCheckpointReadModel[];
+  failures?: TimelineCheckpointFailureReadModel[];
 }
 
 export interface ToolPolicyReadModel {

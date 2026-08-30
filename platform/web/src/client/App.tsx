@@ -80,12 +80,14 @@ import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runt
 import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
+import { TurnDiffPanel } from "./turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "./use-session-catalog";
 import { useComposerDrafts } from "./use-composer-drafts";
 import { rememberSetting, readStoredNumber, useDocumentTitle, useTheme } from "./use-chrome";
 import { useSettingsDialog } from "./use-settings-dialog";
 import { useMarkSessionSeen, useTerminalDrawer } from "./use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
+import { exitDelay } from "./motion";
 
 type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
 type FileNavigation = "explorer" | "sessions";
@@ -94,6 +96,12 @@ type SelectedAttachment = {
   sessionId: string;
   attachments: MessageAttachmentReadModel[];
   index: number;
+  trigger: HTMLButtonElement;
+};
+type SelectedTurnDiff = {
+  sessionId: string;
+  entryId: string;
+  files: NonNullable<MessageReadModel["changedFiles"]>;
   trigger: HTMLButtonElement;
 };
 type PendingSession = {
@@ -167,6 +175,7 @@ export function App() {
   const [fileNavigation, setFileNavigation] = useState<FileNavigation>("explorer");
   const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
   const [selectedAttachment, setSelectedAttachment] = useState<SelectedAttachment>();
+  const [selectedTurnDiff, setSelectedTurnDiff] = useState<SelectedTurnDiff>();
   const [sessionPages, setSessionPages] = useState<SessionProjectPage[]>([]);
   const [activeSessions, setActiveSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -362,7 +371,10 @@ export function App() {
     setSelectedAgentId(undefined);
     setSelectedCompaction(undefined);
     setSelectedAttachment(undefined);
-    setReference(current => (current === "compaction" || current === "attachment" ? null : current));
+    setSelectedTurnDiff(undefined);
+    setReference(current =>
+      current === "compaction" || current === "attachment" || current === "turn-diff" ? null : current,
+    );
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
   useEffect(() => {
@@ -435,6 +447,7 @@ export function App() {
     }
     // Panels opened from the conversation have no button of their own.
     if (closed === "attachment") selectedAttachment?.trigger.focus();
+    else if (closed === "turn-diff") selectedTurnDiff?.trigger.focus();
     else panelToggles.current.get("overview")?.focus();
   }, [reference]);
 
@@ -1275,6 +1288,25 @@ export function App() {
             }
           : undefined
       }
+      openTurnDiffEntryId={
+        reference === "turn-diff" && selectedTurnDiff?.sessionId === live.runtime?.sessionId
+          ? selectedTurnDiff?.entryId
+          : undefined
+      }
+      onOpenTurnDiff={(entryId, files, trigger) => {
+        const sessionId = live.runtime?.sessionId;
+        if (!sessionId) return;
+        if (
+          reference === "turn-diff" &&
+          selectedTurnDiff?.sessionId === sessionId &&
+          selectedTurnDiff.entryId === entryId
+        ) {
+          setReference(null);
+          return;
+        }
+        setSelectedTurnDiff({ sessionId, entryId, files, trigger });
+        setReference("turn-diff");
+      }}
       onOpenAttachment={(attachments, index, trigger) => {
         const sessionId = live.runtime?.sessionId;
         if (!sessionId) return;
@@ -1358,6 +1390,14 @@ export function App() {
           attachments={selectedAttachment.attachments}
           index={selectedAttachment.index}
           onSelect={index => setSelectedAttachment(current => (current ? { ...current, index } : current))}
+          onClose={() => setReference(null)}
+        />
+      )}
+      {reference === "turn-diff" && selectedTurnDiff && selectedTurnDiff.sessionId === live.runtime?.sessionId && (
+        <TurnDiffPanel
+          key={`turn-diff:${selectedTurnDiff.entryId}`}
+          entryId={selectedTurnDiff.entryId}
+          files={selectedTurnDiff.files}
           onClose={() => setReference(null)}
         />
       )}
@@ -1891,17 +1931,22 @@ function SidebarResizer({
   width: number;
   onCommit: (width: number) => void;
 }) {
-  const resize = (clientX: number) => {
-    const next = leftPanelWidth(clientX);
+  const resize = (value: number) => {
+    const next = leftPanelWidth(value);
     container.current?.style.setProperty("--sidebar-width", `${next}px`);
     return next;
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    // The shell eases grid-template-columns for the collapse toggle; during a drag
+    // that easing lags the pointer, so it is suspended for the length of the drag.
+    container.current?.classList.add("is-resizing");
+    // Track the pointer delta: the sidebar's left edge is not always at x = 0 (the scope rail sits before it).
+    const startX = event.clientX;
     let next = width;
     const move = (moveEvent: PointerEvent) => {
-      next = resize(moveEvent.clientX);
+      next = resize(width + moveEvent.clientX - startX);
     };
     const up = () => {
       cleanup();
@@ -1912,6 +1957,7 @@ function SidebarResizer({
       container.current?.style.setProperty("--sidebar-width", `${width}px`);
     };
     const cleanup = () => {
+      container.current?.classList.remove("is-resizing");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
@@ -1947,7 +1993,7 @@ function ErrorToast({ message, onClose }: { message: string; onClose: () => void
   const close = () => {
     if (exiting) return;
     setExiting(true);
-    window.setTimeout(onClose, 140);
+    window.setTimeout(onClose, exitDelay(140));
   };
   useEffect(() => {
     const timer = window.setTimeout(close, 8_000);

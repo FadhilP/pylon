@@ -5,6 +5,8 @@ export interface FileWorkspaceState {
   tab: "changes" | "files";
   query: string;
   openPaths: string[];
+  /** Paths opened from the Changes tab; closed automatically when leaving the session. */
+  changedPaths: string[];
   views: Record<string, FileWorkspaceView>;
   selectedPath?: string;
   selectedLine?: number;
@@ -15,7 +17,17 @@ export function workspaceStateForSession(
   states: Map<string, FileWorkspaceState>,
   sessionId: string,
 ): FileWorkspaceState {
-  return states.get(sessionId) ?? { sessionId, tab: "files", query: "", openPaths: [], views: {}, view: "current" };
+  return (
+    states.get(sessionId) ?? {
+      sessionId,
+      tab: "files",
+      query: "",
+      openPaths: [],
+      changedPaths: [],
+      views: {},
+      view: "current",
+    }
+  );
 }
 
 export function openFileTab(
@@ -23,10 +35,13 @@ export function openFileTab(
   path: string,
   view: FileWorkspaceView,
   selectedLine?: number,
+  fromChanges = false,
 ): FileWorkspaceState {
   return {
     ...state,
     openPaths: state.openPaths.includes(path) ? state.openPaths : [...state.openPaths, path],
+    changedPaths:
+      fromChanges && !state.changedPaths.includes(path) ? [...state.changedPaths, path] : state.changedPaths,
     views: { ...state.views, [path]: view },
     selectedPath: path,
     selectedLine,
@@ -52,9 +67,15 @@ export function closeFileTab(state: FileWorkspaceState, path: string): FileWorks
   return {
     ...state,
     openPaths,
+    changedPaths: state.changedPaths.filter(candidate => candidate !== path),
     views,
     selectedPath,
     selectedLine: undefined,
     view: selectedPath ? (views[selectedPath] ?? "current") : "current",
   };
+}
+
+/** Closes every tab that was opened from the Changes tab, keeping regular file tabs open. */
+export function closeChangedFileTabs(state: FileWorkspaceState): FileWorkspaceState {
+  return state.changedPaths.reduce(closeFileTab, state);
 }

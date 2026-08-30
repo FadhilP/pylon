@@ -249,7 +249,8 @@ function Verification({ verification }: { verification: VerificationReadModel })
   return (
     <div className="overview-list">
       {verification.checks.map(check => {
-        const state: OverviewState = check.status === "passed" ? "done" : "failed";
+        const state: OverviewState =
+          check.status === "running" ? "running" : check.status === "passed" ? "done" : "failed";
         return (
           <div className="overview-list-row" key={check.id}>
             <OverviewOrb state={state} label={check.status} />
@@ -2026,6 +2027,7 @@ function StateQLMaterializedRows({ active, handle, total }: { active: boolean; h
 function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapshot; enabled: boolean }) {
   const timeline = live.runtime?.operational.timeline;
   const checkpoints = timeline?.checkpoints ?? [];
+  const failures = timeline?.failures ?? [];
   const [selected, setSelected] = useState<string>();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -2092,11 +2094,12 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
       <div className="timeline-toolbar">
         <span>
           {checkpoints.length} checkpoint{checkpoints.length === 1 ? "" : "s"} · {verifiedCount} verified
+          {failures.length > 0 && ` · ${failures.length} failed capture${failures.length === 1 ? "" : "s"}`}
         </span>
         <button
           className="text-button danger"
           type="button"
-          disabled={!enabled || checkpoints.length === 0}
+          disabled={!enabled || (checkpoints.length === 0 && failures.length === 0)}
           onClick={() => void act("clear")}>
           <IconTrash size={13} />
           {busy === "clear" ? "Clearing…" : "Clear timeline"}
@@ -2194,7 +2197,25 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
           </div>
         );
       })}
-      {checkpoints.length === 0 && (
+      {failures.map(failure => (
+        <div className="checkpoint-item" key={failure.id}>
+          <div className="checkpoint-row">
+            <OverviewOrb state="failed" label="Capture failed" />
+            <span className="checkpoint-copy">
+              <span className="checkpoint-title">
+                <strong title={failure.title}>{oneLine(failure.title)}</strong>
+              </span>
+              <span className="checkpoint-meta">
+                <span title={failure.reason}>{failure.reason}</span>
+                <time dateTime={failure.createdAt}>{displayTimelineTime(failure.createdAt)}</time>
+              </span>
+            </span>
+            <OverviewStateLabel state="failed">Capture failed</OverviewStateLabel>
+            <span className="checkpoint-row-actions" />
+          </div>
+        </div>
+      ))}
+      {checkpoints.length === 0 && failures.length === 0 && (
         <div className="empty-state">
           <IconTimeline size={20} />
           <strong>No checkpoints</strong>

@@ -2031,6 +2031,8 @@ function validOperational(operational: unknown): boolean {
     !Number.isSafeInteger(operational.timeline.revision) ||
     !Array.isArray(operational.timeline.checkpoints) ||
     operational.timeline.checkpoints.length > 100 ||
+    (operational.timeline.failures !== undefined &&
+      (!Array.isArray(operational.timeline.failures) || operational.timeline.failures.length > 20)) ||
     !available(operational.tools) ||
     !Array.isArray(operational.tools.policies) ||
     operational.tools.policies.length > 100 ||
@@ -2356,6 +2358,11 @@ function operationalValidationIssue(value: unknown): ValidationIssue | undefined
   if (!Number.isSafeInteger(operational.timeline.revision)) return issue("timeline.revision", "must be a safe integer");
   if (!Array.isArray(operational.timeline.checkpoints) || operational.timeline.checkpoints.length > 100)
     return issue("timeline.checkpoints", "must be an array with at most 100 items");
+  if (
+    operational.timeline.failures !== undefined &&
+    (!Array.isArray(operational.timeline.failures) || operational.timeline.failures.length > 20)
+  )
+    return issue("timeline.failures", "must be an array with at most 20 items");
   if (!Array.isArray(operational.tools.policies) || operational.tools.policies.length > 100)
     return issue("tools.policies", "must be an array with at most 100 items");
   if (!healthStatuses.has(String(operational.health.status)))
@@ -2480,7 +2487,7 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
               revision: 0,
               counts: { open: 0, resolved: 0, dismissed: 0, total: 0 },
             },
-            timeline: { availability: "unavailable", revision: 0, checkpoints: [] },
+            timeline: { availability: "unavailable", revision: 0, checkpoints: [], failures: [] },
             tools: { availability: "unavailable", policies: [] },
             sieve: { availability: "unavailable" },
             health: { status: "unavailable", issues: [] },

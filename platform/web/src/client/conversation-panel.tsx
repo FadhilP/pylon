@@ -23,9 +23,7 @@ import {
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
 import {
-  lazy,
   memo,
-  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -79,8 +77,7 @@ import { ToolCallGroup, ToolCallList } from "./tool-calls";
 import { RunSeam, SeamDisclosure, SeamLink } from "./run-seam";
 import { UiDialog } from "./ui-dialog";
 import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
-
-const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
+import { exitDelay } from "./motion";
 
 const markdownTags = [
   "a",
@@ -180,7 +177,9 @@ export function ConversationPanel({
   onOpenLogin,
   onOpenCompaction,
   onOpenAttachment,
+  onOpenTurnDiff,
   openAttachment,
+  openTurnDiffEntryId,
 }: {
   live: RuntimeStoreSnapshot;
   projectAvailable?: boolean;
@@ -195,7 +194,13 @@ export function ConversationPanel({
   onOpenLogin?: (provider?: string) => void;
   onOpenCompaction: (message: MessageReadModel) => void;
   onOpenAttachment: (attachments: MessageAttachmentReadModel[], index: number, trigger: HTMLButtonElement) => void;
+  onOpenTurnDiff: (
+    entryId: string,
+    files: NonNullable<MessageReadModel["changedFiles"]>,
+    trigger: HTMLButtonElement,
+  ) => void;
   openAttachment?: { sourceEntryId: string; index: number };
+  openTurnDiffEntryId?: string;
 }) {
   const [message, setMessage] = useState(initialDraft);
   const [images, setImages] = useState<PastedImage[]>([]);
@@ -941,7 +946,12 @@ export function ConversationPanel({
                       />
                     )}
                     {block.role === "assistant" && Boolean(block.changedFiles?.length) && (
-                      <ChangedFiles files={block.changedFiles!} entryId={block.entryId} />
+                      <ChangedFiles
+                        files={block.changedFiles!}
+                        entryId={block.entryId}
+                        open={block.entryId === openTurnDiffEntryId}
+                        onOpen={onOpenTurnDiff}
+                      />
                     )}
                     {pending ? (
                       <div className="pending-message-footer" role="status">
@@ -1394,7 +1404,7 @@ function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingU
     }
     if (!displayed) return;
     setExiting(true);
-    const timer = window.setTimeout(() => setDisplayed(undefined), 140);
+    const timer = window.setTimeout(() => setDisplayed(undefined), exitDelay(140));
     return () => window.clearTimeout(timer);
   }, [request, displayed]);
 
@@ -2406,52 +2416,17 @@ function finalAssistantIds(messages: MessageReadModel[]): Set<string> {
   return result;
 }
 
-function TurnDiffView({ entryId }: { entryId: string }) {
-  const [state, setState] = useState<{ loading: boolean; error?: string; text?: string; truncated?: boolean }>({
-    loading: true,
-  });
-  useEffect(() => {
-    let active = true;
-    setState({ loading: true });
-    runtimeStore
-      .turnDiff(entryId)
-      .then(result => {
-        if (!active) return;
-        if (result.state === "binary") setState({ loading: false, error: "Binary changes" });
-        else setState({ loading: false, text: result.text ?? "", truncated: result.truncated === true });
-      })
-      .catch(error => {
-        if (active) setState({ loading: false, error: error instanceof Error ? error.message : String(error) });
-      });
-    return () => {
-      active = false;
-    };
-  }, [entryId]);
-  if (state.loading) return <p role="status">Loading turn diff…</p>;
-  if (state.error)
-    return (
-      <p className="changed-file-error" role="alert">
-        {state.error}
-      </p>
-    );
-  return (
-    <>
-      {state.truncated && <p role="note">Turn diff is too large — showing the first portion.</p>}
-      <Suspense fallback={<p role="status">Rendering turn diff…</p>}>
-        <PierreCodeViewer
-          mode="diff"
-          path={`turn:${entryId}`}
-          text={state.text ?? ""}
-          revision={entryId}
-          unifiedDiff={state.text ?? ""}
-        />
-      </Suspense>
-    </>
-  );
-}
-
-function ChangedFiles({ files, entryId }: { files: NonNullable<MessageReadModel["changedFiles"]>; entryId?: string }) {
-  const [showDiff, setShowDiff] = useState(false);
+function ChangedFiles({
+  files,
+  entryId,
+  open,
+  onOpen,
+}: {
+  files: NonNullable<MessageReadModel["changedFiles"]>;
+  entryId?: string;
+  open: boolean;
+  onOpen: (entryId: string, files: NonNullable<MessageReadModel["changedFiles"]>, trigger: HTMLButtonElement) => void;
+}) {
   const additions = files.reduce((total, file) => total + (file.additions ?? 0), 0);
   const deletions = files.reduce((total, file) => total + (file.deletions ?? 0), 0);
   return (
@@ -2492,13 +2467,13 @@ function ChangedFiles({ files, entryId }: { files: NonNullable<MessageReadModel[
         <button
           className="seam-toggle"
           type="button"
-          aria-expanded={showDiff}
-          onClick={() => setShowDiff(current => !current)}>
-          {showDiff ? "Hide turn diff" : "Show turn diff"}
-          <IconChevronDown className={showDiff ? "is-expanded" : ""} size={13} />
+          aria-expanded={open}
+          aria-controls={open ? "turn-diff-panel" : undefined}
+          onClick={event => onOpen(entryId, files, event.currentTarget)}>
+          {open ? "Hide turn diff" : "Show turn diff"}
+          <IconChevronRight size={13} />
         </button>
       )}
-      {showDiff && entryId && <TurnDiffView entryId={entryId} />}
     </SeamDisclosure>
   );
 }
@@ -2579,7 +2554,7 @@ function ActiveAgents({
     const timer = window.setTimeout(() => {
       setDisplayed([]);
       setExiting(false);
-    }, 140);
+    }, exitDelay(140));
     return () => window.clearTimeout(timer);
   }, [runs]);
   if (!displayed.length) return null;

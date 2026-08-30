@@ -28,6 +28,15 @@ const execute: CommandExecutor = async (command, args, options) => {
     };
   }
 };
+
+async function requiredVerificationState(root: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = await verificationWorktreeState(execute, root);
+    if (state) return state;
+    await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+  }
+  assert.fail(`Unable to inspect verification worktree state for ${root}`);
+}
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pi-timeline-checkpoint-agent-"));
 process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
@@ -121,6 +130,78 @@ test("automatic checkpoints skip read-only turns and unchanged bash", async () =
     const checkpoints = appended.filter(entry => entry.customType === "pi-prompt-checkpoint");
     assert.equal(checkpoints.length, 1);
     await deleteRefs(root, [checkpoints[0].data.worktreeRef, checkpoints[0].data.indexRef]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkpoint capture failures are bounded per prompt and cleared by a successful retry", async () => {
+  const { root } = await repository();
+  const entries: any[] = [
+    { type: "message", id: "user-1", message: { role: "user", content: `Update files in ${root}` } },
+  ];
+  const handlers = new Map<string, Function[]>();
+  const eventHandlers = new Map<string, Function>();
+  let nextEntry = 0;
+  const pi: any = {
+    events: {
+      on: (name: string, handler: Function) => {
+        eventHandlers.set(name, handler);
+        return () => eventHandlers.delete(name);
+      },
+      emit() {},
+    },
+    exec: execute,
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerCommand() {},
+    appendEntry: (customType: string, data: any) =>
+      entries.push({ type: "custom", id: `entry-${++nextEntry}`, customType, data }),
+    setSessionName() {},
+  };
+  extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+  const ctx: any = {
+    cwd: root,
+    hasUI: false,
+    mode: "json",
+    sessionManager: {
+      getBranch: () => entries,
+      getEntries: () => entries,
+      getLeafId: () => entries.at(-1)?.id,
+      getSessionFile: () => undefined,
+      getSessionId: () => "capture-failure-session",
+    },
+    ui: { notify() {}, setStatus() {} },
+  };
+  const snapshot = () => {
+    let value: any;
+    eventHandlers.get("pi-timeline:state-request")!({
+      version: 4,
+      sessionId: "capture-failure-session",
+      respond: (state: any) => {
+        value = state;
+      },
+    });
+    return value;
+  };
+  try {
+    await handlers.get("session_start")![0]({}, ctx);
+    await writeFile(join(root, ".env"), "SECRET=test\n");
+
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(snapshot().failures.length, 1);
+    assert.equal(snapshot().failures[0].promptEntryId, "user-1");
+    assert.match(snapshot().failures[0].reason, /Unsafe untracked path: \.env/);
+    assert.doesNotMatch(snapshot().failures[0].reason, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(snapshot().failures.length, 1, "the same prompt has at most one capture failure");
+
+    await rm(join(root, ".env"));
+    await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-2" }, ctx);
+    await handlers.get("agent_settled")![0]({}, ctx);
+    assert.equal(snapshot().failures.length, 0);
+    assert.equal(snapshot().checkpoints.length, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -312,7 +393,7 @@ test("automatic checkpoints attach matching verification outcomes only", async (
     await handlers.get("session_start")![0]({}, ctx);
     await writeFile(join(root, "tracked.txt"), "verified\n");
     await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
-    const verifiedState = await verificationWorktreeState(execute, root);
+    const verifiedState = await requiredVerificationState(root);
     await events.emit("pi-verify:result", {
       version: 1,
       sessionId: "verified-session",
@@ -320,7 +401,7 @@ test("automatic checkpoints attach matching verification outcomes only", async (
       runId: "run-1",
       state: "passed",
       scope: "changed",
-      worktreeId: verifiedState!.id,
+      worktreeId: verifiedState.id,
       results: [{ label: "tests" }],
     });
     await handlers.get("agent_settled")![0]({}, ctx);
@@ -333,7 +414,7 @@ test("automatic checkpoints attach matching verification outcomes only", async (
       runId: "run-2",
       state: "passed",
       scope: "changed",
-      worktreeId: verifiedState!.id,
+      worktreeId: verifiedState.id,
       results: [{ label: "tests" }],
     });
     await writeFile(join(root, "tracked.txt"), "changed after verification\n");
@@ -343,7 +424,7 @@ test("automatic checkpoints attach matching verification outcomes only", async (
     entries.push({ type: "message", id: "user-3", message: { role: "user", content: "Fail verification" } });
     await writeFile(join(root, "tracked.txt"), "failed verification\n");
     await handlers.get("tool_result")![0]({ toolName: "edit", toolCallId: "edit-2" }, ctx);
-    const failedState = await verificationWorktreeState(execute, root);
+    const failedState = await requiredVerificationState(root);
     await events.emit("pi-verify:result", {
       version: 1,
       sessionId: "verified-session",
@@ -351,7 +432,7 @@ test("automatic checkpoints attach matching verification outcomes only", async (
       runId: "run-3",
       state: "failed",
       scope: "changed",
-      worktreeId: failedState!.id,
+      worktreeId: failedState.id,
       results: [{ label: "tests" }],
     });
     await handlers.get("agent_settled")![0]({}, ctx);

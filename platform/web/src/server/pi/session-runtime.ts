@@ -176,6 +176,7 @@ import {
   encodeHistoryCursor,
   encodeTurnIndexCursor,
   HISTORY_PAGE_SIZE,
+  browserJson,
   latestVisibleUserIndex,
   mergeDelegatedRuns,
   projectConversation,
@@ -902,7 +903,10 @@ export class SessionRuntime implements PiDriver {
   private turnGitBranchesLeafId: string | null | undefined;
   private readonly toolDurations = new Map<string, number>();
   private toolDurationsLeafId: string | null | undefined;
-  private readonly activeToolStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
+  private readonly activeToolStarts = new Map<
+    string,
+    { startedAt: string; startedAtMs: number; name: string; input?: string }
+  >();
   private readonly turnControls = new Map<
     string,
     { modelName?: string; thinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"] }
@@ -2984,7 +2988,12 @@ export class SessionRuntime implements PiDriver {
         if (phase === "start") {
           const startedAtMs = Date.now();
           const startedAt = new Date(startedAtMs).toISOString();
-          this.activeToolStarts.set(toolCallId, { startedAt, startedAtMs });
+          this.activeToolStarts.set(toolCallId, {
+            startedAt,
+            startedAtMs,
+            name: String(raw.toolName ?? raw.name ?? ""),
+            input: browserJson(raw.args ?? raw.input),
+          });
           forwarded = { ...raw, startedAt };
         } else if (phase === "end") {
           const started = this.activeToolStarts.get(toolCallId);
@@ -3556,7 +3565,13 @@ export class SessionRuntime implements PiDriver {
       diagnostics: [...this.diagnostics],
       conversation: {
         messages: projectedMessages,
-        tools: [],
+        tools: [...this.activeToolStarts].map(([id, tool]) => ({
+          id,
+          name: tool.name,
+          ...(tool.input === undefined ? {} : { input: tool.input }),
+          status: "running" as const,
+          startedAt: tool.startedAt,
+        })),
         delegatedRuns,
         ...(historyStart > 0
           ? { historyCursor: encodeHistoryCursor(historyStart), historyRemaining: historyStart }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { exitDelay } from "./motion";
 
 export function AnimatedDetails({
   className,
@@ -21,8 +22,7 @@ export function AnimatedDetails({
     window.clearTimeout(closeTimer.current);
     if (expanded) {
       setExpanded(false);
-      const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 160;
-      closeTimer.current = window.setTimeout(() => setOpen(false), delay);
+      closeTimer.current = window.setTimeout(() => setOpen(false), exitDelay(160));
       return;
     }
     onExpand?.();

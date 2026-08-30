@@ -645,7 +645,12 @@ test("session switching restores live delegated-agent metadata from the backgrou
     });
 
     await coordinator.switchSession({ sessionId: initial.sessionId });
-    const [run] = (await coordinator.snapshot()).conversation.delegatedRuns;
+    const snapshot = await coordinator.snapshot();
+    const [tool] = snapshot.conversation.tools;
+    assert.equal(tool?.id, "spawn-background");
+    assert.equal(tool?.status, "running");
+    assert.ok(tool?.startedAt);
+    const [run] = snapshot.conversation.delegatedRuns;
     assert.equal(run?.status, "running");
     assert.equal(run?.agentName, "Ada");
     assert.equal(run?.threadId, "child-session");

@@ -1145,6 +1145,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   const completeWork = async (ctx: any) => {
     if (!work || work.mode === "completed") return false;
+    clearIssue(work);
     work.mode = "completed";
     work.currentTodoId = undefined;
     work.completedAt = new Date().toISOString();
@@ -1165,11 +1166,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (event?.version !== 1 || event.cwd !== session.cwd || event.sessionId !== session.id) return;
     verifyState.latest = event;
     let changed = false;
-    if (["passed", "clean", "no_checks"].includes(event.state) && work?.issue?.kind === "verification") {
+    if (["passed", "clean", "no_checks", "stale"].includes(event.state) && work?.issue?.kind === "verification") {
       clearIssue(work);
       changed = true;
     }
-    if (event.state === "passed") {
+    if (["passed", "stale"].includes(event.state)) {
       verifyState.needed = false;
       const remaining = work?.mode === "executing" ? work.todos.filter(todo => todo.status !== "done") : [];
       if (work && remaining.length === 1 && isVerificationOnlyTodo(remaining[0].text)) {
@@ -1177,12 +1178,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
         changed = true;
       }
     }
-    if (work && event.state === "failed") {
+    if (work && ["failed", "error"].includes(event.state)) {
       setIssue(
         work,
         "verification",
-        `Verification failed (${event.results?.find((item: any) => item.code !== 0)?.command ?? "unknown check"}).`,
-        "Inspect bounded verification failure; use Scout then Advisor if root cause or approach remains unclear.",
+        `Verification ${event.state} (${event.results?.find((item: any) => item.code !== 0)?.command ?? "unknown check"}).`,
+        "Inspect the bounded verification problem and repair it only when attributable to current changes; otherwise report it.",
       );
       changed = true;
     }
@@ -1322,9 +1323,9 @@ export default function continuityExtension(pi: ExtensionAPI) {
         work?.mode === "executing" &&
         (startupChanges === undefined || startupChanges.size > 0) &&
         !(
-          verifyState.latest?.state === "passed" &&
-          verifyState.latest.sessionId === sessionId &&
-          verifyState.latest.worktreeId === startupIdentity
+          verifyState.latest?.sessionId === sessionId &&
+          (verifyState.latest.state === "stale" ||
+            (verifyState.latest.state === "passed" && verifyState.latest.worktreeId === startupIdentity))
         );
       if (memory.enabled) {
         try {
@@ -2386,6 +2387,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           .filter(Boolean)
           .slice(0, 12),
       };
+    clearIssue(work);
     setPlan(work, todos, now);
     if (!planning && !work.currentTodoId) {
       const first = work.todos.find(todo => todo.status !== "done");
@@ -2441,6 +2443,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       updateTodo(active, todo.id, p.status, now);
       if (next) updateTodo(active, next.id, "in_progress", now);
     }
+    if (active.issue?.kind === "manual" && (bulkIds || p.status === "done" || p.status === "in_progress"))
+      clearIssue(active);
     applyManualIssueUpdate(active, p.latestFailure, p.nextAction);
     return undefined;
   };
@@ -2492,7 +2496,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use IDs.",
       "Keep verification out of new todo lists; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
       "Never call a completion tool. Write exactly one text-only final response. For clean/no_checks, acknowledge allowUnverified tool-only; disclose the limitation.",
-      "After failed, stale, cancelled, or error Verify results, write one caveated text-only final response and stop without another tool call.",
+      "After passed, stale, or cancelled Verify results, write one caveated text-only final response and stop without another tool call; stale does not require another Verify. After failed or error results caused by current changes, diagnose and repair them, then Verify again; report unrelated failures without modifying them.",
     ],
     renderShell: "self",
     renderCall: () => new Container(),

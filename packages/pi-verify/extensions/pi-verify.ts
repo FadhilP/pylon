@@ -127,7 +127,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
   let latestContext: any;
   let currentCwd = "";
   let currentSessionId = "";
-  let nonPassingState: VerificationState | undefined;
+  let terminalState: VerificationState | undefined;
   let policy: VerifyPolicy = { mode: "auto" };
   const catalog = async (cwd: string) => {
     const detection = await detectChecks(cwd);
@@ -206,7 +206,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
   };
   const publish = (details: Details, cwd: string) => {
     const event = { version: 1 as const, sessionId: currentSessionId, cwd, ...details };
-    if (["failed", "cancelled", "stale", "error"].includes(details.state)) nonPassingState = details.state;
+    terminalState = ["passed", "cancelled", "stale"].includes(details.state) ? details.state : undefined;
     pi.events.emit("pi-verify:result", event);
     pi.events.emit("pi-verify:lifecycle", event);
     const hygiene = details.hygiene
@@ -223,7 +223,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     currentCwd = ctx.cwd;
     currentSessionId = ctx.sessionManager.getSessionId();
-    nonPassingState = undefined;
+    terminalState = undefined;
     latestContext = (
       [...(ctx.sessionManager.getEntries?.() ?? [])]
         .reverse()
@@ -249,16 +249,16 @@ export default function verifyExtension(pi: ExtensionAPI) {
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-verify" });
     currentCwd = "";
     currentSessionId = "";
-    nonPassingState = undefined;
+    terminalState = undefined;
   });
   pi.on("input", event => {
-    if (event.source !== "extension") nonPassingState = undefined;
+    if (event.source !== "extension") terminalState = undefined;
   });
   pi.on("tool_call", (event, ctx) => {
-    if (nonPassingState)
+    if (terminalState)
       return {
         block: true,
-        reason: `Verification already ended this agent run with ${nonPassingState}. Write one caveated evidence-aware text-only final response and stop; do not call more tools.`,
+        reason: `Verification already ended this agent run with ${terminalState}. Write one evidence-aware text-only final response and stop; do not call more tools.`,
       };
     if (event.toolName === "verify") {
       const lastAssistant = [...(ctx?.sessionManager?.getEntries?.() ?? [])]
@@ -305,7 +305,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
       "Run bounded hygiene and detected checks. Changed scope selects affected workspace packages and falls back to full checks when ownership is uncertain; project scope runs default project checks even when Git is clean. Optionally select up to six stable check IDs.",
     promptSnippet: "Run detected project checks and return bounded failures",
     promptGuidelines: [
-      "Use verify only after all code changes are final—never mid-task while more edits remain, and never in the same assistant message as other tool calls. Call Verify in a tool-only assistant turn with no user-facing prose, wait for its result, then write exactly one evidence-aware final response. After failed, stale, cancelled, or error results, stop without another tool call. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits: it selects checks for affected workspace packages and falls back to full checks for root, shared, unknown, or ambiguous paths. Use project for broad refactors or release checks. Verify never installs dependencies.",
+      "Use verify only after code changes are final—never in the same assistant message as other tool calls. Call Verify alone in a tool-only assistant turn and wait for its result. After passed, stale, or cancelled results, write one evidence-aware final response and stop; stale is reportable and does not require another Verify. After failed or error results caused by the current changes, diagnose and repair them, then Verify again; if the failure is unrelated or unsafe to repair, stop with a caveated final response. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits: it selects checks for affected workspace packages and falls back to full checks for root, shared, unknown, or ambiguous paths. Use project for broad refactors or release checks. Verify never installs dependencies.",
     ],
     parameters: Type.Object(
       {
@@ -319,8 +319,6 @@ export default function verifyExtension(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const runId = randomUUID();
       const startedAt = new Date().toISOString();
-      const initial = await worktreeState(ctx.cwd, signal);
-      const initialIdentity = initial?.id;
       if (ctx.hasUI) ctx.ui.setStatus("pi-verify", "Verify: running");
       pi.events.emit("pi-verify:lifecycle", {
         version: 1,
@@ -328,9 +326,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
         cwd: ctx.cwd,
         scope: params.scope,
         state: "running",
-        worktreeId: initialIdentity,
         startedAt,
       });
+      const initial = await worktreeState(ctx.cwd, signal);
+      const initialIdentity = initial?.id;
       /** Publishes one terminal outcome and returns the tool result for it. */
       const finish = (state: VerificationState, options: { text: string; status?: string } & Partial<Details>) => {
         const { text, status, ...extra } = options;
@@ -410,6 +409,22 @@ export default function verifyExtension(pi: ExtensionAPI) {
           .slice()
           .sort((a, b) => a.index - b.index)
           .map(item => item.result);
+      const activeChecks = new Map<string, { id: string; label: string; command: string }>();
+      const publishRunning = () => {
+        pi.events.emit("pi-verify:lifecycle", {
+          version: 1,
+          runId,
+          cwd: ctx.cwd,
+          scope: params.scope,
+          state: "running",
+          worktreeId: initialIdentity,
+          startedAt,
+          completed: indexedResults.length,
+          total: checks.length,
+          results: orderedResults(),
+          activeChecks: [...activeChecks.values()],
+        });
+      };
       const runningDetails = (extra: object = {}) => ({
         scope: params.scope,
         runId,
@@ -423,17 +438,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
         const displayIndex = ++startedChecks;
         const progress = `Verify: Running ${displayIndex}/${checks.length}`;
         if (ctx.hasUI) ctx.ui.setStatus("pi-verify", progress);
-        pi.events.emit("pi-verify:lifecycle", {
-          version: 1,
-          runId,
-          cwd: ctx.cwd,
-          scope: params.scope,
-          state: "running",
-          worktreeId: initialIdentity,
-          startedAt,
-          completed: indexedResults.length,
-          total: checks.length,
+        activeChecks.set(check.id, {
+          id: check.id,
+          label: check.label,
+          command: [check.command, ...check.args].join(" "),
         });
+        publishRunning();
         onUpdate?.({
           content: [{ type: "text", text: `Running ${displayIndex}/${checks.length}: ${check.label}` }],
           details: runningDetails(),
@@ -470,6 +480,8 @@ export default function verifyExtension(pi: ExtensionAPI) {
             durationMs: Date.now() - started,
           },
         });
+        activeChecks.delete(check.id);
+        publishRunning();
         if (execution.code !== 0) stopped = true;
       };
       await runGrouped(

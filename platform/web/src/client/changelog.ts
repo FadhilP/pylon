@@ -2,6 +2,23 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.1.0",
+    date: "Aug 30, 2026",
+    title: "Turn-level diffs and clearer live workflow feedback",
+    summary:
+      "Pylon makes each turn's changes easier to review, surfaces verification and checkpoint progress more clearly, and improves session continuity and workspace motion.",
+    notes: [
+      "Added a dedicated, resizable Turn Diff panel for assistant changes, with selectable files, multi-file unified diffs, loading and truncation feedback, binary and error states, and focus restoration when the panel closes.",
+      "Streamed currently running Verify checks into the web Overview alongside completed results, and allowed agents to diagnose, repair, and rerun failed or errored checks while treating passed, stale, and cancelled runs as terminal.",
+      "Recorded bounded Timeline checkpoint-capture failures with sanitized reasons, displayed them beside successful checkpoints, and included them in Timeline cleanup.",
+      "Restored live tool-call metadata when switching back to an active session so in-progress tools remain visible with their names, inputs, and start times.",
+      "Closed temporary diff tabs opened from the Changes workspace when leaving a session while preserving regular file tabs, and corrected sidebar dragging when the scope rail offsets the workspace.",
+      "Refined interaction motion across dialogs, panels, controls, and navigation while honoring reduced-motion preferences for transitions and delayed exits.",
+    ],
+  },
+
+
+  {
     version: "2.0.0",
     date: "Aug 30, 2026",
     title: "A new workspace for files, sessions, and usage",

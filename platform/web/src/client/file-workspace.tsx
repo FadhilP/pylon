@@ -13,6 +13,7 @@ import type { FileReference } from "../shared/file-reference";
 import type { WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileReadModel } from "../shared/protocol/snapshots";
 import { FileContent, FileRow, FileTree, FileTypeIcon, type FileView } from "./files-panel";
 import {
+  closeChangedFileTabs,
   closeFileTab,
   openFileTab,
   selectFileTab,
@@ -95,6 +96,10 @@ export function FileWorkspace({
   useEffect(() => {
     setUi(workspaceStateForSession(stateStore.current, sessionId));
     setLoadedContent(undefined);
+    return () => {
+      const stored = stateStore.current.get(sessionId);
+      if (stored) stateStore.current.set(sessionId, closeChangedFileTabs(stored));
+    };
   }, [sessionId]);
 
   useEffect(() => {
@@ -234,7 +239,8 @@ export function FileWorkspace({
   }, [currentFiles, currentUi.query]);
   const visibleFiles = currentUi.tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
 
-  const selectFile = (path: string, view: FileView) => updateUi(current => openFileTab(current, path, view));
+  const selectFile = (path: string, view: FileView, fromChanges = false) =>
+    updateUi(current => openFileTab(current, path, view, undefined, fromChanges));
   const selectOpenFile = (path: string) => updateUi(current => selectFileTab(current, path));
   const setSelectedView = (view: FileView) =>
     updateUi(current => (current.selectedPath ? setFileTabView(current, current.selectedPath, view) : current));
@@ -298,7 +304,9 @@ export function FileWorkspace({
                   file={file}
                   fullPath={Boolean(currentUi.query.trim())}
                   selectedPath={currentUi.selectedPath}
-                  onSelect={path => selectFile(path, currentUi.tab === "changes" ? "diff" : "current")}
+                  onSelect={path =>
+                    currentUi.tab === "changes" ? selectFile(path, "diff", true) : selectFile(path, "current")
+                  }
                 />
               ))
             ) : (

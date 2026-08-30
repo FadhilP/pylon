@@ -14,12 +14,15 @@ test("verify publishes bounded result metadata and session entry", async () => {
   const entries: Array<{ type: string; data: any }> = [];
   const handlers = new Map<string, (event: any) => any>();
   const gitCalls: string[] = [];
+  let firstGitSawRunning = false;
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     on: (name: string, handler: (event: any) => any) => handlers.set(name, handler),
     events: { emit: (channel: string, value: any) => events.push({ channel, value }) },
     appendEntry: (type: string, data: any) => entries.push({ type, data }),
     exec: async (command: string, args: string[]) => {
+      if (command === "git" && gitCalls.length === 0)
+        firstGitSawRunning = events.some(event => event.channel === "pi-verify:lifecycle" && event.value.state === "running");
       if (command === "git") gitCalls.push(args.join(" "));
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git" && args[0] === "status") return { code: 0, stdout: " M file.ts\n", stderr: "" };
@@ -36,6 +39,7 @@ test("verify publishes bounded result metadata and session entry", async () => {
     .execute("call", { scope: "changed" }, undefined, undefined, { cwd, hasUI: false });
   assert.equal(result.details.state, "passed");
   assert.match(result.details.worktreeId, /^[a-f0-9]{16}$/);
+  assert.equal(firstGitSawRunning, true);
   assert.deepEqual(gitCalls, [
     "rev-parse HEAD",
     "status --porcelain=v1 --untracked-files=all",
@@ -53,6 +57,12 @@ test("verify publishes bounded result metadata and session entry", async () => {
   ]);
   const published = events.find(event => event.channel === "pi-verify:result")?.value;
   assert.equal(published.state, "passed");
+  const running = events.find(
+    event =>
+      event.channel === "pi-verify:lifecycle" &&
+      event.value.activeChecks?.some((check: { id: string }) => check.id === "npm:test"),
+  )?.value;
+  assert.equal(running.activeChecks[0].label, "npm test");
   assert.equal(entries[0]?.type, "pi-verify-result");
   assert.equal("output" in entries[0]!.data.results[0], false);
   assert.equal("output" in entries[0]!.data.hygiene, false);
@@ -68,7 +78,10 @@ test("verify publishes bounded result metadata and session entry", async () => {
     handlers.get("context")!({ messages: [{ role: "toolResult", toolName: "verify", details: result.details }] }),
     undefined,
   );
-  handlers.get("tool_call")!({ toolName: "edit" });
+  assert.match(handlers.get("tool_call")!({ toolName: "edit" }).reason, /do not call more tools/i);
+  assert.match(handlers.get("context")!({ messages: [] }).messages.at(-1).content, /^Verification: passed;/);
+  handlers.get("input")!({ source: "interactive" });
+  assert.equal(handlers.get("tool_call")!({ toolName: "edit" }), undefined);
   assert.equal(handlers.get("context")!({ messages: [] }), undefined);
 });
 
@@ -166,28 +179,31 @@ test("Verify never terminates early, even when the assistant emitted prior prose
     assert.equal(result.terminate, undefined, `${kind} must retain one evidence-aware follow-up`);
     assert.equal(result.details.terminal, undefined);
     const block = handlers.get("tool_call")!({ toolName: "read" });
-    if (["failed", "cancelled", "stale", "error", "invalid"].includes(kind))
-      assert.match(block.reason, /Write one caveated evidence-aware text-only final response and stop/i);
-    else assert.equal(block, undefined, `${kind} must not latch the non-passing guard`);
+    if (["passed", "cancelled", "stale"].includes(kind))
+      assert.match(block.reason, /Write one evidence-aware text-only final response and stop/i);
+    else assert.equal(block, undefined, `${kind} must allow repair or acknowledgement when needed`);
   }
 
-  const { handlers, tool, caseCwd } = await run("invalid");
-  assert.match(handlers.get("tool_call")!({ toolName: "verify" }).reason, /already ended this agent run with error/i);
-  handlers.get("input")!({ source: "extension" });
-  assert.match(handlers.get("tool_call")!({ toolName: "bash" }).reason, /do not call more tools/i);
-  handlers.get("input")!({ source: "interactive" });
-  assert.equal(handlers.get("tool_call")!({ toolName: "verify" }), undefined);
-
-  await tool.execute("invalid-again", { scope: "project", checks: ["missing"] }, undefined, undefined, {
-    cwd: caseCwd,
+  const failedRun = await run("invalid");
+  assert.equal(failedRun.handlers.get("tool_call")!({ toolName: "read" }), undefined);
+  assert.equal(failedRun.handlers.get("tool_call")!({ toolName: "verify" }), undefined);
+  await failedRun.tool.execute("invalid-again", { scope: "project", checks: ["missing"] }, undefined, undefined, {
+    cwd: failedRun.caseCwd,
     hasUI: false,
   });
-  assert.match(handlers.get("tool_call")!({ toolName: "read" }).reason, /already ended this agent run/i);
-  handlers.get("session_start")!(
+  assert.equal(failedRun.handlers.get("tool_call")!({ toolName: "read" }), undefined);
+
+  const passedRun = await run("passed");
+  assert.match(passedRun.handlers.get("tool_call")!({ toolName: "bash" }).reason, /do not call more tools/i);
+  passedRun.handlers.get("input")!({ source: "extension" });
+  assert.match(passedRun.handlers.get("tool_call")!({ toolName: "bash" }).reason, /do not call more tools/i);
+  passedRun.handlers.get("input")!({ source: "interactive" });
+  assert.equal(passedRun.handlers.get("tool_call")!({ toolName: "verify" }), undefined);
+  passedRun.handlers.get("session_start")!(
     {},
-    { cwd: caseCwd, sessionManager: { getSessionId: () => "replacement", getEntries: () => [] } },
+    { cwd: passedRun.caseCwd, sessionManager: { getSessionId: () => "replacement", getEntries: () => [] } },
   );
-  assert.equal(handlers.get("tool_call")!({ toolName: "read" }), undefined);
+  assert.equal(passedRun.handlers.get("tool_call")!({ toolName: "read" }), undefined);
 });
 
 test("tool-only passing Verify remains nonterminal and reports capped check IDs compactly", async () => {

@@ -125,7 +125,17 @@ export function displacesConversation(surface: SurfaceId): boolean {
 }
 
 export type ReferenceId =
-  "chat" | "overview" | "policy" | "timeline" | "memory" | "tools" | "changes" | "agents" | "compaction" | "attachment";
+  | "chat"
+  | "overview"
+  | "policy"
+  | "timeline"
+  | "memory"
+  | "tools"
+  | "changes"
+  | "agents"
+  | "compaction"
+  | "attachment"
+  | "turn-diff";
 export type ActiveReference = ReferenceId | null;
 
 /** Rail groups, rendered with a hairline between them. */
@@ -253,8 +263,10 @@ export function referenceRailItems(context: NavContext): Array<ReferenceDefiniti
 export type PanelWidth = { key: string; default: number };
 
 export const SHARED_PANEL_WIDTH: PanelWidth = { key: "pylon-right-panel-width", default: 380 };
+const TURN_DIFF_PANEL_WIDTH: PanelWidth = { key: "pylon-turn-diff-panel-width", default: 620 };
 
 export function panelWidthSlot(reference: ActiveReference): PanelWidth {
+  if (reference === "turn-diff") return TURN_DIFF_PANEL_WIDTH;
   return referenceDefinition(reference)?.width ?? SHARED_PANEL_WIDTH;
 }
 
@@ -263,7 +275,7 @@ export function clampPanelWidth(value: number): number {
 }
 
 export function initialPanelWidths(): Record<string, number> {
-  const slots = [SHARED_PANEL_WIDTH, ...REFERENCES.flatMap(item => item.width ?? [])];
+  const slots = [SHARED_PANEL_WIDTH, TURN_DIFF_PANEL_WIDTH, ...REFERENCES.flatMap(item => item.width ?? [])];
   const widths: Record<string, number> = {};
   for (const slot of slots) {
     let stored = Number.NaN;
