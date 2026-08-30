@@ -2111,7 +2111,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .workspace-layout { height: calc(100% - var(--header-height)); }
   .terminal-layer { position: absolute; inset: 52px 0 0; }
   .terminal-drawer { z-index: 43; height: min(60dvh, max(240px, var(--terminal-height))); box-shadow: 0 -18px 50px rgb(0 0 0 / 28%); }
-  .terminal-resizer { display: none; }
+  .terminal-resizer, .panel-resizer { display: none; }
   .project-new, .project-toggle small, .session-menu.project-menu > summary { opacity: 1; }
   .transcript-layout { grid-template-columns: minmax(0, 820px); }
   .history-rail { display: none; }
@@ -2127,7 +2127,6 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .archive-row { align-items: flex-start; }
   .app-toast-stack { right: 12px; max-width: none; }
   .inspector { width: 100%; }
-  .panel-resizer { display: none; }
   .message-stream { padding: 20px 16px; }
   .pending-session-shell { padding: 24px 18px; }
   .pending-session-draft-note span { display: none; }
@@ -2225,8 +2224,18 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .app-shell.has-scope-rail > .sidebar { top: calc(52px + var(--rail-width)); }
   .scope-rail { height: var(--rail-width); flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-push { margin-top: 0; margin-left: auto; }
-  .rail-item::before, .reference-rail .rail-item::before { top: calc(100% + 6px); right: auto; left: 50%; transform: translateX(-50%); }
-  .reference-rail { display: none; }
+  .rail-item::before { top: calc(100% + 6px); right: auto; left: 50%; transform: translateX(-50%); }
+  /* The reference rail lies down along the bottom edge instead of vanishing,
+     and scrolls sideways: seven items and their dividers do not fit 320px. */
+  .workspace-layout, .workspace-layout.has-inspector { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .reference-rail { width: auto; height: var(--rail-width); flex-direction: row; gap: 2px; padding: 0 6px; overflow-x: auto; border-top: 1px solid var(--line); border-left: 0; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .reference-rail::-webkit-scrollbar { display: none; }
+  .reference-rail hr { width: 0; height: 20px; flex: 0 0 auto; margin: 0 4px; border: 0; border-left: 1px solid var(--line-strong); }
+  /* Labels go above the bottom rail, not below it, where they would sit off screen. */
+  .reference-rail .rail-item::before { top: auto; right: auto; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); }
+  /* The panel stops short of the rail, so it never covers the control that
+     opened it and switching references stays one tap. */
+  .workspace-layout > .inspector, .workspace-layout > .inspector-scrim { bottom: var(--rail-width); }
   .surface-branch { display: none; }
 }
 /* Category colours, pinned per dimension. Same five the app assigns
