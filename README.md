@@ -8,14 +8,14 @@ Pylon is optimized for **cost efficiency and output quality rather than speed**.
 
 ## What Pylon Does
 
-- **Deterministic compaction** — Continuity intercepts manual and automatic `/compact` and rebuilds context from structured session state (goal, plan, todos, constraints, verification, file activity) instead of asking a model to summarize. An optional Compaction Reviewer can refine the result, and any failure falls back to the deterministic one.
-- **Specialized subagents** — Advisor (tool-free reasoning for architecture and failure recovery), Scout (bounded repo and public-web reconnaissance), Grunt (delegated implementation in an isolated Git worktree), and Spawn (resumable private threads and child sessions). Each has its own model, so cheap models do the volume and strong models do the decisions.
-- **File indexing** — Discover keeps a machine-local SQLite index of Git-tracked source files, refreshed on session start and reconciled per turn, backing `symbol_search` and `code_search` so lookups don't cost a full-repo grep. Repositories shared by several workspaces are indexed once.
-- **Bounded context** — Sieve trims old bulky tool output from outbound context without touching stored messages, Discover keeps optional tool schemas deferred until `search_tools` activates them, and every package caps its own output.
-- **Checkpoints and safety** — Timeline takes Git-backed filesystem checkpoints tied to each prompt so you can list, restore, or fork them; Guard intercepts destructive shell and file operations and requires confirmation.
-- **Verification built in** — Verify detects and runs your existing project checks under a time and output budget, and task completion is gated on the result.
-- **Planning and task lists** — Explicit plan mode with structured clarifications, a visible task list, and optional `/plan review`.
-- **Tool-aware memory** — Durable workspace notes that activate on typed lifecycle and tool events rather than fuzzy prompt similarity. A note attached to a path or tool surfaces when you actually touch it, once per session.
+- **Deterministic compaction**: Continuity intercepts manual and automatic `/compact` and rebuilds context from structured session state (goal, plan, todos, constraints, verification, file activity) instead of asking a model to summarize. An optional Compaction Reviewer can refine the result, and any failure falls back to the deterministic one.
+- **Specialized subagents**: Advisor (tool-free reasoning for architecture and failure recovery), Scout (bounded repo and public-web reconnaissance), Grunt (delegated implementation in an isolated Git worktree), and Spawn (resumable private threads and child sessions). Each has its own model, so cheap models do the volume and strong models do the decisions.
+- **File indexing**: Discover keeps a machine-local SQLite index of Git-tracked source files, refreshed on session start and reconciled per turn, backing `symbol_search` and `code_search` so lookups don't cost a full-repo grep. Repositories shared by several workspaces are indexed once.
+- **Bounded context**: Sieve trims old bulky tool output from outbound context without touching stored messages, Discover keeps optional tool schemas deferred until `search_tools` activates them, and every package caps its own output.
+- **Checkpoints and safety**: Timeline takes Git-backed filesystem checkpoints tied to each prompt so you can list, restore, or fork them; Guard intercepts destructive shell and file operations and requires confirmation.
+- **Verification built in**: Verify detects and runs your existing project checks under a time and output budget, and task completion is gated on the result.
+- **Planning and task lists**: Explicit plan mode with structured clarifications, a visible task list, and optional `/plan review`.
+- **Tool-aware memory**: Durable workspace notes that activate on typed lifecycle and tool events rather than fuzzy prompt similarity. A note attached to a path or tool surfaces when you actually touch it, once per session.
 
 ## Web App Setup (Recommended)
 
