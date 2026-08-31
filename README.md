@@ -6,9 +6,20 @@ Pylon is optimized for **cost efficiency and output quality rather than speed**.
 
 ![Pylon web app](./docs/pylon-web.png)
 
+## What Pylon Does
+
+- **Deterministic compaction** — Continuity intercepts manual and automatic `/compact` and rebuilds context from structured session state (goal, plan, todos, constraints, verification, file activity) instead of asking a model to summarize. An optional Compaction Reviewer can refine the result, and any failure falls back to the deterministic one.
+- **Specialized subagents** — Advisor (tool-free reasoning for architecture and failure recovery), Scout (bounded repo and public-web reconnaissance), Grunt (delegated implementation in an isolated Git worktree), and Spawn (resumable private threads and child sessions). Each has its own model, so cheap models do the volume and strong models do the decisions.
+- **File indexing** — Discover keeps a machine-local SQLite index of Git-tracked source files, refreshed on session start and reconciled per turn, backing `symbol_search` and `code_search` so lookups don't cost a full-repo grep. Repositories shared by several workspaces are indexed once.
+- **Bounded context** — Sieve trims old bulky tool output from outbound context without touching stored messages, Discover keeps optional tool schemas deferred until `search_tools` activates them, and every package caps its own output.
+- **Checkpoints and safety** — Timeline takes Git-backed filesystem checkpoints tied to each prompt so you can list, restore, or fork them; Guard intercepts destructive shell and file operations and requires confirmation.
+- **Verification built in** — Verify detects and runs your existing project checks under a time and output budget, and task completion is gated on the result.
+- **Planning and task lists** — Explicit plan mode with structured clarifications, a visible task list, and optional `/plan review`.
+- **Tool-aware memory** — Durable workspace notes that activate on typed lifecycle and tool events rather than fuzzy prompt similarity. A note attached to a path or tool surfaces when you actually touch it, once per session.
+
 ## Web App Setup (Recommended)
 
-Pylon requires Node.js 22.19 or newer. Install it globally, open the project you want to work on, and start the web app:
+Requires Node.js 22.19 or newer.
 
 ```sh
 npm install --global @fadhilp/pylon
@@ -16,44 +27,21 @@ cd /path/to/your/project
 pylon
 ```
 
-Open [http://127.0.0.1:3141](http://127.0.0.1:3141), then use **Settings** to configure providers, package models, Continuity memory, revision-guarded numbered edits, Grunt thinking levels, and Spawn model/thinking eligibility.
+Open [http://127.0.0.1:3141](http://127.0.0.1:3141) (loopback only) and use **Settings** to configure providers, package models, and package options. Recommended for OpenAI subscriptions: main GPT 5.6 Sol Medium, Advisor Sol High, Scout Luna Medium, Grunt Terra.
 
-Recommended configuration for OpenAI subscriptions:
-
-- Main agent: GPT 5.6 Sol Medium
-- Advisor: GPT 5.6 Sol High
-- Scout: GPT 5.6 Luna Medium
-- Grunt: GPT 5.6 Terra (the main agent selects the thinking level)
-
-The server binds only to loopback and uses the directory where you ran `pylon` as the initial project. Set `PYLON_CWD` to override that directory or `PYLON_PORT` to change the default port (`3141`).
-
-Pylon Web stores sessions, settings, and package state in `~/.pylon/agent` by default. Set `PI_CODING_AGENT_DIR` to override it. Existing `~/.pi/agent` data is copied non-destructively on first run; run `pylon migrate` to retry migration.
-
-Pi-native extensions can be managed from **Settings → Extensions**. Global extensions and installed packages are stored under Pylon’s configured agent directory (`~/.pylon/agent/extensions`, `npm`, and `git` by default); later changes under `~/.pi/agent` are not synchronized. Trusted project extensions continue to use `<project>/.pi/extensions`. Extensions execute arbitrary code with the Pylon server’s permissions, so review package sources before installing or enabling them.
-
-Before startup, Pylon checks npm for a newer stable release. Interactive terminals ask before updating; non-interactive sessions only print the update command. After an approved update attempt, run `pylon` again. Set `PYLON_NO_UPDATE_CHECK=1` to disable the check.
+- `PYLON_CWD` sets the project directory, `PYLON_PORT` the port (`3141`), `PYLON_NO_UPDATE_CHECK=1` disables the startup update check.
+- Sessions, settings, and package state live in `~/.pylon/agent` (`PI_CODING_AGENT_DIR` overrides). Existing `~/.pi/agent` data is copied on first run; `pylon migrate` retries.
+- Manage Pi-native extensions in **Settings → Extensions**. Extensions run arbitrary code with the server's permissions — review sources before enabling.
 
 ## Terminal Setup (Alternative)
 
-Install the complete bundle from npm:
+Requires an existing [Pi](https://pi.dev) install (the web app bundles its own).
 
 ```sh
-pi install npm:@fadhilp/pylon
+pi install npm:@fadhilp/pylon   # or an absolute path to a local checkout
 ```
 
-Then reload Pi:
-
-```text
-/reload
-```
-
-For local development, install the checkout instead:
-
-```sh
-pi install /absolute/path/to/pylon
-```
-
-Select models for the child-agent tools after reloading. Replace the examples with models available through your configured Pi providers:
+Reload Pi with `/reload`, then pick models for the child agents — they stay unavailable until configured:
 
 ```text
 /advisor
@@ -61,58 +49,30 @@ Select models for the child-agent tools after reloading. Replace the examples wi
 /scout
 ```
 
-Advisor, Grunt, and Scout stay unavailable until configured. In TUI mode, `/advisor`, `/grunt`, and `/scout` open model selectors. Each command's `reset` option configures that tool with the current main model; `disable` turns it off. With Pylon, configured specialist tools remain deferred until `search_tools` activates the relevant capability. Use `status` to inspect configuration.
-
-Optional Continuity planner and executor profiles can use separate models:
-
-```text
-/continuity planner
-/continuity executor
-```
-
-Run `/pylon doctor` to check model availability, credentials, dependencies, tool registration, and package health. See each package README below for detailed configuration, limits, privacy, and cost behavior.
-
-## Requirements
-
-- Node.js 22.19 or newer
-- [Pi](https://pi.dev)
-- Peer packages declared in [`package.json`](./package.json)
+Each command opens a model selector in TUI mode; `reset` uses the current main model, `disable` turns it off, `status` shows configuration. Run `/pylon doctor` to check models, credentials, dependencies, and package health.
 
 ## Bundled Packages
 
-- **[pi-advisor](./packages/pi-advisor)** — Consults a selected tool-free model for difficult planning, architecture review, and failure recovery using bounded, redacted context.
-- **[pylon-core](./packages/pylon-core)** — Coordinates package tool policies, provides revision-guarded numbered read/edit tools by default, deduplicates shell worktree observation, and reports per-tool estimated session payload tokens.
-- **[pi-continuity](./packages/pi-continuity)** — Adds explicit plan mode, structured clarifications, visible task lists, and opt-in durable workspace memory.
-- **[pi-papercut](./packages/pi-papercut)** — Captures small non-blocking workflow frictions in a durable project backlog and supports listing, resolving, dismissing, and reopening them.
-- **[pi-focus](./packages/pi-focus)** — Provides a low-noise Pi terminal UI, compact or comfortable layouts, and the `focus-dark` theme.
-- **[pi-guard](./packages/pi-guard)** — Intercepts risky shell and file operations, requests confirmation for known destructive actions, and blocks unsafe writes.
-- **[pi-grunt](./packages/pi-grunt)** — Runs a synchronous delegated implementation worker for compact slices or complete non-difficult changes with configurable main-selected thinking.
-- **[pi-heartbeat](./packages/pi-heartbeat)** — Runs bounded background shell jobs with tools for starting, checking, and cancelling jobs.
-- **[pi-helios](./packages/pi-helios)** — Provides consent-gated Playwright browser and Appium Android-emulator automation plus named Windows-window screenshots.
-- **[pi-stateql](./packages/pi-stateql)** — Provides safe stateful database queries, durable result handles, confirmed writes, and bounded web status/history.
-- **[pi-discover](./packages/pi-discover)** — Indexes supported source files, provides read-only repository and historical Pi-session search, and coordinates inactive-tool discovery.
-- **[pi-scout](./packages/pi-scout)** — Performs bounded repository reconnaissance and fresh-browser isolated public-web research.
-- **[pi-spawn](./packages/pi-spawn)** — Creates private resumable subagent threads and first-class child sessions with configurable eligible models and private-agent thinking.
-- **[pi-sieve](./packages/pi-sieve)** — Limits old bulky successful tool output in outbound context without modifying stored session messages.
-- **[pi-timeline](./packages/pi-timeline)** — Creates Git-backed filesystem checkpoints tied to prompts and supports listing, restoring, forking, or clearing them.
-- **[pi-verify](./packages/pi-verify)** — Detects and runs existing project checks with bounded time and output.
+| Package | What it does |
+| --- | --- |
+| [pylon-core](./packages/pylon-core) | Coordinates tool policies across packages; adds revision-guarded numbered read/edit tools and per-tool token reporting. |
+| [pi-continuity](./packages/pi-continuity) | Plan mode, task lists, clarifications, deterministic compaction, and durable tool-aware memory. |
+| [pi-advisor](./packages/pi-advisor) | Asks a tool-free model for help on hard planning, architecture review, and failure recovery. |
+| [pi-grunt](./packages/pi-grunt) | Delegates implementation slices to a worker running in an isolated Git worktree. |
+| [pi-scout](./packages/pi-scout) | Bounded repository reconnaissance and isolated public-web research. |
+| [pi-spawn](./packages/pi-spawn) | Private resumable subagent threads and first-class child sessions. |
+| [pi-discover](./packages/pi-discover) | Indexes sources, searches the repo and past Pi sessions, and activates deferred tools via `search_tools`. |
+| [pi-sieve](./packages/pi-sieve) | Trims old bulky tool output from outbound context, leaving stored messages intact. |
+| [pi-timeline](./packages/pi-timeline) | Git-backed checkpoints per prompt: list, restore, fork, clear. |
+| [pi-guard](./packages/pi-guard) | Confirms or blocks destructive shell and file operations. |
+| [pi-verify](./packages/pi-verify) | Finds and runs your project's existing checks with bounded time and output. |
+| [pi-heartbeat](./packages/pi-heartbeat) | Runs bounded background shell jobs you can check or cancel. |
+| [pi-helios](./packages/pi-helios) | Consent-gated Playwright browser, Appium Android emulator, and Windows window capture. |
+| [pi-stateql](./packages/pi-stateql) | Safe stateful database queries with durable result handles and confirmed writes. |
+| [pi-papercut](./packages/pi-papercut) | Durable backlog for small workflow frictions. |
+| [pi-focus](./packages/pi-focus) | Low-noise Pi terminal UI and the `focus-dark` theme. |
 
-The bundle also installs the [`focus-dark`](./packages/pi-focus/themes/focus-dark.json) theme.
-
-## Integrations
-
-Packages coordinate through bounded, versioned event-bus metadata while remaining functional without Pylon:
-
-- Verify publishes lifecycle and results; Continuity gates completion, Timeline marks matching checkpoints, Advisor receives bounded recovery metadata, and Focus shows status.
-- Guard requests a Timeline checkpoint before destructive confirmation and remains final safety authority; Pylon reports its latest decision.
-- Pylon fingerprints the worktree once around each model turn containing shell calls; Continuity and Timeline consume the shared mutation result while retaining standalone fallbacks.
-- Heartbeat publishes job lifecycle with optional todo and purpose metadata; Continuity tracks explicitly linked jobs.
-- Grunt performs sequential implementation in an isolated temporary Git worktree by default, applying successful non-stale patches back to the parent. Direct mode edits the current working directory without rollback guarantees; dynamic mode selects isolation when Git `HEAD` exists and direct execution otherwise. Main retains architecture, review, and final verification; Advisor consultation remains optional and evidence-driven.
-- Advisor, Grunt, repository Scout, Continuity, and Memory stay active when configured so their workflow guidance remains visible. Discover keeps `rg`, `fd`, and `search_tools` active while Pylon defers optional browser, Android-emulator, capture, and spawn schemas until discovery selects them; restrictive gates remain authoritative.
-- Scout receives bounded verification and checkpoint archaeology from parent session metadata.
-- Continuity supports `/plan review`, recording the shared run's `reviewer` phase for Timeline grouping.
-
-Raw verification and Heartbeat logs never cross package events.
+Each package works standalone; with Pylon installed they coordinate through bounded, versioned event-bus metadata — Verify results gate Continuity completion and mark Timeline checkpoints, Guard requests a checkpoint before destructive confirmation, Heartbeat publishes job lifecycle, and Scout receives bounded verification context. Raw verification and Heartbeat logs never cross package events. See each package README for details.
 
 ## Development
 
