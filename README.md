@@ -4,6 +4,8 @@ Pylon is a web-first coding agent workspace built on [Pi](https://pi.dev). It co
 
 Pylon is optimized for **cost efficiency and output quality rather than speed**. It routes focused work to cost-effective models and reserves stronger models for decisions that benefit from them, while verification and specialist reviews help protect quality. This workflow can take longer than using a single model directly.
 
+![Pylon web app](./docs/pylon-web.png)
+
 ## Web App Setup (Recommended)
 
 Pylon requires Node.js 22.19 or newer. Install it globally, open the project you want to work on, and start the web app:
