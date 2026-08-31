@@ -47,6 +47,7 @@ import type {
   RuntimePolicyReadModel,
   ToolExposureMode,
 } from "../shared/protocol/snapshots";
+import { SYNTAX_THEMES, type SyntaxTheme } from "../shared/syntax-highlighting";
 import { thinkingLabel } from "./format";
 import { ExtensionSettingsFields } from "./extension-settings-fields";
 import { HookSettingsFields } from "./hook-settings-fields";
@@ -114,6 +115,8 @@ interface SettingsDialogProps {
   sessionThinkingLevels: ThinkingLevelReadModel[];
   theme: SettingsTheme;
   onThemeChange: (theme: SettingsTheme) => void;
+  syntaxTheme: SyntaxTheme;
+  onSyntaxThemeChange: (theme: SyntaxTheme) => void;
   onClose: () => void;
   onProviderLogin: (provider: string, authType: ProviderAuthType) => void;
   onProviderLogout: (provider: string) => void;
@@ -161,6 +164,8 @@ export function SettingsDialog({
   sessionThinkingLevels,
   theme,
   onThemeChange,
+  syntaxTheme,
+  onSyntaxThemeChange,
   onClose,
   onProviderLogin,
   onProviderLogout,
@@ -901,6 +906,20 @@ export function SettingsDialog({
                   </label>
                 ))}
               </div>
+              <span className="settings-kicker settings-syntax-kicker">Syntax theme</span>
+              <label className="settings-syntax-theme">
+                <span>Code highlighting</span>
+                <select
+                  value={syntaxTheme}
+                  onChange={event => onSyntaxThemeChange(event.target.value as SyntaxTheme)}>
+                  {SYNTAX_THEMES.map(option => (
+                    <option value={option.id} key={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <small>Syntax themes and languages load in the background after startup.</small>
+              </label>
             </section>
           </div>
         </div>

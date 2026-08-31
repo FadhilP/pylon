@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Safe stateful database access and bounded status/history for Pi",
   "type": "module",
+  "exports": {
+    "./stateql-command": "./src/stateql-command.ts"
+  },
   "keywords": [
     "pi-package"
   ],
@@ -11,6 +14,7 @@
   },
   "files": [
     "extensions",
+    "src",
     "README.md",
     "LICENSE"
   ],
@@ -29,10 +33,10 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "typescript": "^5.8.0"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@fadhilp/stateql": "0.5.4"
+    "@fadhilp/stateql": "0.8.0"
   },
   "license": "MIT"
 }

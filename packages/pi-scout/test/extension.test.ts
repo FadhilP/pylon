@@ -550,7 +550,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
 
     const uiResult = await runtime.tools.get("web_scout").execute(
       "ui",
-      { task: "read current docs", maxPages: 2 },
+      { task: "read current docs" },
       undefined,
       undefined,
       context({
@@ -566,6 +566,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
       }),
     );
     assert.match(uiResult.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
+    assert.deepEqual(options, { maxPages: 20, maxActions: 80, headed: false });
     assert.equal(confirmations, 0);
     assert.equal(revoked, 2);
     assert.equal(statuses.at(-1), undefined);

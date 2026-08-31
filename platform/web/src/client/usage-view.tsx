@@ -27,8 +27,9 @@ type Metric = UsageMetric;
 type Group = UsageGroup;
 type Filters = UsageFilters;
 type Days = 7 | 30 | 90;
-type State = { filters: Filters; range: Days; metric: Metric; split: UsageSplit };
+type Range = Days | { from: string; through: string };
 type Dimensions = Record<Facet, UsageFacetOption[]>;
+type State = { filters: Filters; range: Range; metric: Metric; split: UsageSplit };
 type Series = UsageSeriesData & { color: string };
 
 const FACETS = USAGE_FACETS;
@@ -292,8 +293,8 @@ function Facets({
 
 type LoadState = {
   snapshot?: UsageSnapshot;
-  snapshotRange?: Days;
-  requestedRange: Days;
+  snapshotRange?: string;
+  requestedRange: string;
   loading: boolean;
   error?: string;
 };
@@ -301,17 +302,20 @@ type LoadState = {
 export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: string) => void }) {
   const live = useRuntimeStore();
   const [state, setState] = useState<State>({ filters: emptyFilters(), range: 30, metric: "total", split: "none" });
-  const [load, setLoad] = useState<LoadState>({ requestedRange: 30, loading: true });
+  const [custom, setCustom] = useState({ from: "", through: "" });
+  const [load, setLoad] = useState<LoadState>({ requestedRange: "30", loading: true });
   const [retry, setRetry] = useState(0);
   const generation = live.runtime?.sessionGeneration;
   const runtimeReady = live.runtime?.ready;
   const assistantMessages = live.runtime?.metrics.assistantMessages;
 
+  const rangeKey = typeof state.range === "number" ? String(state.range) : `${state.range.from}:${state.range.through}`;
+  const rangeInput = typeof state.range === "number" ? { days: state.range } : state.range;
   useEffect(() => {
     if (!runtimeReady || !generation) {
       setLoad(current => ({
         ...current,
-        requestedRange: state.range,
+        requestedRange: rangeKey,
         loading: false,
         error: "Usage is available when the runtime is ready.",
       }));
@@ -319,25 +323,28 @@ export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: s
     }
     const controller = new AbortController();
     let active = true;
-    setLoad(current => ({ ...current, requestedRange: state.range, loading: true, error: undefined }));
+    setLoad(current => ({ ...current, requestedRange: rangeKey, loading: true, error: undefined }));
     void runtimeStore
-      .usage({ days: state.range }, controller.signal)
+      .usage(rangeInput, controller.signal)
       .then(snapshot => {
-        if (!active) return;
-        setLoad({ snapshot, snapshotRange: state.range, requestedRange: state.range, loading: false });
+        if (active) setLoad({ snapshot, snapshotRange: rangeKey, requestedRange: rangeKey, loading: false });
       })
       .catch(cause => {
         if (!active || controller.signal.aborted) return;
-        const message = cause instanceof Error ? cause.message : "Unable to load usage";
-        setLoad(current => ({ ...current, requestedRange: state.range, loading: false, error: message }));
+        setLoad(current => ({
+          ...current,
+          requestedRange: rangeKey,
+          loading: false,
+          error: cause instanceof Error ? cause.message : "Unable to load usage",
+        }));
       });
     return () => {
       active = false;
       controller.abort();
     };
-  }, [assistantMessages, generation, retry, runtimeReady, state.range]);
+  }, [assistantMessages, generation, retry, runtimeReady, rangeKey]);
 
-  const snapshot = load.snapshotRange === state.range ? load.snapshot : undefined;
+  const snapshot = load.snapshotRange === rangeKey ? load.snapshot : undefined;
   const records = snapshot?.records ?? [];
   const colorDimensions = useMemo(() => usageFacetOptions(records, emptyFilters()), [records]);
   const dimensions = useMemo(() => usageFacetOptions(records, state.filters), [records, state.filters]);
@@ -407,7 +414,7 @@ export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: s
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(link.href), 0);
   };
-  const error = load.requestedRange === state.range ? load.error : undefined;
+  const error = load.requestedRange === rangeKey ? load.error : undefined;
   const diagnostics = snapshot?.diagnostics;
   const partialHistory = Boolean(
     diagnostics && (diagnostics.truncated || diagnostics.unreadableFiles || diagnostics.conflictingDuplicates),
@@ -442,16 +449,52 @@ export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: s
       <section className="usage-scope" aria-label="Scope">
         <span className="section-kicker">Meter</span>
         <Facets state={state} dimensions={dimensions} onChange={setState} />
-        <div className="usage-range" role="group" aria-label="Period">
-          {RANGES.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={state.range === value}
-              onClick={() => setState({ ...state, range: value })}>
-              {label}
-            </button>
-          ))}
+        <div className="usage-period">
+          <div className="usage-range" role="group" aria-label="Period">
+            {RANGES.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                aria-pressed={state.range === value}
+                onClick={() => {
+                  setCustom({ from: "", through: "" });
+                  setState({ ...state, range: value });
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div
+            className={`usage-date-range${typeof state.range === "number" ? "" : " is-active"}`}
+            aria-label="Custom period">
+            <label>
+              <span>From</span>
+              <input
+                type="date"
+                value={custom.from}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={event => {
+                  const next = { ...custom, from: event.target.value };
+                  setCustom(next);
+                  if (next.from && next.through) setState({ ...state, range: next });
+                }}
+              />
+            </label>
+            <i aria-hidden="true" />
+            <label>
+              <span>To</span>
+              <input
+                type="date"
+                value={custom.through}
+                max={new Date().toISOString().slice(0, 10)}
+                onChange={event => {
+                  const next = { ...custom, through: event.target.value };
+                  setCustom(next);
+                  if (next.from && next.through) setState({ ...state, range: next });
+                }}
+              />
+            </label>
+          </div>
         </div>
       </section>
 
@@ -492,7 +535,10 @@ export function UsageView({ onSelectSession }: { onSelectSession?: (sessionId: s
 
       <section className="usage-hero">
         <div>
-          <span className="usage-label">Total draw · {state.range} days</span>
+          <span className="usage-label">
+            Total draw ·{" "}
+            {typeof state.range === "number" ? `${state.range} days` : `${state.range.from} to ${state.range.through}`}
+          </span>
           <div className="usage-total">
             {money(total.cost)}
             <small>{total.costKnown ? "reported" : "partial"}</small>

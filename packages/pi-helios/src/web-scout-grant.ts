@@ -26,8 +26,8 @@ function equal(left: string, right: string): boolean {
 export async function issueWebScoutGrant(
   options: WebScoutGrant,
 ): Promise<{ value: string; revoke: () => Promise<void> }> {
-  if (!Number.isInteger(options.maxPages) || options.maxPages < 1 || options.maxPages > 12)
-    throw new Error("Web Scout maxPages must be 1 to 12");
+  if (!Number.isInteger(options.maxPages) || options.maxPages < 1 || options.maxPages > 20)
+    throw new Error("Web Scout maxPages must be 1 to 20");
   if (!Number.isInteger(options.maxActions) || options.maxActions < options.maxPages || options.maxActions > 80)
     throw new Error("Web Scout maxActions is invalid");
   await mkdir(GRANT_ROOT, { recursive: true, mode: 0o700 });
@@ -91,7 +91,7 @@ export async function consumeWebScoutGrant(encoded = process.env[WEB_SCOUT_GRANT
     grant.expiresAt < Date.now() ||
     !Number.isInteger(grant.maxPages) ||
     grant.maxPages < 1 ||
-    grant.maxPages > 12 ||
+    grant.maxPages > 20 ||
     !Number.isInteger(grant.maxActions) ||
     grant.maxActions < grant.maxPages ||
     grant.maxActions > 80 ||

@@ -732,6 +732,63 @@ test("continuation pages cached redacted output without another browser command"
   }
 });
 
+test("preserved continuations survive later pages and retain chunk link targets", async () => {
+  let snapshot = ["- text Before", "- link Old page [ref=e1]:", "  - /url: /old-target", "- text After"].join("\n");
+  const cli = await PlaywrightCli.create(
+    async () => ({ code: 0, stdout: JSON.stringify({ snapshot }), stderr: "", killed: false }),
+    { maxSnapshotLines: 1, maxSnapshotBytes: 1024, preserveContinuationsAcrossActions: true },
+  );
+  try {
+    const oldPage = await cli.run(SESSION, { kind: "snapshot" });
+    snapshot = "- link New page [ref=e1]:\n  - /url: /new-target";
+    await cli.run(SESSION, { kind: "navigate", url: "https://example.com/new" });
+
+    const continued = await cli.run(SESSION, { kind: "continue", cursor: oldPage.snapshotContinuation! });
+    assert.match(continued.snapshot!, /Old page/);
+    assert.deepEqual(continued.snapshotLinks, { e1: "/old-target" });
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: oldPage.snapshotContinuation! }), /stale/);
+  } finally {
+    await cli.dispose();
+  }
+});
+
+test("preserved continuations evict the oldest cursor at the session bound", async () => {
+  const raw = "- text First\n- text Second";
+  const cli = await PlaywrightCli.create(
+    async () => ({ code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false }),
+    { maxSnapshotLines: 1, preserveContinuationsAcrossActions: true },
+  );
+  try {
+    const cursors: string[] = [];
+    for (let index = 0; index < 21; index++) {
+      const result = await cli.run(SESSION, { kind: "snapshot" });
+      cursors.push(result.snapshotContinuation!);
+    }
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: cursors[0] }), /stale/);
+    assert.equal((await cli.run(SESSION, { kind: "continue", cursor: cursors.at(-1)! })).snapshot, "- text Second");
+  } finally {
+    await cli.dispose();
+  }
+});
+
+test("failed session cleanup clears preserved continuations", async () => {
+  const raw = "- text First\n- text Second";
+  const cli = await PlaywrightCli.create(
+    async (_command, args) =>
+      args.includes("close")
+        ? { code: 1, stdout: "", stderr: "close failed", killed: false }
+        : { code: 0, stdout: JSON.stringify({ snapshot: raw }), stderr: "", killed: false },
+    { maxSnapshotLines: 1, preserveContinuationsAcrossActions: true },
+  );
+  try {
+    const result = await cli.run(SESSION, { kind: "snapshot" });
+    await assert.rejects(cli.run(SESSION, { kind: "close" }), /command failed/i);
+    await assert.rejects(cli.run(SESSION, { kind: "continue", cursor: result.snapshotContinuation! }), /stale/);
+  } finally {
+    await cli.dispose();
+  }
+});
+
 test("continuation progresses across oversized multibyte lines", async () => {
   const raw = `${"é".repeat(100)}\n- button End [ref=e9]`;
   let calls = 0;

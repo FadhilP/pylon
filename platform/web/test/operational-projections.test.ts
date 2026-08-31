@@ -32,6 +32,48 @@ test("Verify running lifecycle exposes active checks before they finish", () => 
   ]);
 });
 
+test("timeline projection carries only the bounded Guard source and keeps legacy checkpoints unmarked", () => {
+  const state = applyOperationalEvent(
+    initialOperational([], []),
+    "pi-timeline:state-change",
+    {
+      version: 4,
+      revision: 1,
+      sessionId: "session",
+      available: true,
+      checkpoints: [
+        {
+          id: "guard-checkpoint",
+          promptEntryId: "prompt-1",
+          title: "Guarded change",
+          createdAt: new Date(0).toISOString(),
+          ownerSessionId: "session",
+          verified: false,
+          verificationState: "unverified",
+          source: "pi-guard",
+          reason: "do not expose this",
+        },
+        {
+          id: "legacy-checkpoint",
+          promptEntryId: "prompt-2",
+          title: "Older change",
+          createdAt: new Date(0).toISOString(),
+          ownerSessionId: "session",
+          verified: true,
+        },
+      ],
+      failures: [],
+    },
+    [],
+    "session",
+  );
+  assert.equal(state.timeline.checkpoints[0].source, "pi-guard");
+  assert.equal("reason" in state.timeline.checkpoints[0], false);
+  assert.equal("source" in state.timeline.checkpoints[1], false);
+  assert.equal(state.timeline.checkpoints[1].verificationState, "passed");
+});
+
+
 test("operational projections structurally share unchanged branches and ignore stale snapshots", () => {
   const initial = initialOperational(["heartbeat_start", "continuity_update"], []);
   const withJob = applyOperationalEvent(initial, "pi-heartbeat:job", {

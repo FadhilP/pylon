@@ -56,3 +56,10 @@ export function isNearTranscriptBottom(
 ): boolean {
   return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= threshold;
 }
+
+export function scrollTopAfterPrepend(
+  scroller: Pick<HTMLElement, "scrollHeight" | "scrollTop">,
+  previousScrollHeight: number,
+): number {
+  return scroller.scrollTop + scroller.scrollHeight - previousScrollHeight;
+}

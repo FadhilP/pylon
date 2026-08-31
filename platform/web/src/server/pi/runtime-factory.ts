@@ -1,4 +1,5 @@
 import { basename, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -27,6 +28,7 @@ export async function createPylonRuntimeFactory(options: {
   extensionFactories?: InlineExtension[];
   eventBus?: EventBus;
   modelRuntime?: ModelRuntime;
+  onStartupPhase?: (phase: "extension-loading" | "session-start", durationMs: number) => void;
 }): Promise<CreateAgentSessionRuntimeFactory> {
   const eventBus = options.eventBus ?? createEventBus();
   const fixedAgentDir = resolve(options.agentDir);
@@ -42,6 +44,7 @@ export async function createPylonRuntimeFactory(options: {
     const trustStore = new ProjectTrustStore(fixedAgentDir);
     const projectTrusted = !hasTrustRequiringProjectResources(cwd) || trustStore.get(cwd) === true;
     const settingsManager = SettingsManager.create(cwd, fixedAgentDir, { projectTrusted });
+    const extensionLoadingStartedAt = performance.now();
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
@@ -53,7 +56,10 @@ export async function createPylonRuntimeFactory(options: {
         extensionFactories: options.extensionFactories,
       },
     });
+    options.onStartupPhase?.("extension-loading", performance.now() - extensionLoadingStartedAt);
+    const sessionStartStartedAt = performance.now();
     const created = await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent });
+    options.onStartupPhase?.("session-start", performance.now() - sessionStartStartedAt);
     const extensionDiagnostics: AgentSessionRuntimeDiagnostic[] = services.resourceLoader
       .getExtensions()
       .errors.map(({ path }) => ({ type: "error" as const, message: `Extension ${basename(path)} failed to load` }));

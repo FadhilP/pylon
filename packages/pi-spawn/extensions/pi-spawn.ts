@@ -40,14 +40,14 @@ const sessionActions = ["create", "adopt", "continue", "status", "cancel", "list
 const AGENT_PROMPT_GUIDELINES = [
   "Use spawn_agent for a private, resumable specialist conversation that benefits from an isolated transcript or a fixed model, system prompt, thinking level, or tool allowlist; prefer focused specialist tools for one-shot work they already cover.",
   "When using spawn_agent, create one thread with a self-contained prompt and the narrowest useful policy, then continue that thread by ID for follow-ups because its model, system prompt, thinking level, and tools are immutable.",
-  "Set background true only for independent work that should continue across parent turns; use status with the returned thread and run IDs to collect its result, or cancel to stop it.",
+  "Set background true only for independent work that should continue across parent turns; set queue true on a background continuation to place it behind an active run owned by this parent. Use status with the returned thread and run IDs to inspect or collect it, or cancel to remove or stop it.",
   "Use spawn_agent recent to inspect bounded recent transcript messages without prompting the child; use list only to recover private thread IDs available from the current parent branch.",
   "Review child responses and workspace changes before relying on them.",
 ];
 const SESSION_PROMPT_GUIDELINES = [
   "Use spawn_session only when the child conversation must be an ordinary Pi session the user can inspect, open, or continue separately; do not use spawn_session as the default delegation tool when a private spawn_agent thread or focused specialist tool is sufficient.",
   "When starting independent work with spawn_session, use create with a self-contained kickoff prompt and a concise purpose-based name; use continue with the returned ID for follow-ups, and use list only to recover sessions available from the current parent branch.",
-  "Set background true only for independent work that should continue across parent turns; use status with the returned session and run IDs to collect its result, or cancel to stop it.",
+  "Set background true only for independent work that should continue across parent turns; set queue true on a background continuation to place it behind an active run owned by this parent. Use status with the returned session and run IDs to inspect or collect it, or cancel to remove or stop it.",
   "Set spawn_session project only when the user explicitly requests another project; relative project paths resolve from the current project.",
   "Use spawn_session adopt only when the user explicitly asks to resume an existing session in the current or selected project and provides its exact ID; adopt claims and immediately prompts that existing transcript while preserving its model, name, and native parent metadata.",
   "Do not use spawn_session to customize system instructions, thinking, tools, or extensions because it loads the selected project's normal runtime; never prompt or adopt a session concurrently open in another Pi process.",
@@ -63,6 +63,9 @@ const threadParameters = {
   ),
   background: Type.Optional(
     Type.Boolean({ description: "Return immediately and continue this prompt in the background; default false" }),
+  ),
+  queue: Type.Optional(
+    Type.Boolean({ description: "Queue this background continuation behind active work on the same thread; continue only" }),
   ),
 };
 
@@ -373,7 +376,7 @@ export default async function spawnExtension(
     name: "spawn_agent",
     label: "Spawn Agent",
     description:
-      "Create, continue, inspect, or list private persistent subagent threads owned by the current parent-session branch. Set background true on create or continue to return immediately, then use status or cancel with the returned thread and run IDs. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups. Use recent for bounded read-only transcript inspection without prompting the child, and list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
+      "Create, continue, inspect, or list private persistent subagent threads owned by the current parent-session branch. Set background true on create or continue to return immediately; set queue true on a background continuation to place it behind active work on that thread. Then use status or cancel with the returned thread and run IDs. Use create once with a self-contained prompt and the narrowest useful model, system-prompt, thinking, and tool policy; creation policy is immutable, so continue the returned ID for follow-ups. Use recent for bounded read-only transcript inspection without prompting the child, and list only to recover available branch-owned IDs. Review child responses and workspace changes before relying on them. Threads remain private and never appear in Pi's normal session list.",
     ...(agentAvailability === "active" ? { promptGuidelines: AGENT_PROMPT_GUIDELINES } : {}),
     parameters: AgentParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -448,7 +451,8 @@ export default async function spawnExtension(
           "Private subagent policy is invalid.",
           resultDetails("agent", selected.info.id),
         );
-      return dispatch({ ...common, id: selected.info.id, path: selected.info.path, prompt: params.prompt!, policy });
+      const request = { ...common, id: selected.info.id, path: selected.info.path, prompt: params.prompt!, policy };
+      return params.queue ? background.queue(request) : dispatch(request);
     },
   });
   pi.registerTool(agentTool);
@@ -457,7 +461,7 @@ export default async function spawnExtension(
     name: "spawn_session",
     label: "Spawn Session",
     description:
-      "Create, adopt, continue, or list ordinary Pi sessions when the child must be inspectable or openable separately. Set background true on create, adopt, or continue to return immediately, then use status or cancel with the returned session and run IDs. Use create with a self-contained kickoff and purpose-based name, continue the returned ID for follow-ups, and list only to recover sessions available from the current parent branch. Set project only when the user explicitly requests another project; relative paths resolve from the current project. Adopt only on the user's explicit request with an exact session ID from the current or selected project; adoption claims and immediately prompts that transcript while preserving its model and metadata. Never prompt or adopt a session open in another Pi process. Sessions use the selected project's normal runtime and cannot customize system instructions, thinking, tools, or extensions; use spawn_agent for a private customized runtime.",
+      "Create, adopt, continue, or list ordinary Pi sessions when the child must be inspectable or openable separately. Set background true on create, adopt, or continue to return immediately; set queue true on a background continuation to place it behind active work on that session. Then use status or cancel with the returned session and run IDs. Use create with a self-contained kickoff and purpose-based name, continue the returned ID for follow-ups, and list only to recover sessions available from the current parent branch. Set project only when the user explicitly requests another project; relative paths resolve from the current project. Adopt only on the user's explicit request with an exact session ID from the current or selected project; adoption claims and immediately prompts that transcript while preserving its model and metadata. Never prompt or adopt a session open in another Pi process. Sessions use the selected project's normal runtime and cannot customize system instructions, thinking, tools, or extensions; use spawn_agent for a private customized runtime.",
     ...(sessionAvailability === "active" ? { promptGuidelines: SESSION_PROMPT_GUIDELINES } : {}),
     parameters: SessionParameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -544,7 +548,8 @@ export default async function spawnExtension(
       const policy = sessionPolicy(manager, parent);
       if (!policy)
         return failure("invalid_policy", "Spawned session policy is invalid.", resultDetails("session", info.id));
-      return dispatch({ ...common, cwd: info.cwd, id: info.id, path: info.path, prompt: params.prompt!, policy });
+      const request = { ...common, cwd: info.cwd, id: info.id, path: info.path, prompt: params.prompt!, policy };
+      return params.queue ? background.queue(request) : dispatch(request);
     },
   });
   pi.registerTool(sessionTool);

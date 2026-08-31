@@ -6,10 +6,37 @@ import type { PersistedUsageAtom } from "./usage-history.ts";
 
 const MAX_RECORDS = 50_000;
 const MAX_SESSIONS = 10_000;
+export const MAX_USAGE_DAYS = 90;
 const safeAdd = (left: number, right: number) => Math.min(Number.MAX_SAFE_INTEGER, left + right);
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 
+const calendarDate = /^\d{4}-\d{2}-\d{2}$/;
+export function usageWindow(input: UsageQuery, now = new Date()): { fromInclusive: number; toExclusive: number } {
+  if (input.days !== undefined && (input.from !== undefined || input.through !== undefined))
+    throw new Error("days cannot be combined with calendar bounds");
+  if (input.from === undefined && input.through === undefined) {
+    const days = input.days ?? 30;
+    return { fromInclusive: now.getTime() - days * DAY_MS, toExclusive: now.getTime() };
+  }
+  if (input.from === undefined || input.through === undefined) throw new Error("from and through are both required");
+  const parse = (value: string): number => {
+    if (!calendarDate.test(value)) throw new Error("invalid calendar date");
+    const parsed = Date.parse(`${value}T00:00:00.000Z`);
+    if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== value)
+      throw new Error("invalid calendar date");
+    return parsed;
+  };
+  const from = parse(input.from);
+  const through = parse(input.through);
+  const today = new Date(now.getTime());
+  today.setUTCHours(0, 0, 0, 0);
+  if (from > through) throw new Error("calendar bounds are inverted");
+  if (from > today.getTime() || through > today.getTime()) throw new Error("calendar bounds cannot be in the future");
+  if ((through - from) / DAY_MS + 1 > MAX_USAGE_DAYS)
+    throw new Error(`calendar range cannot exceed ${MAX_USAGE_DAYS} days`);
+  return { fromInclusive: from, toExclusive: through + DAY_MS };
+}
 export interface UsageProject {
   id: string;
   label: string;
@@ -28,9 +55,7 @@ export function aggregateUsage(
   now = new Date(),
   unreadableFiles = 0,
 ): UsageSnapshot {
-  const days = input.days ?? 30;
-  const toExclusive = now.getTime();
-  const fromInclusive = toExclusive - days * DAY_MS;
+  const { fromInclusive, toExclusive } = usageWindow(input, now);
   const sessions = [...indexed].sort(
     (left, right) =>
       left.session.created.getTime() - right.session.created.getTime() ||
@@ -113,7 +138,7 @@ export function aggregateUsage(
     sessionGeneration: generation,
     generatedAt: now.toISOString(),
     fromInclusive: new Date(fromInclusive).toISOString(),
-    toExclusive: now.toISOString(),
+    toExclusive: new Date(toExclusive).toISOString(),
     records: visibleRecords,
     sessions: sessions
       .filter(item => visibleSessionIds.has(item.session.id))

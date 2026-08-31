@@ -125,6 +125,8 @@ export class ApiClient {
   async usage(input: UsageQuery = {}, signal?: AbortSignal): Promise<UsageSnapshot> {
     const query = new URLSearchParams();
     if (input.days) query.set("days", String(input.days));
+    if (input.from) query.set("from", input.from);
+    if (input.through) query.set("through", input.through);
     return json<UsageSnapshot>(
       await fetch(`/api/v1/usage${query.size ? `?${query}` : ""}`, {
         headers: { "x-pylon-tab-id": this.tabId },

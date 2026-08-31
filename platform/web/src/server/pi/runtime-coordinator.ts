@@ -55,6 +55,8 @@ import type {
   SessionListSnapshot,
   UsageQuery,
   UsageSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -72,6 +74,7 @@ import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { SessionRuntime, type SessionRuntimeOptions } from "./session-runtime.ts";
 import { PiExtensionManager } from "./pi-extension-manager.ts";
 import { createPylonModelRuntime } from "./runtime-factory.ts";
+import { createOsStateQLCredentialVault, type StateQLCredentialVault } from "./stateql-credential-vault.ts";
 import type {
   DeleteSessionInput,
   DeleteContinuityMemoryInput,
@@ -378,6 +381,7 @@ export class RuntimeCoordinator implements PiDriver {
   private generation = 0;
   private target?: RuntimeTarget;
   private modelRuntime?: ModelRuntime;
+  private stateqlCredentialVault?: StateQLCredentialVault;
   private sleepTimer?: NodeJS.Timeout;
   private lifecycleBusy = false;
   private pickerBusy = false;
@@ -393,6 +397,8 @@ export class RuntimeCoordinator implements PiDriver {
     this.target = target;
     this.sessionIndex.setAgentDir(target.agentDir);
     this.modelRuntime = this.options.modelRuntime ?? (await createPylonModelRuntime(target.agentDir));
+    this.stateqlCredentialVault =
+      this.options.stateqlCredentialVault ?? (await createOsStateQLCredentialVault());
     this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
     await this.projectRegistry.load(async () => {
       const knownSessions = await listSessionInventory(process.env.PI_CODING_AGENT_DIR || target.agentDir);
@@ -721,6 +727,15 @@ export class RuntimeCoordinator implements PiDriver {
     if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
     const result = await slot.driver.stateqlRows(handle, offset, limit);
     this.assertSelected(slot, generation, "loading StateQL rows");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.stateqlCommand) throw new Error("StateQL commands are unavailable");
+    const result = await slot.driver.stateqlCommand(input, signal);
+    this.assertSelected(slot, generation, `running StateQL ${input.command}`);
     return { ...result, sessionGeneration: generation };
   }
 
@@ -1708,6 +1723,7 @@ export class RuntimeCoordinator implements PiDriver {
       ...this.options,
       modelRuntime: this.modelRuntime,
       projectRegistry: this.registry(),
+      stateqlCredentialVault: this.stateqlCredentialVault,
     });
     const handle = await driver.start(target);
     const slot: RuntimeSlot = {

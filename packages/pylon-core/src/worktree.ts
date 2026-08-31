@@ -31,6 +31,7 @@ const ownedBranch = /^refs\/heads\/(?:pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylo
 const canonical = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 const rootCache = new Map<string, string>();
 const revisionCache = new Map<string, { head: string; tree: string }>();
+const snapshotRetryDelaysMs = [25, 50, 100, 200] as const;
 async function repositoryRoot(cwd: string): Promise<string> {
   const key = canonical(cwd);
   const cached = rootCache.get(key);
@@ -420,7 +421,7 @@ export function readPersistedWorktreeSummaries(session: {
 }
 
 export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | undefined> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt <= snapshotRetryDelaysMs.length; attempt++) {
     let raced = false;
     try {
       const root = await repositoryRoot(cwd);
@@ -462,7 +463,8 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
       }
       return { root, tree: candidateTree, fingerprint: `${root}\n${revision.head}\n${indexTree}\n${candidateTree}` };
     } catch {
-      if (!raced || attempt === 1) return undefined;
+      if (!raced || attempt === snapshotRetryDelaysMs.length) return undefined;
+      await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
     }
   }
   return undefined;

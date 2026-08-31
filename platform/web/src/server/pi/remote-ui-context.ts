@@ -14,6 +14,7 @@ import type {
   Theme,
   WorkingIndicatorOptions,
 } from "@earendil-works/pi-coding-agent";
+import type { StateQLCredentialVault } from "./stateql-credential-vault.ts";
 
 export type DialogMethod = "select" | "confirm" | "input" | "editor" | "questionnaire";
 export interface QuestionnaireQuestion {
@@ -32,6 +33,7 @@ export interface UiRequest {
   createdAt: string;
   timeoutSeconds?: number;
   expiresAt?: string;
+  surface?: "database";
 }
 
 export type ProviderAuthPrompt = { signal?: AbortSignal } & (
@@ -58,20 +60,20 @@ export interface StateQLCredentialRequest {
   session: { id: string; name: string };
   operation: StateQLCredentialOperation;
   access: StateQLCredentialAccess;
+  source?: "secret_env" | "credential_ref";
   signal?: AbortSignal;
   profile?: { name: string };
   requestedReadOnly?: boolean;
   connection?: {
     id: string;
     name: string;
-    driver: "sqlite" | "postgres" | "mysql";
+    driver: "sqlite" | "postgres" | "mysql" | "mongodb";
     database: string;
     readOnly: boolean;
   };
 }
-
 export interface StateQLPasswordTarget {
-  driver: "postgres" | "mysql";
+  driver: "postgres" | "mysql" | "mongodb";
   username: string;
   hostname: string;
   port: number;
@@ -80,6 +82,7 @@ export interface StateQLPasswordTarget {
 
 export interface StateQLPasswordDialogOptions {
   timeoutMs: number;
+  remember?: { reference: string; target: string };
 }
 
 export interface StateQLCredentialHost {
@@ -90,6 +93,9 @@ export interface StateQLCredentialHost {
     options?: StateQLPasswordDialogOptions,
   ): Promise<string | undefined>;
   invalidateStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): void;
+  invalidateStateQLCredential(request: StateQLCredentialRequest): void;
+  hasStateQLCredential(reference: string, target?: string): Promise<boolean>;
+  forgetStateQLCredential(reference: string): Promise<boolean>;
 }
 
 interface PendingDialog {
@@ -129,6 +135,7 @@ interface CredentialIdentity {
 
 interface CredentialBinding {
   generation: number;
+  reference: string;
   kind: "source" | "password";
   profile?: string;
   connection?: string;
@@ -154,6 +161,7 @@ interface CredentialDialogInput {
   method: "input";
   payload: Record<string, unknown>;
   neutral: undefined;
+  surface?: "database";
   dialogOptions?: ExtensionUIDialogOptions;
 }
 
@@ -170,11 +178,17 @@ function safeMetadata(value: string, maximum: number): string {
     .replace(/[\u0000-\u001f\u007f]/gu, " ");
 }
 
-function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | undefined {
+function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | "mongodb" | undefined {
   if (/[\u0000-\u001f\u007f]/u.test(value)) return undefined;
   const sqlitePath = /^sqlite:(?!\/\/)(.*)$/iu.exec(value)?.[1];
   if (sqlitePath?.trim() && sqlitePath !== ":memory:") return "sqlite";
-  const driver = /^postgres(?:ql)?:\/\//iu.test(value) ? "postgres" : /^mysql:\/\//iu.test(value) ? "mysql" : undefined;
+  const driver = /^postgres(?:ql)?:\/\//iu.test(value)
+    ? "postgres"
+    : /^mysql:\/\//iu.test(value)
+      ? "mysql"
+      : /^mongodb(?:\+srv)?:\/\//iu.test(value)
+        ? "mongodb"
+        : undefined;
   if (!driver) return undefined;
   try {
     const url = new URL(value);
@@ -191,9 +205,11 @@ function validateCredentialValue(request: StateQLCredentialRequest, value: strin
         ? "complete PostgreSQL connection URL"
         : request.connection?.driver === "mysql"
           ? "complete MySQL connection URL"
-          : request.connection?.driver === "sqlite"
-            ? "explicit sqlite:<path> source"
-            : "complete PostgreSQL/MySQL URL or explicit sqlite:<path> source";
+          : request.connection?.driver === "mongodb"
+            ? "complete MongoDB connection URL"
+            : request.connection?.driver === "sqlite"
+              ? "explicit sqlite:<path> source"
+              : "complete PostgreSQL/MySQL/MongoDB URL or explicit sqlite:<path> source";
     throw new Error(`StateQL credential must use the expected source format: ${expected}`);
   }
 }
@@ -203,8 +219,11 @@ function validateCredentialRequest(
   request: StateQLCredentialRequest,
 ): { request: StateQLCredentialRequest; identity: CredentialIdentity } {
   if (!request || typeof request !== "object") throw new Error("StateQL credential request is invalid");
-  const reference = requiredText(request.reference, "reference", 200);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(reference)) throw new Error("StateQL credential reference is invalid");
+  const source = request.source ?? "secret_env";
+  if (source !== "secret_env" && source !== "credential_ref") throw new Error("StateQL credential source is invalid");
+  const reference = requiredText(request.reference, "reference", source === "credential_ref" ? 1_024 : 200);
+  if (source === "secret_env" && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(reference))
+    throw new Error("StateQL credential reference is invalid");
   const actorId = requiredText(request.actorId, "actor", 128);
   if (actorId !== sessionId) throw new Error("StateQL credential actor does not match this Pi session");
   const stateqlSessionId = requiredText(request.session?.id, "session", 128);
@@ -221,7 +240,7 @@ function validateCredentialRequest(
   if (request.connection) {
     const driver = request.connection.driver;
     if (
-      !(["sqlite", "postgres", "mysql"] as const).includes(driver) ||
+      !(["sqlite", "postgres", "mysql", "mongodb"] as const).includes(driver) ||
       typeof request.connection.readOnly !== "boolean"
     ) {
       throw new Error("StateQL credential connection metadata is invalid");
@@ -247,6 +266,7 @@ function validateCredentialRequest(
       session: { id: stateqlSessionId, name: stateqlSessionName },
       operation: request.operation,
       access: request.access,
+      ...(source === "credential_ref" ? { source } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
       ...(profile ? { profile: { name: profile } } : {}),
       ...(request.requestedReadOnly !== undefined ? { requestedReadOnly: request.requestedReadOnly } : {}),
@@ -269,7 +289,7 @@ function validatePasswordTarget(
   request: StateQLCredentialRequest,
   target: StateQLPasswordTarget,
 ): { target: StateQLPasswordTarget; identity: string } {
-  if (!target || typeof target !== "object" || (target.driver !== "postgres" && target.driver !== "mysql")) {
+  if (!target || typeof target !== "object" || !["postgres", "mysql", "mongodb"].includes(target.driver)) {
     throw new Error("StateQL password target is invalid");
   }
   if (request.connection && request.connection.driver !== target.driver) {
@@ -343,6 +363,8 @@ function replaceKey<T extends { key: string }>(items: T[], key: string, item: T 
 
 class StateQLCredentialBroker {
   private readonly bindings = new Map<string, CredentialBinding>();
+  private readonly invalidCredentialReferences = new Set<string>();
+  private credentialVault?: StateQLCredentialVault;
   private readonly flights = new Map<string, CredentialFlight>();
 
   constructor(
@@ -352,12 +374,74 @@ class StateQLCredentialBroker {
     private readonly now: () => number,
   ) {}
 
+  setCredentialVault(vault: StateQLCredentialVault | undefined): void {
+    this.credentialVault = vault;
+  }
+
+  async requestCredential(
+    sessionId: string,
+    generation: number,
+    raw: StateQLCredentialRequest,
+    surface?: "database",
+  ): Promise<string | undefined> {
+    const { request } = validateCredentialRequest(sessionId, raw);
+    if (request.source === "credential_ref" && this.credentialVault && !this.invalidCredentialReferences.has(request.reference)) {
+      const saved = await this.credentialVault.resolve(request.reference, undefined, request.signal);
+      if (saved !== undefined) return saved;
+    }
+    const value = await this.request(sessionId, generation, request, undefined, undefined, surface);
+    if (value !== undefined && request.source === "credential_ref" && this.credentialVault) {
+      if (await this.credentialVault.save(request.reference, undefined, value, request.signal)) {
+        this.invalidCredentialReferences.delete(request.reference);
+      }
+    }
+    return value;
+  }
+
+  async rememberPassword(
+    reference: string,
+    target: string,
+    password: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (!this.credentialVault) return false;
+    try {
+      const source = new URL(target);
+      source.password = encodeURIComponent(password);
+      const saved = await this.credentialVault.save(reference, target, source.toString(), signal);
+      if (saved) this.invalidCredentialReferences.delete(reference);
+      return saved;
+    } catch {
+      return false;
+    }
+  }
+
+  async hasCredential(reference: string, target?: string): Promise<boolean> {
+    return Boolean(this.credentialVault && (await this.credentialVault.resolve(reference, target)) !== undefined);
+  }
+
+  async forgetCredential(reference: string): Promise<boolean> {
+    return (await this.credentialVault?.forget(reference)) ?? false;
+  }
+
+  invalidateCredential(sessionId: string, generation: number, raw: StateQLCredentialRequest): void {
+    if (!this.isCurrent(generation)) return;
+    const { request } = validateCredentialRequest(sessionId, raw);
+    if (request.source !== "credential_ref") return;
+    this.invalidCredentialReferences.add(request.reference);
+    for (const [key, binding] of this.bindings) {
+      if (binding.reference === request.reference) this.deleteBinding(key, binding);
+    }
+    void this.credentialVault?.invalidate(request.reference, request.signal);
+  }
+
   request(
     sessionId: string,
     generation: number,
     raw: StateQLCredentialRequest,
     rawPasswordTarget?: StateQLPasswordTarget,
     passwordTimeoutMs?: number,
+    surface?: "database",
   ): Promise<string | undefined> {
     if (!this.isCurrent(generation)) return Promise.resolve(undefined);
     const { request, identity } = validateCredentialRequest(sessionId, raw);
@@ -385,6 +469,7 @@ class StateQLCredentialBroker {
       identity.connection,
       identity.target,
       request.access,
+      surface,
     ]);
     let flight = this.flights.get(flightKey);
     if (!flight) {
@@ -406,6 +491,7 @@ class StateQLCredentialBroker {
         identity,
         passwordTarget?.target,
         passwordTimeoutMs,
+        surface,
         controller.signal,
       ).finally(() => {
         activeFlight.settled = true;
@@ -459,6 +545,7 @@ class StateQLCredentialBroker {
     identity: CredentialIdentity,
     passwordTarget: StateQLPasswordTarget | undefined,
     passwordTimeoutMs: number | undefined,
+    surface: "database" | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     const target = request.connection
@@ -471,9 +558,11 @@ class StateQLCredentialBroker {
         ? "complete PostgreSQL connection URL"
         : request.connection?.driver === "mysql"
           ? "complete MySQL connection URL"
-          : request.connection?.driver === "sqlite"
-            ? "explicit sqlite:<path> source"
-            : "complete PostgreSQL/MySQL URL or explicit sqlite:<path> source";
+          : request.connection?.driver === "mongodb"
+            ? "complete MongoDB connection URL"
+            : request.connection?.driver === "sqlite"
+              ? "explicit sqlite:<path> source"
+              : "complete PostgreSQL/MySQL/MongoDB URL or explicit sqlite:<path> source";
     const passwordTargetLabel = passwordTarget
       ? `${safeMetadata(passwordTarget.username, 120)}@${safeMetadata(passwordTarget.hostname, 200)}:${passwordTarget.port}/${safeMetadata(passwordTarget.database || "(default)", 200)}`
       : undefined;
@@ -506,6 +595,7 @@ class StateQLCredentialBroker {
         ...(!passwordTarget && request.connection ? { database: safeMetadata(request.connection.database, 500) } : {}),
       },
       neutral: undefined,
+      ...(surface ? { surface } : {}),
       dialogOptions: { signal, ...(passwordTimeoutMs !== undefined ? { timeout: passwordTimeoutMs } : {}) },
     });
     if (!value || !this.isCurrent(generation) || signal.aborted) return undefined;
@@ -524,7 +614,7 @@ class StateQLCredentialBroker {
       throw new Error("StateQL credential identity does not match the active binding");
     }
     if (!binding) {
-      binding = { generation, ...identity, access: request.access, value, expiresAt: this.now() + this.ttlMs };
+      binding = { generation, reference: request.reference, ...identity, access: request.access, value, expiresAt: this.now() + this.ttlMs };
       this.bindings.set(baseKey, binding);
     } else {
       attachIdentity(binding, identity);
@@ -605,23 +695,28 @@ export class RemoteUiBridge {
     );
   }
 
-  context(sessionId: string, sessionGeneration: number): ExtensionUIContext {
-    if (this.disposed) return new GenerationUiContext(this, sessionId, sessionGeneration);
+  setStateQLCredentialVault(vault: StateQLCredentialVault | undefined): void {
+    this.credentialBroker.setCredentialVault(vault);
+  }
+
+  context(sessionId: string, sessionGeneration: number, surface?: "database"): ExtensionUIContext {
+    if (this.disposed) return new GenerationUiContext(this, sessionId, sessionGeneration, surface);
     if (this.activeGeneration !== sessionGeneration) {
       if (this.activeGeneration !== undefined) this.cancelGeneration(this.activeGeneration);
       this.activeGeneration = sessionGeneration;
       this.state = emptyState();
     }
-    return new GenerationUiContext(this, sessionId, sessionGeneration);
+    return new GenerationUiContext(this, sessionId, sessionGeneration, surface);
   }
 
   async requestStateQLCredential(
     sessionId: string,
     sessionGeneration: number,
     request: StateQLCredentialRequest,
+    surface?: "database",
   ): Promise<string | undefined> {
     if (this.disposed) return undefined;
-    return this.credentialBroker.request(sessionId, sessionGeneration, request);
+    return this.credentialBroker.requestCredential(sessionId, sessionGeneration, request, surface);
   }
 
   async requestStateQLPassword(
@@ -630,15 +725,26 @@ export class RemoteUiBridge {
     request: StateQLCredentialRequest,
     target: StateQLPasswordTarget,
     options?: StateQLPasswordDialogOptions,
+    surface?: "database",
   ): Promise<string | undefined> {
     if (this.disposed) return undefined;
-    return this.credentialBroker.request(
+    const password = await this.credentialBroker.request(
       sessionId,
       sessionGeneration,
       request,
       target,
       validatePasswordTimeout(options),
+      surface,
     );
+    if (password !== undefined && options?.remember) {
+      await this.credentialBroker.rememberPassword(
+        options.remember.reference,
+        options.remember.target,
+        password,
+        request.signal,
+      );
+    }
+    return password;
   }
 
   invalidateStateQLPassword(
@@ -649,6 +755,25 @@ export class RemoteUiBridge {
   ): void {
     if (this.disposed) return;
     this.credentialBroker.invalidatePassword(sessionId, sessionGeneration, request, target);
+  }
+
+  invalidateStateQLCredential(
+    sessionId: string,
+    sessionGeneration: number,
+    request: StateQLCredentialRequest,
+  ): void {
+    if (this.disposed) return;
+    this.credentialBroker.invalidateCredential(sessionId, sessionGeneration, request);
+  }
+
+  async hasStateQLCredential(reference: string, target?: string): Promise<boolean> {
+    if (this.disposed) return false;
+    return this.credentialBroker.hasCredential(reference, target);
+  }
+
+  async forgetStateQLCredential(reference: string): Promise<boolean> {
+    if (this.disposed) return false;
+    return this.credentialBroker.forgetCredential(reference);
   }
 
   snapshot(): ExtensionUiReadModel {
@@ -688,6 +813,7 @@ export class RemoteUiBridge {
     options?: string[];
     questions?: QuestionnaireQuestion[];
     dialogOptions?: ExtensionUIDialogOptions;
+    surface?: "database";
   }): Promise<T> {
     const { dialogOptions } = input;
     if (
@@ -709,6 +835,7 @@ export class RemoteUiBridge {
       method: input.method,
       payload: input.payload,
       createdAt: new Date().toISOString(),
+      ...(input.surface ? { surface: input.surface } : {}),
       ...(timeoutMs ? { timeoutSeconds: Math.ceil(timeoutMs / 1_000) } : {}),
       ...(timeoutMs ? { expiresAt: new Date(Date.now() + timeoutMs).toISOString() } : {}),
     };
@@ -922,10 +1049,11 @@ class GenerationUiContext implements ExtensionUIContext {
     private readonly bridge: RemoteUiBridge,
     private readonly sessionId: string,
     private readonly generation: number,
+    private readonly surface?: "database",
   ) {}
 
   requestStateQLCredential(request: StateQLCredentialRequest): Promise<string | undefined> {
-    return this.bridge.requestStateQLCredential(this.sessionId, this.generation, request);
+    return this.bridge.requestStateQLCredential(this.sessionId, this.generation, request, this.surface);
   }
 
   requestStateQLPassword(
@@ -933,11 +1061,23 @@ class GenerationUiContext implements ExtensionUIContext {
     target: StateQLPasswordTarget,
     options?: StateQLPasswordDialogOptions,
   ): Promise<string | undefined> {
-    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target, options);
+    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target, options, this.surface);
   }
 
   invalidateStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): void {
     this.bridge.invalidateStateQLPassword(this.sessionId, this.generation, request, target);
+  }
+
+  invalidateStateQLCredential(request: StateQLCredentialRequest): void {
+    this.bridge.invalidateStateQLCredential(this.sessionId, this.generation, request);
+  }
+
+  hasStateQLCredential(reference: string, target?: string): Promise<boolean> {
+    return this.bridge.hasStateQLCredential(reference, target);
+  }
+
+  forgetStateQLCredential(reference: string): Promise<boolean> {
+    return this.bridge.forgetStateQLCredential(reference);
   }
 
   select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined> {
@@ -949,6 +1089,7 @@ class GenerationUiContext implements ExtensionUIContext {
       payload: { title: bounded(title), options: offered },
       neutral: undefined,
       options: offered,
+      ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
     });
   }
@@ -960,6 +1101,7 @@ class GenerationUiContext implements ExtensionUIContext {
       method: "confirm",
       payload: { title: bounded(title), message: bounded(message) },
       neutral: false,
+      ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
     });
   }
@@ -971,6 +1113,7 @@ class GenerationUiContext implements ExtensionUIContext {
       method: "input",
       payload: { title: bounded(title), placeholder: placeholder && bounded(placeholder) },
       neutral: undefined,
+      ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
     });
   }
@@ -982,6 +1125,7 @@ class GenerationUiContext implements ExtensionUIContext {
       method: "editor",
       payload: { title: bounded(title), prefill: prefill && bounded(prefill, MAX_EVENT_TEXT) },
       neutral: undefined,
+      ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
     });
   }
@@ -1003,6 +1147,7 @@ class GenerationUiContext implements ExtensionUIContext {
       payload: { questions: offered },
       neutral: undefined,
       questions: offered,
+      ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
     });
   }

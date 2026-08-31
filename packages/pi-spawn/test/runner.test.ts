@@ -87,6 +87,30 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
   assert.equal(run.error, undefined);
 });
 
+test("runner recovers tool arguments from assistant messages when execution starts are incomplete", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({type:'message_end',message:{role:'assistant',content:[
+      {type:'toolCall',id:'edit-start',name:'edit',arguments:{path:'a.ts',newText:'first'}},
+      {type:'toolCall',id:'edit-end',name:'edit',arguments:{path:'b.ts',newText:'second'}}
+    ],stopReason:'toolUse',usage:{}}});
+    emit({type:'tool_execution_start',toolCallId:'edit-start',toolName:'edit'});
+    emit({type:'tool_execution_end',toolCallId:'edit-start',toolName:'edit',result:{content:[{type:'text',text:'updated a'}]}});
+    emit({type:'tool_execution_end',toolCallId:'edit-end',toolName:'edit',result:{content:[{type:'text',text:'updated b'}]}});
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'done'}],stopReason:'stop',usage:{}}});
+    emit({type:'agent_settled'});setInterval(()=>{},1000);
+  }`);
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+  assert.deepEqual(
+    run.activity.map(item => ({ id: item.id, kind: item.kind, tool: item.tool, text: item.text })),
+    [
+      { id: "edit-start", kind: "call", tool: "edit", text: JSON.stringify({ path: "a.ts", newText: "first" }) },
+      { id: "edit-start", kind: "result", tool: "edit", text: "updated a" },
+      { id: "edit-end", kind: "call", tool: "edit", text: JSON.stringify({ path: "b.ts", newText: "second" }) },
+      { id: "edit-end", kind: "result", tool: "edit", text: "updated b" },
+    ],
+  );
+});
+
 test("runner streams bounded assistant text with a message-end fallback", async () => {
   const child = await fake(`if(command.type==='prompt'){
     emit({type:'message_start',message:{role:'assistant',content:[]}});

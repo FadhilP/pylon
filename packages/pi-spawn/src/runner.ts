@@ -63,6 +63,13 @@ export type RunSpawnOptions = {
 const emptyUsage = (): SpawnUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 const TEXT_LIMITS = { maxBytes: 50 * 1024, maxLines: 2000 };
 const ACTIVITY_LIMITS = { maxBytes: 2000, maxLines: 40 };
+const activityInput = (value: unknown): string => {
+  try {
+    return truncateHead(JSON.stringify(value ?? {}), ACTIVITY_LIMITS).content;
+  } catch {
+    return "{}";
+  }
+};
 
 const validNumber = (value: unknown) => {
   const number = Number(value);
@@ -242,6 +249,8 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
   const messages: any[] = [];
   const activity: SpawnActivity[] = [];
   const activityStarts = new Map<string, { startedAt: string; startedAtMs: number }>();
+  const assistantToolInputs = new Map<string, string>();
+  const activityCallIds = new Set<string>();
   const usage = emptyUsage();
   let cumulativeUsage: SpawnUsage | undefined;
   let contextTokens: number | null = null;
@@ -371,22 +380,43 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
     tool_execution_start: event => {
       const startedAtMs = Date.now();
       const startedAt = new Date(startedAtMs).toISOString();
-      if (typeof event.toolCallId === "string") activityStarts.set(event.toolCallId, { startedAt, startedAtMs });
+      const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+      if (toolCallId) {
+        activityStarts.set(toolCallId, { startedAt, startedAtMs });
+        activityCallIds.add(toolCallId);
+      }
+      const input = Object.prototype.hasOwnProperty.call(event, "args")
+        ? activityInput(event.args)
+        : toolCallId
+          ? (assistantToolInputs.get(toolCallId) ?? "{}")
+          : "{}";
+      if (toolCallId) assistantToolInputs.delete(toolCallId);
       pushActivity({
-        ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}),
+        ...(toolCallId ? { id: toolCallId } : {}),
         kind: "call",
         tool: event.toolName,
-        text: truncateHead(JSON.stringify(event.args ?? {}), ACTIVITY_LIMITS).content,
+        text: input,
         startedAt,
       });
     },
 
     tool_execution_end: event => {
-      const timing = typeof event.toolCallId === "string" ? activityStarts.get(event.toolCallId) : undefined;
-      if (typeof event.toolCallId === "string") activityStarts.delete(event.toolCallId);
+      const toolCallId = typeof event.toolCallId === "string" ? event.toolCallId : undefined;
+      const timing = toolCallId ? activityStarts.get(toolCallId) : undefined;
+      if (toolCallId) activityStarts.delete(toolCallId);
+      if (toolCallId && !activityCallIds.has(toolCallId)) {
+        activityCallIds.add(toolCallId);
+        pushActivity({
+          id: toolCallId,
+          kind: "call",
+          tool: event.toolName,
+          text: assistantToolInputs.get(toolCallId) ?? "{}",
+        });
+      }
+      if (toolCallId) assistantToolInputs.delete(toolCallId);
       const durationMs = timing ? Math.max(0, Date.now() - timing.startedAtMs) : undefined;
       pushActivity({
-        ...(typeof event.toolCallId === "string" ? { id: event.toolCallId } : {}),
+        ...(toolCallId ? { id: toolCallId } : {}),
         kind: "result",
         tool: event.toolName,
         text: truncateHead(textContent(event.result), ACTIVITY_LIMITS).content,
@@ -401,6 +431,12 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       const item = message.usage ?? {};
       messages.push(message);
       setStreamedText(textContent(message));
+      if (Array.isArray(message.content))
+        for (const part of message.content) {
+          if (part?.type !== "toolCall" || typeof part.id !== "string") continue;
+          const input = Object.prototype.hasOwnProperty.call(part, "arguments") ? part.arguments : part.args;
+          assistantToolInputs.set(part.id, activityInput(input));
+        }
       usage.input += validNumber(item.input);
       usage.output += validNumber(item.output);
       usage.cacheRead += validNumber(item.cacheRead);

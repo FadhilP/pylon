@@ -183,6 +183,7 @@ export default function timelineExtension(
         ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
         verified: bound.record.verification?.state === "passed",
         verificationState: bound.record.verification?.state ?? "unverified",
+        ...(bound.record.source === "pi-guard" ? { source: bound.record.source } : {}),
         ownerSessionId: bound.record.ownerSessionId,
         ...((bound.record.changes ?? checkpoints.changeCache.get(id))
           ? { changes: bound.record.changes ?? checkpoints.changeCache.get(id) }
@@ -786,7 +787,7 @@ export default function timelineExtension(
       await git(repository.gitRoot, ["update-ref", "-d", repository.indexRef]);
     }
   };
-  async function checkpoint(ctx: any): Promise<Snapshot | undefined> {
+  async function checkpoint(ctx: any, source?: "pi-guard"): Promise<Snapshot | undefined> {
     if (!enabled) return;
     const branch = ctx.sessionManager.getBranch(),
       user = [...branch].reverse().find((e: any) => e.type === "message" && e.message.role === "user") as any;
@@ -822,6 +823,7 @@ export default function timelineExtension(
           continuationEntryId: continuation,
           ...snap,
           createdAt: new Date().toISOString(),
+          ...(source ? { source } : {}),
           ...(sessionBaseline ? { baseline: sessionBaseline.snapshot, baselineEntryId: sessionBaseline.entryId } : {}),
           ...(verification ? { verification } : {}),
         };
@@ -882,7 +884,7 @@ export default function timelineExtension(
   });
   const disposeCheckpoint = pi.events.on("pi-timeline:checkpoint-request", (event: any) => {
     if (event?.version === 1 && lastCtx && typeof event.respond === "function")
-      event.respond(enabled ? checkpoint(lastCtx) : undefined);
+      event.respond(enabled ? checkpoint(lastCtx, event.source === "pi-guard" ? "pi-guard" : undefined) : undefined);
   });
   const disposeRelocation = pi.events.on("pi-timeline:relocation-readiness", (request: any) => {
     if (request?.version !== 1 || request.sessionId !== session.id || typeof request.respond !== "function" || !lastCtx)

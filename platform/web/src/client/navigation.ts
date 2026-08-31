@@ -236,7 +236,7 @@ export const REFERENCES: ReferenceDefinition[] = [
     icon: IconBotId,
     ariaId: "agents-panel",
     group: "run",
-    tone: "var(--magenta)",
+    tone: "var(--blue)",
     badge: runtime => {
       const runs = runtime?.conversation.delegatedRuns ?? [];
       const active = runs.filter(run => run.status === "running").length;

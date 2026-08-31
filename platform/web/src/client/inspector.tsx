@@ -63,6 +63,7 @@ import { ActionDialog } from "./action-dialog";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import type { ReferenceId } from "./navigation";
+import { useSyntaxHighlightingRevision } from "./use-chrome";
 import {
   buildStateQLActivity,
   filterStateQLActivity,
@@ -155,7 +156,7 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
               <>
                 <div className="overview-run-goal">
                   <h2 title={work.goal}>{oneLine(work.goal)}</h2>
-                  <p className="mono">{work.runId || "Current turn"}</p>
+                  <p className="mono">{work.runId || "Session task"}</p>
                 </div>
                 <div className="overview-run-status">
                   <OverviewStateLabel state={workState}>{work.mode}</OverviewStateLabel>
@@ -2143,6 +2144,9 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
                   <strong title={checkpoint.title}>{oneLine(checkpoint.title)}</strong>
                 </span>
                 <span className="checkpoint-meta">
+                  {checkpoint.source === "pi-guard" && (
+                    <span className="checkpoint-source" title="Triggered by Pi Guard">Guard</span>
+                  )}
                   {checkpoint.branch && (
                     <span className="checkpoint-branch">
                       <IconGitBranch size={12} />
@@ -2290,6 +2294,7 @@ function CheckpointDetail({
 }
 
 function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
+  useSyntaxHighlightingRevision();
   if (!value) return <div className="timeline-diff-empty">Loading diff…</div>;
   if (value.state !== "text" || !value.text)
     return (

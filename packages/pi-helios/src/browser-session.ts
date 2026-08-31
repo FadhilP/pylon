@@ -49,7 +49,9 @@ export interface BrowserOperationResult {
   snapshotOmittedBytes?: number;
   findMatches?: number;
   snapshotContinuation?: string;
+  snapshotLinks?: Record<string, string>;
   resolvedUrl?: string;
+  baseUrl?: string;
   textContentType?: string;
   textContentTruncated?: boolean;
   artifactPath?: string;
@@ -710,7 +712,9 @@ export class BrowserSessionManager {
       snapshotOmittedBytes: result.snapshotOmittedBytes,
       findMatches: result.findMatches,
       snapshotContinuation: result.snapshotContinuation,
+      snapshotLinks: result.snapshotLinks,
       resolvedUrl: action === "link-url" ? resultText(result.value) : undefined,
+      baseUrl: result.baseUrl,
       textContentType: result.textContentType,
       textContentTruncated: result.textContentTruncated,
       artifactPath: result.artifactPath,

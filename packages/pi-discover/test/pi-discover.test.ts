@@ -233,6 +233,115 @@ test("session search retrieves correlated tool calls only in explicit tools mode
   await assert.rejects(searchSessions({ query: "diagnose", cwd, toolName: "advisor" }, source), /require tools mode/);
 });
 
+test("session tool search exposes persisted specialist child activity only when requested", async () => {
+  const cwd = process.cwd();
+  const credential = `ghp_${"z".repeat(32)}`;
+  const parents = [
+    { name: "repo_scout", child: "rg", id: "scout", marker: "nested-scout" },
+    { name: "grunt", child: "read", id: "grunt", marker: "nested-grunt" },
+    { name: "spawn_agent", child: "bash", id: "spawn", marker: "nested-spawn" },
+  ];
+  const source = sessionSource(
+    [{ id: "specialists", path: "specialists", cwd, modified: new Date("2026-01-01"), allMessagesText: "" }],
+    {
+      specialists: [
+        {
+          id: "parent-calls",
+          type: "message",
+          message: {
+            role: "assistant",
+            content: parents.map(parent => ({
+              type: "toolCall",
+              id: `${parent.id}-parent`,
+              name: parent.name,
+              arguments: { task: "unrelated parent request" },
+            })),
+          },
+        },
+        ...parents.map(parent => ({
+          id: `${parent.id}-result-entry`,
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: `${parent.id}-parent`,
+            toolName: parent.name,
+            content: [{ type: "text", text: "unrelated parent result" }],
+            details: {
+              activity: [
+                {
+                  id: `${parent.id}-child`,
+                  kind: "call",
+                  tool: parent.child,
+                  text: JSON.stringify({ query: parent.marker, token: credential }),
+                },
+                {
+                  id: `${parent.id}-child`,
+                  kind: "result",
+                  tool: parent.child,
+                  text: `child-result-marker ${parent.marker} secret=${credential}`,
+                  ...(parent.id === "spawn" ? { isError: true } : {}),
+                },
+              ],
+            },
+          },
+        })),
+      ],
+    },
+  );
+
+  assert.equal((await searchSessions({ query: "nested", cwd, mode: "tools" }, source)).matches.length, 0);
+  const calls = await searchSessions({ query: "nested", cwd, mode: "tools", includeChildCalls: true }, source);
+  assert.equal(calls.matches.length, 3);
+  assert.deepEqual(
+    calls.matches.map(match => [match.kind, match.parentToolName, match.toolName, match.status]),
+    [
+      ["child_tool_call", "repo_scout", "rg", "completed"],
+      ["child_tool_call", "grunt", "read", "completed"],
+      ["child_tool_call", "spawn_agent", "bash", "error"],
+    ],
+  );
+  assert.ok(calls.matches.every(match => match.resultEntryId?.endsWith("-result-entry")));
+  assert.doesNotMatch(JSON.stringify(calls), new RegExp(credential));
+  assert.ok(calls.redactionCount >= 3);
+
+  const filtered = await searchSessions(
+    {
+      query: "nested",
+      cwd,
+      mode: "tools",
+      toolName: "spawn_agent",
+      includeChildCalls: true,
+      childToolName: "bash",
+    },
+    source,
+  );
+  assert.equal(filtered.matches.length, 1);
+  assert.equal(filtered.matches[0].parentToolName, "spawn_agent");
+  assert.equal(filtered.matches[0].toolName, "bash");
+
+  assert.equal(
+    (
+      await searchSessions(
+        { query: "child-result-marker", cwd, mode: "tools", includeChildCalls: true },
+        source,
+      )
+    ).matches.length,
+    0,
+  );
+  const results = await searchSessions(
+    { query: "child-result-marker", cwd, mode: "tools", includeChildCalls: true, includeResult: true },
+    source,
+  );
+  assert.equal(results.matches.length, 3);
+  assert.match(results.matches[0].text, /completed result: child-result-marker/);
+  assert.doesNotMatch(JSON.stringify(results), new RegExp(credential));
+
+  await assert.rejects(
+    searchSessions({ query: "nested", cwd, mode: "tools", childToolName: "rg" }, source),
+    /childToolName requires includeChildCalls/,
+  );
+});
+
 test("session tool search rejects ambiguous calls and results", async () => {
   const cwd = process.cwd();
   const source = sessionSource(

@@ -7,7 +7,7 @@ import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { SessionSummaryCache } from "../src/server/pi/session-summary-cache.ts";
 import type { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 import { SessionIndex } from "../src/server/pi/session-index.ts";
-import { aggregateUsage, type UsageIndexedSession } from "../src/server/pi/usage-aggregation.ts";
+import { aggregateUsage, usageWindow, type UsageIndexedSession } from "../src/server/pi/usage-aggregation.ts";
 import { UsageHistoryAccumulator } from "../src/server/pi/usage-history.ts";
 import { isUsageSnapshot } from "../src/shared/protocol/validation.ts";
 
@@ -223,6 +223,23 @@ test("usage aggregation deduplicates fork copies and isolates conflicting identi
   assert.equal(result.diagnostics.unknownCostRecords, 1);
   assert.equal(result.diagnostics.unknownAttributionRecords, 1);
   assert.equal(isUsageSnapshot(result), true);
+});
+
+test("custom usage bounds are UTC calendar days and end-exclusive on the following day", () => {
+  const window = usageWindow({ from: "2026-03-15", through: "2026-03-16" }, new Date("2026-03-20T12:00:00Z"));
+  assert.deepEqual(window, {
+    fromInclusive: Date.parse("2026-03-15T00:00:00.000Z"),
+    toExclusive: Date.parse("2026-03-17T00:00:00.000Z"),
+  });
+  for (const input of [
+    { from: "2026-03-15", through: "2026-03-16", days: 7 as const },
+    { from: "2026-03-16", through: "2026-03-15" },
+    { from: "2026-03-15", through: "2026-03-15T00:00:00Z" },
+    { from: "2026-03-15" },
+    { from: "2026-06-20", through: "2026-06-20" },
+    { from: "2025-01-01", through: "2026-03-20" },
+  ])
+    assert.throws(() => usageWindow(input, new Date("2026-03-20T12:00:00Z")));
 });
 
 test("usage ranges include their lower boundary and exclude the current-time boundary", () => {

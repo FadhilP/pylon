@@ -7,7 +7,7 @@ import { TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { validatePngFile, type Exec } from "./capture.ts";
-import { ELEMENT_REF_FRAGMENT, isElementReference } from "./element-ref.ts";
+import { elementReferences, ELEMENT_REF_FRAGMENT, isElementReference } from "./element-ref.ts";
 import { PlaywrightClient, PlaywrightClientError } from "./playwright-client.ts";
 
 const CLI_PATH = fileURLToPath(new URL("./playwright-thin-cli.mjs", import.meta.url));
@@ -26,10 +26,11 @@ const PAGE_TEXT_MAX_CHARS = 32 * 1024;
 const PAGE_TEXT_EXPRESSION = `() => { const text = document.body?.innerText ?? document.documentElement?.textContent ?? ''; return JSON.stringify({ contentType: document.contentType, text: text.slice(0, ${PAGE_TEXT_MAX_CHARS}), truncated: text.length > ${PAGE_TEXT_MAX_CHARS} }); }`;
 const SESSION_NAME = /^helios-[a-f0-9]{12}-[a-f0-9]{12}$/;
 const CONTINUATION_CURSOR = /^hc_[a-f0-9]{32}$/;
-const INVALIDATES_CONTINUATION = new Set([
-  "open",
-  "attach-cdp",
-  "attach-extension",
+const MAX_CONTINUATIONS_PER_SESSION = 20;
+const MAX_CONTINUATIONS = 32;
+const MAX_CONTINUATION_BYTES = 4 * 1024 * 1024;
+const CLEARS_CONTINUATIONS = new Set(["open", "attach-cdp", "attach-extension", "close", "detach"]);
+const INVALIDATES_CONTINUATIONS = new Set([
   "navigate",
   "click",
   "fill",
@@ -51,8 +52,6 @@ const INVALIDATES_CONTINUATION = new Set([
   "tab-new",
   "tab-select",
   "tab-close",
-  "close",
-  "detach",
 ]);
 
 export type BrowserOwnership = "owned" | "cdp-attached" | "extension-attached";
@@ -62,6 +61,7 @@ export type BrowserAction =
   | { kind: "attach-extension"; browser: "chrome" | "msedge" }
   | { kind: "navigate"; url: string }
   | { kind: "link-url"; target: string }
+  | { kind: "base-url" }
   | { kind: "page-text" }
   | { kind: "snapshot"; target?: string; depth?: number; snapshotMode?: "compact" | "full" }
   | { kind: "continue"; cursor: string }
@@ -89,7 +89,9 @@ export interface CliResult {
   snapshotOmittedBytes?: number;
   findMatches?: number;
   snapshotContinuation?: string;
+  snapshotLinks?: Record<string, string>;
   artifactPath?: string;
+  baseUrl?: string;
   textContentType?: string;
   textContentTruncated?: boolean;
 }
@@ -172,10 +174,56 @@ interface RedactedSnapshot {
 }
 
 interface PendingContinuation {
-  token: string;
+  sessionName: string;
   lines: string[];
   nextIndex: number;
   limits: { lines: number; bytes: number };
+  links: Record<string, string>;
+  bytes: number;
+}
+
+function snapshotScalar(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === "string") return parsed;
+    } catch {}
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1).replaceAll("''", "'");
+  return trimmed;
+}
+
+function snapshotLinkTargets(lines: string[]): Record<string, string> {
+  const links: Record<string, string> = {};
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!/^\s*- link\b/i.test(line)) continue;
+    const ref = elementReferences(line)[0];
+    if (!ref) continue;
+    const indentation = line.length - line.trimStart().length;
+    for (let child = index + 1; child < lines.length; child++) {
+      const childLine = lines[child];
+      const childIndentation = childLine.length - childLine.trimStart().length;
+      if (childLine.trim() && childIndentation <= indentation) break;
+      const url = /^\s*- \/url:\s*(.+)\s*$/.exec(childLine)?.[1];
+      if (!url) continue;
+      links[ref] = snapshotScalar(url);
+      break;
+    }
+  }
+  return links;
+}
+
+function linksForSnapshot(
+  snapshot: string | undefined,
+  links: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!snapshot) return undefined;
+  const entries = elementReferences(snapshot).flatMap(ref =>
+    links[ref] === undefined ? [] : ([[ref, links[ref]]] as const),
+  );
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 interface PersistentClient {
@@ -191,6 +239,7 @@ interface PersistentClient {
 
 export interface PlaywrightCliOptions {
   maxSnapshotLines?: number;
+  preserveContinuationsAcrossActions?: boolean;
   maxSnapshotBytes?: number;
   maxActionSnapshotLines?: number;
   maxActionSnapshotBytes?: number;
@@ -211,6 +260,11 @@ function validateOptions(options: PlaywrightCliOptions): void {
     const minimum = name.endsWith("Lines") ? 1 : 4;
     if (value < minimum) throw new Error(`${name} must be at least ${minimum}`);
   }
+  if (
+    options.preserveContinuationsAcrossActions !== undefined &&
+    typeof options.preserveContinuationsAcrossActions !== "boolean"
+  )
+    throw new Error("preserveContinuationsAcrossActions must be a boolean");
   if (options.persistentClient !== undefined && typeof options.persistentClient !== "boolean")
     throw new Error("persistentClient must be a boolean");
 }
@@ -413,6 +467,7 @@ export class PlaywrightCli {
   private readonly configPath: string;
   private readonly options: PlaywrightCliOptions;
   private readonly continuations = new Map<string, PendingContinuation>();
+  private continuationBytes = 0;
   private configReady?: Promise<void>;
   private client?: Promise<PersistentClient | undefined>;
   private clientUnavailable = false;
@@ -437,7 +492,7 @@ export class PlaywrightCli {
   }
 
   async dispose(): Promise<void> {
-    this.continuations.clear();
+    this.clearContinuations();
     const client = await this.client?.catch(() => undefined);
     await client?.dispose().catch(() => {});
     this.client = undefined;
@@ -562,8 +617,12 @@ export class PlaywrightCli {
     if (!SESSION_NAME.test(sessionName)) throw new Error("Unsafe Playwright CLI session name");
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
     if (action.kind === "continue") return this.continueSnapshot(sessionName, action.cursor);
-    if (INVALIDATES_CONTINUATION.has(action.kind) || action.kind === "snapshot" || action.kind === "find")
-      this.continuations.delete(sessionName);
+    if (CLEARS_CONTINUATIONS.has(action.kind)) this.clearContinuations(sessionName);
+    else if (
+      !this.options.preserveContinuationsAcrossActions &&
+      (INVALIDATES_CONTINUATIONS.has(action.kind) || action.kind === "snapshot" || action.kind === "find")
+    )
+      this.clearContinuations(sessionName);
     await this.ensureConfig();
     const { command, args, artifactPath, timeout } = this.arguments(action);
     const result = await this.execute(action, sessionName, command, args, timeout, signal);
@@ -582,7 +641,8 @@ export class PlaywrightCli {
       textResult?.text ??
       (action.kind === "find" && typeof value.result === "string" ? value.result : undefined);
     if (action.kind === "find" && typeof value.result === "string") delete value.result;
-    if (rawSnapshot !== undefined) this.continuations.delete(sessionName);
+    if (rawSnapshot !== undefined && !this.options.preserveContinuationsAcrossActions)
+      this.clearContinuations(sessionName);
     if (artifactPath) {
       try {
         await validatePngFile(artifactPath);
@@ -601,10 +661,11 @@ export class PlaywrightCli {
     const lines =
       snapshotLines === undefined ? undefined : splitOversizedLines(snapshotLines, Math.max(4, limits.bytes));
     const snapshot = lines === undefined ? undefined : boundedSnapshot(lines, 0, limits);
+    const snapshotLinks = lines === undefined ? {} : snapshotLinkTargets(lines);
     const snapshotContinuation =
       snapshot?.nextIndex === undefined
         ? undefined
-        : this.storeContinuation(sessionName, lines!, snapshot.nextIndex, limits);
+        : this.storeContinuation(sessionName, lines!, snapshot.nextIndex, limits, snapshotLinks);
     return {
       value,
       snapshot: snapshot?.content,
@@ -613,7 +674,9 @@ export class PlaywrightCli {
       snapshotOmittedLines: snapshot?.omittedLines,
       snapshotOmittedBytes: snapshot?.omittedBytes,
       findMatches: action.kind === "find" && rawSnapshot !== undefined ? findMatchCount(rawSnapshot) : undefined,
+      baseUrl: action.kind === "base-url" && typeof value.result === "string" ? value.result : undefined,
       snapshotContinuation,
+      snapshotLinks: linksForSnapshot(snapshot?.content, snapshotLinks),
       artifactPath,
       textContentType: textResult?.contentType,
       textContentTruncated: textResult?.truncated,
@@ -622,16 +685,16 @@ export class PlaywrightCli {
 
   private continueSnapshot(sessionName: string, cursor: string): CliResult {
     if (!CONTINUATION_CURSOR.test(cursor))
-      throw new Error("Browser continuation is stale; request a new snapshot or find result");
-    const pending = this.continuations.get(sessionName);
-    if (!pending || pending.token !== cursor)
-      throw new Error("Browser continuation is stale; request a new snapshot or find result");
-    this.continuations.delete(sessionName);
+      throw new Error("Snapshot continuation cursor is stale; request one new snapshot and use only its cursor");
+    const pending = this.continuations.get(cursor);
+    if (!pending || pending.sessionName !== sessionName)
+      throw new Error("Snapshot continuation cursor is stale; request one new snapshot and use only its cursor");
+    this.deleteContinuation(cursor);
     const snapshot = boundedSnapshot(pending.lines, pending.nextIndex, pending.limits);
     const snapshotContinuation =
       snapshot.nextIndex === undefined
         ? undefined
-        : this.storeContinuation(sessionName, pending.lines, snapshot.nextIndex, pending.limits);
+        : this.storeContinuation(sessionName, pending.lines, snapshot.nextIndex, pending.limits, pending.links);
     return {
       value: {},
       snapshot: snapshot.content,
@@ -639,7 +702,21 @@ export class PlaywrightCli {
       snapshotOmittedLines: snapshot.omittedLines,
       snapshotOmittedBytes: snapshot.omittedBytes,
       snapshotContinuation,
+      snapshotLinks: linksForSnapshot(snapshot.content, pending.links),
     };
+  }
+
+  private deleteContinuation(cursor: string): void {
+    const pending = this.continuations.get(cursor);
+    if (!pending) return;
+    this.continuations.delete(cursor);
+    this.continuationBytes -= pending.bytes;
+  }
+
+  private clearContinuations(sessionName?: string): void {
+    for (const [cursor, pending] of this.continuations) {
+      if (sessionName === undefined || pending.sessionName === sessionName) this.deleteContinuation(cursor);
+    }
   }
 
   private storeContinuation(
@@ -647,9 +724,27 @@ export class PlaywrightCli {
     lines: string[],
     nextIndex: number,
     limits: { lines: number; bytes: number },
-  ): string {
+    links: Record<string, string>,
+  ): string | undefined {
+    const bytes =
+      lines.reduce((total, line) => total + Buffer.byteLength(line) + 1, 0) +
+      Object.entries(links).reduce((total, [ref, url]) => total + Buffer.byteLength(ref) + Buffer.byteLength(url), 0);
+    if (bytes > MAX_CONTINUATION_BYTES) return undefined;
+    const sessionEntries = () =>
+      [...this.continuations.values()].filter(item => item.sessionName === sessionName).length;
+    while (sessionEntries() >= MAX_CONTINUATIONS_PER_SESSION) {
+      const oldest = [...this.continuations].find(([, item]) => item.sessionName === sessionName);
+      if (!oldest) break;
+      this.deleteContinuation(oldest[0]);
+    }
+    while (this.continuations.size >= MAX_CONTINUATIONS || this.continuationBytes + bytes > MAX_CONTINUATION_BYTES) {
+      const oldest = this.continuations.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.deleteContinuation(oldest);
+    }
     const token = `hc_${randomBytes(16).toString("hex")}`;
-    this.continuations.set(sessionName, { token, lines, nextIndex, limits });
+    this.continuations.set(token, { sessionName, lines, nextIndex, limits, links, bytes });
+    this.continuationBytes += bytes;
     return token;
   }
 
@@ -793,6 +888,8 @@ export class PlaywrightCli {
           args: ["el => el instanceof HTMLAnchorElement ? el.href : ''", target(action.target)],
           timeout: normal,
         };
+      case "base-url":
+        return { command: "eval", args: ["() => document.baseURI"], timeout: normal };
       case "page-text":
         return { command: "eval", args: [PAGE_TEXT_EXPRESSION], timeout: normal };
       case "snapshot": {

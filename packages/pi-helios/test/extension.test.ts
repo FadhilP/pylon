@@ -512,39 +512,38 @@ test("Web Scout child extension requires and consumes issued grant", async () =>
   await assert.rejects(webScoutBrowser({} as any, { persistentClient: false }), /grant is missing/);
 });
 
-test("Web Scout reuses navigation snapshots without extra snapshot subprocesses", async () => {
-  const issued = await issueWebScoutGrant({ maxPages: 3, maxActions: 4, headed: false });
+test("Web Scout follows captured links from an older page continuation", async () => {
+  const issued = await issueWebScoutGrant({ maxPages: 3, maxActions: 6, headed: false });
   process.env[WEB_SCOUT_GRANT_ENV] = issued.value;
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const commands: string[] = [];
+  let currentUrl = "about:blank";
   await webScoutBrowser(
     {
       exec: async (_command: string, args: string[]) => {
         const action =
           args.find(value => ["open", "goto", "eval", "snapshot", "tab-list", "close"].includes(value)) ?? "unknown";
         commands.push(action);
+        if (action === "goto") currentUrl = args.find(value => value.startsWith("https://")) ?? currentUrl;
         if (action === "tab-list")
           return {
             code: 0,
-            stdout: JSON.stringify({ result: "- 0: (current) [Example](https://1.1.1.1/)" }),
+            stdout: JSON.stringify({ result: `- 0: (current) [Example](${currentUrl})` }),
             stderr: "",
             killed: false,
           };
         if (action === "eval")
-          return { code: 0, stdout: JSON.stringify({ result: "https://1.1.1.1/next" }), stderr: "", killed: false };
-        if (action === "goto")
-          return {
-            code: 0,
-            stdout: JSON.stringify({
-              snapshot: [
-                "- text: link [ref=f1e999]",
-                ...Array.from({ length: 105 }, (_, index) => `- link Item ${index} [ref=f1e${index + 1}]`),
-              ].join("\n"),
-            }),
-            stderr: "",
-            killed: false,
-          };
+          return { code: 0, stdout: JSON.stringify({ result: currentUrl }), stderr: "", killed: false };
+        if (action === "goto") {
+          const snapshot = currentUrl.endsWith("/a/")
+            ? Array.from(
+                { length: 40 },
+                (_, index) => `- link A${index + 1} [ref=f1e${index + 1}]:\n  - /url: /a/${index + 1}`,
+              ).join("\n")
+            : "- link Current [ref=f2e1]:\n  - /url: /current";
+          return { code: 0, stdout: JSON.stringify({ snapshot }), stderr: "", killed: false };
+        }
         return { code: 0, stdout: "{}", stderr: "", killed: false };
       },
       registerTool(value: any) {
@@ -557,16 +556,17 @@ test("Web Scout reuses navigation snapshots without extra snapshot subprocesses"
     { persistentClient: false },
   );
   const browser = tools.get("scout_browser");
-  const navigated = await browser.execute("navigate", { action: "navigate", url: "https://1.1.1.1" });
-  assert.match(navigated.content[0].text, /ref=f1e1/);
-  assert.deepEqual(commands, ["open", "tab-list", "goto", "tab-list"]);
-  await assert.rejects(browser.execute("follow-spoof", { action: "follow", target: "f1e999" }), /link reference/);
-  const followed = await browser.execute("follow", { action: "follow", target: "f1e1" });
-  assert.deepEqual(commands.slice(4), ["eval", "goto", "tab-list"]);
+  const oldPage = await browser.execute("navigate-a", { action: "navigate", url: "https://1.1.1.1/a/" });
+  assert.ok(oldPage.details.continuation);
+  await browser.execute("navigate-b", { action: "navigate", url: "https://1.1.1.1/b/" });
   const beforeContinue = commands.length;
-  const continued = await browser.execute("continue", { action: "continue", cursor: followed.details.continuation });
+  const continued = await browser.execute("continue-a", { action: "continue", cursor: oldPage.details.continuation });
   assert.equal(commands.length, beforeContinue);
-  assert.match(continued.content[0].text, /ref=f1e105/);
+  assert.match(continued.content[0].text, /ref=f1e40/);
+  await assert.rejects(browser.execute("follow-spoof", { action: "follow", target: "f1e1" }), /link reference/);
+  await browser.execute("follow-old", { action: "follow", target: "f1e40" });
+  assert.equal(currentUrl, "https://1.1.1.1/a/40");
+  assert.equal(commands.filter(command => command === "eval").length, 3);
   assert.equal(commands.includes("snapshot"), false);
   for (const handler of handlers.get("session_shutdown") ?? []) await handler();
 });

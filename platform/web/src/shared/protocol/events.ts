@@ -271,6 +271,7 @@ export interface UiRequestReadModel {
   requestId: string;
   method: "select" | "confirm" | "input" | "editor" | "questionnaire";
   payload: Record<string, unknown>;
+  surface?: "database";
   owned: boolean;
   ownershipAvailable: boolean;
   timeoutSeconds?: number;
@@ -431,6 +432,7 @@ export interface TimelineCheckpointReadModel {
   verified: boolean;
   verificationState: "passed" | "failed" | "unverified";
   ownerSessionId: string;
+  source?: "pi-guard";
   changes?: { fileCount: number; additions: number; deletions: number; binaryCount: number };
 }
 

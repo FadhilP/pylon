@@ -111,12 +111,19 @@ function session(payload: Record<string, unknown>) {
   return { type: "session.event" as const, sessionId: "session", sessionGeneration: 1, payload };
 }
 
-function ui(method: string, payload: Record<string, unknown>, requestId = method) {
+function ui(method: string, payload: Record<string, unknown>, requestId = method, surface?: "database") {
   return {
     type: "ui.event" as const,
     sessionId: "session",
     sessionGeneration: 1,
-    payload: { kind: "request", requestId, method, payload, createdAt: new Date().toISOString() },
+    payload: {
+      kind: "request",
+      requestId,
+      method,
+      payload,
+      createdAt: new Date().toISOString(),
+      ...(surface ? { surface } : {}),
+    },
   };
 }
 
@@ -2106,7 +2113,18 @@ test("terminal agent events settle residual tool and delegated activity", () => 
     { id: "call", name: "bash", status: "running" },
     { id: "done", name: "read", status: "completed" },
   ];
-  initial.conversation.delegatedRuns = [{ id: "delegate", kind: "advisor", turn: 1, status: "running", activity: [] }];
+  initial.conversation.delegatedRuns = [
+    { id: "delegate", kind: "advisor", turn: 1, status: "running", activity: [] },
+    {
+      id: "background-spawn",
+      kind: "spawn_agent",
+      turn: 1,
+      threadId: "child-agent",
+      runId: "background-run",
+      status: "running",
+      activity: [],
+    },
+  ];
 
   const stopped = new RuntimeProjection(initial, () => undefined);
   stopped.apply(session({ type: "agent_end", turnId: "turn-stopped", stopped: true }));
@@ -2128,6 +2146,26 @@ test("terminal agent events settle residual tool and delegated activity", () => 
     ["failed", "completed"],
   );
   assert.equal(errorConversation.delegatedRuns[0]?.status, "failed");
+  assert.equal(errorConversation.delegatedRuns[1]?.status, "running");
+
+  errored.apply(
+    session({
+      type: "spawn_progress",
+      phase: "end",
+      toolCallId: "background-spawn",
+      toolName: "spawn_agent",
+      result: {
+        content: [{ type: "text", text: "Child done" }],
+        details: {
+          piSpawn: { version: 1, kind: "agent", id: "child-agent" },
+          runId: "background-run",
+          background: true,
+          status: "completed",
+        },
+      },
+    }),
+  );
+  assert.equal(errored.snapshot().conversation.delegatedRuns[1]?.status, "completed");
 });
 
 test("projection retains stopped tool-only run metadata without an assistant message", () => {
@@ -2185,6 +2223,16 @@ test("projection publishes bounded discover index state", () => {
   });
   assert.ok(published.includes("discover.index"));
 });
+
+test("projection preserves database dialog routing without marking ordinary dialogs", () => {
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(ui("confirm", { title: "Connect", message: "Proceed?" }, "database-confirm", "database"));
+  assert.equal(projection.pendingUi?.surface, "database");
+
+  projection.apply(ui("confirm", { title: "Tool", message: "Proceed?" }, "tool-confirm"));
+  assert.equal(projection.pendingUi?.surface, undefined);
+});
+
 
 test("projection retains bounded extension UI state and publishes mutation events", () => {
   const published: string[] = [];

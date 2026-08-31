@@ -39,7 +39,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "typescript": "^5.8.0"
+    "typescript": "^7.0.2"
   },
   "license": "MIT"
 }

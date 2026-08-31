@@ -389,6 +389,90 @@ test("background agent runs stream correlated progress, report status, and prese
   }
 });
 
+test("background continuations queue in order and can be cancelled before they start", async () => {
+  const releases: Array<() => void> = [];
+  const prompts: string[] = [];
+  const f = await fixture(
+    (_args, options) =>
+      new Promise<SpawnRun>(resolve => {
+        prompts.push(options.prompt);
+        releases.push(() => resolve(completed(`done:${options.prompt}`)));
+      }),
+  );
+  try {
+    const tool = f.tools.get("spawn_agent");
+    const started = await tool.execute(
+      "create-queued",
+      { action: "create", prompt: "first", background: true },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    const id = started.details.piSpawn.id;
+    persist(f.parent, "spawn_agent", started);
+
+    const second = await tool.execute(
+      "continue-second",
+      { action: "continue", id, prompt: "second", background: true, queue: true },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    const third = await tool.execute(
+      "continue-third",
+      { action: "continue", id, prompt: "third", background: true, queue: true },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.equal(second.details.state, "queued");
+    assert.equal(third.details.state, "queued");
+    assert.deepEqual(prompts, ["first"]);
+
+    const queued = await tool.execute(
+      "status-second",
+      { action: "status", id, runId: second.details.runId },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.equal(queued.details.state, "queued");
+    const cancelled = await tool.execute(
+      "cancel-third",
+      { action: "cancel", id, runId: third.details.runId },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.equal(cancelled.details.status, "cancelled");
+
+    releases.shift()!();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(prompts, ["first", "second"]);
+    const running = await tool.execute(
+      "status-second-running",
+      { action: "status", id, runId: second.details.runId },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.equal(running.details.state, "running");
+    releases.shift()!();
+    await new Promise(resolve => setImmediate(resolve));
+    const completedSecond = await tool.execute(
+      "status-second-completed",
+      { action: "status", id, runId: second.details.runId },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.equal(completedSecond.details.status, "completed");
+    assert.deepEqual(prompts, ["first", "second"]);
+  } finally {
+    f.restore();
+  }
+});
+
 test("a completed background result can only be collected once concurrently", async () => {
   const f = await fixture(async () => completed("once"));
   try {

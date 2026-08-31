@@ -1,14 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
-import { describeRuntimeSnapshotIssue, validateCommand } from "../../shared/protocol/validation.ts";
+import {
+  describeRuntimeSnapshotIssue,
+  isStateQLCommandInput,
+  validateCommand,
+} from "../../shared/protocol/validation.ts";
 import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
-import type { BootstrapSnapshot } from "../../shared/protocol/snapshots.ts";
+import type { BootstrapSnapshot, StateQLCommandInput, UsageQuery } from "../../shared/protocol/snapshots.ts";
 import type { WebEvent } from "../../shared/protocol/envelope.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
+import { usageWindow } from "../pi/usage-aggregation.ts";
 import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from "../pi/projections.ts";
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
@@ -142,6 +147,8 @@ export class ServerTransport {
         return await this.stateqlSnapshot(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/stateql/rows")
         return await this.stateqlRows(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/stateql/command")
+        return await this.stateqlCommand(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/papercuts")
         return await this.papercutList(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/papercuts/mutate")
@@ -358,13 +365,42 @@ export class ServerTransport {
 
   private async usage(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
-    const values = url.searchParams.getAll("days");
-    if (values.length > 1) throw httpError(400, "invalid days");
-    const rawDays = values[0];
+    const names = ["days", "from", "through"] as const;
+    const values = Object.fromEntries(names.map(name => [name, url.searchParams.getAll(name)])) as Record<
+      (typeof names)[number],
+      string[]
+    >;
+    if (Object.values(values).some(items => items.length > 1)) throw httpError(400, "duplicate usage bound");
+    const rawDays = values.days[0];
     const days =
-      rawDays === undefined ? 30 : rawDays === "7" ? 7 : rawDays === "30" ? 30 : rawDays === "90" ? 90 : undefined;
-    if (days === undefined) throw httpError(400, "invalid days");
-    const result = await this.driver.usage({ days });
+      rawDays === undefined
+        ? undefined
+        : rawDays === "7"
+          ? 7
+          : rawDays === "30"
+            ? 30
+            : rawDays === "90"
+              ? 90
+              : undefined;
+    if (rawDays !== undefined && days === undefined) throw httpError(400, "invalid days");
+    if (days !== undefined && (values.from[0] !== undefined || values.through[0] !== undefined)) {
+      throw httpError(400, "days cannot be combined with calendar bounds");
+    }
+    const input: UsageQuery =
+      days !== undefined
+        ? { days }
+        : values.from[0] !== undefined || values.through[0] !== undefined
+          ? {
+              ...(values.from[0] !== undefined ? { from: values.from[0] } : {}),
+              ...(values.through[0] !== undefined ? { through: values.through[0] } : {}),
+            }
+          : { days: 30 };
+    try {
+      usageWindow(input);
+    } catch (cause) {
+      throw httpError(400, cause instanceof Error ? cause.message : "invalid usage range");
+    }
+    const result = await this.driver.usage(input);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while loading usage");
     this.send(response, 200, result);
@@ -439,6 +475,45 @@ export class ServerTransport {
     const result = await this.driver.stateqlRows(body.handle, body.offset, body.limit);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while loading StateQL rows");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
+  private async stateqlCommand(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    const tabId = this.tab(request, session);
+    const input = await readJson(request);
+    if (!input || typeof input !== "object" || Array.isArray(input))
+      throw httpError(400, "invalid StateQL command request");
+    const body = input as Record<string, unknown>;
+    if (Object.keys(body).some(key => key !== "generation" && key !== "input"))
+      throw httpError(400, "invalid StateQL command request");
+    if (
+      typeof body.generation !== "number" ||
+      !Number.isSafeInteger(body.generation) ||
+      body.generation !== this.journal.sessionGeneration
+    )
+      throw httpError(409, "stale session generation");
+    if (!isStateQLCommandInput(body.input)) throw httpError(400, "invalid StateQL command request");
+    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.driver.stateqlCommand) throw httpError(409, "StateQL commands are unavailable");
+    if (![...this.clients].some(client => client.tabId === tabId))
+      throw httpError(409, "the StateQL command tab must have an SSE connection");
+    this.lastCommandOwner = tabId;
+    this.renew(tabId);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    request.once("aborted", cancel);
+    response.once("close", cancel);
+    let result: Awaited<ReturnType<NonNullable<PiDriver["stateqlCommand"]>>>;
+    try {
+      result = await this.driver.stateqlCommand(body.input as StateQLCommandInput, controller.signal);
+    } finally {
+      request.removeListener("aborted", cancel);
+      response.removeListener("close", cancel);
+    }
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while running StateQL command");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
   }

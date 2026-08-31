@@ -1147,6 +1147,7 @@ export class RuntimeProjection {
         requestId: id(raw.requestId, "invalid"),
         method: method as UiRequestReadModel["method"],
         payload: browserValue(payload) as Record<string, unknown>,
+        ...(raw.surface === "database" ? { surface: "database" as const } : {}),
         owned: false,
         ownershipAvailable: false,
         ...(typeof raw.timeoutSeconds === "number"

@@ -9,7 +9,8 @@ const creationOnlyAgentFields = (params: any) =>
   params.tools !== undefined ||
   params.disableSpecialists !== undefined;
 const creationOnlySessionFields = (params: any) => params.name !== undefined || params.model !== undefined;
-const runControlFields = (params: any) => params.runId !== undefined || params.background !== undefined;
+const runControlFields = (params: any) =>
+  params.runId !== undefined || params.background !== undefined || params.queue !== undefined;
 const creationOnlyFields = (kind: SpawnKind, params: any) =>
   kind === "agent"
     ? creationOnlyAgentFields(params)
@@ -20,6 +21,7 @@ type Rule = (kind: SpawnKind, params: any) => string | undefined;
 
 const create: Rule = (kind, params) => {
   if (params.id !== undefined || params.runId !== undefined) return `${kind} create does not accept id or runId.`;
+  if (params.queue !== undefined) return `${kind} create does not accept queue.`;
   if (!params.prompt?.trim()) return `${kind} create requires prompt.`;
   if (params.limit !== undefined || params.maxChars !== undefined)
     return `${kind} create does not accept recent limits.`;
@@ -35,6 +37,7 @@ const adopt: Rule = (kind, params) => {
   if (kind !== "session") return "Only standard sessions can be adopted.";
   if (!params.id) return "session adopt requires id.";
   if (params.runId !== undefined) return "session adopt does not accept runId.";
+  if (params.queue !== undefined) return "session adopt does not accept queue.";
   if (!params.prompt?.trim()) return "session adopt requires prompt.";
   if (params.project !== undefined && !params.project.trim()) return "session project must not be empty.";
   if (creationOnlySessionFields(params)) return "Session name and model cannot be changed on adopt.";
@@ -44,6 +47,8 @@ const proceed: Rule = (kind, params) => {
   if (!params.id) return `${kind} continue requires id.`;
   if (params.runId !== undefined) return `${kind} continue does not accept runId.`;
   if (!params.prompt?.trim()) return `${kind} continue requires prompt.`;
+  if (params.queue !== undefined && (params.queue !== true || params.background !== true))
+    return `${kind} continue queue requires queue and background to both be true.`;
   if (params.limit !== undefined || params.maxChars !== undefined)
     return `${kind} continue does not accept recent limits.`;
   if (kind === "agent" && creationOnlyAgentFields(params)) return "Agent creation policy cannot change on continue.";
@@ -57,6 +62,7 @@ const collect: Rule = (kind, params) => {
     params.prompt !== undefined ||
     params.background !== undefined ||
     params.limit !== undefined ||
+    params.queue !== undefined ||
     params.maxChars !== undefined ||
     creationOnlyFields(kind, params)
   )

@@ -78,6 +78,19 @@ function snapshotArtifactFailure(error: unknown): boolean {
   );
 }
 
+const MAX_CURSOR_CONTEXTS = 20;
+
+function capturedLinks(links: Record<string, string> | undefined, baseUrl: string | undefined): Map<string, string> {
+  const captured = new Map<string, string>();
+  if (!links || !baseUrl) return captured;
+  for (const [ref, href] of Object.entries(links)) {
+    try {
+      captured.set(ref, new URL(href, baseUrl).href);
+    } catch {}
+  }
+  return captured;
+}
+
 export default async function webScoutBrowserExtension(pi: ExtensionAPI, options: { persistentClient?: boolean } = {}) {
   const grant = await consumeWebScoutGrant();
   const proxy = await PublicNetworkProxy.start({
@@ -93,6 +106,7 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
         maxActionSnapshotLines: 60,
         maxActionSnapshotBytes: 6 * 1024,
         persistentClient: options.persistentClient ?? true,
+        preserveContinuationsAcrossActions: true,
       }),
   );
   const sessionId = `web-scout-${randomUUID()}`;
@@ -100,6 +114,9 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
   let pages = 0;
   let actions = 0;
   let linkRefs = new Set<string>();
+  let capturedLinkUrls = new Map<string, string>();
+  let canResolveLiveLinks = false;
+  const cursorBaseUrls = new Map<string, string>();
 
   const ensureStarted = async (signal?: AbortSignal) => {
     if (started) return;
@@ -118,25 +135,45 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
     await resolvePublicHost(url.hostname);
     return url.href;
   };
-  const acceptSnapshot = (result: BrowserOperationResult) => {
+  const rememberCursor = (cursor: string, baseUrl: string) => {
+    cursorBaseUrls.delete(cursor);
+    cursorBaseUrls.set(cursor, baseUrl);
+    while (cursorBaseUrls.size > MAX_CURSOR_CONTEXTS) cursorBaseUrls.delete(cursorBaseUrls.keys().next().value!);
+  };
+  const acceptSnapshot = async (
+    result: BrowserOperationResult,
+    signal?: AbortSignal,
+    inheritedBaseUrl?: string,
+  ): Promise<BrowserOperationResult> => {
+    let baseUrl = inheritedBaseUrl;
+    if (!baseUrl && (result.snapshotContinuation || result.snapshotLinks)) {
+      try {
+        baseUrl = (await manager.operate(sessionId, { kind: "base-url" }, signal)).baseUrl;
+      } catch {
+        baseUrl = result.page?.url;
+      }
+    }
     linkRefs = new Set(
       result.snapshot
         ?.split(/\r?\n/)
         .filter(line => /^\s*- link\b/i.test(line))
         .flatMap(elementReferences) ?? [],
     );
+    capturedLinkUrls = capturedLinks(result.snapshotLinks, baseUrl);
+    canResolveLiveLinks = inheritedBaseUrl === undefined;
+    if (result.snapshotContinuation && baseUrl) rememberCursor(result.snapshotContinuation, baseUrl);
     return result;
   };
   const snapshot = async (signal?: AbortSignal) =>
-    acceptSnapshot(await manager.operate(sessionId, { kind: "snapshot", depth: 6 }, signal));
+    acceptSnapshot(await manager.operate(sessionId, { kind: "snapshot", depth: 6 }, signal), signal);
   const observePage = async (action: BrowserAction, signal?: AbortSignal): Promise<BrowserOperationResult> => {
     try {
       const changed = await manager.operate(sessionId, action, signal);
-      return changed.snapshot === undefined ? await snapshot(signal) : acceptSnapshot(changed);
+      return changed.snapshot === undefined ? await snapshot(signal) : await acceptSnapshot(changed, signal);
     } catch (error) {
       if (!snapshotArtifactFailure(error)) throw error;
       try {
-        return acceptSnapshot(await manager.operate(sessionId, { kind: "page-text" }, signal));
+        return await acceptSnapshot(await manager.operate(sessionId, { kind: "page-text" }, signal), signal);
       } catch (fallbackError) {
         if (fallbackError instanceof HeliosCliError && fallbackError.category === "invalid-output") throw error;
         throw fallbackError;
@@ -192,19 +229,24 @@ export default async function webScoutBrowserExtension(pi: ExtensionAPI, options
       if (input.action === "continue") {
         if (!input.cursor) throw new Error("continue requires cursor");
         if (input.target !== undefined) throw new Error("continue does not accept target");
-        return response(
-          input.action,
-          acceptSnapshot(await manager.operate(sessionId, { kind: "continue", cursor: input.cursor }, signal)),
-        );
+        const baseUrl = cursorBaseUrls.get(input.cursor);
+        cursorBaseUrls.delete(input.cursor);
+        if (!baseUrl) throw new Error("Snapshot continuation cursor is stale; request one new snapshot");
+        const result = await manager.operate(sessionId, { kind: "continue", cursor: input.cursor }, signal);
+        return response(input.action, await acceptSnapshot(result, signal, baseUrl));
       }
       if (input.cursor !== undefined) throw new Error(`${input.action} does not accept cursor`);
       if (input.action === "follow") {
         if (!input.target) throw new Error("follow requires target");
         if (!linkRefs.has(input.target)) throw new Error("follow target must be a link reference from latest snapshot");
+        let capturedUrl = capturedLinkUrls.get(input.target);
+        if (!capturedUrl && canResolveLiveLinks) {
+          capturedUrl = (await manager.operate(sessionId, { kind: "link-url", target: input.target }, signal))
+            .resolvedUrl;
+        }
+        if (!capturedUrl) throw new Error("Link has no public navigation URL");
         ensurePageAvailable();
-        const href = await manager.operate(sessionId, { kind: "link-url", target: input.target }, signal);
-        if (!href.resolvedUrl) throw new Error("Link has no public navigation URL");
-        const url = await publicUrl(href.resolvedUrl);
+        const url = await publicUrl(capturedUrl);
         const result = await observePage({ kind: "navigate", url }, signal);
         pages++;
         return response(input.action, result);

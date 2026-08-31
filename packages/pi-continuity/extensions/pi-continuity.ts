@@ -2072,7 +2072,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     renderShell: "self",
     renderCall: () => new Container(),
     promptGuidelines: [
-      "Propose clear, potentially reusable, explicitly stated user preferences or instructions, and intentional project conventions or contracts, when they could plausibly guide a future session. Do not require certainty of admission: the Memory Reviewer may accept, rewrite, merge, defer, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
+      "At the end of each task, explicitly check whether the user stated a durable preference or instruction, or the repository revealed an intentional, recurring project convention or contract. If concrete evidence could plausibly help a future session, prefer proposing it over silently skipping it; do not require certainty because the Memory Reviewer may accept, rewrite, merge, defer, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {

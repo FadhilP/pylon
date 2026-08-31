@@ -193,6 +193,7 @@ export default function guardExtension(pi: ExtensionAPI) {
     pi.events.emit("pi-timeline:checkpoint-request", {
       version: 1,
       cwd: ctx.cwd,
+      source: "pi-guard",
       reason,
       respond: (value: Promise<unknown>) => {
         checkpoint = value;

@@ -71,7 +71,9 @@ export function settleRunningActivities(
         : message,
     ),
     tools: conversation.tools.map(tool => settledTool(tool, status)),
-    delegatedRuns: conversation.delegatedRuns.map(run => (run.status === "running" ? { ...run, status } : run)),
+    delegatedRuns: conversation.delegatedRuns.map(run =>
+      run.status === "running" && !run.runId ? { ...run, status } : run,
+    ),
   };
 }
 

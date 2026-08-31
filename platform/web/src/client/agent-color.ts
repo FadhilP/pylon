@@ -1,25 +1,25 @@
 import { useRef, type CSSProperties } from "react";
 import { agentColorId } from "../shared/format.ts";
-import { agentColorTokens, assignAgentColorSlots, type AgentIdentity } from "../shared/agent-colors.ts";
+import { agentColorTokens, assignAgentColorHues, type AgentIdentity } from "../shared/agent-colors.ts";
 
 export type AgentColorMap = ReadonlyMap<string, CSSProperties>;
 
-const colorForSlot = (slot: number): CSSProperties => {
-  const { color, soft } = agentColorTokens(slot);
+const colorForHue = (hue: number): CSSProperties => {
+  const { color, soft } = agentColorTokens(hue);
   return { "--agent-color": color, "--agent-soft": soft } as CSSProperties;
 };
 
-function agentColorMap(slots: ReadonlyMap<string, number>): AgentColorMap {
-  return new Map([...slots].map(([identity, slot]) => [identity, colorForSlot(slot)]));
+function agentColorMap(hues: ReadonlyMap<string, number>): AgentColorMap {
+  return new Map([...hues].map(([identity, hue]) => [identity, colorForHue(hue)]));
 }
 
 export function useAgentColors(sessionId: string | undefined, agents: AgentIdentity[]): AgentColorMap {
-  const registry = useRef<{ sessionId?: string; slots: Map<string, number> }>({ slots: new Map() });
-  if (registry.current.sessionId !== sessionId) registry.current = { sessionId, slots: new Map() };
-  registry.current.slots = assignAgentColorSlots(registry.current.slots, agents);
-  return agentColorMap(registry.current.slots);
+  const registry = useRef<{ sessionId?: string; hues: Map<string, number> }>({ hues: new Map() });
+  if (registry.current.sessionId !== sessionId) registry.current = { sessionId, hues: new Map() };
+  registry.current.hues = assignAgentColorHues(registry.current.hues, agents);
+  return agentColorMap(registry.current.hues);
 }
 
 export function agentColor(agent: AgentIdentity, colors: AgentColorMap): CSSProperties {
-  return colors.get(agentColorId(agent)) ?? colorForSlot(0);
+  return colors.get(agentColorId(agent)) ?? colorForHue(0);
 }

@@ -83,7 +83,7 @@ import { TerminalPanel } from "./terminal-panel";
 import { TurnDiffPanel } from "./turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "./use-session-catalog";
 import { useComposerDrafts } from "./use-composer-drafts";
-import { rememberSetting, readStoredNumber, useDocumentTitle, useTheme } from "./use-chrome";
+import { rememberSetting, readStoredNumber, useDocumentTitle, useSyntaxTheme, useTheme } from "./use-chrome";
 import { useSettingsDialog } from "./use-settings-dialog";
 import { useMarkSessionSeen, useTerminalDrawer } from "./use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
@@ -161,6 +161,7 @@ export function App() {
   const composerDrafts = useComposerDrafts();
   const [workspaceView, setWorkspaceView] = useState<ActiveWorkspaceView>(null);
   const [theme, setTheme] = useTheme();
+  const [syntaxTheme, setSyntaxTheme] = useSyntaxTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
@@ -1761,6 +1762,8 @@ export function App() {
           sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
           theme={theme}
           onThemeChange={setTheme}
+          syntaxTheme={syntaxTheme}
+          onSyntaxThemeChange={setSyntaxTheme}
           onClose={() => {
             if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
             closeSettings();

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -851,7 +852,14 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
           Promise.resolve({
             session: { session_id: "s_1", name: "shared-workspace", status: "active", ignored: "value" },
             actor_id: value.sessionId,
-            connection: null,
+            connection: {
+              connection_id: "connection-1",
+              name: "mongo-app",
+              status: "connected",
+              driver: "mongodb",
+              database: "app",
+              read_only: true,
+            },
             transaction: null,
             state_version: null,
             state_confidence: null,
@@ -887,6 +895,8 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal(snapshot.sessionGeneration, handle.sessionGeneration);
     assert.equal(snapshot.session.name, "shared-workspace");
     assert.equal(snapshot.actor_id, handle.sessionId);
+    assert.equal(snapshot.connection?.driver, "mongodb");
+    assert.equal(snapshot.history[0]?.origin, "legacy");
     assert.equal(snapshot.history[0]?.command, "query");
     assert.equal(snapshot.history[0]?.sql, "SELECT id, email FROM users WHERE id = ?");
     assert.equal("ignored" in snapshot, false);
@@ -939,6 +949,87 @@ test("StateQL rows bridge normalizes a bounded page", async () => {
     await assert.rejects(driver.stateqlRows("", 0, 10), /request is invalid/);
     await assert.rejects(driver.stateqlRows("wrong-result", 0, 10), /returned invalid rows/);
     await assert.rejects(driver.stateqlRows("oversized", 0, 10), /returned oversized rows/);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("StateQL command bridge normalizes user commands and propagates cancellation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-stateql-command-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  let requests = 0;
+  let cancelled = false;
+  const probe: InlineExtension = {
+    name: "pylon-stateql-command-probe",
+    factory(pi) {
+      pi.events.on("pylon:stateql-command-request", (value: any) => {
+        if (value?.version !== 1 || !value.claim()) return;
+        requests++;
+        assert.equal(typeof value.ui.confirm, "function");
+        assert.equal(typeof value.ui.requestStateQLCredential, "function");
+        value.signal.addEventListener("abort", () => (cancelled = true), { once: true });
+        if (value.command.sql === "SELECT cancel") {
+          value.respond(new Promise(() => {}));
+          return;
+        }
+        if (value.command.sql === "SELECT error") {
+          value.respond(
+            Promise.resolve({
+              ok: false,
+              command_id: "cmd_user_error",
+              session_id: "s_1",
+              error: {
+                code: "CONNECTION_FAILED",
+                message: "postgres://private:hunter2@example.com/app password=hunter2",
+                retryable: true,
+                executed: false,
+              },
+              meta: { duration_ms: 1 },
+            }),
+          );
+          return;
+        }
+        value.respond(
+          Promise.resolve({
+            ok: true,
+            command_id: "cmd_user_1",
+            session_id: "s_1",
+            data: { result_id: "q_1", preview: [{ value: 1 }] },
+            warnings: [],
+            meta: { duration_ms: 2, state_version: "v1" },
+          }),
+        );
+      });
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [probe] });
+  try {
+    const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const result = await driver.stateqlCommand({ command: "query", sql: "SELECT 1", cache: "bypass" });
+    assert.equal(result.sessionGeneration, handle.sessionGeneration);
+    assert.equal(result.actor_id, handle.sessionId);
+    assert.equal(result.status, "completed");
+    if (result.status === "completed") {
+      assert.equal(result.response.ok, true);
+      assert.equal((result.response as any).data.result_id, "q_1");
+      assert.equal((result.response as any).data.preview[0].value, 1);
+    }
+    const failed = await driver.stateqlCommand({ command: "query", sql: "SELECT error" });
+    assert.equal(failed.status, "completed");
+    assert.equal(JSON.stringify(failed).includes("hunter2"), false);
+    assert.match(JSON.stringify(failed), /postgres:\/\/\*\*\*@example\.com/);
+    const exec = await driver.stateqlCommand({ command: "exec", sql: "DELETE FROM users" });
+    assert.equal(exec.status, "completed");
+
+    const controller = new AbortController();
+    const pending = driver.stateqlCommand({ command: "query", sql: "SELECT cancel" }, controller.signal);
+    controller.abort();
+    await assert.rejects(pending, /request cancelled/);
+    assert.equal(cancelled, true);
+    assert.equal(requests, 4);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
@@ -1958,6 +2049,83 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
     });
     assert.equal(aroundPage.messages[0]?.text, "message-72");
     assert.equal(aroundPage.messages.at(-1)?.text, "message-81");
+  } finally {
+    await driver.dispose();
+    await rm(session.getSessionFile()!, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("driver projects active-work compaction supplements and history as folded display", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-active-compaction-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
+  const session = SessionManager.create(cwd, sessionDir);
+  const keptEntryId = session.appendMessage({ role: "user", content: "Continue", timestamp: Date.now() });
+  const supplement = (sourceEntryId: string, role: "user" | "assistant" | "tool", category: string, quote: string) => ({
+    sourceEntryId,
+    role,
+    category,
+    quote,
+    sourceHash: "a".repeat(64),
+    quoteHash: createHash("sha256").update(quote).digest("hex"),
+  });
+  const compactionEntryId = session.appendCompaction("## Active work summary", keptEntryId, 2_000, {
+    type: "pi-continuity-compaction",
+    version: 3,
+    mode: "active-work",
+    runId: "run-id",
+    timelineId: "timeline-id",
+    sourceEntryCount: 42,
+    history: {
+      read: [{ path: "src/read.ts", sourceEntryId: "read-source" }],
+      modified: [{ path: "src/changed.ts", sourceEntryId: "changed-source" }],
+    },
+    supplements: [
+      supplement("user-source", "user", "constraint", "Preserve behavior"),
+      supplement("assistant-source", "assistant", "outcome", "Implemented the route"),
+      supplement("failed-source", "tool", "error", "permission denied"),
+      supplement("result-source", "tool", "outcome", "all checks passed"),
+    ],
+  });
+
+  session.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "After compaction" }],
+    api: "test",
+    provider: "test",
+    model: "test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  const driver = new SessionRuntime();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, sessionPath: session.getSessionFile()! });
+    const snapshot = await driver.snapshot();
+    const compaction = snapshot.conversation.messages.find(message => message.entryId === compactionEntryId);
+    assert.equal(compaction?.text, "## Active work summary");
+    assert.deepEqual(compaction?.compaction?.display, {
+      records: [
+        { sourceEntryId: "user-source", role: "user", text: "Preserve behavior" },
+        { sourceEntryId: "assistant-source", role: "assistant", text: "Implemented the route" },
+      ],
+      failedTools: [{ sourceEntryId: "failed-source", text: "permission denied" }],
+      toolResults: [{ sourceEntryId: "result-source", text: "all checks passed" }],
+      history: {
+        read: [{ path: "src/read.ts", sourceEntryId: "read-source" }],
+        modified: [{ path: "src/changed.ts", sourceEntryId: "changed-source" }],
+      },
+    });
   } finally {
     await driver.dispose();
     await rm(session.getSessionFile()!, { force: true });

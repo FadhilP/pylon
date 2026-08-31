@@ -2,6 +2,26 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.2.0",
+    date: "Aug 31, 2026",
+    title: "MongoDB workflows, queued agents, and deeper research",
+    summary:
+      "Pylon expands safe database work, lets delegated agents queue follow-ups, and makes web research, code review, usage metering, and checkpoint history more capable and reliable.",
+    notes: [
+      "Expanded StateQL backend to MongoDB with bounded find, aggregate, write, and plan commands; user and model origin tracking; write confirmations; cancellation; filtered history; a validated web command path; and an OS-backed credential vault for remembered connections.",
+      "Added ordered background continuation queues for Spawn agents and sessions, including queued-run cancellation and status collection, durable live-run projection, and richer child tool-call inputs and timing.",
+      "Raised Web Scout's default and maximum page budget to 20 and preserved bounded snapshot continuation chunks with their original link targets across later navigation so long pages remain safely readable without stale-link drift.",
+      "Extended historical session tool search to opt into bounded nested activity from Scout, Grunt, and Spawn, with parent and child filters, linked-result controls, status correlation, and credential redaction.",
+      "Replaced eager Highlight.js rendering with lazy Shiki syntax highlighting across markdown, files, and Timeline diffs, with five persistent syntax themes and a safe plain-code fallback.",
+      "Added exact calendar-date ranges to Usage alongside the 7, 30, and 90-day presets, using validated UTC day boundaries and a 90-day cap.",
+      "Marked Guard-triggered Timeline checkpoints in persisted history and the Inspector, exposed checkpoint change and verification details in the conversation rail, cached nested-repository discovery, and improved snapshot recovery during transient Git path churn.",
+      "Made delegated-agent colors stable and collision-resistant, corrected active tool-group and working-state presentation, displayed active-work compaction supplements, and added diagnostics for slow session startup.",
+      "Strengthened end-of-task durable-memory guidance and upgraded the database and web build stack to StateQL 0.8, TypeScript 7, Vite 8.",
+    ],
+  },
+
+
+  {
     version: "2.1.1",
     date: "Aug 30, 2026",
     title: "Live verification timing and clearer usage attribution",

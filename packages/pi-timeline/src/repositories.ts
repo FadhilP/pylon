@@ -13,6 +13,15 @@ const outside = (parent: string, child: string) => {
 
 async function childPaths(repository: Repository) {
   const paths = new Set<string>();
+  const topLevels = new Map<string, Promise<string>>();
+  const topLevel = (path: string) => {
+    const key = canonical(path);
+    const existing = topLevels.get(key);
+    if (existing) return existing;
+    const pending = git(path, ["rev-parse", "--show-toplevel"]).then(value => realpath(value));
+    topLevels.set(key, pending);
+    return pending;
+  };
   for (const entry of nul(await git(repository.root, ["ls-files", "--stage", "-z"]))) {
     const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
     if (match) paths.add(match[1]);
@@ -27,8 +36,8 @@ async function childPaths(repository: Repository) {
     let candidate = info?.isDirectory() ? absolute : dirname(absolute);
     while (candidate !== repository.root && !outside(repository.root, candidate)) {
       const physical = await realpath(candidate),
-        topLevel = await realpath(await git(physical, ["rev-parse", "--show-toplevel"]));
-      if (canonical(physical) === canonical(topLevel)) {
+        root = await topLevel(physical);
+      if (canonical(physical) === canonical(root)) {
         paths.add(relative(repository.root, physical).replaceAll("\\", "/"));
         break;
       }

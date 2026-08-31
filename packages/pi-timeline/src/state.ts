@@ -1,5 +1,6 @@
 export const TIMELINE_STATE_VERSION = 4 as const;
 export type TimelineVerificationState = "passed" | "failed" | "unverified";
+export type TimelineCheckpointSource = "pi-guard";
 
 export interface TimelineCheckpointChanges {
   fileCount: number;
@@ -17,6 +18,7 @@ export interface TimelineCheckpointState {
   verified: boolean;
   verificationState: TimelineVerificationState;
   ownerSessionId: string;
+  source?: TimelineCheckpointSource;
   changes?: TimelineCheckpointChanges;
 }
 
@@ -88,6 +90,7 @@ export function timelineStateSnapshot(
         ...(item.branch ? { branch: item.branch.slice(0, 200) } : {}),
         verified: item.verified,
         verificationState: item.verificationState,
+        ...(item.source === "pi-guard" ? { source: item.source } : {}),
         ownerSessionId: item.ownerSessionId.slice(0, 128),
         ...(item.changes
           ? {

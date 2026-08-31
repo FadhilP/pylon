@@ -66,6 +66,7 @@ import { displayTime } from "./format";
 import { referenceDefinition } from "./navigation";
 import { copyText } from "./clipboard";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
+import { useSyntaxHighlightingRevision } from "./use-chrome";
 
 export type FileView = "current" | "base" | "diff";
 const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
@@ -875,6 +876,7 @@ function RawFileContent({
   truncated?: boolean;
 }) {
   const targetRef = useRef<HTMLElement>(null);
+  const syntaxRevision = useSyntaxHighlightingRevision();
   useEffect(() => {
     if (!targetLine) return;
     const frame = requestAnimationFrame(() => targetRef.current?.scrollIntoView({ block: "center" }));
@@ -882,7 +884,7 @@ function RawFileContent({
   }, [targetLine, text]);
   const rendered = useMemo(
     () => ({ lines: text.split("\n"), highlighted: DOMPurify.sanitize(highlightSource(text, path, diff)) }),
-    [diff, path, text],
+    [diff, path, syntaxRevision, text],
   );
   return (
     <pre className={`file-code${diff ? " is-diff" : ""}`}>

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { realpath, unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import {
   activeAssistantEntryIds,
   appendToolDuration,
@@ -94,6 +95,9 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
+  StateQLCommandResponseReadModel,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -102,7 +106,7 @@ import type {
   TurnDiffResult,
   VerifyPolicyReadModel,
 } from "../../shared/protocol/snapshots.ts";
-import { isPapercutListPage, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
+import { isPapercutListPage, isStateQLCommandInput, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -151,6 +155,7 @@ import type {
   UpdateToolPolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-context.ts";
+import type { StateQLCredentialVault } from "./stateql-credential-vault.ts";
 import { createPylonModelRuntime, createPylonRuntimeFactory } from "./runtime-factory.ts";
 import {
   applyOperationalEvent,
@@ -344,13 +349,20 @@ function compactionDisplay(details: unknown): CompactionDisplayReadModel | undef
     );
   };
   const history = raw.history as Record<string, unknown> | undefined;
+  const generic = raw.mode === "generic";
+  const activeWork = raw.mode === "active-work";
+  // Persisted detail versions are trusted only when their exact shape is known.
   if (
     raw.type !== "pi-continuity-compaction" ||
     raw.version !== 3 ||
-    raw.mode !== "generic" ||
+    (!generic && !activeWork) ||
     !Number.isSafeInteger(raw.sourceEntryCount) ||
     Number(raw.sourceEntryCount) < 0 ||
     (raw.currentTaskEntryId !== undefined && !bounded(raw.currentTaskEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)) ||
+    (activeWork &&
+      (!bounded(raw.runId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) ||
+        !bounded(raw.timelineId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) ||
+        (raw.handoffEntryId !== undefined && !bounded(raw.handoffEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)))) ||
     !history ||
     Array.isArray(history) ||
     !Array.isArray(history.read) ||
@@ -359,15 +371,23 @@ function compactionDisplay(details: unknown): CompactionDisplayReadModel | undef
     !Array.isArray(history.modified) ||
     history.modified.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS ||
     !history.modified.every(historyRecord) ||
-    !Array.isArray(raw.records) ||
-    raw.records.length > MAX_COMPACTION_DISPLAY_RECORDS ||
-    !raw.records.every(record) ||
     !Array.isArray(raw.supplements) ||
     raw.supplements.length > 8 ||
-    !raw.supplements.every(supplement)
+    !raw.supplements.every(supplement) ||
+    (generic &&
+      (!Array.isArray(raw.records) ||
+        raw.records.length > MAX_COMPACTION_DISPLAY_RECORDS ||
+        !raw.records.every(record)))
   )
     return undefined;
-  const records = raw.records as Array<Record<string, unknown>>;
+  const records = generic
+    ? (raw.records as Array<Record<string, unknown>>)
+    : (raw.supplements as Array<Record<string, unknown>>).map(item => ({
+        sourceEntryId: item.sourceEntryId,
+        role: item.role,
+        text: item.quote,
+        ...(item.category === "error" ? { isError: true } : {}),
+      }));
   const source = (item: Record<string, unknown>) => ({
     sourceEntryId: item.sourceEntryId as string,
     text: item.text as string,
@@ -452,6 +472,14 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
     ...raw,
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration,
+    history: Array.isArray(raw.history)
+      ? raw.history.map((item: any) => ({
+          ...item,
+          origin: ["legacy", "user", "model", "system", "api"].includes(String(item?.origin))
+            ? item.origin
+            : "legacy",
+        }))
+      : raw.history,
     ...(closed ? { connection: null, transaction: null } : {}),
   };
   if (!isStateQLSnapshot(candidate) || candidate.actor_id !== sessionId)
@@ -494,6 +522,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
       timestamp: item.timestamp,
       session_id: item.session_id,
       actor_id: item.actor_id,
+      origin: item.origin,
       command: item.command,
       sql: item.sql,
       handle: item.handle,
@@ -583,6 +612,113 @@ function stateqlRowsResult(
     throw new Error("StateQL returned oversized rows");
   return page;
 }
+
+function stateqlCommandResult(
+  value: unknown,
+  input: StateQLCommandInput,
+  actorId: string,
+  sessionGeneration: number,
+): StateQLCommandResult {
+  const base = {
+    protocolVersion: PROTOCOL_VERSION,
+    sessionGeneration,
+    actor_id: actorId,
+    command: input.command,
+  } as const;
+  if (value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).declined === true)
+    return { ...base, status: "declined" };
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("StateQL returned an invalid command response");
+  const raw = value as Record<string, any>;
+  if (
+    typeof raw.ok !== "boolean" ||
+    typeof raw.command_id !== "string" ||
+    !raw.command_id ||
+    raw.command_id.length > 128 ||
+    typeof raw.session_id !== "string" ||
+    !raw.session_id ||
+    raw.session_id.length > 128 ||
+    !raw.meta ||
+    typeof raw.meta !== "object" ||
+    !Number.isFinite(raw.meta.duration_ms) ||
+    raw.meta.duration_ms < 0
+  )
+    throw new Error("StateQL returned an invalid command response");
+  const meta = {
+    duration_ms: raw.meta.duration_ms,
+    ...(typeof raw.meta.state_version === "string" && raw.meta.state_version.length <= 128
+      ? { state_version: raw.meta.state_version }
+      : {}),
+    ...(typeof raw.meta.state_confidence === "string" && raw.meta.state_confidence.length <= 100
+      ? { state_confidence: raw.meta.state_confidence }
+      : {}),
+  };
+  let response: StateQLCommandResponseReadModel;
+  if (raw.ok) {
+    if (
+      !Array.isArray(raw.warnings) ||
+      raw.warnings.length > 100 ||
+      !raw.warnings.every(
+        (warning: unknown) =>
+          Boolean(warning) &&
+          typeof warning === "object" &&
+          !Array.isArray(warning) &&
+          typeof (warning as any).code === "string" &&
+          (warning as any).code.length <= 100 &&
+          typeof (warning as any).message === "string" &&
+          (warning as any).message.length <= 2_000,
+      )
+    )
+      throw new Error("StateQL returned an invalid command response");
+    response = {
+      ok: true,
+      command_id: raw.command_id,
+      session_id: raw.session_id,
+      data: stateqlJsonValue(raw.data, 0, { bytes: 0 }),
+      warnings: raw.warnings.map((warning: any) => ({ code: warning.code, message: warning.message })),
+      meta,
+    };
+  } else {
+    const error = raw.error;
+    if (
+      !error ||
+      typeof error !== "object" ||
+      typeof error.code !== "string" ||
+      !error.code ||
+      error.code.length > 100 ||
+      typeof error.message !== "string" ||
+      typeof error.retryable !== "boolean" ||
+      typeof error.executed !== "boolean" ||
+      (error.suggested_action !== undefined && typeof error.suggested_action !== "string")
+    )
+      throw new Error("StateQL returned an invalid command response");
+    const redact = (text: string) =>
+      text
+        .slice(0, 2_000)
+        .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/giu, "$1***@")
+        .replace(/\b(password|token|secret|api[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1=***");
+    response = {
+      ok: false,
+      command_id: raw.command_id,
+      session_id: raw.session_id,
+      error: {
+        code: error.code,
+        message: redact(error.message),
+        retryable: error.retryable,
+        executed: error.executed,
+        ...(typeof error.suggested_action === "string"
+          ? { suggested_action: redact(error.suggested_action) }
+          : {}),
+      },
+      meta,
+    };
+  }
+  const result: StateQLCommandResult = { ...base, status: "completed", response };
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_STATEQL_ROWS_BYTES)
+    throw new Error("StateQL returned an oversized command response");
+  return result;
+}
+
 
 function papercutListResult(
   value: unknown,
@@ -818,6 +954,7 @@ const OPTIONAL_TOOLS = [
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const MAX_LIVE_DELEGATED_RUNS = 100;
 const ACTIVE_AUTH_RUNTIMES = new WeakSet<ModelRuntime>();
+const SLOW_SESSION_START_MS = 3_000;
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
 function supportedThinkingLevels(model: {
@@ -860,6 +997,7 @@ export interface SessionRuntimeOptions {
   modelRuntime?: ModelRuntime;
   onShutdownRequested?: () => void;
   projectRegistry?: ProjectRegistry;
+  stateqlCredentialVault?: StateQLCredentialVault;
 }
 
 export class SessionRuntime implements PiDriver {
@@ -953,10 +1091,15 @@ export class SessionRuntime implements PiDriver {
       options.dialogTimeoutMs,
       request => this.publishUiClosed(request),
     );
+    this.ui.setStateQLCredentialVault(options.stateqlCredentialVault);
   }
 
   async start(target: RuntimeTarget): Promise<RuntimeHandle> {
     if (this.runtime || this.disposed) throw new Error("driver cannot be started twice");
+    const startupStartedAt = performance.now();
+    let packageExtensionsMs = 0;
+    let sessionStartMs = 0;
+    let bindMs = 0;
     this.target = target;
     this.sessionIndex.setAgentDir(target.agentDir);
     this.projectRegistry = this.options.projectRegistry ?? ProjectRegistry.forAgentDir(target.agentDir);
@@ -970,8 +1113,12 @@ export class SessionRuntime implements PiDriver {
     this.gitBranch = this.readDisplayGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
     this.hookSettings = new HookSettingsStore(target.agentDir);
+    const packageScanStartedAt = performance.now();
+    const packageScan = this.packageCatalog.scan().finally(() => {
+      packageExtensionsMs += performance.now() - packageScanStartedAt;
+    });
     const [packageState, modelRuntime, hookSettings] = await Promise.all([
-      this.packageCatalog.scan(),
+      packageScan,
       this.options.modelRuntime ?? createPylonModelRuntime(target.agentDir),
       this.hookSettings.read(),
     ]);
@@ -992,6 +1139,10 @@ export class SessionRuntime implements PiDriver {
       ],
       eventBus: this.eventBus,
       modelRuntime,
+      onStartupPhase: (phase, durationMs) => {
+        if (phase === "extension-loading") packageExtensionsMs += durationMs;
+        else sessionStartMs += durationMs;
+      },
     });
     this.createRuntime = createRuntime;
     let runtime: AgentSessionRuntime | undefined;
@@ -1019,8 +1170,21 @@ export class SessionRuntime implements PiDriver {
       this.runtimeDisposable = true;
       this.installRuntimeHooks(runtime);
       this.loadRuntimePolicy(runtime.session.sessionId);
+      const bindStartedAt = performance.now();
       await this.bindSession(runtime.session, generation);
+      bindMs = performance.now() - bindStartedAt;
       this.refreshSnapshot();
+      const totalMs = performance.now() - startupStartedAt;
+      if (totalMs >= SLOW_SESSION_START_MS) {
+        console.warn(
+          `[pylon] Slow session startup ${JSON.stringify({
+            totalMs: Math.round(totalMs),
+            packageExtensionsMs: Math.round(packageExtensionsMs),
+            sessionStartMs: Math.round(sessionStartMs),
+            bindMs: Math.round(bindMs),
+          })}`,
+        );
+      }
       return { sessionId: runtime.session.sessionId, sessionGeneration: generation };
     } catch (error) {
       this.gate.stop();
@@ -1858,6 +2022,53 @@ export class SessionRuntime implements PiDriver {
     } finally {
       clearTimeout(timeout);
       controller.abort();
+    }
+  }
+
+  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult> {
+    if (!isStateQLCommandInput(input)) throw new Error("StateQL command request is invalid");
+    const runtime = this.requireRuntime();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    let answered = false;
+    this.eventBus.emit("pylon:stateql-command-request", {
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      command: input,
+      signal: controller.signal,
+      ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database"),
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        if (answered) return;
+        answered = true;
+        response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("StateQL commands are unavailable");
+    const timeoutMs = Math.min(input.command === "query" ? (input.timeout_ms ?? 30_000) + 60_000 : 300_000, 300_000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    try {
+      const value = await Promise.race([
+        response,
+        new Promise<never>((_resolve, reject) =>
+          controller.signal.addEventListener("abort", () => reject(new Error("StateQL command request cancelled")), {
+            once: true,
+          }),
+        ),
+      ]);
+      return stateqlCommandResult(value, input, runtime.session.sessionId, this.gate.generation);
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+      signal?.removeEventListener("abort", abort);
     }
   }
 

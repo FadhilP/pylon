@@ -1,4 +1,5 @@
 import { validGuardRules } from "../guard-policy.ts";
+import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
 import {
@@ -23,6 +24,7 @@ import type {
   SessionListSnapshot,
   UsageSnapshot,
   StateQLRowsPage,
+  StateQLCommandInput,
   StateQLSnapshot,
   WorkspaceFileContent,
   WorkspaceFilePage,
@@ -984,6 +986,11 @@ export function isPapercutListPage(value: unknown): value is PapercutListPage {
   return value.nextOffset === nextOffset;
 }
 
+export function isStateQLCommandInput(value: unknown): value is StateQLCommandInput {
+  return parseStateQLPanelCommand(value) !== undefined;
+}
+
+
 export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
   if (
     !record(value) ||
@@ -1053,7 +1060,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
       !identifier(connection.connection_id) ||
       !boundedString(connection.name, 500) ||
       connection.status !== "connected" ||
-      !["sqlite", "postgres", "mysql"].includes(String(connection.driver)) ||
+      !["sqlite", "postgres", "mysql", "mongodb"].includes(String(connection.driver)) ||
       !boundedString(connection.database, 500) ||
       typeof connection.read_only !== "boolean")
   )
@@ -1110,6 +1117,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
       !Number.isNaN(Date.parse(item.timestamp)) &&
       identifier(item.session_id) &&
       identifier(item.actor_id) &&
+      ["legacy", "user", "model", "system", "api"].includes(String(item.origin)) &&
       boundedString(item.command, 100) &&
       (item.sql === null || (typeof item.sql === "string" && new TextEncoder().encode(item.sql).byteLength <= 4_096)) &&
       (item.handle === null || identifier(item.handle)) &&

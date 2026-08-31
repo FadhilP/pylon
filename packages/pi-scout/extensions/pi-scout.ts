@@ -600,7 +600,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           description: "Concrete public-web research question and evidence needed",
         }),
         startUrls: Type.Optional(Type.Array(Type.String({ maxLength: 2048 }), { maxItems: 8, uniqueItems: true })),
-        maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 12, default: 8 })),
+        maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, default: 20 })),
       },
       { additionalProperties: false },
     ),
@@ -632,7 +632,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           model: modelName(model),
         });
       const thinking = await resolveThinking();
-      const maxPages = params.maxPages ?? 8;
+      const maxPages = params.maxPages ?? 20;
       const maxActions = Math.min(80, maxPages * 6 + 8);
       const grant = await capability.issueGrant({ maxPages, maxActions, headed: false });
       const started = Date.now();

@@ -19,10 +19,13 @@ import type {
   PapercutMutationResult,
   RuntimeSnapshot,
   SessionListSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
   StateQLSnapshot,
   UsageQuery,
   UsageSnapshot,
 } from "../src/shared/protocol/snapshots.ts";
+import { isStateQLCommandInput } from "../src/shared/protocol/validation.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
 import type {
@@ -117,6 +120,35 @@ const snapshot: RuntimeSnapshot = {
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
 };
 
+test("StateQL HTTP command validation accepts native Mongo commands and rejects irrelevant or oversized payloads", () => {
+  const read = {
+    command: "mongo.query",
+    mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 10 } },
+  };
+  const write = {
+    command: "mongo.exec",
+    mongo: { operation: "updateOne", collection: "users", filter: { id: 1 }, update: { $set: { active: false } } },
+  };
+  assert.equal(isStateQLCommandInput(read), true);
+  assert.equal(isStateQLCommandInput(write), true);
+  assert.equal(isStateQLCommandInput({ ...read, sql: "SELECT 1" }), false);
+  assert.equal(
+    isStateQLCommandInput({ command: "mongo.query", mongo: { operation: "find", collection: "users", extra: true } }),
+    false,
+  );
+  assert.equal(
+    isStateQLCommandInput({
+      command: "mongo.query",
+      mongo: { operation: "find", collection: "users", filter: { payload: "x".repeat(33 * 1024) } },
+    }),
+    false,
+  );
+  assert.equal(
+    isStateQLCommandInput({ command: "exec", sql: "UPDATE users SET active = false", timeout_ms: 0 }),
+    false,
+  );
+});
+
 test("transport keeps backpressured SSE clients until the connection actually closes", async () => {
   const driver = new FakeDriver();
   const transport = new ServerTransport(driver, structuredClone(snapshot), {
@@ -177,10 +209,12 @@ class FakeDriver implements PiDriver {
   heliosAndroidToolingRequests: HeliosAndroidToolingCommand[] = [];
   stateqlHistoryLimits: number[] = [];
   stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
+  stateqlCommands: StateQLCommandInput[] = [];
   papercutMutations: PapercutMutationInput[] = [];
   usageDays: number[] = [];
-  dialogMethod: "confirm" | "questionnaire" = "confirm";
+  usageQueries: UsageQuery[] = [];
   deferDialog = false;
+  dialogMethod: "confirm" | "questionnaire" = "confirm";
   private pendingDialog?: DriverEvent;
   start(_target: RuntimeTarget): Promise<RuntimeHandle> {
     return Promise.resolve({ sessionId: "session-1", sessionGeneration: 1 });
@@ -243,6 +277,7 @@ class FakeDriver implements PiDriver {
     });
   }
   usage(input: UsageQuery = {}): Promise<UsageSnapshot> {
+    this.usageQueries.push(input);
     this.usageDays.push(input.days ?? 30);
     const now = new Date().toISOString();
     return Promise.resolve({
@@ -358,6 +393,24 @@ class FakeDriver implements PiDriver {
       total: 1,
       truncated: false,
       next_offset: null,
+    });
+  }
+  stateqlCommand(input: StateQLCommandInput): Promise<StateQLCommandResult> {
+    this.stateqlCommands.push(input);
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      actor_id: this.current.sessionId,
+      command: input.command,
+      status: "completed",
+      response: {
+        ok: true,
+        command_id: `command-${this.stateqlCommands.length}`,
+        session_id: "s_1",
+        data: { command: input.command },
+        warnings: [],
+        meta: { duration_ms: 1 },
+      },
     });
   }
   papercutMutation(input: PapercutMutationInput): Promise<PapercutMutationResult> {
@@ -1325,6 +1378,20 @@ test(
         (await fetch(`${origin}/api/v1/usage?days=7&days=30`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
         400,
       );
+      const customUsage = await fetch(`${origin}/api/v1/usage?from=2026-03-15&through=2026-03-16`, {
+        headers: { cookie, "x-pylon-tab-id": tab },
+      });
+      assert.equal(customUsage.status, 200);
+      assert.deepEqual(driver.usageQueries.at(-1), { from: "2026-03-15", through: "2026-03-16" });
+      for (const query of [
+        "from=2026-03-16&through=2026-03-15",
+        "from=2026-03-15&through=2026-03-15&days=7",
+        "from=2026-03-15&from=2026-03-16&through=2026-03-16",
+      ])
+        assert.equal(
+          (await fetch(`${origin}/api/v1/usage?${query}`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
+          400,
+        );
       assert.equal(
         (await fetch(`${origin}/api/v1/usage`, { headers: { cookie, "x-pylon-tab-id": "unknown-tab" } })).status,
         403,
@@ -1468,6 +1535,44 @@ test(
             method: "POST",
             headers: { ...mutationHeaders, "x-pylon-csrf": "bad" },
             body: JSON.stringify(rowsInput),
+          })
+        ).status,
+        403,
+      );
+      const commandRequest = { generation: 1, input: { command: "query", sql: "SELECT 1", cache: "bypass" } };
+      const stateqlCommand = await fetch(`${origin}/api/v1/stateql/command`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(commandRequest),
+      });
+      assert.equal(stateqlCommand.status, 200);
+      assert.equal(stateqlCommand.headers.get("cache-control"), "no-store");
+      assert.equal((await body(stateqlCommand)).command, "query");
+      assert.deepEqual(driver.stateqlCommands, [commandRequest.input]);
+      const execCommand = { generation: 1, input: { command: "exec", sql: "DELETE FROM users" } };
+      const execResponse = await fetch(`${origin}/api/v1/stateql/command`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(execCommand),
+      });
+      assert.equal(execResponse.status, 200);
+      assert.deepEqual(driver.stateqlCommands, [commandRequest.input, execCommand.input]);
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/stateql/command`, {
+            method: "POST",
+            headers: mutationHeaders,
+            body: JSON.stringify({ ...commandRequest, generation: 2 }),
+          })
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/stateql/command`, {
+            method: "POST",
+            headers: { ...mutationHeaders, "x-pylon-csrf": "bad" },
+            body: JSON.stringify(commandRequest),
           })
         ).status,
         403,

@@ -6,6 +6,7 @@ import {
   type StateQLCredentialRequest,
   type UiRequest,
 } from "../src/server/pi/remote-ui-context.ts";
+import { createStateQLCredentialReference, OsStateQLCredentialVault } from "../src/server/pi/stateql-credential-vault.ts";
 
 function stateqlRequest(
   access: "read" | "write" = "read",
@@ -58,6 +59,76 @@ test("remote UI correlates every RPC dialog and validates responses", async () =
     () => bridge.answer({ requestId: "missing", sessionGeneration: 3, method: "confirm", confirmed: true }),
     /unknown or expired/,
   );
+});
+
+test("database UI contexts mark their dialogs without marking ordinary tool dialogs", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(request));
+  const ordinary = bridge.context("session-1", 3);
+
+  const ordinaryConfirmation = ordinary.confirm("Confirm", "Proceed?");
+  const ordinaryRequest = requests.at(-1)!;
+  assert.equal(ordinaryRequest.surface, undefined);
+  bridge.answer({
+    requestId: ordinaryRequest.requestId,
+    sessionGeneration: 3,
+    method: "confirm",
+    confirmed: false,
+  });
+  assert.equal(await ordinaryConfirmation, false);
+
+  const database = bridge.context("session-1", 3, "database") as ReturnType<RemoteUiBridge["context"]> &
+    StateQLCredentialHost;
+  const databaseConfirmation = database.confirm("Connect", "Use this connection?");
+  const databaseRequest = requests.at(-1)!;
+  assert.equal(databaseRequest.surface, "database");
+  bridge.answer({
+    requestId: databaseRequest.requestId,
+    sessionGeneration: 3,
+    method: "confirm",
+    confirmed: true,
+  });
+  assert.equal(await databaseConfirmation, true);
+
+  const credential = database.requestStateQLCredential(stateqlRequest());
+  const credentialRequest = requests.at(-1)!;
+  assert.equal(credentialRequest.surface, "database");
+  bridge.answer({
+    requestId: credentialRequest.requestId,
+    sessionGeneration: 3,
+    method: "input",
+    value: DATABASE_URL,
+  });
+  assert.equal(await credential, DATABASE_URL);
+});
+
+test("StateQL credential references resolve from the OS vault and stale entries prompt for replacement", async () => {
+  const values = new Map<string, string>();
+  const vault = new OsStateQLCredentialVault((service, account) => ({
+    async setPassword(value) { values.set(`${service}\0${account}`, value); },
+    async getPassword() { return values.get(`${service}\0${account}`); },
+    async deleteCredential() { return values.delete(`${service}\0${account}`); },
+  }));
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(request));
+  bridge.setStateQLCredentialVault(vault);
+  const host = stateqlHost(bridge);
+  const reference = createStateQLCredentialReference();
+  const target = "postgres://private@localhost/app";
+  assert.equal(await vault.save(reference, target, DATABASE_URL), true);
+
+  const request = stateqlRequest("read", { reference, source: "credential_ref" });
+  assert.equal(await host.requestStateQLCredential(request), DATABASE_URL);
+  assert.equal(requests.length, 0);
+
+  host.invalidateStateQLCredential(request);
+  await new Promise(resolve => setImmediate(resolve));
+  const replacement = host.requestStateQLCredential(request);
+  const prompt = requests.at(-1)!;
+  assert.equal(prompt.surface, undefined);
+  bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: DATABASE_URL });
+  assert.equal(await replacement, DATABASE_URL);
+  assert.equal(await vault.resolve(reference), DATABASE_URL);
 });
 
 test("provider auth prompts mark secrets without publishing their value", async () => {
@@ -198,7 +269,7 @@ test("StateQL rejects password-only connection responses without retaining them"
   const pending = host.requestStateQLCredential(connectRequest);
   const prompt = requests.at(-1)!;
   bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: "password-only" });
-  await assert.rejects(pending, /complete PostgreSQL\/MySQL URL or explicit sqlite:<path> source/);
+  await assert.rejects(pending, /complete PostgreSQL\/MySQL\/MongoDB URL or explicit sqlite:<path> source/);
   assert.equal(JSON.stringify({ requests, snapshot: bridge.snapshot() }).includes("password-only"), false);
 
   const retry = host.requestStateQLCredential(connectRequest);
@@ -247,6 +318,21 @@ test("StateQL accepts explicit SQLite sources and rejects bare paths or wrong st
   });
   await assert.rejects(wrongDriver, /complete PostgreSQL connection URL/);
   assert.equal(JSON.stringify({ invalidRequests, snapshot: invalidBridge.snapshot() }).includes(wrongValue), false);
+});
+
+test("StateQL accepts complete MongoDB sources without retaining credentials", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(request));
+  const host = stateqlHost(bridge);
+  const request = stateqlRequest("read", {
+    connection: { id: "connection-mongo", name: "app", driver: "mongodb", database: "app", readOnly: true },
+  });
+  const source = "mongodb+srv://private:sentinel@example.mongodb.net/app";
+  const pending = host.requestStateQLCredential(request);
+  assert.match(String(requests[0].payload.message), /complete MongoDB connection URL/);
+  bridge.answer({ requestId: requests[0].requestId, sessionGeneration: 3, method: "input", value: source });
+  assert.equal(await pending, source);
+  assert.equal(JSON.stringify({ requests, snapshot: bridge.snapshot() }).includes("sentinel"), false);
 });
 
 test("StateQL rejects malformed or unsupported connection sources without retention", async () => {

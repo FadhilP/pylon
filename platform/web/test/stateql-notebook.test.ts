@@ -31,6 +31,7 @@ const history = (command_id: string, command: string, handle: string | null, suc
   timestamp: `2026-01-01T00:00:0${command_id.slice(-1)}.000Z`,
   session_id: "session-1",
   actor_id: "actor-1",
+  origin: "legacy" as const,
   command,
   sql: null,
   handle,

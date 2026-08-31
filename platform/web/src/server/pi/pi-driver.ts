@@ -34,6 +34,8 @@ import type {
   SessionListSnapshot,
   UsageQuery,
   UsageSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -340,6 +342,7 @@ export interface PiDriver {
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
   stateqlRows?(handle: string, offset: number, limit: number): Promise<StateQLRowsPage>;
+  stateqlCommand?(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult>;
   papercutList?(
     status: PapercutStatusReadModel | "all",
     query: string,

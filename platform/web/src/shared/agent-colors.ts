@@ -2,7 +2,16 @@ import { agentColorId } from "./format.ts";
 
 export type AgentIdentity = { id: string; threadId?: string };
 
-export function assignAgentColorSlots(
+function stableHue(identity: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < identity.length; index++) {
+    hash ^= identity.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0) % 360;
+}
+
+export function assignAgentColorHues(
   previous: ReadonlyMap<string, number>,
   agents: AgentIdentity[],
 ): Map<string, number> {
@@ -12,15 +21,17 @@ export function assignAgentColorSlots(
   const used = new Set(next.values());
   for (const identity of identities) {
     if (next.has(identity)) continue;
-    let slot = 0;
-    while (used.has(slot)) slot++;
-    next.set(identity, slot);
-    used.add(slot);
+    let hue = stableHue(identity);
+    while (used.has(hue)) hue = (hue + 137) % 360;
+    next.set(identity, hue);
+    used.add(hue);
   }
   return next;
 }
 
-export function agentColorTokens(slot: number): { color: string; soft: string } {
-  const hue = (slot * 137) % 360;
-  return { color: `hsl(${hue} 24% 56%)`, soft: `hsl(${hue} 24% 56% / 0.15)` };
+export function agentColorTokens(hue: number): { color: string; soft: string } {
+  return {
+    color: `light-dark(hsl(${hue} 72% 40%), hsl(${hue} 76% 70%))`,
+    soft: `light-dark(hsl(${hue} 72% 40% / 0.12), hsl(${hue} 76% 70% / 0.15))`,
+  };
 }

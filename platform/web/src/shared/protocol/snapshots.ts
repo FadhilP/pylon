@@ -13,6 +13,7 @@ import type {
   UiRequestReadModel,
   VerifyOptionReadModel,
 } from "./events.ts";
+import type { StateQLMongoCommand, StateQLPanelCommand } from "pi-stateql/stateql-command";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -182,11 +183,14 @@ export interface TimelineCheckpointDiff {
   truncated?: boolean;
 }
 
+export type StateQLCommandOrigin = "legacy" | "user" | "model" | "system" | "api";
+
 export interface StateQLHistoryEntryReadModel {
   command_id: string;
   timestamp: string;
   session_id: string;
   actor_id: string;
+  origin: StateQLCommandOrigin;
   command: string;
   sql: string | null;
   handle: string | null;
@@ -195,6 +199,36 @@ export interface StateQLHistoryEntryReadModel {
   success: boolean;
   error_code: string | null;
 }
+
+export type { StateQLMongoCommand };
+export type StateQLCommandInput = StateQLPanelCommand;
+
+export interface StateQLCommandResponseSuccessReadModel {
+  ok: true;
+  command_id: string;
+  session_id: string;
+  data: unknown;
+  warnings: Array<{ code: string; message: string }>;
+  meta: { duration_ms: number; state_version?: string; state_confidence?: string };
+}
+
+export interface StateQLCommandResponseFailureReadModel {
+  ok: false;
+  command_id: string;
+  session_id: string;
+  error: { code: string; message: string; retryable: boolean; executed: boolean; suggested_action?: string };
+  meta: { duration_ms: number; state_version?: string; state_confidence?: string };
+}
+
+export type StateQLCommandResponseReadModel =
+  StateQLCommandResponseSuccessReadModel | StateQLCommandResponseFailureReadModel;
+
+export type StateQLCommandResult = {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  actor_id: string;
+  command: StateQLCommandInput["command"];
+} & ({ status: "completed"; response: StateQLCommandResponseReadModel } | { status: "declined" });
 
 export interface StateQLRowsPage {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -254,7 +288,7 @@ export interface StateQLSnapshot {
     connection_id: string;
     name: string;
     status: "connected";
-    driver: "sqlite" | "postgres" | "mysql";
+    driver: "sqlite" | "postgres" | "mysql" | "mongodb";
     database: string;
     read_only: boolean;
   } | null;
@@ -424,7 +458,12 @@ export interface SessionListSnapshot {
 export type UsageAgent = "main" | "advisor" | "grunt" | "scout" | "private" | "other" | "unknown";
 
 export interface UsageQuery {
+  /** Rolling compatibility window. Mutually exclusive with calendar bounds. */
   days?: 7 | 30 | 90;
+  /** ISO calendar date, inclusive at 00:00:00Z. */
+  from?: string;
+  /** ISO calendar date, inclusive in the UI. */
+  through?: string;
 }
 
 export interface UsageRecord {

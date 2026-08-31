@@ -865,6 +865,7 @@ function timeline(old: TimelineReadModel, value: unknown, expectedSessionId?: st
         createdAt,
         verified: verificationState === "passed",
         verificationState,
+        ...(item.source === "pi-guard" ? { source: "pi-guard" as const } : {}),
         ...(string(item.branch, 200) ? { branch: string(item.branch, 200) } : {}),
         ...(boundedChanges ? { changes: boundedChanges } : {}),
       },

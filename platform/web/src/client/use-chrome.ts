@@ -1,9 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import {
+  DEFAULT_SYNTAX_THEME,
+  getSyntaxHighlightingRevision,
+  isSyntaxTheme,
+  setSyntaxTheme,
+  subscribeSyntaxHighlighting,
+  type SyntaxTheme,
+} from "../shared/syntax-highlighting";
 
 export type Theme = "light" | "dark";
 
 const THEME_KEY = "pylon-theme";
 const THEME_COLORS: Record<Theme, string> = { dark: "#111318", light: "#e9eaec" };
+const SYNTAX_THEME_KEY = "pylon-syntax-theme";
 
 /**
  * localStorage is unavailable in hardened browser contexts, so every read falls
@@ -41,6 +50,29 @@ export function useTheme() {
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
   }, [theme]);
   return [theme, setTheme] as const;
+}
+
+function readInitialSyntaxTheme(): SyntaxTheme {
+  const theme = document.documentElement.dataset.syntaxTheme;
+  return isSyntaxTheme(theme) ? theme : DEFAULT_SYNTAX_THEME;
+}
+
+export function useSyntaxTheme() {
+  const [theme, setTheme] = useState<SyntaxTheme>(readInitialSyntaxTheme);
+  useEffect(() => {
+    document.documentElement.dataset.syntaxTheme = theme;
+    setSyntaxTheme(theme);
+    rememberSetting(SYNTAX_THEME_KEY, theme);
+  }, [theme]);
+  return [theme, setTheme] as const;
+}
+
+export function useSyntaxHighlightingRevision(): number {
+  return useSyncExternalStore(
+    subscribeSyntaxHighlighting,
+    getSyntaxHighlightingRevision,
+    getSyntaxHighlightingRevision,
+  );
 }
 
 /** Keeps the document title in step with whatever the extension UI has set. */

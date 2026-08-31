@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   StateQL,
   type BatchCommand,
+  type CommandExecutionContext,
   type CredentialRequest,
   type StateQLActorOptions,
   type StateQLSnapshot,
@@ -36,8 +37,9 @@ const baseSnapshot: StateQLSnapshot = {
 class FakeStateQL {
   closed = false;
   commands: BatchCommand[] = [];
+  contexts: CommandExecutionContext[] = [];
   snapshotCalls: number[] = [];
-  executeImpl?: (command: BatchCommand) => Promise<any>;
+  executeImpl?: (command: BatchCommand, context?: CommandExecutionContext) => Promise<any>;
   readonly options: StateQLActorOptions;
 
   constructor(options: StateQLActorOptions) {
@@ -51,9 +53,10 @@ class FakeStateQL {
     this.snapshotCalls.push(options.historyLimit ?? 50);
     return structuredClone(baseSnapshot);
   }
-  async executeCommand(command: BatchCommand) {
+  async executeCommand(command: BatchCommand, context: CommandExecutionContext = {}) {
     this.commands.push(command);
-    if (this.executeImpl) return this.executeImpl(command);
+    this.contexts.push(context);
+    if (this.executeImpl) return this.executeImpl(command, context);
     return {
       ok: true,
       command_id: "cmd_1",
@@ -562,6 +565,18 @@ test("formats materialized rows as parallel arrays for model output", async () =
   ]);
   assert.doesNotMatch(queryResult.content[0].text, /"id"\s*:/);
 
+  const mongoResult = await value.tools.get("stateql").execute(
+    "mongo-query",
+    { command: "mongo.query", mongo: { operation: "find", collection: "users" } },
+    undefined,
+    undefined,
+    context(),
+  );
+  const mongoOutput = JSON.parse(mongoResult.content[0].text);
+  assert.deepEqual(mongoOutput.data.columns, ["id", "name"]);
+  assert.deepEqual(mongoOutput.data.column_types, ["integer", "text"]);
+  assert.deepEqual(mongoOutput.data.preview, [[1, "Ada"], [2, "Lin"]]);
+
   const rowsResult = await value.tools
     .get("stateql")
     .execute("rows", { command: "rows", handle: "q_1", offset: 0, limit: 2 }, undefined, undefined, context());
@@ -627,6 +642,8 @@ test("rows bridge forwards bounded actor-scoped requests and only returns data",
   assert.ok(response);
   assert.deepEqual(await response, { command: "rows" });
   assert.deepEqual(value.instances[0].commands, [{ command: "rows", handle: "result-1", offset: 2, limit: 10 }]);
+  assert.equal(value.instances[0].contexts[0]?.origin, "user");
+  assert.equal(value.instances[0].contexts[0]?.signal instanceof AbortSignal, true);
   let claimed = false;
   handler({
     version: 1,
@@ -711,6 +728,111 @@ test("rows bridge forwards bounded actor-scoped requests and only returns data",
   await value.handlers.get("session_shutdown")![0]();
   assert.equal(value.events.get("pylon:stateql-rows-request")?.length, 0);
 });
+
+test("panel command bridge forwards reads and writes with user attribution, filtering history, and confirming mutations", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-command-request")![0];
+  const ui = {
+    async requestStateQLCredential() {
+      return undefined;
+    },
+    async confirm() {
+      return true;
+    },
+    setStatus() {},
+  };
+  const run = (command: unknown, overrides: Record<string, unknown> = {}) => {
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    handler({
+      version: 1,
+      sessionId: "pi-session",
+      command,
+      signal: new AbortController().signal,
+      ui,
+      claim: () => {
+        claimed = true;
+        return true;
+      },
+      respond(result: Promise<unknown>) {
+        response = result;
+      },
+      ...overrides,
+    });
+    return { claimed: () => claimed, response: () => response };
+  };
+
+  const history = run({ command: "history", limit: 25 });
+  assert.equal(history.claimed(), true);
+  assert.equal((await history.response()) && typeof (await history.response()), "object");
+  assert.deepEqual(value.instances[0].commands[0], { command: "history", limit: 25, history_origin: "user" });
+  assert.equal(value.instances[0].contexts[0]?.origin, "user");
+  assert.equal(value.instances[0].options.actor, "pi-session");
+
+  const write = run({ command: "exec", sql: "DELETE FROM users" });
+  assert.equal(write.claimed(), true);
+  await write.response();
+  assert.deepEqual(value.instances[0].commands[1], { command: "exec", sql: "DELETE FROM users" });
+  assert.equal(value.instances[0].contexts[1]?.origin, "user");
+
+  let confirms = 0;
+  const declined = run(
+    { command: "profile.remove", name: "production" },
+    {
+      ui: {
+        ...ui,
+        async confirm() {
+          confirms++;
+          return false;
+        },
+      },
+    },
+  );
+  assert.deepEqual(await declined.response(), { declined: true });
+  assert.equal(confirms, 1);
+  assert.equal(value.instances[0].commands.length, 2);
+  await value.tools
+    .get("stateql")
+    .execute("model-history", { command: "history", limit: 10, history_origin: "user" }, undefined, undefined, context());
+  assert.deepEqual(value.instances[0].commands[2], { command: "history", limit: 10, history_origin: "user" });
+  assert.equal(value.instances[0].contexts[2]?.origin, "model");
+
+  await value.handlers.get("session_shutdown")![0]();
+  assert.equal(value.events.get("pylon:stateql-command-request")?.length, 0);
+});
+
+
+test("panel forwards Mongo reads, filters history without changing origin, confirms Mongo writes, and rejects malformed payloads", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-command-request")![0];
+  let confirmations = 0;
+  const ui = {
+    async requestStateQLCredential() { return undefined; },
+    async confirm() { confirmations++; return false; },
+    setStatus() {},
+  };
+  const invoke = (command: unknown, overrideUi = ui) => {
+    let response: Promise<unknown> | undefined;
+    handler({ version: 1, sessionId: "pi-session", command, signal: new AbortController().signal, ui: overrideUi, claim: () => true, respond(result: Promise<unknown>) { response = result; } });
+    assert.ok(response);
+    return response!;
+  };
+  const read = await invoke({ command: "mongo.query", mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } } }, { ...ui, async confirm() { return true; } });
+  assert.equal((read as any).ok, true);
+  assert.deepEqual(value.instances[0].commands[0], { command: "mongo.query", mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } } });
+  assert.equal(value.instances[0].contexts[0]?.origin, "user");
+  const history = await invoke({ command: "history", limit: 5, history_origin: "model" }, { ...ui, async confirm() { return true; } });
+  assert.equal((history as any).ok, true);
+  assert.deepEqual(value.instances[0].commands[1], { command: "history", limit: 5, history_origin: "model" });
+  assert.equal(value.instances[0].contexts[1]?.origin, "user");
+  const declined = await invoke({ command: "mongo.exec", mongo: { operation: "deleteMany", collection: "users", filter: { active: false } } });
+  assert.deepEqual(declined, { declined: true });
+  assert.equal(confirmations, 1);
+  assert.equal(value.instances[0].commands.length, 2);
+  await assert.rejects(value.tools.get("stateql").execute("bad", { command: "mongo.query", mongo: { operation: "find", collection: "users", extra: true } }, undefined, undefined, context()), /invalid MongoDB command/);
+  assert.equal(value.instances[0].commands.length, 2);
+});
+
 
 test("confirmed operations fail closed and declined commands do not execute", async () => {
   const value = await start();
@@ -883,11 +1005,22 @@ test("failures redact credentials and successful output stays within its adverti
   assert.ok(Buffer.byteLength(result.content[0].text, "utf8") <= 40 * 1024);
 });
 
-test("cancellation aborts, replaces the session instance, and permits the next command", async () => {
+test("cancellation aborts only the active command and permits the next command", async () => {
   const value = await start();
-  value.instances[0].executeImpl = async () =>
-    new Promise(resolve => {
-      value.instances[0].options.signal!.addEventListener(
+  let calls = 0;
+  value.instances[0].executeImpl = async (_command, executionContext) => {
+    calls++;
+    if (calls > 1)
+      return {
+        ok: true,
+        command_id: "cmd_next",
+        session_id: "s_1",
+        data: {},
+        warnings: [],
+        meta: { duration_ms: 1 },
+      };
+    return new Promise(resolve => {
+      executionContext!.signal!.addEventListener(
         "abort",
         () =>
           resolve({
@@ -900,6 +1033,7 @@ test("cancellation aborts, replaces the session instance, and permits the next c
         { once: true },
       );
     });
+  };
   const controller = new AbortController();
   const running = value.tools
     .get("stateql")
@@ -907,14 +1041,14 @@ test("cancellation aborts, replaces the session instance, and permits the next c
   await new Promise(resolve => setImmediate(resolve));
   controller.abort();
   await assert.rejects(running, /OPERATION_CANCELLED/);
-  assert.equal(value.instances.length, 2);
-  assert.equal(value.instances[0].closed, true);
-  assert.equal(value.instances[1].options.signal?.aborted, false);
+  assert.equal(value.instances.length, 1);
+  assert.equal(value.instances[0].closed, false);
+  assert.equal(value.instances[0].options.signal?.aborted, false);
   const next = await value.tools
     .get("stateql")
     .execute("next", { command: "query", sql: "SELECT 2" }, undefined, undefined, context());
-  assert.equal(next.details.commandId, "cmd_1");
-  assert.equal(value.instances[1].commands.length, 1);
+  assert.equal(next.details.commandId, "cmd_next");
+  assert.equal(value.instances[0].commands.length, 2);
 });
 
 test("snapshot remains available while database work is running", async () => {

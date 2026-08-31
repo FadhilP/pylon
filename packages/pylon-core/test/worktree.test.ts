@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,13 +33,16 @@ function git(cwd: string, args: string[]): Promise<void> {
   });
 }
 
+async function initializeRepository(cwd: string): Promise<void> {
+  await git(cwd, ["init", "-q"]);
+  await appendFile(join(cwd, ".git", "config"), "\n[user]\n\temail = pylon@test.local\n\tname = Pylon\n");
+}
+
 test("worktree diff reports only changes made after a dirty baseline", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-turn-diff-"));
   await mkdir(join(root, "src"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "src", "tracked.txt"), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -61,14 +64,36 @@ test("worktree diff reports only changes made after a dirty baseline", async () 
   }
 });
 
+test("worktree snapshots recover after transient path churn", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-race-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+
+    const churn = (async () => {
+      for (let index = 0; index < 150; index++) {
+        await writeFile(join(root, `churn-${index}.txt`), `${index}\n`);
+        await new Promise(resolve => setTimeout(resolve, 2));
+      }
+    })();
+    const snapshot = await worktreeSnapshot(root);
+    await churn;
+
+    assert.ok(snapshot, "a brief worktree race should not erase the turn snapshot");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("worktree snapshots from nested directories include repository-wide changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-nested-snapshot-"));
   const nested = join(root, "src", "nested");
   await mkdir(nested, { recursive: true });
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "outside.txt"), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -87,9 +112,7 @@ test("worktree snapshots treat unusual changed paths literally", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-literal-paths-"));
   const names = ["literal[ab].txt", "old[ab].txt", "delete[ab].txt", "space 界.txt"];
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     for (const name of names) await writeFile(join(root, name), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -226,9 +249,7 @@ test("session worktrees isolate a dirty baseline and expose bounded files", asyn
   const owned = await mkdtemp(join(tmpdir(), "pylon-owned-worktrees-"));
   const target = join(owned, "session-one");
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "tracked.txt"), "committed\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -278,9 +299,7 @@ test("session worktrees isolate a dirty baseline and expose bounded files", asyn
 test("local workspace files report all uncommitted changes against HEAD", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-local-files-"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "deleted.txt"), "delete me\n");
     await writeFile(join(root, "staged.txt"), "base\n");
     await writeFile(join(root, "unstaged.txt"), "base\n");
@@ -313,9 +332,7 @@ test("local workspace files report all uncommitted changes against HEAD", async 
 test("read-only workspace files do not contend for the checkout index lock", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-locked-index-files-"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "tracked.txt"), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -349,9 +366,7 @@ test("concurrent session worktrees never mix file changes", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-concurrent-worktrees-"));
   const owned = await mkdtemp(join(tmpdir(), "pylon-owned-worktrees-"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "shared.txt"), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -386,9 +401,7 @@ test("session state moves to the project checkout and back without merging", asy
   const owned = await mkdtemp(join(tmpdir(), "pylon-owned-worktrees-"));
   const target = join(owned, "session-move");
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "file.txt"), "project\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -421,9 +434,7 @@ test("session changes merge onto a dirty checkout without changing its index", a
   const root = await mkdtemp(join(tmpdir(), "pylon-apply-"));
   const owned = await mkdtemp(join(tmpdir(), "pylon-apply-worktrees-"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "shared.txt"), "first\nmiddle\nlast\n");
     await writeFile(join(root, "target.txt"), "base\n");
     await git(root, ["add", "."]);
@@ -465,9 +476,7 @@ test("conflicting session changes leave both checkout states untouched", async (
   const root = await mkdtemp(join(tmpdir(), "pylon-apply-conflict-"));
   const owned = await mkdtemp(join(tmpdir(), "pylon-apply-conflict-worktrees-"));
   try {
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "shared.txt"), "base\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -493,17 +502,13 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
   const root = await mkdtemp(join(tmpdir(), "pylon-submodule-root-"));
   const originRoot = await mkdtemp(join(tmpdir(), "pylon-submodule-origin-"));
   try {
-    await git(originRoot, ["init", "-q"]);
-    await git(originRoot, ["config", "user.email", "pylon@test.local"]);
-    await git(originRoot, ["config", "user.name", "Pylon"]);
+    await initializeRepository(originRoot);
     await writeFile(join(originRoot, "lib.txt"), "lib\n");
     await git(originRoot, ["add", "."]);
     await git(originRoot, ["commit", "-qm", "origin"]);
     const secondOrigin = join(originRoot, "second");
     await mkdir(secondOrigin);
-    await git(secondOrigin, ["init", "-q"]);
-    await git(secondOrigin, ["config", "user.email", "pylon@test.local"]);
-    await git(secondOrigin, ["config", "user.name", "Pylon"]);
+    await initializeRepository(secondOrigin);
     await writeFile(join(secondOrigin, "nested.txt"), "fresh\n");
     await git(secondOrigin, ["add", "."]);
     await git(secondOrigin, ["commit", "-qm", "second"]);
@@ -517,9 +522,7 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     ]);
     await git(originRoot, ["commit", "-qm", "nested submodule"]);
 
-    await git(root, ["init", "-q"]);
-    await git(root, ["config", "user.email", "pylon@test.local"]);
-    await git(root, ["config", "user.name", "Pylon"]);
+    await initializeRepository(root);
     await writeFile(join(root, "tracked.txt"), "parent\n");
     await git(root, ["add", "."]);
     await git(root, ["commit", "-qm", "base"]);
@@ -538,7 +541,9 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     await git(root, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
     await git(root, ["commit", "-qm", "submodule"]);
     const submodulePath = join(root, "vendor", "lib");
+    // Isolated indexes still share Git's object store, so serialize snapshots on Windows.
     const clean = await listWorkspaceFiles({ cwd: root });
+    const cleanChanges = await inspectWorkspaceChanges(root);
     assert.deepEqual(
       clean.files.map(file => [file.path, file.status]),
       [
@@ -549,12 +554,18 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
         ["vendor/lib/nested/nested.txt", undefined],
       ],
     );
-    assert.equal((await inspectWorkspaceChanges(root)).unapplicableSubmoduleChanges, undefined);
+    assert.equal(cleanChanges.unapplicableSubmoduleChanges, undefined);
 
     // Nested dirty and untracked state appears with workspace-relative paths.
     await writeFile(join(submodulePath, "lib.txt"), "lib\ndirty\n");
     await writeFile(join(submodulePath, "extra.txt"), "untracked\n");
+    const dirtyChanges = await inspectWorkspaceChanges(root);
     const dirty = await listWorkspaceFiles({ cwd: root });
+    const nestedBase = await readWorkspaceFile({ cwd: root, path: "vendor/lib/nested/nested.txt", view: "base" });
+    const delta = await collectWorkspaceFileDelta({
+      cwd: root,
+      paths: ["vendor/lib/lib.txt", "vendor/lib/extra.txt", "vendor/lib/nested/nested.txt"],
+    });
     assert.deepEqual(
       dirty.files.map(file => [file.path, file.status]),
       [
@@ -568,15 +579,8 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     );
     assert.equal(dirty.files.find(file => file.path === "vendor/lib/lib.txt")?.additions, 1);
     assert.notEqual(dirty.revision, clean.revision);
-    assert.equal((await inspectWorkspaceChanges(root)).unapplicableSubmoduleChanges, true);
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "vendor/lib/nested/nested.txt", view: "base" })).text?.trim(),
-      "fresh",
-    );
-    const delta = await collectWorkspaceFileDelta({
-      cwd: root,
-      paths: ["vendor/lib/lib.txt", "vendor/lib/extra.txt", "vendor/lib/nested/nested.txt"],
-    });
+    assert.equal(dirtyChanges.unapplicableSubmoduleChanges, true);
+    assert.equal(nestedBase.text?.trim(), "fresh");
     assert.equal(delta.reconcileRequired, false);
     assert.deepEqual(
       delta.upserted.map(file => [file.path, file.status]),
@@ -590,42 +594,31 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     const removed = await collectWorkspaceFileDelta({ cwd: root, paths: ["vendor/lib/extra.txt"] });
     assert.deepEqual(removed.removed, ["vendor/lib/extra.txt"]);
 
-    // Current/base reads and diffs route through the owning submodule checkout.
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text?.replaceAll("\r\n", "\n"),
-      "lib\ndirty\n",
-    );
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "base" })).text
-        ?.replaceAll("\r\n", "\n")
-        .trim(),
-      "lib",
-    );
-    assert.match((await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text ?? "", /^\+dirty$/m);
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "tracked.txt", view: "base" })).text?.replaceAll("\r\n", "\n").trim(),
-      "parent",
-    );
+    const currentLib = await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" });
+    const baseLib = await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "base" });
+    const libDiff = await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" });
+    const baseParent = await readWorkspaceFile({ cwd: root, path: "tracked.txt", view: "base" });
+    assert.equal(currentLib.text?.replaceAll("\r\n", "\n"), "lib\ndirty\n");
+    assert.equal(baseLib.text?.replaceAll("\r\n", "\n").trim(), "lib");
+    assert.match(libDiff.text ?? "", /^\+dirty$/m);
+    assert.equal(baseParent.text?.replaceAll("\r\n", "\n").trim(), "parent");
     await addSubmodule(secondOrigin, join("vendor", "newmod"));
     const staged = await listWorkspaceFiles({ cwd: root });
+    const stagedBase = await readWorkspaceFile({ cwd: root, path: "vendor/newmod/nested.txt", view: "base" });
     assert.equal(staged.files.find(file => file.path === "vendor/newmod/nested.txt")?.status, "added");
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "vendor/newmod/nested.txt", view: "base" })).state,
-      "deleted",
-    );
+    assert.equal(stagedBase.state, "deleted");
 
     // Uninitialized registered submodules degrade to folder markers without misreading through the parent.
-    await rm(submodulePath, { recursive: true, force: true });
+    await rm(submodulePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     const broken = await listWorkspaceFiles({ cwd: root });
+    const brokenCurrent = await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "current" });
+    const brokenDiff = await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" });
     assert.equal(broken.files.find(file => file.path === "vendor/lib")?.kind, "submodule");
     assert.ok(!broken.files.some(file => file.path.startsWith("vendor/lib/")));
-    assert.equal(
-      (await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "current" })).state,
-      "deleted",
-    );
-    assert.equal((await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" })).text, undefined);
+    assert.equal(brokenCurrent.state, "deleted");
+    assert.equal(brokenDiff.text, undefined);
   } finally {
-    await rm(root, { recursive: true, force: true });
-    await rm(originRoot, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(originRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

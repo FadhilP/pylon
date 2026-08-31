@@ -2,6 +2,8 @@ import type { Snapshot } from "./snapshot.ts";
 import type { TimelineChangeSet } from "./changes.ts";
 
 /** A checkpoint as persisted in the session log, alongside the snapshot it captured. */
+export type TimelineCheckpointSource = "pi-guard";
+
 export type CheckpointRecord = Snapshot & {
   version: 3 | 4 | 5 | 6;
   kind: "pi-prompt-checkpoint";
@@ -9,6 +11,8 @@ export type CheckpointRecord = Snapshot & {
   ownerSessionId: string;
   continuationEntryId: string;
   createdAt: string;
+  /** Bounded operational origin; absent on checkpoints created before source tracking. */
+  source?: TimelineCheckpointSource;
   changes?: Pick<TimelineChangeSet, "fileCount" | "additions" | "deletions" | "binaryCount">;
   /** Session-start state used only to attribute the first checkpoint's displayed changes. */
   baseline?: Snapshot;

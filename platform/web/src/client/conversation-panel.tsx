@@ -51,6 +51,7 @@ import {
   fileMentionAtCaret,
   insertFileMention,
   isNearTranscriptBottom,
+  scrollTopAfterPrepend,
   loginCommandProvider,
   replaceFileMention,
   WORKSPACE_FILE_DRAG_TYPE,
@@ -78,6 +79,8 @@ import { RunSeam, SeamDisclosure, SeamLink } from "./run-seam";
 import { UiDialog } from "./ui-dialog";
 import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
 import { exitDelay } from "./motion";
+import { OverviewOrb } from "./overview-primitives";
+import { useSyntaxHighlightingRevision } from "./use-chrome";
 
 const markdownTags = [
   "a",
@@ -228,6 +231,7 @@ export function ConversationPanel({
   const transcriptRef = useRef<HTMLDivElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const followBottomRef = useRef(true);
+  const prependScrollHeightRef = useRef<number | undefined>(undefined);
   const turnRefs = useRef(new Map<string, HTMLElement>());
   const draftingOnly = Boolean(pendingSession);
   const runtime = draftingOnly ? undefined : live.runtime;
@@ -282,6 +286,7 @@ export function ConversationPanel({
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
   useEffect(() => {
     setHistoryLoading(undefined);
+    prependScrollHeightRef.current = undefined;
     setEdit(undefined);
     setUndo(undefined);
     setFork(undefined);
@@ -294,7 +299,8 @@ export function ConversationPanel({
   const running = Boolean(runtime?.conversation.workStartedAt);
   const stopping = runtime?.conversation.stopping === true;
   const queuedItems = runtime?.conversation.queue.items ?? [];
-  const composerBlocked = !draftingOnly && Boolean(live.pendingUi);
+  const pendingUi = live.pendingUi?.surface === "database" ? undefined : live.pendingUi;
+  const composerBlocked = !draftingOnly && Boolean(pendingUi);
   const hasDraft = Boolean(message.trim() || images.length || files.length);
   const sending = submitting && !edit && !undo && !fork;
   const planAvailable =
@@ -306,6 +312,14 @@ export function ConversationPanel({
     activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
       ? activeHistoryWindow.messages
       : (runtime?.conversation.messages ?? []);
+  useLayoutEffect(() => {
+    const previousScrollHeight = prependScrollHeightRef.current;
+    const stream = streamRef.current;
+    if (previousScrollHeight === undefined || !stream) return;
+    setTranscriptScrollTop(stream, scrollTopAfterPrepend(stream, previousScrollHeight));
+    prependScrollHeightRef.current = undefined;
+    setHistoryLoading(undefined);
+  }, [transcriptSourceMessages]);
   const liveTools = runtime?.conversation.tools ?? [];
   const liveToolsById = new Map(liveTools.map(tool => [tool.id, tool]));
   const transcriptMessages = transcriptSourceMessages.map(message => {
@@ -358,9 +372,21 @@ export function ConversationPanel({
     }
     return ids;
   }, [conversationBlocks]);
+  const toolBlocksBeforeLaterAssistant = useMemo(() => {
+    const ids = new Set<string>();
+    let laterAssistant = false;
+    for (let index = conversationBlocks.length - 1; index >= 0; index--) {
+      const block = conversationBlocks[index]!;
+      if ("tools" in block) {
+        if (laterAssistant) ids.add(block.id);
+      } else if (block.role === "assistant") laterAssistant = true;
+    }
+    return ids;
+  }, [conversationBlocks]);
   const activeToolGroupId = running
-    ? [...conversationBlocks].reverse().find(block => "tools" in block && !toolBlocksBeforeLaterPrompt.has(block.id))
-        ?.id
+    ? [...conversationBlocks]
+        .reverse()
+        .find(block => "tools" in block && !toolBlocksBeforeLaterAssistant.has(block.id))?.id
     : undefined;
   const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
   /** The prompt a failed request can be sent from again. */
@@ -642,35 +668,22 @@ export function ConversationPanel({
       setQueueBusy(undefined);
     }
   };
-  const loadHistory = async (all: boolean, preserveAnchor = false) => {
+  const loadHistory = async (all: boolean, preservePosition = false) => {
     const stream = streamRef.current;
+    if (preservePosition && (!stream || prependScrollHeightRef.current !== undefined)) return;
     followBottomRef.current = false;
-    const viewportTop = stream?.getBoundingClientRect().top ?? 0;
-    const anchor = preserveAnchor
-      ? ([...(transcriptRef.current?.children ?? [])].find(
-          element =>
-            !element.classList.contains("history-loader") && element.getBoundingClientRect().bottom > viewportTop,
-        ) as HTMLElement | undefined)
-      : undefined;
-    const anchorTop = anchor?.getBoundingClientRect().top;
+    if (preservePosition && stream) prependScrollHeightRef.current = stream.scrollHeight;
     setHistoryLoading(all ? "all" : "page");
     try {
       await runtimeStore.loadEarlierMessages(all);
-      requestAnimationFrame(() => {
-        try {
-          if (!stream) return;
-          if (preserveAnchor) {
-            if (anchor?.isConnected && anchorTop !== undefined) {
-              setTranscriptScrollTop(stream, stream.scrollTop + anchor.getBoundingClientRect().top - anchorTop);
-            }
-            return;
-          }
-          setTranscriptScrollTop(stream, 0);
-        } finally {
+      if (!preservePosition) {
+        requestAnimationFrame(() => {
+          if (stream) setTranscriptScrollTop(stream, 0);
           setHistoryLoading(undefined);
-        }
-      });
+        });
+      }
     } catch {
+      prependScrollHeightRef.current = undefined;
       setHistoryLoading(undefined);
       // Store routes the failure through the application toast.
     }
@@ -852,7 +865,7 @@ export function ConversationPanel({
       {runtime && (
         <div
           ref={streamRef}
-          className="message-stream"
+          className={`message-stream${prependScrollHeightRef.current === undefined ? "" : " is-prepending-history"}`}
           aria-live="polite"
           onScroll={event => {
             followBottomRef.current = isNearTranscriptBottom(event.currentTarget);
@@ -1181,7 +1194,7 @@ export function ConversationPanel({
             })}
         </div>
       )}
-      <RetainedUiDialog request={draftingOnly ? undefined : live.pendingUi} />
+      <RetainedUiDialog request={draftingOnly ? undefined : pendingUi} />
       {pendingSession && (
         <div className={`pending-session-draft-note is-${pendingSession.phase}`} role="status">
           <strong>{pendingSession.phase === "failed" ? "Setup failed" : "Write while setup finishes"}</strong>
@@ -1189,7 +1202,7 @@ export function ConversationPanel({
         </div>
       )}
       <form
-        className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${(!draftingOnly && live.pendingUi) || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
+        className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${(!draftingOnly && pendingUi) || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
         onDragEnter={event => {
           event.preventDefault();
@@ -1959,7 +1972,7 @@ function HistoryRail({
           {tooltipCheckpoint && comparableRailText(tooltipCheckpoint.title) !== comparableRailText(tooltip.preview) && (
             <span className="history-rail-prompt">Prompt: {tooltip.preview}</span>
           )}
-          {tooltipCheckpoint && (tooltipCheckpoint.changes || tooltipCheckpoint.verificationState !== "unverified") && (
+          {tooltipCheckpoint && (
             <span className="history-rail-metrics">
               {tooltipCheckpoint.changes && (
                 <>
@@ -1976,6 +1989,7 @@ function HistoryRail({
               )}
               {tooltipCheckpoint.verificationState === "passed" && <span className="is-verified">Verified</span>}
               {tooltipCheckpoint.verificationState === "failed" && <span className="is-failed">Checks failed</span>}
+              {tooltipCheckpoint.verificationState === "unverified" && <span>Unverified</span>}
             </span>
           )}
           {tooltip.createdAt && <time dateTime={tooltip.createdAt}>{formatMessageDateTime(tooltip.createdAt)}</time>}
@@ -2278,9 +2292,10 @@ function FileStrip({ files, onRemove }: { files: DroppedTextFile[]; onRemove: (i
 }
 
 export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+  const syntaxRevision = useSyntaxHighlightingRevision();
   const html = useMemo(
     () => DOMPurify.sanitize(renderMarkdown(text), { ALLOWED_ATTR: markdownAttributes, ALLOWED_TAGS: markdownTags }),
-    [text],
+    [syntaxRevision, text],
   );
 
   const onClick = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -2565,7 +2580,7 @@ function ActiveAgents({
         const elapsed = Number.isNaN(started) ? (run.durationMs ?? 0) : Math.max(0, now - started);
         return (
           <button type="button" key={run.id} style={agentColor(run, colors)} onClick={() => onSelect?.(run.id)}>
-            <span className="agent-state is-working" aria-hidden="true" />
+            <OverviewOrb state="running" label="Working" />
             <IconBotId size={14} />
             <span>
               <strong>
