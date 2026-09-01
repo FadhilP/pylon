@@ -7,7 +7,8 @@ import { configPath, effectiveConfig, loadConfig, saveConfig } from "../src/conf
 import { loadDelegateRetryPolicy } from "../src/delegate-retry.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
-const fieldValues = (settings: any) => Object.fromEntries(settings.fields.map((field: any) => [field.key, field.value]));
+const fieldValues = (settings: any) =>
+  Object.fromEntries(settings.fields.map((field: any) => [field.key, field.value]));
 
 test("pylon-core generic settings persist line-edit ratio and delegate retry policy", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pylon-core-settings-"));

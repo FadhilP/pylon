@@ -124,7 +124,14 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     await pruneStaleSessionDirs(root, dir);
     const shellPath = SettingsManager.create(ctx.cwd, getAgentDir()).getShellPath();
     const settings = effectiveConfig(await loadConfig());
-    manager = new JobManager(dir, refresh, 5_000, shellPath, settings.defaultJobTimeoutMs, settings.completedJobRetention);
+    manager = new JobManager(
+      dir,
+      refresh,
+      5_000,
+      shellPath,
+      settings.defaultJobTimeoutMs,
+      settings.completedJobRetention,
+    );
     await manager.init();
     refresh();
   });

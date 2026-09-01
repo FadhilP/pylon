@@ -11,8 +11,26 @@ export const papercutSettings = definePackageSettings({
   version: 1,
   packageId: "pi-papercut",
   fields: [
-    { version: 1, key: "listDefaultLimit", label: "Default list limit", type: "integer", defaultValue: 50, min: 1, max: 100, apply: "next-session" },
-    { version: 1, key: "queryDefaultLimit", label: "Default query limit", type: "integer", defaultValue: 25, min: 1, max: 100, apply: "next-session" },
+    {
+      version: 1,
+      key: "listDefaultLimit",
+      label: "Default list limit",
+      type: "integer",
+      defaultValue: 50,
+      min: 1,
+      max: 100,
+      apply: "next-session",
+    },
+    {
+      version: 1,
+      key: "queryDefaultLimit",
+      label: "Default query limit",
+      type: "integer",
+      defaultValue: 25,
+      min: 1,
+      max: 100,
+      apply: "next-session",
+    },
   ],
 } as const);
 
@@ -34,16 +52,20 @@ export function defaultConfig(): PapercutConfig {
 }
 
 export async function loadConfig(path = configPath()): Promise<PapercutConfig> {
-  return loadJsonConfig(path, value => {
-    if (value?.version !== 1 || typeof value !== "object") return undefined;
-    const config: PapercutConfig = { version: 1 };
-    for (const field of papercutSettings.fields) {
-      const setting = value[field.key];
-      if (setting !== undefined && !validPackageSettingValue(field, setting)) return undefined;
-      if (setting !== undefined) (config as Record<string, unknown>)[field.key] = setting;
-    }
-    return config;
-  }, defaultConfig);
+  return loadJsonConfig(
+    path,
+    value => {
+      if (value?.version !== 1 || typeof value !== "object") return undefined;
+      const config: PapercutConfig = { version: 1 };
+      for (const field of papercutSettings.fields) {
+        const setting = value[field.key];
+        if (setting !== undefined && !validPackageSettingValue(field, setting)) return undefined;
+        if (setting !== undefined) (config as Record<string, unknown>)[field.key] = setting;
+      }
+      return config;
+    },
+    defaultConfig,
+  );
 }
 
 export const saveConfig = (config: PapercutConfig, path = configPath()) => saveJsonConfig(config, path);

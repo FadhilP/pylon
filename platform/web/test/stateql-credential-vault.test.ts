@@ -8,10 +8,7 @@ import {
   type KeyringEntryFactory,
 } from "../src/server/pi/stateql-credential-vault.ts";
 
-function fakeKeyring(values = new Map<string, string>()): {
-  values: Map<string, string>;
-  entry: KeyringEntryFactory;
-} {
+function fakeKeyring(values = new Map<string, string>()): { values: Map<string, string>; entry: KeyringEntryFactory } {
   return {
     values,
     entry: (service, account) => ({
@@ -49,10 +46,7 @@ test("OS credential vault resolves only the exact password-free connection ident
     await vault.resolve(reference, "postgres://ada@other.example.com:5432/shop?sslmode=verify-full"),
     undefined,
   );
-  assert.equal(
-    await vault.resolve(reference, "postgres://ada@db.example.com:5432/shop?sslmode=disable"),
-    undefined,
-  );
+  assert.equal(await vault.resolve(reference, "postgres://ada@db.example.com:5432/shop?sslmode=disable"), undefined);
   assert.equal(await vault.forget(reference), true);
   assert.equal(await vault.resolve(reference, target), undefined);
 });

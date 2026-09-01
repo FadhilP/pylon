@@ -103,14 +103,8 @@ test("web settings persist all worker limits at the supplied agent directory", a
     maxCostUsd: 3,
     parentContextChars: 1_200,
   });
-  await assert.rejects(
-    updateSettings({ ...settings, maxCostUsd: 0 }, { agentDir }),
-    /invalid Grunt settings/,
-  );
-  await assert.rejects(
-    updateSettings({ ...settings, maxTurns: 1_001 }, { agentDir }),
-    /invalid Grunt settings/,
-  );
+  await assert.rejects(updateSettings({ ...settings, maxCostUsd: 0 }, { agentDir }), /invalid Grunt settings/);
+  await assert.rejects(updateSettings({ ...settings, maxTurns: 1_001 }, { agentDir }), /invalid Grunt settings/);
 });
 
 test("environment fallbacks apply only when a worker setting is not persisted", async () => {

@@ -73,7 +73,6 @@ test("timeline projection carries only the bounded Guard source and keeps legacy
   assert.equal(state.timeline.checkpoints[1].verificationState, "passed");
 });
 
-
 test("operational projections structurally share unchanged branches and ignore stale snapshots", () => {
   const initial = initialOperational(["heartbeat_start", "continuity_update"], []);
   const withJob = applyOperationalEvent(initial, "pi-heartbeat:job", {

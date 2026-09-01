@@ -17,11 +17,7 @@ import {
 import { git, setGitTimeoutMs } from "../src/git.ts";
 import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry } from "../src/run.ts";
-import {
-  TIMELINE_STATE_VERSION,
-  timelineStateSnapshot,
-  type TimelineCheckpointFailureState,
-} from "../src/state.ts";
+import { TIMELINE_STATE_VERSION, timelineStateSnapshot, type TimelineCheckpointFailureState } from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
 import {
   defaultConfig,

@@ -2257,7 +2257,6 @@ test("projection preserves database dialog routing without marking ordinary dial
   assert.equal(projection.pendingUi?.surface, undefined);
 });
 
-
 test("projection retains bounded extension UI state and publishes mutation events", () => {
   const published: string[] = [];
   const projection = new RuntimeProjection(runtime(), type => published.push(type));

@@ -53,7 +53,6 @@ test("preflight scans initialized gitlinks without .gitmodules", async () => {
   }
 });
 
-
 test("preflight scans untracked worktrees that use a separate git directory", async () => {
   const { root } = await repository();
   const metadataRoot = await mkdtemp(join(tmpdir(), "pi-timeline-git-dir-"));

@@ -19,7 +19,6 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "2.2.0",
     date: "Aug 31, 2026",
@@ -39,7 +38,6 @@ export const RELEASES: Release[] = [
     ],
   },
 
-
   {
     version: "2.1.1",
     date: "Aug 30, 2026",
@@ -51,7 +49,6 @@ export const RELEASES: Release[] = [
       "Classified non-agent telemetry as Other instead of Private agents in usage history, with a versioned session-summary cache rebuild for existing data.",
     ],
   },
-
 
   {
     version: "2.1.0",
@@ -68,7 +65,6 @@ export const RELEASES: Release[] = [
       "Refined interaction motion across dialogs, panels, controls, and navigation while honoring reduced-motion preferences for transitions and delayed exits.",
     ],
   },
-
 
   {
     version: "2.0.0",

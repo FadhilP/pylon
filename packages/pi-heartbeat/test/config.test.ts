@@ -11,7 +11,13 @@ test("heartbeat settings use supplied agentDir and expose defaults for missing l
   try {
     const initial = await readSettings({ agentDir });
     assert.equal(initial.fields.find(field => field.key === "defaultJobTimeoutMs")?.value, 1_800_000);
-    const update = { ...initial, fields: initial.fields.map(field => ({ ...field, value: field.key === "completedJobRetention" ? 7 : field.value })) };
+    const update = {
+      ...initial,
+      fields: initial.fields.map(field => ({
+        ...field,
+        value: field.key === "completedJobRetention" ? 7 : field.value,
+      })),
+    };
     await updateSettings(update, { agentDir });
     assert.equal((await loadConfig(configPath(agentDir))).completedJobRetention, 7);
   } finally {

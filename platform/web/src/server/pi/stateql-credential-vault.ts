@@ -127,7 +127,13 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
     try {
       const stored = storedCredential((await this.entry(SERVICE, reference).getPassword(signal)) ?? "");
       const actual = stored && stateqlCredentialFingerprint(stored.source);
-      if (!stored || stored.stale || !actual || stored.fingerprint !== actual || (expected && stored.fingerprint !== expected))
+      if (
+        !stored ||
+        stored.stale ||
+        !actual ||
+        stored.fingerprint !== actual ||
+        (expected && stored.fingerprint !== expected)
+      )
         return undefined;
       return signal?.aborted ? undefined : stored.source;
     } catch {
@@ -147,7 +153,6 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
       return false;
     }
   }
-
 
   async forget(reference: string, signal?: AbortSignal): Promise<boolean> {
     if (!isStateQLCredentialReference(reference) || signal?.aborted) return false;

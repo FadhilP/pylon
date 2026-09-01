@@ -42,7 +42,6 @@ interface PackageSettingsAdapter {
   updateSettings(value: unknown, context: { agentDir: string }): Promise<void>;
 }
 
-
 function matchesGenericPackageId(settings: PackageSettingsReadModel, packageId: string): boolean {
   return settings.kind !== "generic" || settings.packageId === packageId;
 }
@@ -164,7 +163,8 @@ export class PackageCatalog {
   async updateSettings(packageId: string, value: PackageSettingsReadModel): Promise<PackageSettingsReadModel> {
     const definition = (await this.scan()).packages.find(item => item.id === packageId);
     if (!definition?.settingsPath) throw new Error("package has no configurable settings");
-    if (!matchesGenericPackageId(value, packageId)) throw new Error("generic settings packageId does not match package");
+    if (!matchesGenericPackageId(value, packageId))
+      throw new Error("generic settings packageId does not match package");
     const adapter = await this.adapter(definition.settingsPath);
     const context = { agentDir: this.agentDir };
     const previous = await adapter.readSettings(context);

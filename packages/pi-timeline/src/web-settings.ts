@@ -1,10 +1,4 @@
-import {
-  configPath,
-  effectiveTimelineSettings,
-  loadConfig,
-  saveConfig,
-  timelineSettingFields,
-} from "./config.ts";
+import { configPath, effectiveTimelineSettings, loadConfig, saveConfig, timelineSettingFields } from "./config.ts";
 import { validPackageSettingValue } from "pylon-core/package-settings";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {

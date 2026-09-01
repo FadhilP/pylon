@@ -56,7 +56,10 @@ function context(cwd: string, notifications: Array<{ text: string; level: string
 test("session settings apply configured omitted list limits", async () => {
   const cwd = join(root, "configured-repo");
   await mkdir(join(cwd, ".git"), { recursive: true });
-  await saveConfig({ version: 1, listDefaultLimit: 1, queryDefaultLimit: 1 }, configPath(process.env.PI_CODING_AGENT_DIR));
+  await saveConfig(
+    { version: 1, listDefaultLimit: 1, queryDefaultLimit: 1 },
+    configPath(process.env.PI_CODING_AGENT_DIR),
+  );
   const app = runtime();
   const ctx = context(cwd);
   const tool = app.tools.get("papercut");

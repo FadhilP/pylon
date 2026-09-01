@@ -345,7 +345,11 @@ export class AndroidToolingManager {
     }
   }
 
-  async install(activeSessions = 0, signal?: AbortSignal, installTimeoutMs = INSTALL_TIMEOUT_MS): Promise<AndroidToolingStatus> {
+  async install(
+    activeSessions = 0,
+    signal?: AbortSignal,
+    installTimeoutMs = INSTALL_TIMEOUT_MS,
+  ): Promise<AndroidToolingStatus> {
     const release = await this.acquire();
     const { root, current, previous } = this.paths();
     const stage = join(root, `stage-${process.pid}-${randomUUID()}`);

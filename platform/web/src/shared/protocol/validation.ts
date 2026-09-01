@@ -363,7 +363,6 @@ function validGenericPackageSettings(value: Record<string, unknown>): boolean {
   );
 }
 
-
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
   if (value.kind === "generic") return validGenericPackageSettings(value);
@@ -1175,7 +1174,6 @@ export function isPapercutListPage(value: unknown): value is PapercutListPage {
 export function isStateQLCommandInput(value: unknown): value is StateQLCommandInput {
   return parseStateQLPanelCommand(value) !== undefined;
 }
-
 
 export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
   if (

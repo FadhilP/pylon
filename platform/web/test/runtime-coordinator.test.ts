@@ -2136,7 +2136,6 @@ test("Local sessions can run concurrently in one project", { timeout: 20_000 }, 
   }
 });
 
-
 test("fork translates the coordinator generation to the selected runtime generation", { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-fork-generation-"));
   const cwd = join(root, "workspace");

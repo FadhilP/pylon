@@ -41,9 +41,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
     value?.kind !== "grunt" ||
     !["disabled", "session", "model"].includes(value.mode) ||
     !gruntModes.includes(value.executionMode) ||
-    !Object.entries(gruntSettingFields).every(
-      ([key, field]) => validPackageSettingValue(field, value[key]),
-    ) ||
+    !Object.entries(gruntSettingFields).every(([key, field]) => validPackageSettingValue(field, value[key])) ||
     !Array.isArray(value.thinkingLevels) ||
     !value.thinkingLevels.length ||
     new Set(value.thinkingLevels).size !== value.thinkingLevels.length ||

@@ -79,9 +79,21 @@ export interface TimelineConfig {
 export type TimelineRuntimeSettings = { [K in keyof typeof timelineSettingFields]: number };
 export const effectiveTimelineSettings = (config: TimelineConfig): TimelineRuntimeSettings => ({
   gitTimeoutMs: effectivePackageSettingValue(timelineSettingFields.gitTimeoutMs, config.gitTimeoutMs, process.env),
-  titleTimeoutMs: effectivePackageSettingValue(timelineSettingFields.titleTimeoutMs, config.titleTimeoutMs, process.env),
-  titleMaxTokens: effectivePackageSettingValue(timelineSettingFields.titleMaxTokens, config.titleMaxTokens, process.env),
-  titleChangedFiles: effectivePackageSettingValue(timelineSettingFields.titleChangedFiles, config.titleChangedFiles, process.env),
+  titleTimeoutMs: effectivePackageSettingValue(
+    timelineSettingFields.titleTimeoutMs,
+    config.titleTimeoutMs,
+    process.env,
+  ),
+  titleMaxTokens: effectivePackageSettingValue(
+    timelineSettingFields.titleMaxTokens,
+    config.titleMaxTokens,
+    process.env,
+  ),
+  titleChangedFiles: effectivePackageSettingValue(
+    timelineSettingFields.titleChangedFiles,
+    config.titleChangedFiles,
+    process.env,
+  ),
 });
 
 export const defaultConfig = (): TimelineConfig => ({ version: 1, editRollbackDefault: false });

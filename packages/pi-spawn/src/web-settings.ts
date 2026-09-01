@@ -35,8 +35,14 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     agentThinkingLevels: config.agentThinkingLevels ?? [...thinkingLevels],
     spawnTimeoutMs: effectivePackageSettingValue(primitiveFields.spawnTimeoutMs!, config.spawnTimeoutMs),
     recentThreadLimit: effectivePackageSettingValue(primitiveFields.recentThreadLimit!, config.recentThreadLimit),
-    recentThreadMaxChars: effectivePackageSettingValue(primitiveFields.recentThreadMaxChars!, config.recentThreadMaxChars),
-    recentThreadTotalChars: effectivePackageSettingValue(primitiveFields.recentThreadTotalChars!, config.recentThreadTotalChars),
+    recentThreadMaxChars: effectivePackageSettingValue(
+      primitiveFields.recentThreadMaxChars!,
+      config.recentThreadMaxChars,
+    ),
+    recentThreadTotalChars: effectivePackageSettingValue(
+      primitiveFields.recentThreadTotalChars!,
+      config.recentThreadTotalChars,
+    ),
   };
 }
 

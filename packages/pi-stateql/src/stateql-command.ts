@@ -2,26 +2,117 @@ export type StateQLCommandOrigin = "legacy" | "user" | "model" | "system" | "api
 
 export type StateQLMongoCommand =
   | { operation: "find"; collection: string; filter?: Record<string, unknown>; options?: Record<string, unknown> }
-  | { operation: "aggregate"; collection: string; pipeline: Array<Record<string, unknown>>; options?: Record<string, unknown> }
+  | {
+      operation: "aggregate";
+      collection: string;
+      pipeline: Array<Record<string, unknown>>;
+      options?: Record<string, unknown>;
+    }
   | { operation: "insertOne"; collection: string; document: Record<string, unknown>; options?: Record<string, never> }
-  | { operation: "insertMany"; collection: string; documents: Array<Record<string, unknown>>; options?: { ordered?: boolean } }
-  | { operation: "updateOne" | "updateMany"; collection: string; filter: Record<string, unknown>; update: Record<string, unknown> | Array<Record<string, unknown>>; options?: Record<string, unknown> }
-  | { operation: "replaceOne"; collection: string; filter: Record<string, unknown>; replacement: Record<string, unknown>; options?: Record<string, unknown> }
-  | { operation: "deleteOne" | "deleteMany"; collection: string; filter: Record<string, unknown>; options?: Record<string, unknown> };
+  | {
+      operation: "insertMany";
+      collection: string;
+      documents: Array<Record<string, unknown>>;
+      options?: { ordered?: boolean };
+    }
+  | {
+      operation: "updateOne" | "updateMany";
+      collection: string;
+      filter: Record<string, unknown>;
+      update: Record<string, unknown> | Array<Record<string, unknown>>;
+      options?: Record<string, unknown>;
+    }
+  | {
+      operation: "replaceOne";
+      collection: string;
+      filter: Record<string, unknown>;
+      replacement: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }
+  | {
+      operation: "deleteOne" | "deleteMany";
+      collection: string;
+      filter: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    };
 
 export type StateQLPanelCommand =
   | { command: "status" | "profile.list" | "disconnect" }
   | { command: "profile.show"; name: string }
   | { command: "profile.remove"; name: string; forget_credential?: boolean }
-  | { command: "profile.add"; name: string; target?: string; secret_env?: string; read_only?: boolean; remember?: boolean }
-  | { command: "connect"; target?: string; secret_env?: string; profile?: string; name?: string; read_only?: boolean; remember?: boolean; timeout_ms?: number }
-  | { command: "query"; sql: string; params?: unknown[] | Record<string, unknown>; cache?: "auto" | "bypass" | "require"; as?: string; timeout_ms?: number }
-  | { command: "exec"; sql: string; params?: unknown[] | Record<string, unknown>; replay?: boolean; idempotency_key?: string; allow_unbounded?: boolean; allow_destructive?: boolean; timeout_ms?: number }
-  | { command: "plan"; sql: string; params?: unknown[] | Record<string, unknown>; allow_unbounded?: boolean; allow_destructive?: boolean; timeout_ms?: number }
-  | { command: "mongo.query"; mongo: Extract<StateQLMongoCommand, { operation: "find" | "aggregate" }>; cache?: "auto" | "bypass" | "require"; as?: string; timeout_ms?: number }
-  | { command: "mongo.exec"; mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>; replay?: boolean; idempotency_key?: string; allow_unbounded?: boolean; allow_destructive?: boolean; timeout_ms?: number }
-  | { command: "mongo.plan"; mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>; allow_unbounded?: boolean; allow_destructive?: boolean; timeout_ms?: number }
-  | { command: "inspect"; kind: "schema" | "table" | "columns" | "indexes" | "constraints"; table?: string; timeout_ms?: number }
+  | {
+      command: "profile.add";
+      name: string;
+      target?: string;
+      secret_env?: string;
+      read_only?: boolean;
+      remember?: boolean;
+    }
+  | {
+      command: "connect";
+      target?: string;
+      secret_env?: string;
+      profile?: string;
+      name?: string;
+      read_only?: boolean;
+      remember?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      command: "query";
+      sql: string;
+      params?: unknown[] | Record<string, unknown>;
+      cache?: "auto" | "bypass" | "require";
+      as?: string;
+      timeout_ms?: number;
+    }
+  | {
+      command: "exec";
+      sql: string;
+      params?: unknown[] | Record<string, unknown>;
+      replay?: boolean;
+      idempotency_key?: string;
+      allow_unbounded?: boolean;
+      allow_destructive?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      command: "plan";
+      sql: string;
+      params?: unknown[] | Record<string, unknown>;
+      allow_unbounded?: boolean;
+      allow_destructive?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      command: "mongo.query";
+      mongo: Extract<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      cache?: "auto" | "bypass" | "require";
+      as?: string;
+      timeout_ms?: number;
+    }
+  | {
+      command: "mongo.exec";
+      mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      replay?: boolean;
+      idempotency_key?: string;
+      allow_unbounded?: boolean;
+      allow_destructive?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      command: "mongo.plan";
+      mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      allow_unbounded?: boolean;
+      allow_destructive?: boolean;
+      timeout_ms?: number;
+    }
+  | {
+      command: "inspect";
+      kind: "schema" | "table" | "columns" | "indexes" | "constraints";
+      table?: string;
+      timeout_ms?: number;
+    }
   | { command: "transaction.begin"; isolation?: string }
   | { command: "transaction.status" | "transaction.rollback"; handle?: string }
   | { command: "transaction.commit"; handle?: string; timeout_ms?: number }
@@ -40,7 +131,15 @@ const CACHE_POLICIES = new Set(["auto", "bypass", "require"]);
 const FORBIDDEN_MONGO_OPERATORS = new Set(["$out", "$merge", "$changeStream", "$where", "$function", "$accumulator"]);
 const UPDATE_PIPELINE_STAGES = new Set(["$addFields", "$set", "$project", "$unset", "$replaceRoot", "$replaceWith"]);
 const READ_OPERATIONS = new Set(["find", "aggregate"]);
-const WRITE_OPERATIONS = new Set(["insertOne", "insertMany", "updateOne", "updateMany", "replaceOne", "deleteOne", "deleteMany"]);
+const WRITE_OPERATIONS = new Set([
+  "insertOne",
+  "insertMany",
+  "updateOne",
+  "updateMany",
+  "replaceOne",
+  "deleteOne",
+  "deleteMany",
+]);
 
 const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> = {
   status: [],
@@ -75,7 +174,9 @@ function plainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function boundedString(value: unknown, maximum: number): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/u.test(value);
+  return (
+    typeof value === "string" && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/u.test(value)
+  );
 }
 
 function optionalString(value: unknown, maximum: number): boolean {
@@ -122,7 +223,11 @@ function jsonBytes(value: unknown): number | undefined {
 }
 
 function boundedJsonContainer(value: unknown): boolean {
-  return (Array.isArray(value) || plainRecord(value)) && boundedJson(value) && (jsonBytes(value) ?? Infinity) <= MAX_JSON_BYTES;
+  return (
+    (Array.isArray(value) || plainRecord(value)) &&
+    boundedJson(value) &&
+    (jsonBytes(value) ?? Infinity) <= MAX_JSON_BYTES
+  );
 }
 
 function safeMongoJson(value: unknown): boolean {
@@ -146,8 +251,12 @@ function mongoCollection(value: unknown): value is string {
 
 function mongoSort(value: unknown): boolean {
   if (mongoDocument(value)) return true;
-  return Array.isArray(value) && value.every(item =>
-    Array.isArray(item) && item.length === 2 && boundedString(item[0], 500) && (item[1] === 1 || item[1] === -1),
+  return (
+    Array.isArray(value) &&
+    value.every(
+      item =>
+        Array.isArray(item) && item.length === 2 && boundedString(item[0], 500) && (item[1] === 1 || item[1] === -1),
+    )
   );
 }
 
@@ -182,7 +291,6 @@ function emptyMongoOptions(value: unknown): boolean {
   return value === undefined || (plainRecord(value) && Object.keys(value).length === 0);
 }
 
-
 function mutationOptions(value: unknown, allowUpsert: boolean, allowOrdered = false): boolean {
   if (value === undefined) return true;
   if (!plainRecord(value) || !safeMongoJson(value)) return false;
@@ -194,10 +302,14 @@ function mutationOptions(value: unknown, allowUpsert: boolean, allowOrdered = fa
 }
 
 function updatePipeline(value: unknown): boolean {
-  return Array.isArray(value) && value.length > 0 && value.every(stage => {
-    if (!mongoDocument(stage) || Object.keys(stage).length !== 1) return false;
-    return UPDATE_PIPELINE_STAGES.has(Object.keys(stage)[0]!);
-  });
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(stage => {
+      if (!mongoDocument(stage) || Object.keys(stage).length !== 1) return false;
+      return UPDATE_PIPELINE_STAGES.has(Object.keys(stage)[0]!);
+    })
+  );
 }
 
 function updateDocument(value: unknown): boolean {
@@ -207,32 +319,55 @@ function updateDocument(value: unknown): boolean {
 function mongoCommandShape(value: Record<string, unknown>, operation: string): boolean {
   switch (operation) {
     case "find":
-      return hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
-        optionalMongoDocument(value.filter) && findOptions(value.options);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
+        optionalMongoDocument(value.filter) &&
+        findOptions(value.options)
+      );
     case "aggregate":
-      return hasOnlyKeys(value, ["operation", "collection", "pipeline", "options"]) &&
-        Array.isArray(value.pipeline) && value.pipeline.every(stage => mongoDocument(stage) && Object.keys(stage).length === 1) &&
-        aggregateOptions(value.options);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "pipeline", "options"]) &&
+        Array.isArray(value.pipeline) &&
+        value.pipeline.every(stage => mongoDocument(stage) && Object.keys(stage).length === 1) &&
+        aggregateOptions(value.options)
+      );
     case "insertOne":
-      return hasOnlyKeys(value, ["operation", "collection", "document", "options"]) &&
-        mongoDocument(value.document) && emptyMongoOptions(value.options);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "document", "options"]) &&
+        mongoDocument(value.document) &&
+        emptyMongoOptions(value.options)
+      );
     case "insertMany":
-      return hasOnlyKeys(value, ["operation", "collection", "documents", "options"]) &&
-        Array.isArray(value.documents) && value.documents.length > 0 && value.documents.every(mongoDocument) &&
-        mutationOptions(value.options, false, true);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "documents", "options"]) &&
+        Array.isArray(value.documents) &&
+        value.documents.length > 0 &&
+        value.documents.every(mongoDocument) &&
+        mutationOptions(value.options, false, true)
+      );
     case "updateOne":
     case "updateMany":
-      return hasOnlyKeys(value, ["operation", "collection", "filter", "update", "options"]) &&
-        mongoDocument(value.filter) && (updateDocument(value.update) || updatePipeline(value.update)) &&
-        mutationOptions(value.options, true);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "filter", "update", "options"]) &&
+        mongoDocument(value.filter) &&
+        (updateDocument(value.update) || updatePipeline(value.update)) &&
+        mutationOptions(value.options, true)
+      );
     case "replaceOne":
-      return hasOnlyKeys(value, ["operation", "collection", "filter", "replacement", "options"]) &&
-        mongoDocument(value.filter) && mongoDocument(value.replacement) &&
-        Object.keys(value.replacement).every(key => !key.startsWith("$")) && mutationOptions(value.options, true);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "filter", "replacement", "options"]) &&
+        mongoDocument(value.filter) &&
+        mongoDocument(value.replacement) &&
+        Object.keys(value.replacement).every(key => !key.startsWith("$")) &&
+        mutationOptions(value.options, true)
+      );
     case "deleteOne":
     case "deleteMany":
-      return hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
-        mongoDocument(value.filter) && mutationOptions(value.options, false);
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
+        mongoDocument(value.filter) &&
+        mutationOptions(value.options, false)
+      );
     default:
       return false;
   }
@@ -255,13 +390,22 @@ function params(value: unknown): boolean {
 }
 
 function sqlCommand(value: Record<string, unknown>, timeout: number, write: boolean): boolean {
-  if (!boundedString(value.sql, 100_000) || !params(value.params) || !optionalTimeout(value.timeout_ms, timeout)) return false;
-  if (!commandBooleans(value, write ? ["replay", "allow_unbounded", "allow_destructive"] : ["allow_unbounded", "allow_destructive"])) return false;
+  if (!boundedString(value.sql, 100_000) || !params(value.params) || !optionalTimeout(value.timeout_ms, timeout))
+    return false;
+  if (
+    !commandBooleans(
+      value,
+      write ? ["replay", "allow_unbounded", "allow_destructive"] : ["allow_unbounded", "allow_destructive"],
+    )
+  )
+    return false;
   return !write || optionalString(value.idempotency_key, 500);
 }
 
 function connectionSources(value: Record<string, unknown>, includeProfile: boolean): boolean {
-  const sources = [value.target, value.secret_env, includeProfile ? value.profile : undefined].filter(item => item !== undefined);
+  const sources = [value.target, value.secret_env, includeProfile ? value.profile : undefined].filter(
+    item => item !== undefined,
+  );
   if (sources.length !== 1) return false;
   if (!optionalString(value.target, 4_096) || !optionalString(value.secret_env, 200)) return false;
   if (value.secret_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(value.secret_env as string)) return false;
@@ -279,37 +423,69 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
     case "profile.remove":
       return boundedString(value.name, 200) && optionalBoolean(value.forget_credential);
     case "profile.add":
-      return boundedString(value.name, 200) && connectionSources(value, false) && optionalBoolean(value.read_only) &&
-        optionalBoolean(value.remember) && (value.remember !== true || value.target !== undefined);
+      return (
+        boundedString(value.name, 200) &&
+        connectionSources(value, false) &&
+        optionalBoolean(value.read_only) &&
+        optionalBoolean(value.remember) &&
+        (value.remember !== true || value.target !== undefined)
+      );
     case "connect":
-      return connectionSources(value, true) && optionalString(value.name, 200) && optionalBoolean(value.read_only) &&
-        optionalBoolean(value.remember) && (value.remember !== true || value.target !== undefined) &&
-        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+      return (
+        connectionSources(value, true) &&
+        optionalString(value.name, 200) &&
+        optionalBoolean(value.read_only) &&
+        optionalBoolean(value.remember) &&
+        (value.remember !== true || value.target !== undefined) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "query":
-      return boundedString(value.sql, 100_000) && params(value.params) && optionalString(value.as, 200) &&
+      return (
+        boundedString(value.sql, 100_000) &&
+        params(value.params) &&
+        optionalString(value.as, 200) &&
         (value.cache === undefined || (typeof value.cache === "string" && CACHE_POLICIES.has(value.cache))) &&
-        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "exec":
       return sqlCommand(value, maxTimeoutMs, true);
     case "plan":
       return sqlCommand(value, maxTimeoutMs, false);
     case "mongo.query":
-      return Boolean(parseStateQLMongoCommand(value.mongo, false)) && optionalString(value.as, 200) &&
+      return (
+        Boolean(parseStateQLMongoCommand(value.mongo, false)) &&
+        optionalString(value.as, 200) &&
         (value.cache === undefined || (typeof value.cache === "string" && CACHE_POLICIES.has(value.cache))) &&
-        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "mongo.exec":
-      return Boolean(parseStateQLMongoCommand(value.mongo, true)) &&
+      return (
+        Boolean(parseStateQLMongoCommand(value.mongo, true)) &&
         commandBooleans(value, ["replay", "allow_unbounded", "allow_destructive"]) &&
-        optionalString(value.idempotency_key, 500) && optionalTimeout(value.timeout_ms, maxTimeoutMs);
+        optionalString(value.idempotency_key, 500) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "mongo.plan":
-      return Boolean(parseStateQLMongoCommand(value.mongo, true)) &&
-        commandBooleans(value, ["allow_unbounded", "allow_destructive"]) && optionalTimeout(value.timeout_ms, maxTimeoutMs);
+      return (
+        Boolean(parseStateQLMongoCommand(value.mongo, true)) &&
+        commandBooleans(value, ["allow_unbounded", "allow_destructive"]) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "inspect":
-      return typeof value.kind === "string" && INSPECTION_KINDS.has(value.kind) && optionalString(value.table, 500) &&
-        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+      return (
+        typeof value.kind === "string" &&
+        INSPECTION_KINDS.has(value.kind) &&
+        optionalString(value.table, 500) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "transaction.begin":
-      return value.isolation === undefined ||
-        (boundedString(value.isolation, 50) && /^(?:serializable|repeatable[ _-]+read|read[ _-]+committed|read[ _-]+uncommitted|snapshot)$/iu.test(value.isolation.trim()));
+      return (
+        value.isolation === undefined ||
+        (boundedString(value.isolation, 50) &&
+          /^(?:serializable|repeatable[ _-]+read|read[ _-]+committed|read[ _-]+uncommitted|snapshot)$/iu.test(
+            value.isolation.trim(),
+          ))
+      );
     case "transaction.status":
     case "transaction.rollback":
       return optionalString(value.handle, 200);
@@ -320,8 +496,12 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
     case "receipt":
       return boundedString(value.handle, 200);
     case "history":
-      return (value.limit === undefined || positiveInteger(value.limit, 100)) &&
-        (value.history_origin === undefined || (typeof value.history_origin === "string" && HISTORY_ORIGINS.has(value.history_origin as StateQLCommandOrigin)));
+      return (
+        (value.limit === undefined || positiveInteger(value.limit, 100)) &&
+        (value.history_origin === undefined ||
+          (typeof value.history_origin === "string" &&
+            HISTORY_ORIGINS.has(value.history_origin as StateQLCommandOrigin)))
+      );
     default:
       return false;
   }

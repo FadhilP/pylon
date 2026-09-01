@@ -375,7 +375,12 @@ export class AndroidSdk {
     throw new Error("No Android emulator console port is available");
   }
 
-  async start(avd: string, headless: boolean, signal?: AbortSignal, timeoutMs = START_TIMEOUT_MS): Promise<OwnedEmulator> {
+  async start(
+    avd: string,
+    headless: boolean,
+    signal?: AbortSignal,
+    timeoutMs = START_TIMEOUT_MS,
+  ): Promise<OwnedEmulator> {
     const avds = await this.listAvds(signal);
     if (!avds.includes(avd)) throw new Error(`Unknown Android AVD: ${avd}`);
     const occupied = await this.occupiedAvds(signal);

@@ -11,7 +11,10 @@ test("papercut settings use supplied agentDir and expose defaults for missing le
   try {
     const initial = await readSettings({ agentDir });
     assert.equal(initial.fields.find(field => field.key === "listDefaultLimit")?.value, 50);
-    const update = { ...initial, fields: initial.fields.map(field => ({ ...field, value: field.key === "queryDefaultLimit" ? 31 : field.value })) };
+    const update = {
+      ...initial,
+      fields: initial.fields.map(field => ({ ...field, value: field.key === "queryDefaultLimit" ? 31 : field.value })),
+    };
     await updateSettings(update, { agentDir });
     assert.equal((await loadConfig(configPath(agentDir))).queryDefaultLimit, 31);
   } finally {

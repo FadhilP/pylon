@@ -10,10 +10,7 @@ import {
   type StateQLSnapshot,
 } from "@fadhilp/stateql";
 import { Type, type Static } from "typebox";
-import {
-  parseStateQLPanelCommand,
-  type StateQLPanelCommand,
-} from "../src/stateql-command.ts";
+import { parseStateQLPanelCommand, type StateQLPanelCommand } from "../src/stateql-command.ts";
 
 const COMMANDS = [
   "connect",
@@ -75,7 +72,9 @@ const toolSchema = Type.Object(
       StringEnum(["schema", "table", "columns", "indexes", "constraints"] as const, { description: "inspect only" }),
     ),
     table: Type.Optional(Type.String({ description: "inspect only: optional qualified table name", maxLength: 500 })),
-    mongo: Type.Optional(Type.Any({ description: "mongo.query/mongo.exec/mongo.plan only: bounded MongoDB native command" })),
+    mongo: Type.Optional(
+      Type.Any({ description: "mongo.query/mongo.exec/mongo.plan only: bounded MongoDB native command" }),
+    ),
     params: Type.Optional(
       Type.Any({ description: "query/filter/exec/plan only: positional JSON array or named JSON object" }),
     ),
@@ -103,7 +102,11 @@ const toolSchema = Type.Object(
       }),
     ),
     limit: Type.Optional(Type.Integer({ description: "rows/history only", minimum: 1, maximum: 100 })),
-    history_origin: Type.Optional(StringEnum(["legacy", "user", "model", "system", "api"] as const, { description: "history retrieval origin filter; does not change attribution" })),
+    history_origin: Type.Optional(
+      StringEnum(["legacy", "user", "model", "system", "api"] as const, {
+        description: "history retrieval origin filter; does not change attribution",
+      }),
+    ),
     isolation: Type.Optional(Type.String({ description: "transaction.begin only", maxLength: 50 })),
     timeout_ms: Type.Optional(
       Type.Integer({
@@ -190,7 +193,9 @@ interface StateQLCommandUi extends StateQLCredentialHost {
 }
 function commandUi(value: unknown): StateQLCommandUi | undefined {
   const host = credentialHost(value);
-  return host && typeof (value as Partial<StateQLCommandUi>).confirm === "function" ? (value as StateQLCommandUi) : undefined;
+  return host && typeof (value as Partial<StateQLCommandUi>).confirm === "function"
+    ? (value as StateQLCommandUi)
+    : undefined;
 }
 
 function abortSignal(value: unknown): value is AbortSignal | undefined {
@@ -217,17 +222,44 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   exec: ["sql", "params", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
   "mongo.query": ["mongo", "cache", "as", "timeout_ms"],
   "mongo.exec": ["mongo", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
-  show: ["handle"], rows: ["handle", "offset", "limit"], count: ["handle"], columns: ["handle"],
-  "alias.set": ["name", "handle"], inspect: ["kind", "table", "timeout_ms"], "transaction.begin": ["isolation"],
-  "transaction.status": ["handle"], "transaction.commit": ["handle", "timeout_ms"], "transaction.rollback": ["handle"],
-  plan: ["sql", "params", "allow_unbounded", "allow_destructive", "timeout_ms"], "mongo.plan": ["mongo", "allow_unbounded", "allow_destructive", "timeout_ms"],
-  apply: ["handle", "timeout_ms"], history: ["limit", "history_origin"], receipt: ["handle"], doctor: [], capabilities: [],
+  show: ["handle"],
+  rows: ["handle", "offset", "limit"],
+  count: ["handle"],
+  columns: ["handle"],
+  "alias.set": ["name", "handle"],
+  inspect: ["kind", "table", "timeout_ms"],
+  "transaction.begin": ["isolation"],
+  "transaction.status": ["handle"],
+  "transaction.commit": ["handle", "timeout_ms"],
+  "transaction.rollback": ["handle"],
+  plan: ["sql", "params", "allow_unbounded", "allow_destructive", "timeout_ms"],
+  "mongo.plan": ["mongo", "allow_unbounded", "allow_destructive", "timeout_ms"],
+  apply: ["handle", "timeout_ms"],
+  history: ["limit", "history_origin"],
+  receipt: ["handle"],
+  doctor: [],
+  capabilities: [],
 };
 
 const required: Partial<Record<StateQLToolInput["command"], readonly (keyof StateQLToolInput)[]>> = {
-  "profile.add": ["name"], "profile.show": ["name"], "profile.remove": ["name"], query: ["sql"], filter: ["handle", "where"], exec: ["sql"],
-  "mongo.query": ["mongo"], "mongo.exec": ["mongo"], show: ["handle"], rows: ["handle"], count: ["handle"], columns: ["handle"],
-  "alias.set": ["name", "handle"], inspect: ["kind"], plan: ["sql"], "mongo.plan": ["mongo"], apply: ["handle"], receipt: ["handle"],
+  "profile.add": ["name"],
+  "profile.show": ["name"],
+  "profile.remove": ["name"],
+  query: ["sql"],
+  filter: ["handle", "where"],
+  exec: ["sql"],
+  "mongo.query": ["mongo"],
+  "mongo.exec": ["mongo"],
+  show: ["handle"],
+  rows: ["handle"],
+  count: ["handle"],
+  columns: ["handle"],
+  "alias.set": ["name", "handle"],
+  inspect: ["kind"],
+  plan: ["sql"],
+  "mongo.plan": ["mongo"],
+  apply: ["handle"],
+  receipt: ["handle"],
 };
 
 const CONFIRMED_COMMANDS = new Set<StateQLToolInput["command"]>([
@@ -312,9 +344,13 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
     const parsed = parseStateQLPanelCommand(input, { maxTimeoutMs: 2_147_483_647 });
     if (!parsed) {
       const allowed = new Set(["command", ...(fields[input.command] ?? [])]);
-      const unexpected = Object.keys(input).find(key => input[key as keyof StateQLToolInput] !== undefined && !allowed.has(key as keyof StateQLToolInput));
+      const unexpected = Object.keys(input).find(
+        key => input[key as keyof StateQLToolInput] !== undefined && !allowed.has(key as keyof StateQLToolInput),
+      );
       if (input.command === "connect" && input.target !== undefined && input.secret_env !== undefined) {
-        throw new Error("connect accepts either target or secret_env; secret_env must contain a complete database URL or explicit sqlite:<path> source");
+        throw new Error(
+          "connect accepts either target or secret_env; secret_env must contain a complete database URL or explicit sqlite:<path> source",
+        );
       }
       if (unexpected) throw new Error(`${input.command} does not accept ${unexpected}`);
       if (input.params !== undefined) boundedJson(input.params, "params");
@@ -326,24 +362,76 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
   const commandFields = fields[input.command];
   if (!commandFields) throw new Error(`Unknown StateQL command ${String(input.command)}`);
   const allowed = new Set<keyof StateQLToolInput>(["command", ...commandFields]);
-  for (const [key, value] of Object.entries(input)) if (value !== undefined && !allowed.has(key as keyof StateQLToolInput)) throw new Error(`${input.command} does not accept ${key}`);
-  for (const key of required[input.command] ?? []) if (input[key] === undefined || input[key] === "") throw new Error(`${input.command} requires ${String(key)}`);
-  const limits: Partial<Record<keyof StateQLToolInput, number>> = { target: 4096, sql: 100_000, where: 20_000, handle: 200, name: 200, as: 200, kind: 50, table: 500, secret_env: 200, profile: 200, idempotency_key: 500, isolation: 50 };
-  for (const [key, maximum] of Object.entries(limits)) { const value = input[key as keyof StateQLToolInput]; if (value !== undefined && (typeof value !== "string" || value.length === 0 || value.length > maximum!)) throw new Error(`${input.command} has invalid ${key}`); }
-  for (const key of ["read_only", "replay", "allow_unbounded", "allow_destructive"] as const) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error(`${input.command} has invalid ${key}`);
-  if (input.command === "connect" || input.command === "profile.add") {
-    if (input.command === "connect" && input.target !== undefined && input.secret_env !== undefined) throw new Error("connect accepts either target or secret_env; secret_env must contain a complete database URL or explicit sqlite:<path> source");
-    const sources = [input.target, input.secret_env, ...(input.command === "connect" ? [input.profile] : [])].filter(value => value !== undefined);
-    if (sources.length !== 1) throw new Error(`${input.command} accepts exactly one connection source`);
-    if (input.secret_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(input.secret_env)) throw new Error("secret_env is invalid");
+  for (const [key, value] of Object.entries(input))
+    if (value !== undefined && !allowed.has(key as keyof StateQLToolInput))
+      throw new Error(`${input.command} does not accept ${key}`);
+  for (const key of required[input.command] ?? [])
+    if (input[key] === undefined || input[key] === "") throw new Error(`${input.command} requires ${String(key)}`);
+  const limits: Partial<Record<keyof StateQLToolInput, number>> = {
+    target: 4096,
+    sql: 100_000,
+    where: 20_000,
+    handle: 200,
+    name: 200,
+    as: 200,
+    kind: 50,
+    table: 500,
+    secret_env: 200,
+    profile: 200,
+    idempotency_key: 500,
+    isolation: 50,
+  };
+  for (const [key, maximum] of Object.entries(limits)) {
+    const value = input[key as keyof StateQLToolInput];
+    if (value !== undefined && (typeof value !== "string" || value.length === 0 || value.length > maximum!))
+      throw new Error(`${input.command} has invalid ${key}`);
   }
-  if (["query", "exec", "plan"].includes(input.command) && typeof input.sql !== "string") throw new Error(`${input.command} requires sql`);
-  if (input.command === "filter" && (typeof input.handle !== "string" || typeof input.where !== "string")) throw new Error("filter requires handle and where");
-  if (input.kind !== undefined && !["schema", "table", "columns", "indexes", "constraints"].includes(input.kind)) throw new Error("inspect has invalid kind");
-  if (input.isolation !== undefined && !/^(?:serializable|repeatable[ _-]+read|read[ _-]+committed|read[ _-]+uncommitted|snapshot)$/iu.test(input.isolation.trim())) throw new Error("transaction.begin has invalid isolation");
-  if (input.history_origin !== undefined && !["legacy", "user", "model", "system", "api"].includes(input.history_origin)) throw new Error("history has invalid history_origin");
-  for (const key of ["timeout_ms", "offset", "limit"] as const) { const value = input[key]; if (value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > (key === "limit" ? 100 : key === "offset" ? 10_000 : 2_147_483_647))) throw new Error(`${input.command} has invalid ${key}`); if ((key === "timeout_ms" || key === "limit") && value === 0) throw new Error(`${key} must be positive`); }
-  if (input.cache !== undefined && !["auto", "bypass", "require"].includes(input.cache)) throw new Error("cache is invalid");
+  for (const key of ["read_only", "replay", "allow_unbounded", "allow_destructive"] as const)
+    if (input[key] !== undefined && typeof input[key] !== "boolean")
+      throw new Error(`${input.command} has invalid ${key}`);
+  if (input.command === "connect" || input.command === "profile.add") {
+    if (input.command === "connect" && input.target !== undefined && input.secret_env !== undefined)
+      throw new Error(
+        "connect accepts either target or secret_env; secret_env must contain a complete database URL or explicit sqlite:<path> source",
+      );
+    const sources = [input.target, input.secret_env, ...(input.command === "connect" ? [input.profile] : [])].filter(
+      value => value !== undefined,
+    );
+    if (sources.length !== 1) throw new Error(`${input.command} accepts exactly one connection source`);
+    if (input.secret_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(input.secret_env))
+      throw new Error("secret_env is invalid");
+  }
+  if (["query", "exec", "plan"].includes(input.command) && typeof input.sql !== "string")
+    throw new Error(`${input.command} requires sql`);
+  if (input.command === "filter" && (typeof input.handle !== "string" || typeof input.where !== "string"))
+    throw new Error("filter requires handle and where");
+  if (input.kind !== undefined && !["schema", "table", "columns", "indexes", "constraints"].includes(input.kind))
+    throw new Error("inspect has invalid kind");
+  if (
+    input.isolation !== undefined &&
+    !/^(?:serializable|repeatable[ _-]+read|read[ _-]+committed|read[ _-]+uncommitted|snapshot)$/iu.test(
+      input.isolation.trim(),
+    )
+  )
+    throw new Error("transaction.begin has invalid isolation");
+  if (
+    input.history_origin !== undefined &&
+    !["legacy", "user", "model", "system", "api"].includes(input.history_origin)
+  )
+    throw new Error("history has invalid history_origin");
+  for (const key of ["timeout_ms", "offset", "limit"] as const) {
+    const value = input[key];
+    if (
+      value !== undefined &&
+      (!Number.isSafeInteger(value) ||
+        value < 0 ||
+        value > (key === "limit" ? 100 : key === "offset" ? 10_000 : 2_147_483_647))
+    )
+      throw new Error(`${input.command} has invalid ${key}`);
+    if ((key === "timeout_ms" || key === "limit") && value === 0) throw new Error(`${key} must be positive`);
+  }
+  if (input.cache !== undefined && !["auto", "bypass", "require"].includes(input.cache))
+    throw new Error("cache is invalid");
   if (input.params !== undefined) boundedJson(input.params, "params");
   return input as BatchCommand & StateQLToolInput;
 }
@@ -351,7 +439,6 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
 function panelCommand(value: unknown): StateQLPanelCommand | undefined {
   return parseStateQLPanelCommand(value);
 }
-
 
 interface BrokeredTarget {
   source: string;
@@ -687,12 +774,10 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       exclusive(async () => {
         if (request.signal?.aborted) throw new Error("StateQL rows request cancelled");
-        const response = await current(request.sessionId).stateql.executeCommand({
-          command: "rows",
-          handle: request.handle,
-          offset: request.offset,
-          limit: request.limit,
-        } as BatchCommand, { signal: request.signal, origin: "user" });
+        const response = await current(request.sessionId).stateql.executeCommand(
+          { command: "rows", handle: request.handle, offset: request.offset, limit: request.limit } as BatchCommand,
+          { signal: request.signal, origin: "user" },
+        );
         if (!response.ok) throw safeFailure(response);
         return response.data;
       }),
@@ -715,116 +800,134 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     )
       return;
     if (!request.claim()) return;
-    request.respond((async () => {
-      const input = command.command === "history" && command.history_origin === undefined
-        ? { ...command, history_origin: "user" as const }
-        : command;
-      const remembers = "remember" in input && input.remember === true;
-      const target =
-        (input.command === "connect" || input.command === "profile.add") && input.target && ui.requestStateQLPassword
-          ? brokeredTarget(input.target)
-          : undefined;
-      const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
-      const passwordTimeoutMs = approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
-        ? approvalTiming.timeoutSeconds * 1_000
-        : 0;
-      if (CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) && (!target || insecureBrokeredConnect)) {
-        const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
-        if (!(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target)), { timeout: passwordTimeoutMs }))) {
-          return { declined: true };
+    request.respond(
+      (async () => {
+        const input =
+          command.command === "history" && command.history_origin === undefined
+            ? { ...command, history_origin: "user" as const }
+            : command;
+        const remembers = "remember" in input && input.remember === true;
+        const target =
+          (input.command === "connect" || input.command === "profile.add") && input.target && ui.requestStateQLPassword
+            ? brokeredTarget(input.target)
+            : undefined;
+        const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
+        const passwordTimeoutMs =
+          approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+            ? approvalTiming.timeoutSeconds * 1_000
+            : 0;
+        if (
+          CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
+          (!target || insecureBrokeredConnect)
+        ) {
+          const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
+          if (
+            !(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target)), {
+              timeout: passwordTimeoutMs,
+            }))
+          ) {
+            return { declined: true };
+          }
         }
-      }
-      if (request.signal?.aborted) throw new Error("StateQL command request cancelled");
+        if (request.signal?.aborted) throw new Error("StateQL command request cancelled");
 
-      const { remember: _remember, forget_credential: forgetCredential, ...stateqlInput } = input as StateQLPanelCommand & {
-        remember?: boolean;
-        forget_credential?: boolean;
-      };
-      let reference: string | undefined;
-      let credentialSaved = false;
-      let executionCommand = stateqlInput as BatchCommand;
-      if (target && remembers) {
-        const transientReference = brokeredReference();
-        const savedReference = durableReference();
-        const snapshot = current(request.sessionId).stateql.snapshot({ historyLimit: 1 });
-        const credentialRequest = {
-          reference: transientReference,
-          actorId: request.sessionId,
-          session: { id: snapshot.session.session_id, name: snapshot.session.name },
-          operation: "connect",
-          access: input.read_only === false ? "write" : "read",
-          requestedReadOnly: input.read_only !== false,
-          signal: request.signal,
-        } as CredentialRequest;
-        const password = await ui.requestStateQLPassword?.(credentialRequest, target.prompt, {
-          timeoutMs: passwordTimeoutMs,
-          remember: { reference: savedReference, target: target.source },
-        });
-        if (password === undefined) return { declined: true };
-        credentialSaved = (await ui.hasStateQLCredential?.(savedReference, target.source)) === true;
-        const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
-        if (credentialSaved) {
-          executionCommand = { ...withoutTarget, credential_ref: savedReference } as BatchCommand;
-        } else if (input.command === "connect") {
+        const {
+          remember: _remember,
+          forget_credential: forgetCredential,
+          ...stateqlInput
+        } = input as StateQLPanelCommand & { remember?: boolean; forget_credential?: boolean };
+        let reference: string | undefined;
+        let credentialSaved = false;
+        let executionCommand = stateqlInput as BatchCommand;
+        if (target && remembers) {
+          const transientReference = brokeredReference();
+          const savedReference = durableReference();
+          const snapshot = current(request.sessionId).stateql.snapshot({ historyLimit: 1 });
+          const credentialRequest = {
+            reference: transientReference,
+            actorId: request.sessionId,
+            session: { id: snapshot.session.session_id, name: snapshot.session.name },
+            operation: "connect",
+            access: input.read_only === false ? "write" : "read",
+            requestedReadOnly: input.read_only !== false,
+            signal: request.signal,
+          } as CredentialRequest;
+          const password = await ui.requestStateQLPassword?.(credentialRequest, target.prompt, {
+            timeoutMs: passwordTimeoutMs,
+            remember: { reference: savedReference, target: target.source },
+          });
+          if (password === undefined) return { declined: true };
+          credentialSaved = (await ui.hasStateQLCredential?.(savedReference, target.source)) === true;
+          const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
+          if (credentialSaved) {
+            executionCommand = { ...withoutTarget, credential_ref: savedReference } as BatchCommand;
+          } else if (input.command === "connect") {
+            reference = transientReference;
+            executionCommand = { ...withoutTarget, secret_env: reference } as BatchCommand;
+            brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
+          }
+        } else if (target && input.command === "connect") {
+          const transientReference = brokeredReference();
           reference = transientReference;
-          executionCommand = { ...withoutTarget, secret_env: reference } as BatchCommand;
+          const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
+          executionCommand = { ...withoutTarget, secret_env: transientReference } as BatchCommand;
           brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
         }
-      } else if (target && input.command === "connect") {
-        const transientReference = brokeredReference();
-        reference = transientReference;
-        const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
-        executionCommand = { ...withoutTarget, secret_env: transientReference } as BatchCommand;
-        brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
-      }
 
-      ui.setStatus?.("pi-stateql", `database: ${input.command}`);
-      try {
-        return await exclusive(async () => {
-          if (request.signal?.aborted) throw new Error("StateQL command request cancelled");
-          let credentialToForget: string | undefined;
-          if (input.command === "profile.remove" && forgetCredential) {
-            const shown = await current(request.sessionId).stateql.executeCommand(
-              { command: "profile.show", name: input.name },
-              { signal: request.signal, origin: "user" },
-            );
-            if (shown.ok && record(shown.data) && typeof shown.data.credential_ref === "string") {
-              credentialToForget = shown.data.credential_ref;
+        ui.setStatus?.("pi-stateql", `database: ${input.command}`);
+        try {
+          return await exclusive(async () => {
+            if (request.signal?.aborted) throw new Error("StateQL command request cancelled");
+            let credentialToForget: string | undefined;
+            if (input.command === "profile.remove" && forgetCredential) {
+              const shown = await current(request.sessionId).stateql.executeCommand(
+                { command: "profile.show", name: input.name },
+                { signal: request.signal, origin: "user" },
+              );
+              if (shown.ok && record(shown.data) && typeof shown.data.credential_ref === "string") {
+                credentialToForget = shown.data.credential_ref;
+              }
             }
-          }
-          let response: Response<unknown>;
-          activeCredentialHost = ui;
-          try {
-            response = await current(request.sessionId).stateql.executeCommand(executionCommand, {
-              signal: request.signal,
-              origin: "user",
-            });
-          } catch (error) {
-            if (reference) brokeredTargets.delete(reference);
-            throw error;
-          } finally {
-            activeCredentialHost = undefined;
-          }
-          if (reference) {
-            const brokered = brokeredTargets.get(reference);
-            if (!response.ok && brokered?.request && passwordAuthenticationFailed(response)) {
-              ui.invalidateStateQLPassword?.(brokered.request, brokered.prompt);
+            let response: Response<unknown>;
+            activeCredentialHost = ui;
+            try {
+              response = await current(request.sessionId).stateql.executeCommand(executionCommand, {
+                signal: request.signal,
+                origin: "user",
+              });
+            } catch (error) {
+              if (reference) brokeredTargets.delete(reference);
+              throw error;
+            } finally {
+              activeCredentialHost = undefined;
             }
-            brokeredTargets.delete(reference);
-          }
-          if (response.ok && credentialToForget) await ui.forgetStateQLCredential?.(credentialToForget);
-          if (response.ok && remembers && !credentialSaved) {
-            response = {
-              ...response,
-              warnings: [...response.warnings, { code: "CREDENTIAL_NOT_SAVED", message: "The OS credential vault was unavailable; this connection remains memory-only." }],
-            };
-          }
-          return response;
-        });
-      } finally {
-        ui.setStatus?.("pi-stateql", undefined);
-      }
-    })());
+            if (reference) {
+              const brokered = brokeredTargets.get(reference);
+              if (!response.ok && brokered?.request && passwordAuthenticationFailed(response)) {
+                ui.invalidateStateQLPassword?.(brokered.request, brokered.prompt);
+              }
+              brokeredTargets.delete(reference);
+            }
+            if (response.ok && credentialToForget) await ui.forgetStateQLCredential?.(credentialToForget);
+            if (response.ok && remembers && !credentialSaved) {
+              response = {
+                ...response,
+                warnings: [
+                  ...response.warnings,
+                  {
+                    code: "CREDENTIAL_NOT_SAVED",
+                    message: "The OS credential vault was unavailable; this connection remains memory-only.",
+                  },
+                ],
+              };
+            }
+            return response;
+          });
+        } finally {
+          ui.setStatus?.("pi-stateql", undefined);
+        }
+      })(),
+    );
   });
 
   const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {

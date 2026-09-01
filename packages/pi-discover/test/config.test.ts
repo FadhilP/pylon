@@ -12,7 +12,10 @@ test("discover settings use supplied agentDir and expose defaults for missing le
   try {
     const initial = await readSettings({ agentDir });
     assert.equal(initial.fields.find(field => field.key === "searchTimeoutMs")?.value, 30_000);
-    const update = { ...initial, fields: initial.fields.map(field => ({ ...field, value: field.key === "codeResults" ? 17 : field.value })) };
+    const update = {
+      ...initial,
+      fields: initial.fields.map(field => ({ ...field, value: field.key === "codeResults" ? 17 : field.value })),
+    };
     await updateSettings(update, { agentDir });
     assert.equal((await loadConfig(configPath(agentDir))).codeResults, 17);
   } finally {
@@ -23,10 +26,12 @@ test("discover settings use supplied agentDir and expose defaults for missing le
 test("discover search execution uses the configured timeout", async () => {
   let timeout: number | undefined;
   await runSearch(
-    { exec: async (_command: string, _args: string[], options: { timeout: number }) => {
-      timeout = options.timeout;
-      return { code: 0, stdout: "", stderr: "" };
-    } } as any,
+    {
+      exec: async (_command: string, _args: string[], options: { timeout: number }) => {
+        timeout = options.timeout;
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    } as any,
     "search",
     [],
     { probe: async () => true, timeoutMs: effectiveConfig({ version: 1, searchTimeoutMs: 4_321 }).searchTimeoutMs },

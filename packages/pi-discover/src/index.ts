@@ -126,7 +126,12 @@ export class WorkspaceIndex {
   private readonly scanner: RepositoryScanner;
   private readonly path: string;
 
-  constructor(cwd: string, exec: IndexExecutor, path = indexDatabasePath(), searchTimeoutMs = DEFAULT_INDEX_SETTINGS.searchTimeoutMs) {
+  constructor(
+    cwd: string,
+    exec: IndexExecutor,
+    path = indexDatabasePath(),
+    searchTimeoutMs = DEFAULT_INDEX_SETTINGS.searchTimeoutMs,
+  ) {
     this.scanner = new RepositoryScanner(cwd, exec, searchTimeoutMs);
     this.path = path;
   }
@@ -570,15 +575,23 @@ export type IndexProvider = (cwd: string) => WorkspaceIndex;
 export type IndexRegistry = { indexFor: IndexProvider; closeAll(): Promise<void> };
 
 /** One WorkspaceIndex per cwd, sharing the extension's exec adapter. */
-export function createIndexRegistry(pi: ExtensionAPI, settings: DiscoverIndexSettings = DEFAULT_INDEX_SETTINGS): IndexRegistry {
+export function createIndexRegistry(
+  pi: ExtensionAPI,
+  settings: DiscoverIndexSettings = DEFAULT_INDEX_SETTINGS,
+): IndexRegistry {
   const indexes = new Map<string, WorkspaceIndex>();
   const indexFor = (cwd: string) => {
     let index = indexes.get(cwd);
     if (!index) {
-      index = new WorkspaceIndex(cwd, async (command, args, options) => {
-        const result = await pi.exec(command, args, options);
-        return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
-      }, undefined, settings.searchTimeoutMs);
+      index = new WorkspaceIndex(
+        cwd,
+        async (command, args, options) => {
+          const result = await pi.exec(command, args, options);
+          return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
+        },
+        undefined,
+        settings.searchTimeoutMs,
+      );
       indexes.set(cwd, index);
     }
     return index;
@@ -617,7 +630,10 @@ export function registerIndexTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, _signal, _update, ctx) {
-      const results = await indexFor(ctx.cwd).searchSymbols(ctx.cwd, { ...params, limit: params.limit ?? settings.symbolResults });
+      const results = await indexFor(ctx.cwd).searchSymbols(ctx.cwd, {
+        ...params,
+        limit: params.limit ?? settings.symbolResults,
+      });
       const displayed = results.map(({ name, kind, path, line }) => ({ name, kind, path, line }));
       const text = structuredResults({ heuristic: true }, displayed, maxBytes, results.moreAvailable === true);
       return {
@@ -644,7 +660,10 @@ export function registerIndexTools(
       { additionalProperties: false },
     ),
     async execute(_id, params, _signal, _update, ctx) {
-      const results = await indexFor(ctx.cwd).searchCode(ctx.cwd, { ...params, limit: params.limit ?? settings.codeResults });
+      const results = await indexFor(ctx.cwd).searchCode(ctx.cwd, {
+        ...params,
+        limit: params.limit ?? settings.codeResults,
+      });
       const displayed = results.map(({ path, line, text }) => ({ path, line, text }));
       const text = structuredResults({ semantic: false }, displayed, maxBytes, results.moreAvailable === true);
       return {

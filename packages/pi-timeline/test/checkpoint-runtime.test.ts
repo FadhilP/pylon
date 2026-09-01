@@ -169,7 +169,9 @@ test("Heartbeat completion delays checkpoints and Grunt mutations are captured",
 test("guard checkpoint requests persist only the bounded source", async () => {
   const { root } = await repository();
   const entries: any[] = [{ type: "message", id: "user-1", message: { role: "user", content: "Approve a change" } }];
-  const handlers = new Map<string, Function[]>(), eventHandlers = new Map<string, Set<Function>>(), appended: any[] = [];
+  const handlers = new Map<string, Function[]>(),
+    eventHandlers = new Map<string, Set<Function>>(),
+    appended: any[] = [];
   const events = {
     on(name: string, handler: Function) {
       const values = eventHandlers.get(name) ?? new Set<Function>();
@@ -228,7 +230,6 @@ test("guard checkpoint requests persist only the bounded source", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("timeline rejects incompatible targets before rollback capture", async () => {
   const { root, git } = await repository();

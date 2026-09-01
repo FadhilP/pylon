@@ -2145,7 +2145,9 @@ function Timeline({ live, enabled: packageEnabled }: { live: RuntimeStoreSnapsho
                 </span>
                 <span className="checkpoint-meta">
                   {checkpoint.source === "pi-guard" && (
-                    <span className="checkpoint-source" title="Triggered by Pi Guard">Guard</span>
+                    <span className="checkpoint-source" title="Triggered by Pi Guard">
+                      Guard
+                    </span>
                   )}
                   {checkpoint.branch && (
                     <span className="checkpoint-branch">

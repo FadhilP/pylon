@@ -280,7 +280,13 @@ export default function advisorExtension(
       ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
       : "";
     const reservedInputTokens = Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
-    const snapshot = buildSnapshot(messages, model.contextWindow, reservedInputTokens, inputTokenBudget, maxOutputTokens);
+    const snapshot = buildSnapshot(
+      messages,
+      model.contextWindow,
+      reservedInputTokens,
+      inputTokenBudget,
+      maxOutputTokens,
+    );
     if (snapshot.requiredContextOmitted)
       return fail(
         named("Advisor failed nonfatally: required context exceeds the input budget."),
@@ -315,7 +321,20 @@ export default function advisorExtension(
     };
     return {
       ok: true,
-      call: { started, named, base, model, auth, snapshot, budget, maxOutputTokens, timeoutMs, thinking, userMessage, cacheRetention },
+      call: {
+        started,
+        named,
+        base,
+        model,
+        auth,
+        snapshot,
+        budget,
+        maxOutputTokens,
+        timeoutMs,
+        thinking,
+        userMessage,
+        cacheRetention,
+      },
     };
   };
 
@@ -365,8 +384,20 @@ export default function advisorExtension(
         if (signal?.aborted) throw new DOMException("Advisor call was aborted.", "AbortError");
         const prepared = await prepareCall(id, params, ctx);
         if (!prepared.ok) return prepared.result;
-        const { started, named, base, model, auth, snapshot, budget, timeoutMs, maxOutputTokens, thinking, userMessage, cacheRetention } =
-          prepared.call;
+        const {
+          started,
+          named,
+          base,
+          model,
+          auth,
+          snapshot,
+          budget,
+          timeoutMs,
+          maxOutputTokens,
+          thinking,
+          userMessage,
+          cacheRetention,
+        } = prepared.call;
         let contextTokens: number | null = null;
         const contextLimit = model.contextWindow;
 
@@ -484,7 +515,12 @@ export default function advisorExtension(
     ));
 
   const disableAdvisor = async (ctx: any) => {
-    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    const {
+      advisorModel: _advisorModel,
+      useMainModel: _useMainModel,
+      thinking: _thinking,
+      ...preserved
+    } = await loadConfig();
     await saveConfig({ ...preserved, version: 1 });
     await refreshTool(ctx);
     ctx.ui.notify("Advisor disabled.", "info");
@@ -496,7 +532,12 @@ export default function advisorExtension(
       return;
     }
     if (!(await confirmContextSharing(ctx, model))) return;
-    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    const {
+      advisorModel: _advisorModel,
+      useMainModel: _useMainModel,
+      thinking: _thinking,
+      ...preserved
+    } = await loadConfig();
     await saveConfig({ ...preserved, version: 1, useMainModel: true });
     await refreshTool(ctx);
     ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
@@ -538,7 +579,12 @@ export default function advisorExtension(
       if (!thinking) return;
     }
     if (!(await confirmContextSharing(ctx, model))) return;
-    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    const {
+      advisorModel: _advisorModel,
+      useMainModel: _useMainModel,
+      thinking: _thinking,
+      ...preserved
+    } = await loadConfig();
     await saveConfig({ ...preserved, version: 1, advisorModel: modelName(model), ...(thinking ? { thinking } : {}) });
     await refreshTool(ctx);
     ctx.ui.notify(`Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`, "info");

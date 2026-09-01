@@ -385,9 +385,8 @@ export function ConversationPanel({
     return ids;
   }, [conversationBlocks]);
   const activeToolGroupId = running
-    ? [...conversationBlocks]
-        .reverse()
-        .find(block => "tools" in block && !toolBlocksBeforeLaterAssistant.has(block.id))?.id
+    ? [...conversationBlocks].reverse().find(block => "tools" in block && !toolBlocksBeforeLaterAssistant.has(block.id))
+        ?.id
     : undefined;
   const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
   /** The prompt a failed request can be sent from again. */
@@ -2615,7 +2614,11 @@ function ActiveAgents({
             <OverviewOrb state={hot ? "attention" : "running"} label={hot ? "Cost limit reached" : "Working"} />
             <span className="agent-dock-line">
               <span className="agent-dock-name">
-                {run.agentName ? <span className="agent-instance-name">{run.agentName}</span> : agentKindLabel(run.kind)}
+                {run.agentName ? (
+                  <span className="agent-instance-name">{run.agentName}</span>
+                ) : (
+                  agentKindLabel(run.kind)
+                )}
               </span>
               <time className="agent-dock-elapsed mono">{formatWorkDuration(elapsed)}</time>
             </span>
@@ -2628,9 +2631,13 @@ function ActiveAgents({
                     : "Model pending"}
               </span>
               <span className="agent-dock-spend mono">
-                <span className="calls">{calls.length} {calls.length === 1 ? "call" : "calls"}</span>
+                <span className="calls">
+                  {calls.length} {calls.length === 1 ? "call" : "calls"}
+                </span>
                 <span className="sep">·</span>
-                <span className={`cost${hot ? " is-hot" : ""}`}>{cost === undefined ? "—" : `$${cost.toFixed(4)}`}</span>
+                <span className={`cost${hot ? " is-hot" : ""}`}>
+                  {cost === undefined ? "—" : `$${cost.toFixed(4)}`}
+                </span>
               </span>
             </span>
             <ToolCallTrack calls={calls} slots={32} variant="dock" />
@@ -2647,7 +2654,8 @@ function ActiveAgents({
 }
 
 function agentCost(run: DelegatedAgentRunReadModel): number | undefined {
-  const usage = (run.kind === "spawn_agent" || run.kind === "spawn_session" ? run.sessionUsage : undefined) ?? run.usage;
+  const usage =
+    (run.kind === "spawn_agent" || run.kind === "spawn_session" ? run.sessionUsage : undefined) ?? run.usage;
   return usage?.cost;
 }
 

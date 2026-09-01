@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { advisorMaxCalls, advisorMaxCostUsd, advisorMaxOutputTokens, advisorTimeoutMs, configPath, loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
+import {
+  advisorMaxCalls,
+  advisorMaxCostUsd,
+  advisorMaxOutputTokens,
+  advisorTimeoutMs,
+  configPath,
+  loadConfig,
+  parseModelRef,
+  saveConfig,
+} from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
 test("config persists and malformed config deactivates advisor", async () => {
@@ -55,7 +64,15 @@ test("Advisor settings use persisted values and validate package bounds", async 
   assert.equal(advisorMaxOutputTokens(config.maxOutputTokens), 4_096);
   await assert.rejects(
     updateSettings(
-      { kind: "advisor", mode: "session", maxCalls: 0, timeoutMs: 120_000, maxCostUsd: 1.25, maxOutputTokens: 4_096, inputTokenBudget: 40_000 },
+      {
+        kind: "advisor",
+        mode: "session",
+        maxCalls: 0,
+        timeoutMs: 120_000,
+        maxCostUsd: 1.25,
+        maxOutputTokens: 4_096,
+        inputTokenBudget: 40_000,
+      },
       { agentDir },
     ),
     /invalid Advisor settings/,

@@ -106,7 +106,12 @@ import type {
   TurnDiffResult,
   VerifyPolicyReadModel,
 } from "../../shared/protocol/snapshots.ts";
-import { isPapercutListPage, isStateQLCommandInput, isStateQLRowsPage, isStateQLSnapshot } from "../../shared/protocol/validation.ts";
+import {
+  isPapercutListPage,
+  isStateQLCommandInput,
+  isStateQLRowsPage,
+  isStateQLSnapshot,
+} from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -475,9 +480,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
     history: Array.isArray(raw.history)
       ? raw.history.map((item: any) => ({
           ...item,
-          origin: ["legacy", "user", "model", "system", "api"].includes(String(item?.origin))
-            ? item.origin
-            : "legacy",
+          origin: ["legacy", "user", "model", "system", "api"].includes(String(item?.origin)) ? item.origin : "legacy",
         }))
       : raw.history,
     ...(closed ? { connection: null, transaction: null } : {}),
@@ -625,7 +628,12 @@ function stateqlCommandResult(
     actor_id: actorId,
     command: input.command,
   } as const;
-  if (value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).declined === true)
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>).declined === true
+  )
     return { ...base, status: "declined" };
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("StateQL returned an invalid command response");
@@ -706,9 +714,7 @@ function stateqlCommandResult(
         message: redact(error.message),
         retryable: error.retryable,
         executed: error.executed,
-        ...(typeof error.suggested_action === "string"
-          ? { suggested_action: redact(error.suggested_action) }
-          : {}),
+        ...(typeof error.suggested_action === "string" ? { suggested_action: redact(error.suggested_action) } : {}),
       },
       meta,
     };
@@ -718,7 +724,6 @@ function stateqlCommandResult(
     throw new Error("StateQL returned an oversized command response");
   return result;
 }
-
 
 function papercutListResult(
   value: unknown,

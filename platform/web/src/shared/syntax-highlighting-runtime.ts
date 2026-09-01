@@ -58,9 +58,9 @@ export function highlightSyntax(text: string, language: string, theme: SyntaxThe
 
   const { tokens } = highlighter.codeToTokens(text, { lang: language, theme });
   return tokens
-    .map((line) =>
+    .map(line =>
       line
-        .map((token) => {
+        .map(token => {
           const classes = tokenClasses(token.color, token.fontStyle);
           const content = escapeHtml(token.content);
           return classes ? `<span class="${classes}">${content}</span>` : content;
@@ -79,7 +79,10 @@ function createTokenCss(): string {
       if (color) colors.add(color);
     }
   }
-  return [...colors].sort().map((color) => `.shiki-token-${color.slice(1)}{color:${color}}`).join("\n");
+  return [...colors]
+    .sort()
+    .map(color => `.shiki-token-${color.slice(1)}{color:${color}}`)
+    .join("\n");
 }
 
 function tokenClasses(color: string | undefined, fontStyle: number | undefined): string {
@@ -97,7 +100,7 @@ function normalizedColor(color: string | undefined): string | undefined {
   const value = color?.toLowerCase();
   if (!value || !/^#[\da-f]{3,4}$|^#[\da-f]{6}(?:[\da-f]{2})?$/.test(value)) return;
   if (value.length > 5) return value;
-  return `#${[...value.slice(1)].map((character) => character.repeat(2)).join("")}`;
+  return `#${[...value.slice(1)].map(character => character.repeat(2)).join("")}`;
 }
 
 function escapeHtml(value: string): string {

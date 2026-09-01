@@ -11,10 +11,45 @@ import {
 } from "../src/package-settings.ts";
 
 const fields: PackageSettingField[] = [
-  { version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: false, env: "ENABLED", apply: "immediate" },
-  { version: 1, key: "turns", label: "Turns", type: "integer", defaultValue: 4, min: 1, max: 10, env: "TURNS", apply: "next-operation" },
-  { version: 1, key: "cost", label: "Cost", type: "number", defaultValue: 1, min: 0.1, max: 10, apply: "next-operation" },
-  { version: 1, key: "mode", label: "Mode", type: "enum", defaultValue: "safe", choices: ["safe", "fast"], apply: "next-session" },
+  {
+    version: 1,
+    key: "enabled",
+    label: "Enabled",
+    type: "boolean",
+    defaultValue: false,
+    env: "ENABLED",
+    apply: "immediate",
+  },
+  {
+    version: 1,
+    key: "turns",
+    label: "Turns",
+    type: "integer",
+    defaultValue: 4,
+    min: 1,
+    max: 10,
+    env: "TURNS",
+    apply: "next-operation",
+  },
+  {
+    version: 1,
+    key: "cost",
+    label: "Cost",
+    type: "number",
+    defaultValue: 1,
+    min: 0.1,
+    max: 10,
+    apply: "next-operation",
+  },
+  {
+    version: 1,
+    key: "mode",
+    label: "Mode",
+    type: "enum",
+    defaultValue: "safe",
+    choices: ["safe", "fast"],
+    apply: "next-session",
+  },
   {
     version: 1,
     key: "tags",
@@ -54,13 +89,20 @@ test("persisted package values override environment fallbacks and invalid values
 });
 
 test("generic read models resolve persisted values, environment fallbacks, and defaults without exposing env names", () => {
-  const model = effectivePackageSettingsReadModel(descriptor, { enabled: true, mode: "fast" }, { TURNS: "7", TAGS: "two" });
+  const model = effectivePackageSettingsReadModel(
+    descriptor,
+    { enabled: true, mode: "fast" },
+    { TURNS: "7", TAGS: "two" },
+  );
   assert.equal(model.kind, "generic");
   assert.equal(model.packageId, "pi-example");
-  assert.deepEqual(
-    Object.fromEntries(model.fields.map(field => [field.key, field.value])),
-    { enabled: true, turns: 7, cost: 1, mode: "fast", tags: ["two"] },
-  );
+  assert.deepEqual(Object.fromEntries(model.fields.map(field => [field.key, field.value])), {
+    enabled: true,
+    turns: 7,
+    cost: 1,
+    mode: "fast",
+    tags: ["two"],
+  });
   assert.equal("env" in model.fields[0]!, false);
 });
 
@@ -82,7 +124,11 @@ test("generic updates extract only values validated by the authoritative descrip
     /invalid generic/,
   );
   assert.throws(
-    () => extractPackageSettingsUpdate(descriptor, { ...update, fields: update.fields.filter(field => field.key !== "mode") }),
+    () =>
+      extractPackageSettingsUpdate(descriptor, {
+        ...update,
+        fields: update.fields.filter(field => field.key !== "mode"),
+      }),
     /invalid generic/,
   );
   assert.throws(

@@ -565,17 +565,22 @@ test("formats materialized rows as parallel arrays for model output", async () =
   ]);
   assert.doesNotMatch(queryResult.content[0].text, /"id"\s*:/);
 
-  const mongoResult = await value.tools.get("stateql").execute(
-    "mongo-query",
-    { command: "mongo.query", mongo: { operation: "find", collection: "users" } },
-    undefined,
-    undefined,
-    context(),
-  );
+  const mongoResult = await value.tools
+    .get("stateql")
+    .execute(
+      "mongo-query",
+      { command: "mongo.query", mongo: { operation: "find", collection: "users" } },
+      undefined,
+      undefined,
+      context(),
+    );
   const mongoOutput = JSON.parse(mongoResult.content[0].text);
   assert.deepEqual(mongoOutput.data.columns, ["id", "name"]);
   assert.deepEqual(mongoOutput.data.column_types, ["integer", "text"]);
-  assert.deepEqual(mongoOutput.data.preview, [[1, "Ada"], [2, "Lin"]]);
+  assert.deepEqual(mongoOutput.data.preview, [
+    [1, "Ada"],
+    [2, "Lin"],
+  ]);
 
   const rowsResult = await value.tools
     .get("stateql")
@@ -793,7 +798,13 @@ test("panel command bridge forwards reads and writes with user attribution, filt
   assert.equal(value.instances[0].commands.length, 2);
   await value.tools
     .get("stateql")
-    .execute("model-history", { command: "history", limit: 10, history_origin: "user" }, undefined, undefined, context());
+    .execute(
+      "model-history",
+      { command: "history", limit: 10, history_origin: "user" },
+      undefined,
+      undefined,
+      context(),
+    );
   assert.deepEqual(value.instances[0].commands[2], { command: "history", limit: 10, history_origin: "user" });
   assert.equal(value.instances[0].contexts[2]?.origin, "model");
 
@@ -801,38 +812,87 @@ test("panel command bridge forwards reads and writes with user attribution, filt
   assert.equal(value.events.get("pylon:stateql-command-request")?.length, 0);
 });
 
-
 test("panel forwards Mongo reads, filters history without changing origin, confirms Mongo writes, and rejects malformed payloads", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];
   let confirmations = 0;
   const ui = {
-    async requestStateQLCredential() { return undefined; },
-    async confirm() { confirmations++; return false; },
+    async requestStateQLCredential() {
+      return undefined;
+    },
+    async confirm() {
+      confirmations++;
+      return false;
+    },
     setStatus() {},
   };
   const invoke = (command: unknown, overrideUi = ui) => {
     let response: Promise<unknown> | undefined;
-    handler({ version: 1, sessionId: "pi-session", command, signal: new AbortController().signal, ui: overrideUi, claim: () => true, respond(result: Promise<unknown>) { response = result; } });
+    handler({
+      version: 1,
+      sessionId: "pi-session",
+      command,
+      signal: new AbortController().signal,
+      ui: overrideUi,
+      claim: () => true,
+      respond(result: Promise<unknown>) {
+        response = result;
+      },
+    });
     assert.ok(response);
     return response!;
   };
-  const read = await invoke({ command: "mongo.query", mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } } }, { ...ui, async confirm() { return true; } });
+  const read = await invoke(
+    {
+      command: "mongo.query",
+      mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } },
+    },
+    {
+      ...ui,
+      async confirm() {
+        return true;
+      },
+    },
+  );
   assert.equal((read as any).ok, true);
-  assert.deepEqual(value.instances[0].commands[0], { command: "mongo.query", mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } } });
+  assert.deepEqual(value.instances[0].commands[0], {
+    command: "mongo.query",
+    mongo: { operation: "find", collection: "users", filter: { active: true }, options: { limit: 5 } },
+  });
   assert.equal(value.instances[0].contexts[0]?.origin, "user");
-  const history = await invoke({ command: "history", limit: 5, history_origin: "model" }, { ...ui, async confirm() { return true; } });
+  const history = await invoke(
+    { command: "history", limit: 5, history_origin: "model" },
+    {
+      ...ui,
+      async confirm() {
+        return true;
+      },
+    },
+  );
   assert.equal((history as any).ok, true);
   assert.deepEqual(value.instances[0].commands[1], { command: "history", limit: 5, history_origin: "model" });
   assert.equal(value.instances[0].contexts[1]?.origin, "user");
-  const declined = await invoke({ command: "mongo.exec", mongo: { operation: "deleteMany", collection: "users", filter: { active: false } } });
+  const declined = await invoke({
+    command: "mongo.exec",
+    mongo: { operation: "deleteMany", collection: "users", filter: { active: false } },
+  });
   assert.deepEqual(declined, { declined: true });
   assert.equal(confirmations, 1);
   assert.equal(value.instances[0].commands.length, 2);
-  await assert.rejects(value.tools.get("stateql").execute("bad", { command: "mongo.query", mongo: { operation: "find", collection: "users", extra: true } }, undefined, undefined, context()), /invalid MongoDB command/);
+  await assert.rejects(
+    value.tools
+      .get("stateql")
+      .execute(
+        "bad",
+        { command: "mongo.query", mongo: { operation: "find", collection: "users", extra: true } },
+        undefined,
+        undefined,
+        context(),
+      ),
+    /invalid MongoDB command/,
+  );
   assert.equal(value.instances[0].commands.length, 2);
 });
-
 
 test("confirmed operations fail closed and declined commands do not execute", async () => {
   const value = await start();
@@ -1011,14 +1071,7 @@ test("cancellation aborts only the active command and permits the next command",
   value.instances[0].executeImpl = async (_command, executionContext) => {
     calls++;
     if (calls > 1)
-      return {
-        ok: true,
-        command_id: "cmd_next",
-        session_id: "s_1",
-        data: {},
-        warnings: [],
-        meta: { duration_ms: 1 },
-      };
+      return { ok: true, command_id: "cmd_next", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
     return new Promise(resolve => {
       executionContext!.signal!.addEventListener(
         "abort",

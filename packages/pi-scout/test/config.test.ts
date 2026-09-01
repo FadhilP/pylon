@@ -19,16 +19,19 @@ import { readSettings, updateSettings } from "../src/web-settings.ts";
 test("config is atomic, validated, and corrupt input is preserved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-config-"));
   const path = join(dir, "nested", "config.json");
-  await saveConfig({
-    version: 1,
-    model: "openai/gpt",
-    thinking: "xhigh",
-    disabled: true,
-    webSearch: true,
-    repoTimeoutMs: 120_000,
-    maxCostUsd: 1.25,
-    webSearchResults: 6,
-  }, path);
+  await saveConfig(
+    {
+      version: 1,
+      model: "openai/gpt",
+      thinking: "xhigh",
+      disabled: true,
+      webSearch: true,
+      repoTimeoutMs: 120_000,
+      maxCostUsd: 1.25,
+      webSearchResults: 6,
+    },
+    path,
+  );
   assert.deepEqual(await loadConfig(path), {
     version: 1,
     model: "openai/gpt",

@@ -129,10 +129,14 @@ test("session-start title settings are used by title calls", async () => {
   );
   const entries = [{ type: "message", id: "user-1", message: { role: "user", content: "Name this session" } }];
   let options: any;
-  const { handlers, ctx, names } = namingHarness(entries, async (_model: any, _prompt: any, value: any) => {
-    options = value;
-    return { content: [{ type: "text", text: "Configured Session Title" }] };
-  }, path);
+  const { handlers, ctx, names } = namingHarness(
+    entries,
+    async (_model: any, _prompt: any, value: any) => {
+      options = value;
+      return { content: [{ type: "text", text: "Configured Session Title" }] };
+    },
+    path,
+  );
   await handlers.get("session_start")![0]({}, ctx);
   await settleTurn(handlers, ctx);
   assert.deepEqual(names, ["Configured Session Title"]);

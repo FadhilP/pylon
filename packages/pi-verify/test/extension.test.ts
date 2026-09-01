@@ -22,7 +22,9 @@ test("verify publishes bounded result metadata and session entry", async () => {
     appendEntry: (type: string, data: any) => entries.push({ type, data }),
     exec: async (command: string, args: string[]) => {
       if (command === "git" && gitCalls.length === 0)
-        firstGitSawRunning = events.some(event => event.channel === "pi-verify:lifecycle" && event.value.state === "running");
+        firstGitSawRunning = events.some(
+          event => event.channel === "pi-verify:lifecycle" && event.value.state === "running",
+        );
       if (command === "git") gitCalls.push(args.join(" "));
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git" && args[0] === "status") return { code: 0, stdout: " M file.ts\n", stderr: "" };

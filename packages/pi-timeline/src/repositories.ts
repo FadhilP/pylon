@@ -65,7 +65,7 @@ async function childPaths(repository: Repository) {
       }
       candidate = dirname(candidate);
     }
-    }
+  }
   return paths;
 }
 

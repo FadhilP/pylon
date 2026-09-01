@@ -1497,8 +1497,22 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     const generation = configured.sessionGeneration;
     assert.equal(spawnConfigured.sessionGeneration, generation);
     for (const [packageId, settings] of [
-      ["pi-advisor", { kind: "advisor", mode: "session", maxCalls: 3, timeoutMs: 900_000, maxCostUsd: 0.5, maxOutputTokens: 8_192, inputTokenBudget: 32_768 }],
-      ["pi-scout", { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 }],
+      [
+        "pi-advisor",
+        {
+          kind: "advisor",
+          mode: "session",
+          maxCalls: 3,
+          timeoutMs: 900_000,
+          maxCostUsd: 0.5,
+          maxOutputTokens: 8_192,
+          inputTokenBudget: 32_768,
+        },
+      ],
+      [
+        "pi-scout",
+        { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 },
+      ],
       [
         "pi-grunt",
         {

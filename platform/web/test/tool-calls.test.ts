@@ -120,7 +120,6 @@ test("pairedToolCallViews reports a failed call over a completed one", () => {
   assert.equal(view?.key, "c1");
 });
 
-
 test("toolCallTrackTicks keeps the newest window and scales failures visibly", () => {
   const calls = Array.from({ length: 35 }, (_, index) =>
     call({ key: String(index), durationMs: index === 34 ? 10_000 : 100 + index * 10 }),

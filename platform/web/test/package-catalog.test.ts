@@ -118,10 +118,52 @@ test("package catalog confines and delegates package-owned settings", async () =
     const catalog = new PackageCatalog(root, agentDir);
     const state = await catalog.scan();
     assert.ok(state.packages[0]?.settingsPath?.endsWith("settings.mjs"));
-    assert.deepEqual(await catalog.readSettings("pi-settings", state), { kind: "generic", packageId: "pi-settings", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] });
-    const next = { kind: "generic" as const, packageId: "pi-settings", fields: [{ version: 1 as const, key: "enabled", label: "Enabled", type: "boolean" as const, defaultValue: true, value: false, apply: "immediate" as const }] };
+    assert.deepEqual(await catalog.readSettings("pi-settings", state), {
+      kind: "generic",
+      packageId: "pi-settings",
+      fields: [
+        {
+          version: 1,
+          key: "enabled",
+          label: "Enabled",
+          type: "boolean",
+          defaultValue: true,
+          value: true,
+          apply: "immediate",
+        },
+      ],
+    });
+    const next = {
+      kind: "generic" as const,
+      packageId: "pi-settings",
+      fields: [
+        {
+          version: 1 as const,
+          key: "enabled",
+          label: "Enabled",
+          type: "boolean" as const,
+          defaultValue: true,
+          value: false,
+          apply: "immediate" as const,
+        },
+      ],
+    };
     const previous = await catalog.updateSettings("pi-settings", next);
-    assert.deepEqual(previous, { kind: "generic", packageId: "pi-settings", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] });
+    assert.deepEqual(previous, {
+      kind: "generic",
+      packageId: "pi-settings",
+      fields: [
+        {
+          version: 1,
+          key: "enabled",
+          label: "Enabled",
+          type: "boolean",
+          defaultValue: true,
+          value: true,
+          apply: "immediate",
+        },
+      ],
+    });
     assert.deepEqual(await catalog.readSettings("pi-settings"), next);
 
     await assert.rejects(

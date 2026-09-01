@@ -15,11 +15,7 @@ export type ToolCallView = {
   durationMs?: number;
 };
 
-export type ToolCallTrackTick = {
-  key: string;
-  status: ToolCallStatus;
-  height: number;
-};
+export type ToolCallTrackTick = { key: string; status: ToolCallStatus; height: number };
 
 const TRACK_FLOOR = 3;
 const TRACK_FULL = 14;

@@ -835,7 +835,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         if (!thinking) return;
       }
       const { model: _model, thinking: _thinking, disabled: _disabled, ...preserved } = await loadConfig();
-      await saveConfig({ ...preserved, version: 1, disabled: false, model: modelName(model), ...(thinking ? { thinking } : {}) });
+      await saveConfig({
+        ...preserved,
+        version: 1,
+        disabled: false,
+        model: modelName(model),
+        ...(thinking ? { thinking } : {}),
+      });
       await refreshTool();
       ctx.ui.notify(
         `Scout enabled.\nModel: ${modelName(model)}\nThinking: ${thinking ?? "current main level"}`,

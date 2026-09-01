@@ -385,7 +385,11 @@ class StateQLCredentialBroker {
     surface?: "database",
   ): Promise<string | undefined> {
     const { request } = validateCredentialRequest(sessionId, raw);
-    if (request.source === "credential_ref" && this.credentialVault && !this.invalidCredentialReferences.has(request.reference)) {
+    if (
+      request.source === "credential_ref" &&
+      this.credentialVault &&
+      !this.invalidCredentialReferences.has(request.reference)
+    ) {
       const saved = await this.credentialVault.resolve(request.reference, undefined, request.signal);
       if (saved !== undefined) return saved;
     }
@@ -398,12 +402,7 @@ class StateQLCredentialBroker {
     return value;
   }
 
-  async rememberPassword(
-    reference: string,
-    target: string,
-    password: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
+  async rememberPassword(reference: string, target: string, password: string, signal?: AbortSignal): Promise<boolean> {
     if (!this.credentialVault) return false;
     try {
       const source = new URL(target);
@@ -614,7 +613,14 @@ class StateQLCredentialBroker {
       throw new Error("StateQL credential identity does not match the active binding");
     }
     if (!binding) {
-      binding = { generation, reference: request.reference, ...identity, access: request.access, value, expiresAt: this.now() + this.ttlMs };
+      binding = {
+        generation,
+        reference: request.reference,
+        ...identity,
+        access: request.access,
+        value,
+        expiresAt: this.now() + this.ttlMs,
+      };
       this.bindings.set(baseKey, binding);
     } else {
       attachIdentity(binding, identity);
@@ -757,11 +763,7 @@ export class RemoteUiBridge {
     this.credentialBroker.invalidatePassword(sessionId, sessionGeneration, request, target);
   }
 
-  invalidateStateQLCredential(
-    sessionId: string,
-    sessionGeneration: number,
-    request: StateQLCredentialRequest,
-  ): void {
+  invalidateStateQLCredential(sessionId: string, sessionGeneration: number, request: StateQLCredentialRequest): void {
     if (this.disposed) return;
     this.credentialBroker.invalidateCredential(sessionId, sessionGeneration, request);
   }

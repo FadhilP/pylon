@@ -305,14 +305,7 @@ test("session tool search exposes persisted specialist child activity only when 
   assert.ok(calls.redactionCount >= 3);
 
   const filtered = await searchSessions(
-    {
-      query: "nested",
-      cwd,
-      mode: "tools",
-      toolName: "spawn_agent",
-      includeChildCalls: true,
-      childToolName: "bash",
-    },
+    { query: "nested", cwd, mode: "tools", toolName: "spawn_agent", includeChildCalls: true, childToolName: "bash" },
     source,
   );
   assert.equal(filtered.matches.length, 1);
@@ -320,12 +313,8 @@ test("session tool search exposes persisted specialist child activity only when 
   assert.equal(filtered.matches[0].toolName, "bash");
 
   assert.equal(
-    (
-      await searchSessions(
-        { query: "child-result-marker", cwd, mode: "tools", includeChildCalls: true },
-        source,
-      )
-    ).matches.length,
+    (await searchSessions({ query: "child-result-marker", cwd, mode: "tools", includeChildCalls: true }, source))
+      .matches.length,
     0,
   );
   const results = await searchSessions(

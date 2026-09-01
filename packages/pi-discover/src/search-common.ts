@@ -85,7 +85,14 @@ export async function runSearch(
   args: string[],
   options: SearchRunOptions,
 ): Promise<SearchOutcome> {
-  const { probe, signal, label = command, noMatchCode = 1, verifyNoMatch = false, timeoutMs = SEARCH_TIMEOUT_MS } = options;
+  const {
+    probe,
+    signal,
+    label = command,
+    noMatchCode = 1,
+    verifyNoMatch = false,
+    timeoutMs = SEARCH_TIMEOUT_MS,
+  } = options;
   let result: SearchExecResult;
   try {
     result = await pi.exec(command, args, { signal, timeout: timeoutMs });

@@ -185,12 +185,7 @@ function childActivityCalls(result: any) {
   const byId = new Map<string, (typeof calls)[number]>();
   const ambiguous = new Set<string>();
   for (const item of activity.slice(0, 100)) {
-    if (
-      !item ||
-      typeof item.id !== "string" ||
-      typeof item.tool !== "string" ||
-      typeof item.text !== "string"
-    )
+    if (!item || typeof item.id !== "string" || typeof item.tool !== "string" || typeof item.text !== "string")
       continue;
     if (item.kind === "call") {
       const call = { part: { id: item.id, name: item.tool, text: item.text.slice(0, 4_000) } };
@@ -396,10 +391,7 @@ export async function searchSessions(
               toolCallId: cleanMetadata(part.id),
               toolName: cleanMetadata(part.name),
               ...(parentPart
-                ? {
-                    parentToolCallId: cleanMetadata(parentPart.id),
-                    parentToolName: cleanMetadata(parentPart.name),
-                  }
+                ? { parentToolCallId: cleanMetadata(parentPart.id), parentToolName: cleanMetadata(parentPart.name) }
                 : {}),
               ...(candidate.result?.id ? { resultEntryId: cleanMetadata(candidate.result.id) } : {}),
               status: candidate.status,

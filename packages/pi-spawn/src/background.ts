@@ -221,7 +221,8 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
       if (cancel && run.state === "running") run.controller.abort();
       if (cancel && run.promise) await run.promise;
       if (run.state === "queued") return queuedSummary(run);
-      if (run.state === "running") return runningSummary(run, run.started === undefined ? undefined : Date.now() - run.started);
+      if (run.state === "running")
+        return runningSummary(run, run.started === undefined ? undefined : Date.now() - run.started);
       if (runs.get(runId) !== run) return failure("not_found", "Background run result was already collected.");
       runs.delete(runId);
       return run.result;

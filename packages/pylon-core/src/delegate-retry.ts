@@ -20,7 +20,11 @@ export function isTransientProviderFailure(value: unknown): boolean {
   return !TERMINAL_PROVIDER_FAILURE.test(message) && TRANSIENT_PROVIDER_FAILURE.test(message);
 }
 
-export async function waitForDelegateRetry(retryNumber: number, signal?: AbortSignal, baseMs = 1_000): Promise<boolean> {
+export async function waitForDelegateRetry(
+  retryNumber: number,
+  signal?: AbortSignal,
+  baseMs = 1_000,
+): Promise<boolean> {
   if (signal?.aborted) return false;
   return new Promise(resolve => {
     const timeout = setTimeout(done, baseMs * 2 ** (retryNumber - 1));

@@ -909,9 +909,7 @@ export function SettingsDialog({
               <span className="settings-kicker settings-syntax-kicker">Syntax theme</span>
               <label className="settings-syntax-theme">
                 <span>Code highlighting</span>
-                <select
-                  value={syntaxTheme}
-                  onChange={event => onSyntaxThemeChange(event.target.value as SyntaxTheme)}>
+                <select value={syntaxTheme} onChange={event => onSyntaxThemeChange(event.target.value as SyntaxTheme)}>
                   {SYNTAX_THEMES.map(option => (
                     <option value={option.id} key={option.id}>
                       {option.label}
@@ -1409,9 +1407,7 @@ function GenericPackageFields({
   return (
     <div className="package-list">
       {settings.fields.map(field => {
-        const description = [field.description, `Applies ${field.apply.replace("-", " ")}.`]
-          .filter(Boolean)
-          .join(" ");
+        const description = [field.description, `Applies ${field.apply.replace("-", " ")}.`].filter(Boolean).join(" ");
         if (field.type === "boolean") {
           return (
             <PackageRow key={field.key} label={field.label} description={description}>
@@ -1480,7 +1476,6 @@ function GenericPackageFields({
   );
 }
 
-
 function PackageFields({
   settings,
   models,
@@ -1520,7 +1515,9 @@ function PackageFields({
             }
           />
         </PackageRow>
-        <PackageRow label="Git timeout" description="Maximum time for each Timeline git operation. Applies to the next session.">
+        <PackageRow
+          label="Git timeout"
+          description="Maximum time for each Timeline git operation. Applies to the next session.">
           <PackageNumber
             label="Git timeout"
             value={settings.gitTimeoutMs}
@@ -1532,7 +1529,9 @@ function PackageFields({
             onChange={gitTimeoutMs => onUpdate({ ...settings, gitTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow label="Title generation timeout" description="Maximum time for each session or checkpoint title call. Applies to the next session.">
+        <PackageRow
+          label="Title generation timeout"
+          description="Maximum time for each session or checkpoint title call. Applies to the next session.">
           <PackageNumber
             label="Title generation timeout"
             value={settings.titleTimeoutMs}
@@ -1544,7 +1543,9 @@ function PackageFields({
             onChange={titleTimeoutMs => onUpdate({ ...settings, titleTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow label="Title maximum output" description="Maximum tokens generated for a Timeline title. Applies to the next session.">
+        <PackageRow
+          label="Title maximum output"
+          description="Maximum tokens generated for a Timeline title. Applies to the next session.">
           <PackageNumber
             label="Title maximum output"
             value={settings.titleMaxTokens}
@@ -1555,7 +1556,9 @@ function PackageFields({
             onChange={titleMaxTokens => onUpdate({ ...settings, titleMaxTokens })}
           />
         </PackageRow>
-        <PackageRow label="Changed files in title prompt" description="Maximum changed-file paths supplied to checkpoint title generation. Applies to the next session.">
+        <PackageRow
+          label="Changed files in title prompt"
+          description="Maximum changed-file paths supplied to checkpoint title generation. Applies to the next session.">
           <PackageNumber
             label="Changed files in title prompt"
             value={settings.titleChangedFiles}
@@ -1616,33 +1619,111 @@ function PackageFields({
         </PackageRow>
         {settings.kind === "advisor" && (
           <>
-            <PackageRow label="Maximum consultations" description="Maximum Advisor calls for each original user prompt.">
-              <PackageNumber label="Maximum consultations" value={settings.maxCalls} min={1} max={10} disabled={disabled} onChange={maxCalls => onUpdate({ ...settings, maxCalls })} />
+            <PackageRow
+              label="Maximum consultations"
+              description="Maximum Advisor calls for each original user prompt.">
+              <PackageNumber
+                label="Maximum consultations"
+                value={settings.maxCalls}
+                min={1}
+                max={10}
+                disabled={disabled}
+                onChange={maxCalls => onUpdate({ ...settings, maxCalls })}
+              />
             </PackageRow>
             <PackageRow label="Consultation timeout" description="Stops an Advisor consultation after this duration.">
-              <PackageNumber label="Consultation timeout" value={settings.timeoutMs} min={1_000} max={7_200_000} step={1_000} unit="ms" disabled={disabled} onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })} />
+              <PackageNumber
+                label="Consultation timeout"
+                value={settings.timeoutMs}
+                min={1_000}
+                max={7_200_000}
+                step={1_000}
+                unit="ms"
+                disabled={disabled}
+                onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })}
+              />
             </PackageRow>
-            <PackageRow label="Maximum consultation cost" description="Stops an Advisor consultation when this cost limit is reached.">
-              <PackageNumber label="Maximum consultation cost" value={settings.maxCostUsd} min={0.01} max={100} step={0.01} unit="USD" integer={false} disabled={disabled} onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })} />
+            <PackageRow
+              label="Maximum consultation cost"
+              description="Stops an Advisor consultation when this cost limit is reached.">
+              <PackageNumber
+                label="Maximum consultation cost"
+                value={settings.maxCostUsd}
+                min={0.01}
+                max={100}
+                step={0.01}
+                unit="USD"
+                integer={false}
+                disabled={disabled}
+                onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
+              />
             </PackageRow>
             <PackageRow label="Maximum output tokens" description="Caps each Advisor response.">
-              <PackageNumber label="Maximum output tokens" value={settings.maxOutputTokens} min={256} max={65_536} unit="tokens" disabled={disabled} onChange={maxOutputTokens => onUpdate({ ...settings, maxOutputTokens })} />
+              <PackageNumber
+                label="Maximum output tokens"
+                value={settings.maxOutputTokens}
+                min={256}
+                max={65_536}
+                unit="tokens"
+                disabled={disabled}
+                onChange={maxOutputTokens => onUpdate({ ...settings, maxOutputTokens })}
+              />
             </PackageRow>
             <PackageRow label="Input context budget" description="Caps the Advisor snapshot input token budget.">
-              <PackageNumber label="Input context budget" value={settings.inputTokenBudget} min={1_000} max={1_000_000} step={1_000} unit="tokens" disabled={disabled} onChange={inputTokenBudget => onUpdate({ ...settings, inputTokenBudget })} />
+              <PackageNumber
+                label="Input context budget"
+                value={settings.inputTokenBudget}
+                min={1_000}
+                max={1_000_000}
+                step={1_000}
+                unit="tokens"
+                disabled={disabled}
+                onChange={inputTokenBudget => onUpdate({ ...settings, inputTokenBudget })}
+              />
             </PackageRow>
           </>
         )}
         {settings.kind === "scout" && (
           <>
-            <PackageRow label="Repository scout timeout" description="Stops a repository scout run after this duration.">
-              <PackageNumber label="Repository scout timeout" value={settings.repoTimeoutMs} min={1} max={7_200_000} step={1_000} unit="ms" disabled={disabled} onChange={repoTimeoutMs => onUpdate({ ...settings, repoTimeoutMs })} />
+            <PackageRow
+              label="Repository scout timeout"
+              description="Stops a repository scout run after this duration.">
+              <PackageNumber
+                label="Repository scout timeout"
+                value={settings.repoTimeoutMs}
+                min={1}
+                max={7_200_000}
+                step={1_000}
+                unit="ms"
+                disabled={disabled}
+                onChange={repoTimeoutMs => onUpdate({ ...settings, repoTimeoutMs })}
+              />
             </PackageRow>
             <PackageRow label="Maximum scout cost" description="Set to 0 for no cost limit.">
-              <PackageNumber label="Maximum scout cost" value={settings.maxCostUsd} min={0} max={100} step={0.01} unit="USD" integer={false} disabled={disabled} onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })} />
+              <PackageNumber
+                label="Maximum scout cost"
+                value={settings.maxCostUsd}
+                min={0}
+                max={100}
+                step={0.01}
+                unit="USD"
+                integer={false}
+                disabled={disabled}
+                onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
+              />
             </PackageRow>
-            <PackageRow label="Web search results" description="Default URL candidates returned by each Web Scout search.">
-              <PackageNumber label="Web search results" value={settings.webSearchResults} min={1} max={8} unit="results" disabled={disabled} onChange={webSearchResults => onUpdate({ ...settings, webSearchResults })} />
+            <PackageRow
+              label="Web search results"
+              description="Default URL candidates returned by each Web Scout search.">
+              <PackageNumber
+                label="Web search results"
+                value={settings.webSearchResults}
+                min={1}
+                max={8}
+                unit="results"
+                disabled={disabled}
+                onChange={webSearchResults => onUpdate({ ...settings, webSearchResults })}
+              />
             </PackageRow>
           </>
         )}
@@ -1686,9 +1767,7 @@ function PackageFields({
             <option value="dynamic">Dynamic</option>
           </select>
         </PackageRow>
-        <PackageRow
-          label="Worker timeout"
-          description="Stops a worker run after this duration.">
+        <PackageRow label="Worker timeout" description="Stops a worker run after this duration.">
           <PackageNumber
             label="Worker timeout"
             value={settings.timeoutMs}
@@ -1714,9 +1793,7 @@ function PackageFields({
             onChange={maxTurns => onUpdate({ ...settings, maxTurns })}
           />
         </PackageRow>
-        <PackageRow
-          label="Maximum worker cost"
-          description="Stops a worker run when this cost limit is reached.">
+        <PackageRow label="Maximum worker cost" description="Stops a worker run when this cost limit is reached.">
           <PackageNumber
             label="Maximum worker cost"
             value={settings.maxCostUsd}
@@ -1793,7 +1870,9 @@ function PackageFields({
             onChange={keepRecentTokens => onUpdate({ ...settings, keepRecentTokens })}
           />
         </PackageRow>
-        <PackageRow label="Compaction review timeout" description="Maximum time for a compaction reviewer call. Applies to the next review.">
+        <PackageRow
+          label="Compaction review timeout"
+          description="Maximum time for a compaction reviewer call. Applies to the next review.">
           <PackageNumber
             label="Compaction review timeout"
             value={settings.compactionReviewTimeoutMs}
@@ -1805,7 +1884,9 @@ function PackageFields({
             onChange={compactionReviewTimeoutMs => onUpdate({ ...settings, compactionReviewTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow label="Compaction reviewer maximum output" description="Maximum tokens generated by the compaction reviewer. Applies to the next review.">
+        <PackageRow
+          label="Compaction reviewer maximum output"
+          description="Maximum tokens generated by the compaction reviewer. Applies to the next review.">
           <PackageNumber
             label="Compaction reviewer maximum output"
             value={settings.compactionReviewerMaxOutputTokens}
@@ -1978,7 +2059,9 @@ function PackageFields({
             onChange={spawnTimeoutMs => onUpdate({ ...settings, spawnTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow label="Recent thread message limit" description="Default number of transcript messages returned by recent.">
+        <PackageRow
+          label="Recent thread message limit"
+          description="Default number of transcript messages returned by recent.">
           <PackageNumber
             label="Recent thread message limit"
             value={settings.recentThreadLimit}
@@ -1989,7 +2072,9 @@ function PackageFields({
             onChange={recentThreadLimit => onUpdate({ ...settings, recentThreadLimit })}
           />
         </PackageRow>
-        <PackageRow label="Recent thread message characters" description="Default maximum characters per transcript message.">
+        <PackageRow
+          label="Recent thread message characters"
+          description="Default maximum characters per transcript message.">
           <PackageNumber
             label="Recent thread message characters"
             value={settings.recentThreadMaxChars}

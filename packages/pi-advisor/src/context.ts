@@ -220,7 +220,8 @@ export function buildSnapshot(
   inputTokenBudget = MAX_INPUT_TOKENS,
   maxOutputTokens = ADVISOR_MAX_OUTPUT_TOKENS,
 ): Snapshot {
-  const charBudget = snapshotTokenBudget(contextWindow, reservedInputTokens, inputTokenBudget, maxOutputTokens) * CHARS_PER_TOKEN;
+  const charBudget =
+    snapshotTokenBudget(contextWindow, reservedInputTokens, inputTokenBudget, maxOutputTokens) * CHARS_PER_TOKEN;
   const duplicateTelemetry: DuplicateTelemetry = { records: 0, chars: 0 };
   const localUnique = (records: string[]) => dedupeRecords(records, duplicateTelemetry);
 

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { effectiveConfig, loadConfig, saveConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
-const fieldValues = (settings: any) => Object.fromEntries(settings.fields.map((field: any) => [field.key, field.value]));
+const fieldValues = (settings: any) =>
+  Object.fromEntries(settings.fields.map((field: any) => [field.key, field.value]));
 
 test("Helios generic settings expose defaults and persist all operation values", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-helios-web-settings-"));
@@ -24,9 +25,28 @@ test("Helios generic settings expose defaults and persist all operation values",
     const update = {
       ...settings,
       fields: settings.fields.map((field: any) =>
-        ({ headed: true, androidStartTimeoutMs: 2_000, androidInstallTimeoutMs: 3_000, browserLeaseIdleMs: 0, browserResultTabs: 7 } as Record<string, unknown>)[field.key] === undefined
+        (
+          ({
+            headed: true,
+            androidStartTimeoutMs: 2_000,
+            androidInstallTimeoutMs: 3_000,
+            browserLeaseIdleMs: 0,
+            browserResultTabs: 7,
+          }) as Record<string, unknown>
+        )[field.key] === undefined
           ? field
-          : { ...field, value: ({ headed: true, androidStartTimeoutMs: 2_000, androidInstallTimeoutMs: 3_000, browserLeaseIdleMs: 0, browserResultTabs: 7 } as Record<string, unknown>)[field.key] },
+          : {
+              ...field,
+              value: (
+                {
+                  headed: true,
+                  androidStartTimeoutMs: 2_000,
+                  androidInstallTimeoutMs: 3_000,
+                  browserLeaseIdleMs: 0,
+                  browserResultTabs: 7,
+                } as Record<string, unknown>
+              )[field.key],
+            },
       ),
     };
     await updateSettings(update, { agentDir });

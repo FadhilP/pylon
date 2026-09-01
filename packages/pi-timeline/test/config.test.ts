@@ -6,12 +6,7 @@ import { tmpdir } from "node:os";
 import { defaultConfig, loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
-const runtimeSettings = {
-  gitTimeoutMs: 120_000,
-  titleTimeoutMs: 30_000,
-  titleMaxTokens: 32,
-  titleChangedFiles: 20,
-};
+const runtimeSettings = { gitTimeoutMs: 120_000, titleTimeoutMs: 30_000, titleMaxTokens: 32, titleChangedFiles: 20 };
 
 test("Timeline settings preserve title modes and persist bounded runtime settings", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-timeline-config-"));
@@ -67,12 +62,21 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
       ...runtimeSettings,
     });
     await assert.rejects(
-      updateSettings({ kind: "timeline", editRollbackDefault: false, checkpointTitleMode: "model", ...runtimeSettings }, { agentDir }),
+      updateSettings(
+        { kind: "timeline", editRollbackDefault: false, checkpointTitleMode: "model", ...runtimeSettings },
+        { agentDir },
+      ),
       /invalid Timeline settings/,
     );
     await assert.rejects(
       updateSettings(
-        { kind: "timeline", editRollbackDefault: false, checkpointTitleMode: "disabled", ...runtimeSettings, titleMaxTokens: 7 },
+        {
+          kind: "timeline",
+          editRollbackDefault: false,
+          checkpointTitleMode: "disabled",
+          ...runtimeSettings,
+          titleMaxTokens: 7,
+        },
         { agentDir },
       ),
       /invalid Timeline settings/,

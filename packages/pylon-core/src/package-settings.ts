@@ -159,16 +159,36 @@ export function validPackageSettingField(value: unknown): value is PackageSettin
     return false;
 
   if (value.type === "boolean") {
-    return value.min === undefined && value.max === undefined && value.choices === undefined && value.step === undefined && typeof value.defaultValue === "boolean";
+    return (
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      value.step === undefined &&
+      typeof value.defaultValue === "boolean"
+    );
   }
   if (value.type === "integer") {
-    return value.choices === undefined && validBounds(value, true) && validPackageSettingValue(value as IntegerPackageSettingField, value.defaultValue);
+    return (
+      value.choices === undefined &&
+      validBounds(value, true) &&
+      validPackageSettingValue(value as IntegerPackageSettingField, value.defaultValue)
+    );
   }
   if (value.type === "number") {
-    return value.choices === undefined && validBounds(value, false) && validPackageSettingValue(value as NumberPackageSettingField, value.defaultValue);
+    return (
+      value.choices === undefined &&
+      validBounds(value, false) &&
+      validPackageSettingValue(value as NumberPackageSettingField, value.defaultValue)
+    );
   }
   if (value.type === "enum") {
-    return value.min === undefined && value.max === undefined && value.step === undefined && Boolean(validChoices(value.choices, true)) && validPackageSettingValue(value as EnumPackageSettingField, value.defaultValue);
+    return (
+      value.min === undefined &&
+      value.max === undefined &&
+      value.step === undefined &&
+      Boolean(validChoices(value.choices, true)) &&
+      validPackageSettingValue(value as EnumPackageSettingField, value.defaultValue)
+    );
   }
   if (value.type === "string-list") {
     return (
@@ -188,7 +208,10 @@ function bounded(value: number, field: IntegerPackageSettingField | NumberPackag
 /** Validates values as they are represented in persisted config and web requests. */
 export function validPackageSettingValue(field: PackageSettingField, value: unknown): boolean {
   if (field.type === "boolean") return typeof value === "boolean";
-  if (field.type === "integer") return Number.isSafeInteger(value) && Math.abs(value as number) <= MAX_ABSOLUTE_NUMBER && bounded(value as number, field);
+  if (field.type === "integer")
+    return (
+      Number.isSafeInteger(value) && Math.abs(value as number) <= MAX_ABSOLUTE_NUMBER && bounded(value as number, field)
+    );
   if (field.type === "number") return boundedNumber(value) && bounded(value, field);
   if (field.type === "enum") return typeof value === "string" && field.choices.includes(value);
   return (
@@ -196,7 +219,12 @@ export function validPackageSettingValue(field: PackageSettingField, value: unkn
     (field.min === undefined || value.length >= field.min) &&
     (field.max === undefined || value.length <= field.max) &&
     value.length <= MAX_LIST_ITEMS &&
-    value.every(item => typeof item === "string" && item.length <= MAX_STRING_LENGTH && (!field.choices || field.choices.includes(item))) &&
+    value.every(
+      item =>
+        typeof item === "string" &&
+        item.length <= MAX_STRING_LENGTH &&
+        (!field.choices || field.choices.includes(item)),
+    ) &&
     new Set(value).size === value.length
   );
 }
@@ -257,7 +285,9 @@ export function effectivePackageSettingsReadModel(
       const value = effectivePackageSettingValue(field, persisted[field.key], environment);
       return {
         ...publicField,
-        defaultValue: Array.isArray(publicField.defaultValue) ? [...publicField.defaultValue] : publicField.defaultValue,
+        defaultValue: Array.isArray(publicField.defaultValue)
+          ? [...publicField.defaultValue]
+          : publicField.defaultValue,
         value: Array.isArray(value) ? [...value] : value,
       } as GenericPackageSettingReadField;
     }),
@@ -273,16 +303,38 @@ export function extractPackageSettingsUpdate(
   update: unknown,
 ): Record<string, PackageSettingPrimitive> {
   if (!validPackageSettingsDescriptor(descriptor)) throw new Error("invalid package settings descriptor");
-  if (!plainRecord(update) || update.kind !== "generic" || update.packageId !== descriptor.packageId || !Array.isArray(update.fields)) {
+  if (
+    !plainRecord(update) ||
+    update.kind !== "generic" ||
+    update.packageId !== descriptor.packageId ||
+    !Array.isArray(update.fields)
+  ) {
     throw new Error("invalid generic package settings update");
   }
   if (update.fields.length !== descriptor.fields.length) throw new Error("invalid generic package settings update");
   const submitted = new Map<string, unknown>();
   const allowedFieldKeys = [
-    "version", "key", "label", "type", "defaultValue", "value", "description", "unit", "step", "min", "max", "choices", "apply",
+    "version",
+    "key",
+    "label",
+    "type",
+    "defaultValue",
+    "value",
+    "description",
+    "unit",
+    "step",
+    "min",
+    "max",
+    "choices",
+    "apply",
   ];
   for (const field of update.fields) {
-    if (!plainRecord(field) || !exactKeys(field, allowedFieldKeys) || typeof field.key !== "string" || !("value" in field)) {
+    if (
+      !plainRecord(field) ||
+      !exactKeys(field, allowedFieldKeys) ||
+      typeof field.key !== "string" ||
+      !("value" in field)
+    ) {
       throw new Error("invalid generic package settings update");
     }
     if (submitted.has(field.key)) throw new Error("invalid generic package settings update");

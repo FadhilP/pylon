@@ -6,7 +6,10 @@ import {
   type StateQLCredentialRequest,
   type UiRequest,
 } from "../src/server/pi/remote-ui-context.ts";
-import { createStateQLCredentialReference, OsStateQLCredentialVault } from "../src/server/pi/stateql-credential-vault.ts";
+import {
+  createStateQLCredentialReference,
+  OsStateQLCredentialVault,
+} from "../src/server/pi/stateql-credential-vault.ts";
 
 function stateqlRequest(
   access: "read" | "write" = "read",
@@ -69,12 +72,7 @@ test("database UI contexts mark their dialogs without marking ordinary tool dial
   const ordinaryConfirmation = ordinary.confirm("Confirm", "Proceed?");
   const ordinaryRequest = requests.at(-1)!;
   assert.equal(ordinaryRequest.surface, undefined);
-  bridge.answer({
-    requestId: ordinaryRequest.requestId,
-    sessionGeneration: 3,
-    method: "confirm",
-    confirmed: false,
-  });
+  bridge.answer({ requestId: ordinaryRequest.requestId, sessionGeneration: 3, method: "confirm", confirmed: false });
   assert.equal(await ordinaryConfirmation, false);
 
   const database = bridge.context("session-1", 3, "database") as ReturnType<RemoteUiBridge["context"]> &
@@ -82,32 +80,28 @@ test("database UI contexts mark their dialogs without marking ordinary tool dial
   const databaseConfirmation = database.confirm("Connect", "Use this connection?");
   const databaseRequest = requests.at(-1)!;
   assert.equal(databaseRequest.surface, "database");
-  bridge.answer({
-    requestId: databaseRequest.requestId,
-    sessionGeneration: 3,
-    method: "confirm",
-    confirmed: true,
-  });
+  bridge.answer({ requestId: databaseRequest.requestId, sessionGeneration: 3, method: "confirm", confirmed: true });
   assert.equal(await databaseConfirmation, true);
 
   const credential = database.requestStateQLCredential(stateqlRequest());
   const credentialRequest = requests.at(-1)!;
   assert.equal(credentialRequest.surface, "database");
-  bridge.answer({
-    requestId: credentialRequest.requestId,
-    sessionGeneration: 3,
-    method: "input",
-    value: DATABASE_URL,
-  });
+  bridge.answer({ requestId: credentialRequest.requestId, sessionGeneration: 3, method: "input", value: DATABASE_URL });
   assert.equal(await credential, DATABASE_URL);
 });
 
 test("StateQL credential references resolve from the OS vault and stale entries prompt for replacement", async () => {
   const values = new Map<string, string>();
   const vault = new OsStateQLCredentialVault((service, account) => ({
-    async setPassword(value) { values.set(`${service}\0${account}`, value); },
-    async getPassword() { return values.get(`${service}\0${account}`); },
-    async deleteCredential() { return values.delete(`${service}\0${account}`); },
+    async setPassword(value) {
+      values.set(`${service}\0${account}`, value);
+    },
+    async getPassword() {
+      return values.get(`${service}\0${account}`);
+    },
+    async deleteCredential() {
+      return values.delete(`${service}\0${account}`);
+    },
   }));
   const requests: UiRequest[] = [];
   const bridge = new RemoteUiBridge(request => requests.push(request));

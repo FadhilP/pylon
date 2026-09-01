@@ -65,7 +65,9 @@ const threadParameters = {
     Type.Boolean({ description: "Return immediately and continue this prompt in the background; default false" }),
   ),
   queue: Type.Optional(
-    Type.Boolean({ description: "Queue this background continuation behind active work on the same thread; continue only" }),
+    Type.Boolean({
+      description: "Queue this background continuation behind active work on the same thread; continue only",
+    }),
   ),
 };
 
@@ -220,7 +222,9 @@ function recentTranscriptResult(
     content: [
       {
         type: "text" as const,
-        text: outputTruncated ? `${output.slice(0, (options.totalChars ?? RECENT_THREAD_MAX_TOTAL_CHARS) - 1)}…` : output,
+        text: outputTruncated
+          ? `${output.slice(0, (options.totalChars ?? RECENT_THREAD_MAX_TOTAL_CHARS) - 1)}…`
+          : output,
       },
     ],
     details: {

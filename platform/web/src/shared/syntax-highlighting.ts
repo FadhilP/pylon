@@ -20,7 +20,7 @@ let revision = 0;
 const listeners = new Set<Listener>();
 
 export function isSyntaxTheme(value: string | undefined | null): value is SyntaxTheme {
-  return SYNTAX_THEMES.some((theme) => theme.id === value);
+  return SYNTAX_THEMES.some(theme => theme.id === value);
 }
 
 export function getSyntaxTheme(): SyntaxTheme {
@@ -35,7 +35,7 @@ export function setSyntaxTheme(theme: SyntaxTheme): void {
 
 export function startSyntaxHighlighting(): Promise<void> {
   loading ??= import("./syntax-highlighting-runtime.ts")
-    .then((loaded) => {
+    .then(loaded => {
       runtime = loaded;
       installTokenStyles(loaded.syntaxThemeTokenCss);
       notify();

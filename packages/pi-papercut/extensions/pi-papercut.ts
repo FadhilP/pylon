@@ -85,12 +85,7 @@ function parseListRequest(request: any, defaultLimit = 25) {
   if (!inRange(request.offset, 0, 1_000)) throw invalid();
   const limit = request.limit ?? defaultLimit;
   if (!inRange(limit, 1, 100)) throw invalid();
-  return {
-    status: request.status,
-    query: request.query as string,
-    offset: request.offset as number,
-    limit,
-  };
+  return { status: request.status, query: request.query as string, offset: request.offset as number, limit };
 }
 
 function parseMutationRequest(request: any): PapercutMutation {
