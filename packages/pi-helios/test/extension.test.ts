@@ -299,6 +299,37 @@ test("visibility command changes future owned launches only", async () => {
   assert.match(notification, /Active owned session unchanged/);
 });
 
+test("agent browser resize changes the CSS viewport", async () => {
+  let resizeArgs: string[] = [];
+  const { tools } = runtime({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find(value => ["open", "resize", "tab-list", "close"].includes(value));
+      if (action === "resize") resizeArgs = args;
+      if (action === "tab-list")
+        return {
+          code: 0,
+          stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }),
+          stderr: "",
+          killed: false,
+        };
+      return { code: 0, stdout: "{}", stderr: "", killed: false };
+    },
+  });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  await browser.execute("start", { action: "start" }, undefined, undefined, ctx);
+  const result = await browser.execute(
+    "mobile",
+    { action: "resize", width: 390, height: 844 },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(result.content[0].text, /Browser resize completed/);
+  assert.deepEqual(resizeArgs.slice(-3), ["resize", "390", "844"]);
+  await browser.execute("close", { action: "close" }, undefined, undefined, ctx);
+});
+
 test("embedded browser bridge launches headless, returns an ephemeral frame, and closes", async () => {
   const commands: string[] = [];
   const { eventHandlers } = runtime({

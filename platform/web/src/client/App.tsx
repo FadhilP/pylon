@@ -61,6 +61,8 @@ const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory"
 import { UsageView } from "./usage-view";
 import {
   clampPanelWidth,
+  beginBrowserSessionSurfaceTransition,
+  browserSurfaceAfterSessionStatus,
   displacesConversation,
   initialPanelWidths,
   panelWidthSlot,
@@ -202,6 +204,10 @@ export function App() {
   /** What was docked before a surface displaced the conversation into the rail. */
   const displacedReference = useRef<ActiveReference>(reference);
   const browserToolSession = useRef<string | undefined>(undefined);
+  const browserSurfaceSessions = useRef(new Set<string>());
+  const browserSurfaceSession = useRef<string | undefined>(undefined);
+  const browserSurfaceRequest = useRef<string | undefined>(undefined);
+  const changeSurfaceRef = useRef<(next: SurfaceId) => void>(() => undefined);
   const observedBrowserTools = useRef(new Set<string>());
   const sessionListRequest = useRef(0);
   const sessionListApplied = useRef(false);
@@ -369,6 +375,18 @@ export function App() {
 
   useDocumentTitle(live.runtime?.extensionUi.title);
   useEffect(() => {
+    const sessionId = live.runtime?.sessionId;
+    if (sessionId && browserSurfaceSession.current !== sessionId) {
+      const transition = beginBrowserSessionSurfaceTransition(
+        browserSurfaceSessions.current,
+        browserSurfaceSession.current,
+        sessionId,
+        surface,
+      );
+      browserSurfaceSessions.current = transition.browserSessions;
+      browserSurfaceSession.current = sessionId;
+      browserSurfaceRequest.current = transition.requested ? sessionId : undefined;
+    }
     setSelectedAgentId(undefined);
     setSelectedCompaction(undefined);
     setSelectedAttachment(undefined);
@@ -378,21 +396,37 @@ export function App() {
     );
     setBrowserActive(false);
   }, [live.runtime?.sessionId]);
+  const reconcileBrowserSurface = (sessionId: string, active: boolean) => {
+    const next = browserSurfaceAfterSessionStatus(browserSurfaceRequest.current, sessionId, active);
+    if (!next) return;
+    browserSurfaceRequest.current = undefined;
+    changeSurfaceRef.current(next);
+  };
   useEffect(() => {
-    if (live.connection !== "connected" || !live.runtime?.ready || !browserAvailable) {
+    if (live.connection !== "connected" || !live.runtime?.ready) {
+      setBrowserActive(false);
+      return;
+    }
+    const sessionId = live.runtime.sessionId;
+    const requested = browserSurfaceRequest.current === sessionId;
+    if (!browserAvailable && !requested) {
       setBrowserActive(false);
       return;
     }
     let current = true;
-    const sessionId = live.runtime.sessionId;
     const generation = live.runtime.sessionGeneration;
     void runtimeStore
       .heliosBrowser({ action: "status" })
       .then(result => {
-        if (current && runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation))
-          setBrowserActive(result.active);
+        if (!current || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) return;
+        setBrowserActive(result.active);
+        reconcileBrowserSurface(sessionId, result.active);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!current || !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, generation)) return;
+        setBrowserActive(false);
+        reconcileBrowserSurface(sessionId, false);
+      });
     return () => {
       current = false;
     };
@@ -1119,6 +1153,12 @@ export function App() {
    * else while it was docked, in which case that choice stands.
    */
   const changeSurface = (next: SurfaceId) => {
+    const sessionId = live.runtime?.sessionId;
+    if (sessionId) {
+      if (next === "browser") browserSurfaceSessions.current.add(sessionId);
+      else browserSurfaceSessions.current.delete(sessionId);
+      if (browserSurfaceRequest.current === sessionId) browserSurfaceRequest.current = undefined;
+    }
     setWorkspaceView(null);
     setSidebarOpen(false);
     if (next === surface) return;
@@ -1131,6 +1171,7 @@ export function App() {
       setReference(displacedReference.current);
     }
   };
+  changeSurfaceRef.current = changeSurface;
 
   const openWorkspaceView = (next: WorkspaceViewId) => {
     if (next === "sessions") {
@@ -1211,7 +1252,7 @@ export function App() {
       context={navContext}
       runtime={pendingSession ? undefined : live.runtime}
       disabled={Boolean(pendingSession)}
-      style={selectedAgent ? agentColor(selectedAgent, agentColors) : undefined}
+      agentTone={selectedAgent ? agentColor(selectedAgent, agentColors)["--agent-color"] : undefined}
       registerButton={(id, node) => {
         if (node) panelToggles.current.set(id, node);
         else panelToggles.current.delete(id);

@@ -5,6 +5,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  anchorWorktreeTurn,
   appendTurnCommit,
   captureCheckoutState,
   createSessionWorktree,
@@ -19,9 +20,11 @@ import {
   recreateSessionWorktree,
   removeSessionRef,
   removeSessionWorktree,
+  removeWorktreeTurnRefs,
   restoreCheckoutState,
   readPersistedWorktreeSummaries,
   turnTreeDiff,
+  turnWorktreeDiff,
   turnsBranchForSession,
   worktreeDiff,
   worktreeSnapshot,
@@ -185,13 +188,19 @@ test("persisted summaries are validated and follow the active branch", () => {
 });
 
 test("turn anchors persist in summaries", () => {
-  const anchor = { root: "/repo", beforeTree: "1".repeat(40), afterTree: "2".repeat(40) };
+  const anchor = {
+    root: "/repo",
+    beforeTree: "1".repeat(40),
+    afterTree: "2".repeat(40),
+    repositories: [{ path: "vendor/lib", beforeTree: "3".repeat(40), afterTree: "4".repeat(40) }],
+  };
   const summary = createWorktreeSummary("assistant-anchor", [{ path: "src/a.ts", additions: 1, deletions: 0 }], anchor);
   assert.ok(summary);
   assert.equal(summary.root, anchor.root);
   const parsed = parseWorktreeSummary(summary);
   assert.equal(parsed?.beforeTree, anchor.beforeTree);
   assert.equal(parsed?.afterTree, anchor.afterTree);
+  assert.deepEqual(parsed?.repositories, anchor.repositories);
   // Invalid anchors degrade to an unanchored summary rather than dropping files.
   const unanchored = createWorktreeSummary("assistant-anchor", [{ path: "a.ts", additions: 1, deletions: 0 }], {
     ...anchor,
@@ -203,6 +212,16 @@ test("turn anchors persist in summaries", () => {
   assert.deepEqual(parseWorktreeSummary(valid), valid); // v1 entries without anchors still parse
   assert.equal(
     parseWorktreeSummary({ ...valid, root: "/repo", beforeTree: "z".repeat(40), afterTree: "2".repeat(40) }),
+    undefined,
+  );
+  assert.equal(
+    parseWorktreeSummary({
+      ...valid,
+      root: "/repo",
+      beforeTree: "1".repeat(40),
+      afterTree: "2".repeat(40),
+      repositories: [{ path: "../escape", beforeTree: "3".repeat(40), afterTree: "4".repeat(40) }],
+    }),
     undefined,
   );
 });
@@ -544,6 +563,8 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     // Isolated indexes still share Git's object store, so serialize snapshots on Windows.
     const clean = await listWorkspaceFiles({ cwd: root });
     const cleanChanges = await inspectWorkspaceChanges(root);
+    const turnBefore = await worktreeSnapshot(root);
+    assert.ok(turnBefore);
     assert.deepEqual(
       clean.files.map(file => [file.path, file.status]),
       [
@@ -559,6 +580,33 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     // Nested dirty and untracked state appears with workspace-relative paths.
     await writeFile(join(submodulePath, "lib.txt"), "lib\ndirty\n");
     await writeFile(join(submodulePath, "extra.txt"), "untracked\n");
+    const turnAfter = await worktreeSnapshot(root);
+    assert.ok(turnAfter);
+    assert.deepEqual(await worktreeDiff(turnBefore, turnAfter), [
+      { path: "vendor/lib/extra.txt", additions: 1, deletions: 0 },
+      { path: "vendor/lib/lib.txt", additions: 1, deletions: 0 },
+    ]);
+
+    const nestedPath = join(submodulePath, "nested", "nested.txt");
+    await writeFile(nestedPath, "fresh\nnested turn\n");
+    const nestedAfter = await worktreeSnapshot(root);
+    assert.ok(nestedAfter);
+    assert.deepEqual(await worktreeDiff(turnAfter, nestedAfter), [
+      { path: "vendor/lib/nested/nested.txt", additions: 1, deletions: 0 },
+    ]);
+    const turnBranch = turnsBranchForSession("submodule-turn");
+    assert.ok(turnBranch);
+    const nestedAnchor = await anchorWorktreeTurn(turnAfter, nestedAfter, turnBranch);
+    assert.deepEqual(
+      nestedAnchor?.repositories?.map(repository => repository.path),
+      ["vendor/lib/nested"],
+    );
+    const nestedPatch = nestedAnchor && (await turnWorktreeDiff(root, nestedAnchor));
+    assert.equal(nestedPatch?.state, "available");
+    assert.match(nestedPatch?.state === "available" ? nestedPatch.text : "", /a\/vendor\/lib\/nested\/nested\.txt/);
+    assert.match(nestedPatch?.state === "available" ? nestedPatch.text : "", /^\+nested turn$/m);
+    await writeFile(nestedPath, "fresh\n");
+    await removeWorktreeTurnRefs(root, turnBranch);
     const dirtyChanges = await inspectWorkspaceChanges(root);
     const dirty = await listWorkspaceFiles({ cwd: root });
     const nestedBase = await readWorkspaceFile({ cwd: root, path: "vendor/lib/nested/nested.txt", view: "base" });
@@ -608,8 +656,64 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     assert.equal(staged.files.find(file => file.path === "vendor/newmod/nested.txt")?.status, "added");
     assert.equal(stagedBase.state, "deleted");
 
+    // A submodule commit with an unchanged tree remains visible as a gitlink-only change.
+    const pointerBefore = await worktreeSnapshot(root);
+    assert.ok(pointerBefore);
+    await git(submodulePath, [
+      "-c",
+      "user.email=pylon@test.local",
+      "-c",
+      "user.name=Pylon",
+      "commit",
+      "--allow-empty",
+      "-qm",
+      "pointer only",
+    ]);
+    const pointerAfter = await worktreeSnapshot(root);
+    assert.ok(pointerAfter);
+    assert.ok((await worktreeDiff(pointerBefore, pointerAfter))?.some(file => file.path === "vendor/lib"));
+
+    // A committed content change is expanded to files and suppresses the parent gitlink patch.
+    await writeFile(join(submodulePath, "lib.txt"), "lib\ndirty\ncommitted turn\n");
+    await git(submodulePath, ["add", "lib.txt"]);
+    await git(submodulePath, [
+      "-c",
+      "user.email=pylon@test.local",
+      "-c",
+      "user.name=Pylon",
+      "commit",
+      "-qm",
+      "content turn",
+    ]);
+    const committedAfter = await worktreeSnapshot(root);
+    assert.ok(committedAfter);
+    assert.deepEqual(await worktreeDiff(pointerAfter, committedAfter), [
+      { path: "vendor/lib/lib.txt", additions: 1, deletions: 0 },
+    ]);
+    const committedBranch = turnsBranchForSession("submodule-commit-turn");
+    assert.ok(committedBranch);
+    const committedAnchor = await anchorWorktreeTurn(pointerAfter, committedAfter, committedBranch);
+    assert.deepEqual(
+      committedAnchor?.repositories?.map(repository => repository.path),
+      ["vendor/lib"],
+    );
+    const committedPatch = committedAnchor && (await turnWorktreeDiff(root, committedAnchor));
+    const committedText = committedPatch?.state === "available" ? committedPatch.text : "";
+    assert.match(committedText, /a\/vendor\/lib\/lib\.txt/);
+    assert.doesNotMatch(committedText, /diff --git a\/vendor\/lib b\/vendor\/lib/);
+    await removeWorktreeTurnRefs(root, committedBranch);
+
+    const initializedBeforeRemoval = committedAfter;
+
     // Uninitialized registered submodules degrade to folder markers without misreading through the parent.
     await rm(submodulePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    const uninitializedAfterRemoval = await worktreeSnapshot(root);
+    assert.ok(uninitializedAfterRemoval);
+    assert.ok(
+      (await worktreeDiff(initializedBeforeRemoval, uninitializedAfterRemoval))?.some(
+        file => file.path === "vendor/lib",
+      ),
+    );
     const broken = await listWorkspaceFiles({ cwd: root });
     const brokenCurrent = await readWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt", view: "current" });
     const brokenDiff = await diffWorkspaceFile({ cwd: root, path: "vendor/lib/lib.txt" });

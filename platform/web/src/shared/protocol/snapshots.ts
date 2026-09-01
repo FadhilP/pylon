@@ -594,6 +594,16 @@ export type GenericPackageSettingReadField =
       version: 1;
       key: string;
       label: string;
+      type: "model";
+      defaultValue: string;
+      value: string;
+      description?: string;
+      apply: GenericPackageSettingApplyTiming;
+    }
+  | {
+      version: 1;
+      key: string;
+      label: string;
       type: "string-list";
       defaultValue: string[];
       value: string[];

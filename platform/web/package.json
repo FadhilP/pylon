@@ -9,7 +9,7 @@
     "build:server": "vite build --ssr src/server/index.ts --outDir dist-server/server --emptyOutDir",
     "start": "node --experimental-transform-types src/server/start.ts --production",
     "preview": "npm run start",
-    "test": "node --experimental-transform-types --test-concurrency=2 --test test/*.test.ts",
+    "test": "node --experimental-transform-types --test-concurrency=1 --test test/*.test.ts",
     "check": "npm run typecheck",
     "typecheck": "tsc -b --pretty false",
     "verify": "npm test && npm run build"

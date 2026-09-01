@@ -49,6 +49,15 @@ export const pylonCoreSettings = definePackageSettings({
       unit: "ms",
       apply: "next-operation",
     },
+    {
+      version: 1,
+      key: "delegateNamingModel",
+      label: "Delegate naming model",
+      type: "model",
+      defaultValue: "",
+      description: "Optional background model that assigns short semantic names to delegated agents.",
+      apply: "next-session",
+    },
   ],
 } as const);
 
@@ -58,6 +67,7 @@ export type PylonCoreConfig = {
   lineEditPriceRatio?: number;
   delegateMaxAttempts?: number;
   delegateRetryBaseMs?: number;
+  delegateNamingModel?: string;
 };
 export type EffectivePylonCoreConfig = {
   version: 1;
@@ -65,6 +75,7 @@ export type EffectivePylonCoreConfig = {
   lineEditPriceRatio: number;
   delegateMaxAttempts: number;
   delegateRetryBaseMs: number;
+  delegateNamingModel: string;
 };
 export const defaultConfig = (): PylonCoreConfig => ({ version: 1, lineEditEnabled: true });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pylon-core", "config.json");
@@ -76,6 +87,7 @@ export function effectiveConfig(config: PylonCoreConfig): EffectivePylonCoreConf
     lineEditPriceRatio: effectivePackageSettingValue(fields.lineEditPriceRatio, config.lineEditPriceRatio) as number,
     delegateMaxAttempts: effectivePackageSettingValue(fields.delegateMaxAttempts, config.delegateMaxAttempts) as number,
     delegateRetryBaseMs: effectivePackageSettingValue(fields.delegateRetryBaseMs, config.delegateRetryBaseMs) as number,
+    delegateNamingModel: effectivePackageSettingValue(fields.delegateNamingModel, config.delegateNamingModel) as string,
   };
 }
 

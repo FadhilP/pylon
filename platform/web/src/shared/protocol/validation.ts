@@ -340,6 +340,20 @@ function validGenericPackageField(value: unknown): boolean {
       (value.choices as string[]).includes(value.value)
     );
   }
+  if (value.type === "model") {
+    return (
+      value.step === undefined &&
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      value.unit === undefined &&
+      typeof value.defaultValue === "string" &&
+      value.defaultValue.length <= 500 &&
+      typeof value.value === "string" &&
+      value.value.length <= 500
+    );
+  }
+
   if (value.type === "string-list") {
     return (
       value.step === undefined &&

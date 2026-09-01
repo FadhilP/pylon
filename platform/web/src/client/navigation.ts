@@ -124,6 +124,28 @@ export function displacesConversation(surface: SurfaceId): boolean {
   return surface !== "chat";
 }
 
+export function beginBrowserSessionSurfaceTransition(
+  browserSessions: ReadonlySet<string>,
+  previousSessionId: string | undefined,
+  sessionId: string,
+  surface: SurfaceId,
+): { browserSessions: Set<string>; requested: boolean } {
+  const next = new Set(browserSessions);
+  if (previousSessionId) {
+    if (surface === "browser") next.add(previousSessionId);
+    else next.delete(previousSessionId);
+  }
+  return { browserSessions: next, requested: surface === "browser" || next.has(sessionId) };
+}
+
+export function browserSurfaceAfterSessionStatus(
+  requestedSessionId: string | undefined,
+  sessionId: string,
+  active: boolean,
+): SurfaceId | undefined {
+  return requestedSessionId === sessionId ? (active ? "browser" : "chat") : undefined;
+}
+
 export type ReferenceId =
   | "chat"
   | "overview"
@@ -236,7 +258,7 @@ export const REFERENCES: ReferenceDefinition[] = [
     icon: IconBotId,
     ariaId: "agents-panel",
     group: "run",
-    tone: "var(--agent-color, var(--blue))",
+    tone: "var(--blue)",
     badge: runtime => {
       const runs = runtime?.conversation.delegatedRuns ?? [];
       const active = runs.filter(run => run.status === "running").length;

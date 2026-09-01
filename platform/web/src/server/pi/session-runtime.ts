@@ -18,8 +18,8 @@ import {
   inspectGitWorkspace,
   parseWorktreeSummary,
   readPersistedWorktreeSummaries,
-  removeSessionRef,
-  turnTreeDiff,
+  removeWorktreeTurnRefs,
+  turnWorktreeDiff,
   turnsBranchForSession,
   WORKTREE_SUMMARY_ENTRY_TYPE,
 } from "pylon-core/src/worktree.ts";
@@ -122,6 +122,8 @@ import type {
   DriverEventListener,
   EditPromptInput,
   FileSuggestionInput,
+  HeliosBrowserFrame,
+  HeliosBrowserStreamInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
@@ -1350,7 +1352,12 @@ export class SessionRuntime implements PiDriver {
         break;
       }
       try {
-        const diff = await turnTreeDiff(workspace.root, summary.beforeTree, summary.afterTree);
+        const diff = await turnWorktreeDiff(workspace.root, {
+          root: summary.root,
+          beforeTree: summary.beforeTree,
+          afterTree: summary.afterTree,
+          ...(summary.repositories ? { repositories: summary.repositories } : {}),
+        });
         return {
           protocolVersion: PROTOCOL_VERSION,
           sessionId: runtime.session.sessionId,
@@ -2253,6 +2260,34 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
+  async heliosBrowserStream(
+    input: HeliosBrowserStreamInput,
+    send: (frame: HeliosBrowserFrame) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
+    const runtime = this.requireRuntime();
+    let response: Promise<void> | undefined;
+    let claimed = false;
+    this.eventBus.emit("pylon:helios-browser-stream-request", {
+      version: 1,
+      ...input,
+      sessionId: runtime.session.sessionId,
+      signal,
+      send,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<void>) => {
+        if (!response) response = Promise.resolve(value);
+      },
+    });
+    if (!response) throw new Error("Helios browser stream is unavailable");
+    await response;
+  }
+
   async heliosAndroidTooling(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult> {
     if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
     const runtime = this.requireRuntime();
@@ -2311,7 +2346,7 @@ export class SessionRuntime implements PiDriver {
         throw new Error("cannot delete the currently active session");
       await deleteSessionFile(session.path);
       const turnsBranch = turnsBranchForSession(input.sessionId);
-      if (turnsBranch) await removeSessionRef(session.cwd, turnsBranch);
+      if (turnsBranch) await removeWorktreeTurnRefs(session.cwd, turnsBranch);
       this.sessionIndex.remove(input.sessionId);
     });
   }
@@ -2611,6 +2646,12 @@ export class SessionRuntime implements PiDriver {
         throw new Error("package thinking level is unavailable for the selected model");
       }
     };
+    if (settings.kind === "generic") {
+      for (const field of settings.fields)
+        if (field.type === "model" && field.value) assertProfile(field.value, undefined);
+      return;
+    }
+
     if (settings.kind === "continuity") {
       if (settings.planner) assertProfile(settings.planner.model, settings.planner.thinking);
       if (settings.executor) assertProfile(settings.executor.model, settings.executor.thinking);

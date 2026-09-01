@@ -2,6 +2,7 @@ import { complete, type Message, type Model } from "@earendil-works/pi-ai/compat
 import { sessionEntryToContextMessages, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { requestDelegateName, type DelegateNameHandle } from "pylon-core/delegate-names";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
 import { advisorBudget } from "../src/budget.ts";
 import { ADVISOR_PROMPT } from "../src/prompts.ts";
@@ -32,6 +33,8 @@ import { waitForDelegateRetry } from "../src/retry.ts";
 
 type Details = {
   agentName?: string;
+  delegateNameFallback?: string;
+  delegateNameKey?: string;
   startedAt?: string;
   advisorModel?: string;
   provider?: string;
@@ -72,18 +75,6 @@ const configuredModel = (ctx: any, config: AdvisorConfig): Model<any> | undefine
   const ref = parseModelRef(config.advisorModel);
   return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
 };
-function delegatedName(pi: ExtensionAPI, callId: string): string {
-  let assigned: string | undefined;
-  pi.events.emit("pylon:delegate-name", {
-    version: 1,
-    kind: "advisor",
-    callId,
-    respond: (name: unknown) => {
-      if (typeof name === "string" && /^A\d+$/.test(name)) assigned = name;
-    },
-  });
-  return assigned ?? `A-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
-}
 
 type CallLifecycle = { signal: AbortSignal; isTimedOut: () => boolean };
 /** Owns the abort chain, the hard timeout, and the progress heartbeat for one consultation. */
@@ -197,6 +188,7 @@ export default function advisorExtension(
   type PreparedCall = {
     started: number;
     named: (value: string) => string;
+    delegateName: DelegateNameHandle;
     base: Details;
     model: Model<any>;
     auth: any;
@@ -236,12 +228,14 @@ export default function advisorExtension(
       };
 
     const started = Date.now();
-    const agentName = delegatedName(pi, id);
-    const named = (value: string) => `[${agentName} · Advisor] ${value}`;
+    const delegateName = requestDelegateName(pi, { kind: "advisor", callId: id, task: params.request });
+    const named = (value: string) => `[${delegateName.getName()} · Advisor] ${value}`;
     const model = configuredModel(ctx, config);
     const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
     const base: Details = {
-      agentName,
+      agentName: delegateName.getName(),
+      delegateNameFallback: delegateName.fallbackName,
+      delegateNameKey: id,
       startedAt: new Date(started).toISOString(),
       advisorModel: model ? modelName(model) : undefined,
       provider: model?.provider,
@@ -324,6 +318,7 @@ export default function advisorExtension(
       call: {
         started,
         named,
+        delegateName,
         base,
         model,
         auth,
@@ -388,6 +383,7 @@ export default function advisorExtension(
           started,
           named,
           base,
+          delegateName,
           model,
           auth,
           snapshot,
@@ -406,7 +402,14 @@ export default function advisorExtension(
         const running = (text: string, extra: Record<string, unknown> = {}) =>
           onUpdate?.({
             content: [{ type: "text", text }],
-            details: { ...runningDetails, state: "running", contextTokens, contextLimit, ...extra },
+            details: {
+              ...runningDetails,
+              agentName: delegateName.getName(),
+              state: "running",
+              contextTokens,
+              contextLimit,
+              ...extra,
+            },
           });
         running(`Consulting ${modelName(model)}…`, snapshotDetails(snapshot));
 
@@ -449,8 +452,11 @@ export default function advisorExtension(
               }),
           );
 
+          await delegateName.settled;
+
           const details: Details = {
             ...base,
+            agentName: delegateName.getName(),
             durationMs: Date.now() - started,
             usage: result.usage,
             contextTokens,

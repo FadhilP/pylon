@@ -594,19 +594,22 @@ export class PlaywrightCli {
       outputMode: "stdout",
       codegen: "none",
       browser: {
-        isolated: true,
+        isolated: false,
+        userDataDir: profileDirectory,
         launchOptions: {
           headless: !headed,
-          ...(webIsolation
-            ? {
-                proxy: webIsolation.proxy,
-                args: [
+          args: [
+            "--remote-debugging-address=127.0.0.1",
+            "--remote-debugging-port=0",
+            ...(webIsolation
+              ? [
                   "--proxy-bypass-list=<-loopback>",
                   "--disable-quic",
                   "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-                ],
-              }
-            : {}),
+                ]
+              : []),
+          ],
+          ...(webIsolation ? { proxy: webIsolation.proxy } : {}),
         },
         ...(webIsolation ? { contextOptions: { acceptDownloads: false, serviceWorkers: "block" } } : {}),
       },

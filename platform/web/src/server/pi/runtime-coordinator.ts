@@ -84,6 +84,8 @@ import type {
   DriverEventListener,
   EditPromptInput,
   FileSuggestionInput,
+  HeliosBrowserFrame,
+  HeliosBrowserStreamInput,
   ForkInput,
   NewSessionInput,
   PiDriver,
@@ -567,6 +569,18 @@ export class RuntimeCoordinator implements PiDriver {
     const result = await slot.driver.heliosBrowser({ ...input, expectedGeneration: slot.innerGeneration });
     this.assertSelected(slot, input.expectedGeneration, "controlling Helios browser");
     return { ...result, sessionGeneration: this.generation };
+  }
+
+  async heliosBrowserStream(
+    input: HeliosBrowserStreamInput,
+    send: (frame: HeliosBrowserFrame) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const slot = this.selected();
+    if (!slot.driver.heliosBrowserStream) throw new Error("Helios browser stream is unavailable");
+    await slot.driver.heliosBrowserStream({ ...input, expectedGeneration: slot.innerGeneration }, send, signal);
+    if (!signal.aborted) this.assertSelected(slot, input.expectedGeneration, "streaming Helios browser");
   }
 
   async heliosAndroidTooling(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult> {

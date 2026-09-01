@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./client/App";
 import "./client/styles.css";
+import { isTheme } from "./client/use-chrome";
 import {
   DEFAULT_SYNTAX_THEME,
   isSyntaxTheme,
@@ -15,12 +16,11 @@ try {
 } catch {
   /* Use the system theme when storage is unavailable. */
 }
-document.documentElement.dataset.theme =
-  savedTheme === "light" || savedTheme === "dark"
-    ? savedTheme
-    : matchMedia("(prefers-color-scheme: light)").matches
-      ? "light"
-      : "dark";
+document.documentElement.dataset.theme = isTheme(savedTheme)
+  ? savedTheme
+  : matchMedia("(prefers-color-scheme: light)").matches
+    ? "light"
+    : "dark";
 
 let savedSyntaxTheme: string | null = null;
 try {

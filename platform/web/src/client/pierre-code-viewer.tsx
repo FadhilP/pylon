@@ -54,7 +54,7 @@ export default function PierreCodeViewer({
 }) {
   const viewerRef = useRef<CodeViewHandle<undefined>>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
-    document.documentElement.dataset.theme === "light" ? "light" : "dark",
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
   );
   const itemId = useMemo(() => `${ITEM_ID_PREFIX}:${mode}:${path}`, [mode, path]);
   const item = useMemo<CodeViewItem | undefined>(
@@ -85,7 +85,7 @@ export default function PierreCodeViewer({
 
   useEffect(() => {
     const observer = new MutationObserver(() =>
-      setTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark"),
+      setTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light"),
     );
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => observer.disconnect();

@@ -326,6 +326,19 @@ export type DriverEvent =
 
 export type DriverEventListener = (event: DriverEvent) => void;
 
+export interface HeliosBrowserStreamInput {
+  expectedGeneration: number;
+  owner: string;
+  width: number;
+  height: number;
+}
+
+export interface HeliosBrowserFrame {
+  mimeType: "image/jpeg";
+  data: Uint8Array;
+  sequence: number;
+}
+
 export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
@@ -351,6 +364,11 @@ export interface PiDriver {
   ): Promise<PapercutListPage>;
   papercutMutation?(input: PapercutMutationInput): Promise<PapercutMutationResult>;
   heliosBrowser?(input: HeliosBrowserInput): Promise<HeliosBrowserResult>;
+  heliosBrowserStream?(
+    input: HeliosBrowserStreamInput,
+    send: (frame: HeliosBrowserFrame) => void,
+    signal: AbortSignal,
+  ): Promise<void>;
   heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
   usage(input?: UsageQuery): Promise<UsageSnapshot>;

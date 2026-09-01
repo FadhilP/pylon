@@ -3,10 +3,19 @@ import { resolve } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { requestDelegateName } from "pylon-core/delegate-names";
 import { createBackgroundRuns } from "../src/background.ts";
 import { configPath, effectiveConfig, loadConfig, thinkingLevels } from "../src/config.ts";
 import { MAX_DEPTH, SPAWN_TOOLS } from "../src/constants.ts";
-import { defaultName, failure, isFailure, missingThread, threadListResult, type ToolFailure } from "../src/results.ts";
+import {
+  defaultName,
+  failure,
+  isFailure,
+  missingThread,
+  scientistName,
+  threadListResult,
+  type ToolFailure,
+} from "../src/results.ts";
 import { runSpawn } from "../src/runner.ts";
 import {
   agentPolicy,
@@ -341,8 +350,18 @@ export default async function spawnExtension(
       return failure("depth_limit", `pi-spawn depth limit (${MAX_DEPTH}) reached.`);
   };
 
-  const dispatch = (request: TurnRequest & { toolCallId: string; parentSessionId: string }) =>
-    request.background ? background.start(request) : executeTurn(request);
+  const dispatch = (request: TurnRequest & { toolCallId: string; parentSessionId: string }) => {
+    const delegateNameKey = `pi-spawn:${request.kind}:${request.id}`;
+    const delegateName = requestDelegateName(pi, {
+      kind: request.kind === "agent" ? "spawn_agent" : "spawn_session",
+      callId: request.toolCallId,
+      identityId: delegateNameKey,
+      task: request.prompt,
+      fallbackName: scientistName(request.id),
+    });
+    const named = { ...request, delegateName, delegateNameKey };
+    return request.background ? background.start(named) : executeTurn(named);
+  };
 
   pi.on("context", event => {
     const content = background.contextLines();

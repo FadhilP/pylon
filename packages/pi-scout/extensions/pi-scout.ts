@@ -26,6 +26,7 @@ import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClai
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "pylon-core/redact";
+import { requestDelegateName } from "pylon-core/delegate-names";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -122,18 +123,6 @@ function webStartUrl(value: string): string {
 
 function modelName(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
-}
-function delegatedName(pi: ExtensionAPI, kind: "repo_scout" | "web_scout", callId: string): string {
-  let assigned: string | undefined;
-  pi.events.emit("pylon:delegate-name", {
-    version: 1,
-    kind,
-    callId,
-    respond: (name: unknown) => {
-      if (typeof name === "string" && /^S\d+$/.test(name)) assigned = name;
-    },
-  });
-  return assigned ?? `S-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
 }
 export function startsNewRepoSequence(event: { source: string; streamingBehavior?: string }): boolean {
   return event.source !== "extension" && event.streamingBehavior !== "steer";
@@ -360,7 +349,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       const callNumber = repoCallNumber(id);
       activeRepoCalls++;
       const started = Date.now();
-      const agent = { agentName: delegatedName(pi, "repo_scout", id), startedAt: new Date(started).toISOString() };
+      const delegateName = requestDelegateName(pi, { kind: "repo_scout", callId: id, task: params.task });
+      const agent = {
+        delegateNameFallback: delegateName.fallbackName,
+        delegateNameKey: id,
+        startedAt: new Date(started).toISOString(),
+      };
+      const agentDetails = () => ({ ...agent, agentName: delegateName.getName() });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       let attempts = 0;
@@ -374,7 +369,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         onUpdate?.({
           content: [{ type: "text", text }],
           details: {
-            ...agent,
+            ...agentDetails(),
             model: modelName(model),
             thinking,
             costLimitUsd: maxCostUsd,
@@ -509,10 +504,12 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         const omittedEvidence = mergeEvidenceAnchors([...(run.omittedEvidence ?? []), ...report.omittedEvidence]);
         const claims = structuredClaims(report.text);
         const searches = searchTelemetry(run.activity, seenRepoSearches);
+        await delegateName.settled;
+
         return {
-          content: [{ type: "text" as const, text: `[${agent.agentName} · Repo Scout] ${report.text}` }],
+          content: [{ type: "text" as const, text: `[${delegateName.getName()} · Repo Scout] ${report.text}` }],
           details: {
-            ...agent,
+            ...agentDetails(),
             task: params.task.trim(),
             retryReason: params.retryReason?.trim(),
             callNumber,
@@ -640,7 +637,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       const maxActions = Math.min(80, maxPages * 6 + 8);
       const grant = await capability.issueGrant({ maxPages, maxActions, headed: false });
       const started = Date.now();
-      const agent = { agentName: delegatedName(pi, "web_scout", id), startedAt: new Date(started).toISOString() };
+      const delegateName = requestDelegateName(pi, { kind: "web_scout", callId: id, task });
+      const agent = {
+        delegateNameFallback: delegateName.fallbackName,
+        delegateNameKey: id,
+        startedAt: new Date(started).toISOString(),
+      };
+      const agentDetails = () => ({ ...agent, agentName: delegateName.getName() });
       let lastUpdateAt = started;
       let activity: readonly ScoutActivity[] = [];
       let contextTokens: number | null = null;
@@ -651,7 +654,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         onUpdate?.({
           content: [{ type: "text", text }],
           details: {
-            ...agent,
+            ...agentDetails(),
             model: modelName(model),
             thinking,
             costLimitUsd: maxCostUsd,
@@ -729,10 +732,12 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         });
         const failureMessage = run.error ? sanitizeFailureMessage(run.error, "Web Scout child failed.") : undefined;
         const text = failureMessage ? `Web scout failed nonfatally: ${failureMessage}` : run.text;
+        await delegateName.settled;
+
         return {
-          content: [{ type: "text" as const, text: `[${agent.agentName} · Web Scout] ${text}` }],
+          content: [{ type: "text" as const, text: `[${delegateName.getName()} · Web Scout] ${text}` }],
           details: {
-            ...agent,
+            ...agentDetails(),
             task,
             startUrls,
             maxPages,

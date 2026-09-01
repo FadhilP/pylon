@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-  appendTurnCommit,
+  anchorWorktreeTurn,
   createWorktreeSummary,
   WORKTREE_SUMMARY_ENTRY_TYPE,
   turnsBranchForSession,
@@ -15,17 +15,10 @@ const lastAssistantEntryId = (ctx: any): string | undefined =>
     .reverse()
     .find((entry: any) => entry?.type === "message" && entry.message?.role === "assistant")?.id;
 
-/**
- * Anchors both boundary trees on a per-session branch so the turn's diff survives `git gc`.
- * The before-tree is anchored first because external edits between turns can orphan it; identical
- * trees short-circuit inside `appendTurnCommit`, and failures degrade to an unanchored summary.
- */
+/** Anchors every changed repository so the complete turn diff survives `git gc`. */
 async function anchorTurn(before: WorktreeSnapshot, after: WorktreeSnapshot, ctx: any) {
   const branch = turnsBranchForSession(String(ctx.sessionManager?.getSessionId?.() ?? ""));
-  if (!branch) return;
-  if (!(await appendTurnCommit(before.root, branch, before.tree))) return;
-  if (!(await appendTurnCommit(before.root, branch, after.tree))) return;
-  return { root: before.root, beforeTree: before.tree, afterTree: after.tree };
+  return branch ? anchorWorktreeTurn(before, after, branch) : undefined;
 }
 
 /**

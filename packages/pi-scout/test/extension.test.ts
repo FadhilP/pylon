@@ -102,12 +102,23 @@ test("Repo Scout publishes sanitized bounded child failure details", async () =>
       cacheReadTokens: 0,
     };
   });
+  runtime.events.on("pylon:delegate-name", (request: any) => {
+    if (request.version === 2) {
+      request.respond({
+        version: 1,
+        fallbackName: "S1",
+        getName: () => "repo-review",
+        settled: Promise.resolve("repo-review"),
+      });
+    }
+  });
   try {
     const result = await runtime.tools
       .get("repo_scout")
       .execute("failure", { task: "inspect" }, undefined, undefined, context({ hasUI: false }));
     assert.equal(result.details.failureCode, "child_error");
     assert.equal(calls, 1);
+    assert.equal(result.details.agentName, "repo-review");
     assert.ok(result.details.failureMessage.length <= 500);
     assert.doesNotMatch(result.details.failureMessage, new RegExp(secret));
     assert.doesNotMatch(result.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
@@ -550,7 +561,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
         },
       }),
     );
-    assert.match(result.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
+    assert.match(result.content[0].text, /^\[Scout-[\w-]+ · Web Scout\] cited report$/);
 
     const uiResult = await runtime.tools.get("web_scout").execute(
       "ui",
@@ -569,7 +580,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
         },
       }),
     );
-    assert.match(uiResult.content[0].text, /^\[S-[\w-]+ · Web Scout\] cited report$/);
+    assert.match(uiResult.content[0].text, /^\[Scout-[\w-]+ · Web Scout\] cited report$/);
     assert.deepEqual(options, { maxPages: 20, maxActions: 80, headed: false });
     assert.equal(confirmations, 0);
     assert.equal(revoked, 2);

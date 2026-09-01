@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { DelegateNameHandle } from "pylon-core/delegate-names";
 import { SPAWN_TOOLS, SPECIALIST_TOOLS } from "./constants.ts";
 import { failure, label, runText, scientistName } from "./results.ts";
 import {
@@ -29,6 +30,8 @@ export type TurnRequest = {
   beforeRun?: () => void | Promise<void>;
   runId?: string;
   background?: boolean;
+  delegateName?: DelegateNameHandle;
+  delegateNameKey?: string;
 };
 
 function modelAttribution(ref: string | undefined): { provider: string; modelId: string } | undefined {
@@ -75,10 +78,25 @@ function spawnRuntimePolicy(pi: ExtensionAPI, cwd: string, sessionId: string): s
 
 export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: { spawnTimeoutMs?: number } = {}) {
   return async function executeTurn(request: TurnRequest) {
-    const { kind, id, path, cwd, prompt, policy, ctx, signal, onUpdate, beforeRun, background = false } = request;
+    const {
+      kind,
+      id,
+      path,
+      cwd,
+      prompt,
+      policy,
+      ctx,
+      signal,
+      onUpdate,
+      beforeRun,
+      background = false,
+      delegateName,
+      delegateNameKey,
+    } = request;
     const runId = request.runId ?? randomUUID();
     const started = Date.now();
-    const agentName = scientistName(id);
+    const fallbackName = delegateName?.fallbackName ?? scientistName(id);
+    const agentName = () => delegateName?.getName() ?? fallbackName;
     const name = label(kind);
     let model = policy?.model;
     let thinking = kind === "agent" ? (policy as AgentPolicy | undefined)?.thinking : undefined;
@@ -91,7 +109,9 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
     const runningDetails = () => ({
       ...resultDetails(kind, id, path, cwd),
       runId,
-      agentName,
+      agentName: agentName(),
+      delegateNameFallback: fallbackName,
+      ...(delegateNameKey ? { delegateNameKey } : {}),
       startedAt: new Date(started).toISOString(),
       state: "running",
       ...(model ? { model, ...modelAttribution(model) } : {}),
@@ -112,8 +132,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
     const onUiRequest = async (uiRequest: SpawnUiRequest, uiSignal: AbortSignal): Promise<SpawnUiResponse> => {
       if (background || !ctx.hasUI || uiRequest.method === "editor")
         return uiRequest.method === "confirm" ? { confirmed: false } : { cancelled: true };
-      report(`${name} ${agentName} is waiting for input…`, { state: "attention", durationMs: elapsed() });
-      const title = `${name} ${agentName}: ${uiRequest.title}`;
+      report(`${name} ${agentName()} is waiting for input…`, { state: "attention", durationMs: elapsed() });
+      const title = `${name} ${agentName()}: ${uiRequest.title}`;
       const dialogOptions = {
         signal: uiSignal,
         ...(uiRequest.timeout !== undefined ? { timeout: uiRequest.timeout } : {}),
@@ -128,7 +148,7 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
       return value === undefined ? { cancelled: true } : { value };
     };
 
-    report(`${name} ${agentName} is working…`, { activity });
+    report(`${name} ${agentName()} is working…`, { activity });
     try {
       const run = await withThreadLock(
         path,
@@ -168,13 +188,16 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
         signal,
       );
       const effectiveModel = run.model ?? model;
+      await delegateName?.settled;
 
       return {
-        content: [{ type: "text" as const, text: runText(kind, id, agentName, run) }],
+        content: [{ type: "text" as const, text: runText(kind, id, agentName(), run) }],
         details: {
           ...resultDetails(kind, id, path, cwd),
           runId,
-          agentName,
+          agentName: agentName(),
+          delegateNameFallback: fallbackName,
+          ...(delegateNameKey ? { delegateNameKey } : {}),
           startedAt: new Date(started).toISOString(),
           status: signal?.aborted ? "cancelled" : run.error ? "failed" : "completed",
           ...(effectiveModel ? { model: effectiveModel, ...modelAttribution(effectiveModel) } : {}),
@@ -202,13 +225,16 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      await delegateName?.settled;
       return failure(
         error instanceof SessionAdoptionError ? error.code : "runner_error",
         `${name} ${id} turn failed: ${message}`,
         {
           ...(authorized ? resultDetails(kind, id, path, cwd) : {}),
           runId,
-          agentName,
+          agentName: agentName(),
+          delegateNameFallback: fallbackName,
+          ...(delegateNameKey ? { delegateNameKey } : {}),
           startedAt: new Date(started).toISOString(),
           status: signal?.aborted ? "cancelled" : "failed",
           ...(background ? { background: true } : {}),

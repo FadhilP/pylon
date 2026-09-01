@@ -183,10 +183,20 @@ async function assertSafeCheckout(workspace: GitWorkspace): Promise<void> {
   }
 }
 
+export interface WorktreeRepositorySnapshot {
+  /** Workspace-relative path; empty only for the top repository. */
+  path: string;
+  root: string;
+  commonDir: string;
+  tree: string;
+  fingerprint: string;
+}
+
 export interface WorktreeSnapshot {
   root: string;
   tree: string;
   fingerprint: string;
+  repositories?: WorktreeRepositorySnapshot[];
 }
 
 export interface WorktreeFileChange {
@@ -282,12 +292,22 @@ export interface WorkspaceFileDiff {
 export const WORKTREE_SUMMARY_ENTRY_TYPE = "pylon-worktree-summary";
 const MAX_SUMMARY_BYTES = 64 * 1024;
 const MAX_SUMMARY_FILES = 100;
+const MAX_TURN_REPOSITORIES = 64;
+const MAX_SUBMODULE_DEPTH = 16;
 const MAX_WORKSPACE_FILES = 10_000;
+
+export interface TurnRepositoryAnchor {
+  path: string;
+  beforeTree: string;
+  afterTree: string;
+}
 
 export interface TurnAnchor {
   root: string;
   beforeTree: string;
   afterTree: string;
+  /** Changed initialized submodules. The top repository remains in the legacy fields above. */
+  repositories?: TurnRepositoryAnchor[];
 }
 
 export interface PersistedWorktreeSummary {
@@ -297,6 +317,7 @@ export interface PersistedWorktreeSummary {
   root?: string;
   beforeTree?: string;
   afterTree?: string;
+  repositories?: TurnRepositoryAnchor[];
 }
 
 function validSummaryPath(path: string): boolean {
@@ -310,20 +331,51 @@ function validSummaryPath(path: string): boolean {
   );
 }
 
+function validatedTurnRepositories(value: unknown): TurnRepositoryAnchor[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_TURN_REPOSITORIES) return undefined;
+  const seen = new Set<string>();
+  const repositories: TurnRepositoryAnchor[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+    const raw = item as Record<string, unknown>;
+    if (
+      typeof raw.path !== "string" ||
+      !validSummaryPath(raw.path) ||
+      seen.has(raw.path) ||
+      typeof raw.beforeTree !== "string" ||
+      !objectId.test(raw.beforeTree) ||
+      typeof raw.afterTree !== "string" ||
+      !objectId.test(raw.afterTree)
+    )
+      return undefined;
+    seen.add(raw.path);
+    repositories.push({ path: raw.path, beforeTree: raw.beforeTree, afterTree: raw.afterTree });
+  }
+  return repositories;
+}
+
 export function createWorktreeSummary(
   assistantEntryId: string,
   values: WorktreeFileChange[],
   anchor?: TurnAnchor,
 ): PersistedWorktreeSummary | undefined {
   if (!/^[A-Za-z0-9._:-]{1,128}$/.test(assistantEntryId)) return undefined;
+  const repositories = validatedTurnRepositories(anchor?.repositories);
   const anchored =
     anchor &&
+    repositories &&
     typeof anchor.root === "string" &&
     anchor.root.length > 0 &&
     anchor.root.length <= 1024 &&
     objectId.test(anchor.beforeTree) &&
     objectId.test(anchor.afterTree)
-      ? { root: anchor.root, beforeTree: anchor.beforeTree, afterTree: anchor.afterTree }
+      ? {
+          root: anchor.root,
+          beforeTree: anchor.beforeTree,
+          afterTree: anchor.afterTree,
+          ...(repositories.length ? { repositories } : {}),
+        }
       : {};
   const summary: PersistedWorktreeSummary = { version: 1, assistantEntryId, files: [], ...anchored };
   for (const value of values.slice(0, MAX_SUMMARY_FILES)) {
@@ -366,7 +418,13 @@ export function parseWorktreeSummary(value: unknown): PersistedWorktreeSummary |
     return undefined;
 
   let anchor: TurnAnchor | undefined;
-  if (raw.root !== undefined || raw.beforeTree !== undefined || raw.afterTree !== undefined) {
+  if (
+    raw.root !== undefined ||
+    raw.beforeTree !== undefined ||
+    raw.afterTree !== undefined ||
+    raw.repositories !== undefined
+  ) {
+    const repositories = validatedTurnRepositories(raw.repositories);
     if (
       typeof raw.root !== "string" ||
       raw.root.length === 0 ||
@@ -374,10 +432,16 @@ export function parseWorktreeSummary(value: unknown): PersistedWorktreeSummary |
       typeof raw.beforeTree !== "string" ||
       !objectId.test(raw.beforeTree) ||
       typeof raw.afterTree !== "string" ||
-      !objectId.test(raw.afterTree)
+      !objectId.test(raw.afterTree) ||
+      !repositories
     )
       return undefined;
-    anchor = { root: raw.root, beforeTree: raw.beforeTree, afterTree: raw.afterTree };
+    anchor = {
+      root: raw.root,
+      beforeTree: raw.beforeTree,
+      afterTree: raw.afterTree,
+      ...(repositories.length ? { repositories } : {}),
+    };
   }
 
   const files: WorktreeFileChange[] = [];
@@ -420,7 +484,7 @@ export function readPersistedWorktreeSummaries(session: {
   return summaries;
 }
 
-export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | undefined> {
+async function repositorySnapshot(cwd: string, path = ""): Promise<WorktreeRepositorySnapshot | undefined> {
   for (let attempt = 0; attempt <= snapshotRetryDelaysMs.length; attempt++) {
     let raced = false;
     try {
@@ -450,7 +514,10 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
         revision = { head, tree };
       }
       revisionCache.set(key, revision);
-      if (!status.dirty) return { root, tree: revision.tree, fingerprint: `${root}\n${revision.head}\nclean` };
+      const commonDir = await commonDirectory(root);
+      if (!status.dirty) {
+        return { path, root, commonDir, tree: revision.tree, fingerprint: `${root}\n${revision.head}\nclean` };
+      }
 
       const [indexTree, candidateTree] = await Promise.all([
         git(root, ["write-tree"]),
@@ -461,7 +528,13 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
         raced = true;
         throw Error("Git worktree changed during observation.");
       }
-      return { root, tree: candidateTree, fingerprint: `${root}\n${revision.head}\n${indexTree}\n${candidateTree}` };
+      return {
+        path,
+        root,
+        commonDir,
+        tree: candidateTree,
+        fingerprint: `${root}\n${revision.head}\n${indexTree}\n${candidateTree}`,
+      };
     } catch {
       if (!raced || attempt === snapshotRetryDelaysMs.length) return undefined;
       await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
@@ -470,37 +543,140 @@ export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | 
   return undefined;
 }
 
+export async function worktreeSnapshot(cwd: string): Promise<WorktreeSnapshot | undefined> {
+  const top = await repositorySnapshot(cwd);
+  if (!top) return undefined;
+  try {
+    const { nodes } = await discoverSubmodules(top.root, top.tree);
+    const repositories: WorktreeRepositorySnapshot[] = [];
+    // Serialize captures because nested repositories may share object-store locks on Windows.
+    for (const node of nodes.slice(0, MAX_TURN_REPOSITORIES)) {
+      const snapshot = await repositorySnapshot(node.root, node.path);
+      if (
+        !snapshot ||
+        canonical(snapshot.root) !== canonical(node.root) ||
+        canonical(snapshot.commonDir) !== canonical(node.current.commonDir)
+      )
+        return undefined;
+      repositories.push(snapshot);
+    }
+    const fingerprint = createHash("sha256").update(top.fingerprint);
+    for (const repository of repositories) fingerprint.update(`\n${repository.path}\n${repository.fingerprint}`);
+    return {
+      root: top.root,
+      tree: top.tree,
+      fingerprint: fingerprint.digest("base64url"),
+      ...(repositories.length ? { repositories } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
   return (await worktreeSnapshot(cwd))?.fingerprint;
 }
 
-export async function worktreeDiff(
-  before: WorktreeSnapshot,
-  after: WorktreeSnapshot,
-): Promise<WorktreeFileChange[] | undefined> {
-  if (before.root !== after.root) return undefined;
-  try {
-    const output = await git(before.root, ["diff", "--numstat", "-z", "--no-renames", before.tree, after.tree]);
-    const files: WorktreeFileChange[] = [];
-    for (const record of output.split("\0").filter(Boolean).slice(0, 500)) {
-      const first = record.indexOf("\t");
-      const second = record.indexOf("\t", first + 1);
-      if (first < 0 || second < 0) continue;
-      const added = record.slice(0, first);
-      const deleted = record.slice(first + 1, second);
-      const path = record.slice(second + 1);
-      if (!path || path.length > 1_000) continue;
-      if (added === "-" || deleted === "-") {
-        files.push({ path, binary: true });
-        continue;
-      }
+interface MatchedRepositorySnapshots {
+  path: string;
+  before: WorktreeRepositorySnapshot;
+  after: WorktreeRepositorySnapshot;
+}
+
+function matchedRepositorySnapshots(before: WorktreeSnapshot, after: WorktreeSnapshot): MatchedRepositorySnapshots[] {
+  const matches: MatchedRepositorySnapshots[] = [
+    {
+      path: "",
+      before: { path: "", root: before.root, commonDir: "", tree: before.tree, fingerprint: before.fingerprint },
+      after: { path: "", root: after.root, commonDir: "", tree: after.tree, fingerprint: after.fingerprint },
+    },
+  ];
+  const afterByPath = new Map((after.repositories ?? []).map(repository => [repository.path, repository]));
+  for (const repository of before.repositories ?? []) {
+    const candidate = afterByPath.get(repository.path);
+    if (
+      candidate &&
+      canonical(candidate.root) === canonical(repository.root) &&
+      canonical(candidate.commonDir) === canonical(repository.commonDir)
+    ) {
+      matches.push({ path: repository.path, before: repository, after: candidate });
+    }
+  }
+  return matches;
+}
+
+async function repositoryTreeChanges(match: MatchedRepositorySnapshots): Promise<WorktreeFileChange[]> {
+  const output = await git(match.before.root, [
+    "diff",
+    "--numstat",
+    "-z",
+    "--no-renames",
+    match.before.tree,
+    match.after.tree,
+  ]);
+  const files: WorktreeFileChange[] = [];
+  for (const record of output.split("\0").filter(Boolean).slice(0, 500)) {
+    const first = record.indexOf("\t");
+    const second = record.indexOf("\t", first + 1);
+    if (first < 0 || second < 0) continue;
+    const added = record.slice(0, first);
+    const deleted = record.slice(first + 1, second);
+    const path = record.slice(second + 1);
+    if (!path || path.length > 1_000) continue;
+    if (added === "-" || deleted === "-") files.push({ path, binary: true });
+    else {
       const additions = Number(added);
       const deletions = Number(deleted);
       if (Number.isSafeInteger(additions) && Number.isSafeInteger(deletions)) {
         files.push({ path, additions, deletions });
       }
     }
-    return files;
+  }
+  return files;
+}
+
+function directChildPath(parent: string, child: string, paths: Set<string>): string | undefined {
+  let owner = "";
+  for (const path of paths) {
+    if (path !== child && child.startsWith(`${path}/`) && path.length > owner.length) owner = path;
+  }
+  if (owner !== parent) return undefined;
+  return parent ? child.slice(parent.length + 1) : child;
+}
+
+export async function worktreeDiff(
+  before: WorktreeSnapshot,
+  after: WorktreeSnapshot,
+): Promise<WorktreeFileChange[] | undefined> {
+  if (canonical(before.root) !== canonical(after.root)) return undefined;
+  try {
+    const matches = matchedRepositorySnapshots(before, after);
+    const paths = new Set(matches.map(match => match.path));
+    const changes = new Map<string, WorktreeFileChange[]>();
+    for (const match of matches) changes.set(match.path, await repositoryTreeChanges(match));
+
+    for (const child of matches.slice(1)) {
+      if (!changes.get(child.path)?.length) continue;
+      for (const parent of matches) {
+        const localPath = directChildPath(parent.path, child.path, paths);
+        if (!localPath) continue;
+        changes.set(
+          parent.path,
+          (changes.get(parent.path) ?? []).filter(file => file.path !== localPath),
+        );
+        break;
+      }
+    }
+
+    return matches
+      .flatMap(match =>
+        (changes.get(match.path) ?? []).map(file => ({
+          ...file,
+          path: match.path ? `${match.path}/${file.path}` : file.path,
+        })),
+      )
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .slice(0, 500);
   } catch {
     return undefined;
   }
@@ -553,6 +729,32 @@ export async function appendTurnCommit(
   }
 }
 
+/** Anchors every repository needed to reconstruct a complete turn diff. */
+export async function anchorWorktreeTurn(
+  before: WorktreeSnapshot,
+  after: WorktreeSnapshot,
+  branch: string,
+): Promise<TurnAnchor | undefined> {
+  if (canonical(before.root) !== canonical(after.root)) return undefined;
+  const matches = matchedRepositorySnapshots(before, after);
+
+  if (!(await appendTurnCommit(before.root, branch, before.tree))) return undefined;
+  if (!(await appendTurnCommit(after.root, branch, after.tree))) return undefined;
+  const repositories: TurnRepositoryAnchor[] = [];
+  for (const match of matches.slice(1)) {
+    if (match.before.tree === match.after.tree) continue;
+    if (!(await appendTurnCommit(match.before.root, branch, match.before.tree))) return undefined;
+    if (!(await appendTurnCommit(match.after.root, branch, match.after.tree))) return undefined;
+    repositories.push({ path: match.path, beforeTree: match.before.tree, afterTree: match.after.tree });
+  }
+  return {
+    root: before.root,
+    beforeTree: before.tree,
+    afterTree: after.tree,
+    ...(repositories.length ? { repositories } : {}),
+  };
+}
+
 export async function removeSessionRef(repositoryRootPath: string, branch: string): Promise<void> {
   if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
   try {
@@ -562,36 +764,117 @@ export async function removeSessionRef(repositoryRootPath: string, branch: strin
   }
 }
 
+/** Best-effort cleanup of turn refs in the top checkout and currently initialized submodules. */
+export async function removeWorktreeTurnRefs(cwd: string, branch: string): Promise<void> {
+  if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  const top = await repositorySnapshot(cwd);
+  if (!top) {
+    await removeSessionRef(cwd, branch);
+    return;
+  }
+  let roots = [top.root];
+  try {
+    const { nodes } = await discoverSubmodules(top.root, top.tree);
+    roots = [...roots, ...nodes.map(node => node.root)];
+  } catch {
+    // The top ref can still be removed when nested checkout discovery is unavailable.
+  }
+  await Promise.all(roots.map(root => removeSessionRef(root, branch)));
+}
+
 export type TurnTreeDiff =
   { state: "binary" } | { state: "available" | "oversized"; text: string; truncated?: boolean };
 
-export async function turnTreeDiff(cwd: string, beforeTree: string, afterTree: string): Promise<TurnTreeDiff> {
-  const maxBytes = 2 * 1024 * 1024;
-  const maxLines = 20_000;
+const MAX_TURN_DIFF_BYTES = 2 * 1024 * 1024;
+const MAX_TURN_DIFF_LINES = 20_000;
+
+async function turnTreeDiffText(
+  cwd: string,
+  beforeTree: string,
+  afterTree: string,
+  path = "",
+  excludedPaths: string[] = [],
+): Promise<string> {
   if (!objectId.test(beforeTree) || !objectId.test(afterTree)) throw Error("Invalid turn snapshot trees.");
   const root = await realpath(cwd);
-  let output: string;
-  try {
-    output = await git(
-      root,
-      ["diff", "--no-ext-diff", "--no-renames", "--unified=3", beforeTree, afterTree],
-      {},
-      maxBytes + 1,
-    );
-  } catch (error) {
-    // execFile aborts once stdout exceeds maxBuffer; salvage the captured prefix instead of failing.
-    const captured =
-      typeof (error as { stdout?: unknown })?.stdout === "string" ? String((error as { stdout?: string }).stdout) : "";
-    if (!captured) throw Error("turn diff is unavailable");
-    output = captured;
-  }
+  return git(
+    root,
+    [
+      "diff",
+      "--no-ext-diff",
+      "--no-renames",
+      "--unified=3",
+      ...(path ? [`--src-prefix=a/${path}/`, `--dst-prefix=b/${path}/`] : []),
+      beforeTree,
+      afterTree,
+      ...(excludedPaths.length ? ["--", ".", ...excludedPaths.map(excluded => `:(exclude,literal)${excluded}`)] : []),
+    ],
+    {},
+    MAX_TURN_DIFF_BYTES + 1,
+  );
+}
+
+function boundedTurnTreeDiff(output: string): TurnTreeDiff {
   if (output.includes("Binary files ") || output.includes("GIT binary patch")) return { state: "binary" };
   const lines = output.split(/\r?\n/);
-  if (Buffer.byteLength(output, "utf8") > maxBytes || lines.length > maxLines) {
-    const bounded = lines.slice(0, maxLines).join("\n");
-    return { state: "oversized", text: Buffer.from(bounded).subarray(0, maxBytes).toString("utf8"), truncated: true };
+  if (Buffer.byteLength(output, "utf8") > MAX_TURN_DIFF_BYTES || lines.length > MAX_TURN_DIFF_LINES) {
+    const bounded = lines.slice(0, MAX_TURN_DIFF_LINES).join("\n");
+    return {
+      state: "oversized",
+      text: Buffer.from(bounded).subarray(0, MAX_TURN_DIFF_BYTES).toString("utf8"),
+      truncated: true,
+    };
   }
   return { state: "available", text: output };
+}
+
+export async function turnTreeDiff(cwd: string, beforeTree: string, afterTree: string): Promise<TurnTreeDiff> {
+  return boundedTurnTreeDiff(await turnTreeDiffText(cwd, beforeTree, afterTree));
+}
+
+/** Builds one complete, path-prefixed patch from a trusted top checkout and persisted tree IDs. */
+export async function turnWorktreeDiff(cwd: string, anchor: TurnAnchor): Promise<TurnTreeDiff> {
+  const repositories = validatedTurnRepositories(anchor.repositories);
+  if (!repositories) throw Error("Invalid turn repository anchors.");
+  if (!repositories.length) return turnTreeDiff(cwd, anchor.beforeTree, anchor.afterTree);
+
+  const root = await realpath(cwd);
+  const { nodes } = await discoverSubmodules(root, anchor.afterTree);
+  const nodesByPath = new Map(nodes.map(node => [node.path, node]));
+  const sources = [
+    { path: "", root, beforeTree: anchor.beforeTree, afterTree: anchor.afterTree },
+    ...repositories.map(repository => {
+      const node = nodesByPath.get(repository.path);
+      if (!node) throw Error("turn diff submodule is unavailable");
+      return { ...repository, root: node.root };
+    }),
+  ];
+  const sourcePaths = new Set(sources.map(source => source.path));
+  const initial = new Map<string, string>();
+  for (const source of sources) {
+    initial.set(source.path, await turnTreeDiffText(source.root, source.beforeTree, source.afterTree, source.path));
+  }
+  const hasSubtreeDiff = (path: string) =>
+    [...initial].some(
+      ([candidate, text]) => text.length > 0 && (candidate === path || candidate.startsWith(`${path}/`)),
+    );
+  const outputs: string[] = [];
+  for (const source of sources) {
+    const excluded = sources
+      .slice(1)
+      .map(child => directChildPath(source.path, child.path, sourcePaths))
+      .filter((path): path is string => Boolean(path))
+      .filter(path => {
+        const full = source.path ? `${source.path}/${path}` : path;
+        return hasSubtreeDiff(full);
+      });
+    outputs.push(
+      excluded.length
+        ? await turnTreeDiffText(source.root, source.beforeTree, source.afterTree, source.path, excluded)
+        : initial.get(source.path)!,
+    );
+  }
+  return boundedTurnTreeDiff(outputs.filter(Boolean).join("\n"));
 }
 
 async function createSessionBaseline(
@@ -1029,7 +1312,9 @@ async function discoverSubmodules(
   const nodes: SubmoduleNode[] = [];
   const markers: string[] = [];
   const levels = new Map<string, Set<string>>();
-  async function walk(prefix: string, cwd: string, baseline?: string): Promise<void> {
+  const visited = new Set<string>();
+  async function walk(prefix: string, cwd: string, baseline?: string, depth = 0): Promise<void> {
+    if (depth > MAX_SUBMODULE_DEPTH || nodes.length >= MAX_TURN_REPOSITORIES) return;
     const links = await registeredGitlinks(cwd, baseline);
     levels.set(
       prefix,
@@ -1064,6 +1349,9 @@ async function discoverSubmodules(
       if (!topLevel || canonical(await realpath(topLevel)) !== canonical(physical)) continue;
       const current = await captureCheckoutState(absolute).catch(() => undefined);
       if (!current) continue;
+      const identity = canonical(current.commonDir);
+      if (visited.has(identity) || nodes.length >= MAX_TURN_REPOSITORIES) continue;
+      visited.add(identity);
       const recorded = links.get(name)!;
       nodes.push({
         path: full,
@@ -1071,7 +1359,7 @@ async function discoverSubmodules(
         baselineTree: recorded || (await emptyTreeOf(current.root)),
         current,
       });
-      await walk(full, current.root, recorded || undefined);
+      await walk(full, current.root, recorded || undefined, depth + 1);
     }
   }
   await walk("", physicalTop, baselineTree);

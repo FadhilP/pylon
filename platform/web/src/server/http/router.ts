@@ -42,6 +42,11 @@ interface SseClient {
   tabId: string;
   heartbeat: NodeJS.Timeout;
 }
+interface HeliosMirrorClient {
+  session: BrowserSession;
+  tabId: string;
+  controller: AbortController;
+}
 interface DialogOwner {
   requestId: string;
   sessionGeneration: number;
@@ -63,6 +68,7 @@ export class ServerTransport {
   private readonly sessions = new SessionStore();
   private readonly clients = new Set<SseClient>();
   private readonly idempotency = new CommandIdempotency();
+  private readonly mirrors = new Set<HeliosMirrorClient>();
   private readonly unsubscribe: () => void;
   private readonly terminal: TerminalServer;
   private lastCommandOwner?: string;
@@ -92,6 +98,8 @@ export class ServerTransport {
       client.response.end();
     }
     this.clients.clear();
+    for (const mirror of this.mirrors) mirror.controller.abort(new Error("Server closing"));
+    this.mirrors.clear();
     for (const timer of this.tabLossTimers.values()) clearTimeout(timer);
     this.tabLossTimers.clear();
     this.clearDialogOwner();
@@ -153,6 +161,8 @@ export class ServerTransport {
         return await this.papercutList(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/papercuts/mutate")
         return await this.papercutMutation(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/helios-browser-stream")
+        return await this.heliosBrowserStream(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-browser")
         return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-android-tooling")
@@ -263,6 +273,95 @@ export class ServerTransport {
     const close = () => this.removeClient(client);
     request.once("close", close);
     response.once("close", close);
+  }
+
+  private async heliosBrowserStream(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const session = this.sessions.get(request);
+    const tabId = url.searchParams.get("tabId") ?? undefined;
+    const generation = Number(url.searchParams.get("generation"));
+    const width = Number(url.searchParams.get("width"));
+    const height = Number(url.searchParams.get("height"));
+    if (
+      !validCsrf(session, url.searchParams.get("csrf") ?? undefined) ||
+      !validTabId(tabId) ||
+      !session?.tabs.has(tabId)
+    )
+      throw httpError(403, "forbidden");
+    if (
+      !Number.isSafeInteger(generation) ||
+      generation !== this.journal.sessionGeneration ||
+      !Number.isSafeInteger(width) ||
+      width < 320 ||
+      width > 1920 ||
+      !Number.isSafeInteger(height) ||
+      height < 240 ||
+      height > 1080
+    )
+      throw httpError(400, "invalid Helios browser stream request");
+    if (![...this.clients].some(client => client.tabId === tabId))
+      throw httpError(409, "the browser tab must have an SSE connection");
+    if (!this.driver.heliosBrowserStream) throw httpError(409, "Helios browser stream is unavailable");
+    this.renew(tabId);
+    response.statusCode = 200;
+    response.setHeader("content-type", "multipart/x-mixed-replace; boundary=helios-frame");
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("connection", "keep-alive");
+    response.setHeader("x-accel-buffering", "no");
+    response.flushHeaders();
+    const controller = new AbortController();
+    const mirror: HeliosMirrorClient = { session, tabId, controller };
+    this.mirrors.add(mirror);
+    let blocked = false;
+    let closed = false;
+    let settleTimer: NodeJS.Timeout | undefined;
+    const markBackpressure = (accepted: boolean) => {
+      if (accepted || blocked) return;
+      blocked = true;
+      response.once("drain", () => (blocked = false));
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      if (settleTimer) clearTimeout(settleTimer);
+      controller.abort(new Error("Browser mirror disconnected"));
+    };
+    request.once("close", close);
+    response.once("close", close);
+    try {
+      await this.driver.heliosBrowserStream(
+        { expectedGeneration: generation, owner: `web:${tabId}`, width, height },
+        frame => {
+          if (
+            closed ||
+            blocked ||
+            response.writableEnded ||
+            frame.mimeType !== "image/jpeg" ||
+            frame.data.byteLength > 5 * 1024 * 1024
+          )
+            return;
+          const header = Buffer.from(
+            `--helios-frame\r\nContent-Type: ${frame.mimeType}\r\nContent-Length: ${frame.data.byteLength}\r\nX-Sequence: ${frame.sequence}\r\n\r\n`,
+          );
+          const part = Buffer.concat([header, Buffer.from(frame.data), Buffer.from("\r\n")]);
+          if (settleTimer) clearTimeout(settleTimer);
+          markBackpressure(response.write(part));
+          // Chromium displays an MJPEG part only after the next boundary arrives. If the
+          // page becomes static, one delayed duplicate terminates and reveals the frame.
+          settleTimer = setTimeout(() => {
+            settleTimer = undefined;
+            if (!closed && !response.writableEnded) markBackpressure(response.write(part));
+          }, 50);
+          settleTimer.unref?.();
+        },
+        controller.signal,
+      );
+    } finally {
+      if (settleTimer) clearTimeout(settleTimer);
+      request.off("close", close);
+      response.off("close", close);
+      this.mirrors.delete(mirror);
+      if (!response.writableEnded) response.end();
+    }
   }
 
   private async heliosBrowser(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -1148,6 +1247,7 @@ export class ServerTransport {
       this.clearDialogOwner();
       this.lastCommandOwner = undefined;
       this.journal = new EventJournal(event.sessionGeneration, event.sessionId);
+      for (const mirror of this.mirrors) mirror.controller.abort(new Error("Session changed"));
     }
     // The owner must be installed before projection publication so the first
     // UI event is personalized correctly for every connected tab.
@@ -1226,6 +1326,10 @@ export class ServerTransport {
     if (!this.clients.delete(client)) return;
     clearInterval(client.heartbeat);
     this.startTabLossGrace(client.session, client.tabId);
+    for (const mirror of this.mirrors) {
+      if (mirror.session === client.session && mirror.tabId === client.tabId)
+        mirror.controller.abort(new Error("Browser tab disconnected"));
+    }
     const owner = this.dialogOwner;
     if (owner?.tabId === client.tabId) this.startDialogOwnerLossGrace(owner);
   }

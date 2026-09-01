@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { BrowserSessionManager, cliSessionName, parseTabs, validateCdpEndpoint } from "../src/browser-session.ts";
 import { HeliosCliError, PlaywrightCli } from "../src/playwright-cli.ts";
+import { selectScreencastTarget } from "../src/browser-screencast.ts";
 
 function fakeCli(log: string[], delay = 0) {
   return {
@@ -37,6 +38,21 @@ test("session names are opaque and endpoints are strict loopback origins", () =>
       { index: 0, title: "One", url: "https://one.test/" },
       { index: 1, title: "Two", url: "https://two.test/" },
     ],
+  );
+});
+
+test("screencast follows Playwright tab indexes when duplicate URLs exist", () => {
+  const newestFirst = [
+    { id: "BBBB", type: "page", title: "Same", url: "https://example.com/" },
+    { id: "AAAA", type: "page", title: "Same", url: "https://example.com/" },
+  ];
+  assert.equal(
+    selectScreencastTarget(newestFirst, { index: 0, title: "Same", url: "https://example.com/" })?.id,
+    "AAAA",
+  );
+  assert.equal(
+    selectScreencastTarget(newestFirst, { index: 1, title: "Same", url: "https://example.com/" })?.id,
+    "BBBB",
   );
 });
 
@@ -153,6 +169,30 @@ test("interactive lease is owned-only, excludes agent actions, and releases held
   await attached.close("interactive-attached", "detach");
 });
 
+test("agent viewport resize locks panel fitting until direct control", async () => {
+  const sizes: Array<[number, number]> = [];
+  const cli = fakeCli([]);
+  cli.run = async (_session: string, action: any) => {
+    if (action.kind === "resize") sizes.push([action.width, action.height]);
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("viewport-lock");
+  await manager.resizeForPanel("viewport-lock", 800, 600);
+  await manager.operate("viewport-lock", { kind: "resize", width: 390, height: 844 });
+  await manager.resizeForPanel("viewport-lock", 1000, 700);
+  assert.deepEqual(sizes, [
+    [800, 600],
+    [390, 844],
+  ]);
+  await manager.acquireInteractive("viewport-lock", "web:tab-one");
+  await manager.releaseInteractive("viewport-lock", "web:tab-one");
+  await manager.resizeForPanel("viewport-lock", 1000, 700);
+  assert.deepEqual(sizes.at(-1), [1000, 700]);
+  await manager.close("viewport-lock", "close");
+});
+
 test("passive frames do not acquire control or queue behind agent work", async () => {
   let releaseSnapshot!: () => void;
   const snapshotGate = new Promise<void>(resolve => {
@@ -181,6 +221,62 @@ test("passive frames do not acquire control or queue behind agent work", async (
   await attached.attachCdp("passive-attached", "http://127.0.0.1:9222");
   await assert.rejects(attached.observeFrame("passive-attached"), /only for Helios-owned/);
   await attached.close("passive-attached", "detach");
+});
+
+test("screencast frames stay independent from agent and direct-control actions", async () => {
+  const log: string[] = [];
+  let started!: () => void;
+  const streamStarted = new Promise<void>(resolve => (started = resolve));
+  let stopped = false;
+  let streamRuns = 0;
+  const manager = new BrowserSessionManager(
+    exec as any,
+    async () => fakeCli(log),
+    5_000,
+    20,
+    (_profile, currentPage) => ({
+      async run(width, height, emit, signal) {
+        streamRuns++;
+        assert.deepEqual(currentPage(), { index: 0, title: "Example", url: "https://example.com/" });
+        assert.deepEqual([width, height], [1920, 1080]);
+        emit({ mimeType: "image/jpeg", data: Buffer.from("frame"), sequence: 1 });
+        started();
+        await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+        stopped = true;
+      },
+    }),
+  );
+  await manager.start("streamed");
+  const controller = new AbortController();
+  const frames: Buffer[] = [];
+  const stream = manager.streamFrames(
+    "streamed",
+    "web:tab-one",
+    1920,
+    1080,
+    frame => frames.push(frame.data),
+    controller.signal,
+  );
+  await streamStarted;
+  await manager.operate("streamed", { kind: "navigate", url: "https://example.com/next" });
+  await manager.acquireInteractive("streamed", "web:tab-one");
+  await manager.operateInteractive("streamed", [{ kind: "mouse-move", x: 10, y: 20 }], "web:tab-one");
+  await manager.releaseInteractive("streamed", "web:tab-one");
+  assert.deepEqual(frames, [Buffer.from("frame")]);
+  assert.ok(log.includes("navigate"));
+  assert.ok(log.includes("mouse-move"));
+  assert.ok(!log.includes("screenshot"));
+  controller.abort();
+  await stream;
+  assert.equal(stopped, true);
+  const preAborted = new AbortController();
+  preAborted.abort(new Error("pre-aborted"));
+  await assert.rejects(
+    manager.streamFrames("streamed", "web:tab-one", 800, 600, () => undefined, preAborted.signal),
+    /pre-aborted/,
+  );
+  assert.equal(streamRuns, 1);
+  await manager.close("streamed", "close");
 });
 
 test("failed input keeps the lease until reset succeeds and idle expiry releases input", async () => {

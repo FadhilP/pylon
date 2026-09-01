@@ -2,6 +2,23 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.4.0",
+    date: "Sep 1, 2026",
+    title: "Named agents, live browser streaming, and deeper repository diffs",
+    summary:
+      "Pylon gives delegated work durable semantic identities, upgrades embedded browsing with responsive live streaming, and captures complete turn changes across nested repositories, alongside clearer model controls and a warm theme.",
+    notes: [
+      "Added optional model-generated semantic names for Advisor, Scout, Grunt, and Spawn delegates, with immediate role-based fallbacks, bounded unique names, persistent identities across session history, and failure isolation so naming never delays delegated work.",
+      "Added a dedicated Agent models settings area for Advisor, Scout, Grunt, Spawn, Timeline, Continuity, and delegate naming, plus validated generic model fields and consistent hidden-model filtering that preserves existing selections until they are changed.",
+      "Replaced embedded Helios screenshot polling with an authenticated, loopback-only JPEG screencast targeting up to 30 FPS, including bounded frames, backpressure handling, disconnect cleanup, hidden-tab suspension, and isolation from the event journal and model context.",
+      "Added a Helios resize action for responsive testing, kept panel-driven viewport fitting separate from explicit agent sizes, and returned to panel-fit behavior when direct control begins.",
+      "Remembered the Browser surface independently for each session, restored it only when that session still has an active browser, and safely returned to Chat when it does not.",
+      "Extended turn snapshots, change summaries, durable diff anchors, and cleanup across initialized nested submodules, expanding real nested file changes while retaining gitlink-only changes when repository pointers move.",
+      "Added a persistent warm appearance theme with matching terminal colors and light-compatible code rendering, and made active-agent tool tracks adapt to their available width while keeping agent color accents scoped to the Agents control.",
+    ],
+  },
+
+  {
     version: "2.3.0",
     date: "Sep 1, 2026",
     title: "Configurable agents, live work tracking, and safer repositories",

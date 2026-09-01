@@ -14,7 +14,7 @@ Run `/reload` after installation. `@playwright/cli@0.1.18` is pinned as runtime 
 
 ### Owned Sessions
 
-Owned sessions use a visible isolated browser. Helios never downloads browsers during extension load or tool execution. If no compatible browser exists, run explicit setup from installed `pi-helios` package:
+Owned sessions use an isolated browser that is headless by default. Helios never downloads browsers during extension load or tool execution. If no compatible browser exists, run explicit setup from installed `pi-helios` package:
 
 ```sh
 node node_modules/@playwright/cli/playwright-cli.js install-browser chrome
@@ -93,7 +93,7 @@ An opt-in local contract test is available with `PI_HELIOS_ANDROID_LIVE=1`, `PI_
 `helios_browser` exposes constrained actions:
 
 - `start`, `attach`, `close`, `detach`
-- `navigate`, `back`, `forward`, `reload`
+- `navigate`, `back`, `forward`, `reload`, `resize`
 - `snapshot`, `continue`, `find`, `screenshot`
 - `click`, `fill`, `press`, `hover`, `select`, `check`, `uncheck`
 - `tabs` with `list`, `select`, `create`, or `close`
@@ -113,6 +113,14 @@ For deterministic form work, a semantic plan can resolve one unique visible text
 ```
 
 Plans fail closed on no match or ambiguity and stop before the next step after an observed page change. Successful intermediate find output is kept out of model context. Use plans only for non-consequential work; purchases, messages, publishing, destructive actions, permissions, and secret entry remain directly supervised.
+
+Use `resize` to test responsive layouts in CSS pixels without full device emulation:
+
+```text
+{ action: "resize", width: 390, height: 844 }
+```
+
+Swap width and height for landscape. The Pylon panel follows its available size by default, but an agent `resize` locks the logical page viewport so later panel resizing only scales the mirror. Taking direct control returns the viewport to panel-fit behavior.
 
 ### Search, Snapshots, and Screenshots
 
@@ -135,9 +143,9 @@ Use element references from latest snapshot, such as `e12`; arbitrary selectors 
 
 ### Pylon Web
 
-In Pylon Web, an agent-started owned session automatically opens the **Browser** right panel and passively mirrors the viewport with bounded local screenshots while agent actions continue. The panel can also launch a browser or take direct control to forward pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never mirrored or controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
+In Pylon Web, an agent-started owned session automatically opens the **Browser** right panel and passively mirrors the viewport through a bounded local JPEG screencast targeting up to 30 FPS while the panel is visible. The stream uses an ephemeral loopback-only Chromium debugging endpoint inside the private owned profile, is pushed directly to the authenticated panel without entering the event journal, and stops when the panel disconnects. The panel can also launch a browser or take direct control to forward pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never mirrored or controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
 
-The embedded surface is screenshot-backed rather than an iframe, so fast animation, media, IME input, and precision dragging can feel less responsive than a native browser window.
+The embedded surface is a JPEG stream rather than an iframe. Explicit agent screenshots remain bounded PNG artifacts; the live stream runs independently so it does not serialize with agent browser actions. IME input and precision dragging can still feel less responsive than a native browser window.
 
 ### Visibility and Session Lifecycle
 

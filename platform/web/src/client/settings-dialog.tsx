@@ -54,13 +54,21 @@ import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
-import { modelKey, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
+import { modelKey, selectableModels, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
 import { OverviewOrb, type OverviewState } from "./overview-primitives";
+import type { Theme } from "./use-chrome";
 
 export type SettingsTab =
-  "providers" | "models" | "packages" | "extensions" | "hooks" | "policy" | "notifications" | "appearance";
-type SettingsTheme = "light" | "dark";
-/* Grouping the eight sections names the thing each one governs; the flat order
+  | "providers"
+  | "models"
+  | "agent-models"
+  | "packages"
+  | "extensions"
+  | "hooks"
+  | "policy"
+  | "notifications"
+  | "appearance";
+/* Grouping the nine sections names the thing each one governs; the flat order
    below stays the roving-tabindex order, so it must match the visual order. */
 const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; icon: ReactNode }[] }[] = [
   {
@@ -73,6 +81,7 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
   {
     group: "Capabilities",
     tabs: [
+      { tab: "agent-models", label: "Agent models", icon: <IconSettings size={15} /> },
       { tab: "packages", label: "Packages", icon: <IconPackages size={15} /> },
       { tab: "extensions", label: "Extensions", icon: <IconPuzzle size={15} /> },
       { tab: "hooks", label: "Hooks", icon: <IconWebhook size={15} /> },
@@ -113,8 +122,8 @@ interface SettingsDialogProps {
   providerLogoutDisabled: boolean;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
-  theme: SettingsTheme;
-  onThemeChange: (theme: SettingsTheme) => void;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   syntaxTheme: SyntaxTheme;
   onSyntaxThemeChange: (theme: SyntaxTheme) => void;
   onClose: () => void;
@@ -210,6 +219,7 @@ export function SettingsDialog({
     if (last && last.provider === item.provider) last.items.push(item);
     else modelGroups.push({ provider: item.provider, items: [item] });
   }
+  const agentModelPackages = packages.filter(item => hasAgentModelFields(item.settings));
   const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
     for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
   };
@@ -284,6 +294,7 @@ export function SettingsDialog({
       ? `${providers.filter(provider => provider.configured).length}/${providers.length}`
       : "",
     models: models.length ? String(models.length) : "",
+    "agent-models": agentModelPackages.length ? String(agentModelPackages.length) : "",
     packages: packages.length ? String(packages.length) : "",
     extensions: extensions ? String(extensions.extensions.length) : "",
     hooks: hookSettings ? `${hookKeys.filter(key => hookSettings[key].enabled).length}/${hookKeys.length}` : "",
@@ -875,6 +886,28 @@ export function SettingsDialog({
             </section>
 
             <section
+              id="settings-panel-agent-models"
+              className="settings-pane"
+              role="tabpanel"
+              aria-labelledby="settings-tab-agent-models"
+              hidden={activeTab !== "agent-models"}>
+              <div className="settings-pane-header">
+                <div>
+                  <h2>Agent models</h2>
+                  <p>Choose the models and thinking levels used by Pylon agents and background tasks.</p>
+                </div>
+              </div>
+              <AgentModelSettings
+                packages={agentModelPackages}
+                models={models}
+                sessionThinkingLevels={sessionThinkingLevels}
+                loading={loading}
+                disabled={Boolean(busy)}
+                onUpdate={onUpdate}
+              />
+            </section>
+
+            <section
               id="settings-panel-appearance"
               className="settings-pane"
               role="tabpanel"
@@ -888,7 +921,7 @@ export function SettingsDialog({
               </div>
               <span className="settings-kicker">Color theme</span>
               <div className="settings-theme-options">
-                {(["dark", "light"] as const).map(option => (
+                {(["dark", "light", "warm"] as const).map(option => (
                   <label key={option}>
                     <input
                       type="radio"
@@ -1392,13 +1425,16 @@ function hasPackageFields(settings: PackageSettingsReadModel | undefined): boole
 
 function GenericPackageFields({
   settings,
+  models,
   disabled,
   onUpdate,
 }: {
   settings: Extract<PackageSettingsReadModel, { kind: "generic" }>;
+  models: ModelOptionReadModel[];
   disabled: boolean;
   onUpdate: (settings: Extract<PackageSettingsReadModel, { kind: "generic" }>) => void;
 }) {
+  const hiddenModels = useHiddenModels();
   const updateField = (key: string, value: unknown) =>
     onUpdate({
       ...settings,
@@ -1408,6 +1444,30 @@ function GenericPackageFields({
     <div className="package-list">
       {settings.fields.map(field => {
         const description = [field.description, `Applies ${field.apply.replace("-", " ")}.`].filter(Boolean).join(" ");
+        if (field.type === "model") {
+          const options = visibleModels(models, hiddenModels);
+          const selected = models.find(model => modelKey(model) === field.value);
+          if (selected && !options.some(model => modelKey(model) === field.value)) options.push(selected);
+          const missing = field.value && !options.some(model => modelKey(model) === field.value);
+          return (
+            <PackageRow key={field.key} label={field.label} description={description}>
+              <select
+                aria-label={field.label}
+                value={field.value}
+                disabled={disabled}
+                onChange={event => updateField(field.key, event.target.value)}>
+                <option value="">Disabled</option>
+                {missing && <option value={field.value}>{field.value}</option>}
+                {options.map(model => (
+                  <option value={modelKey(model)} key={modelKey(model)}>
+                    {model.name}
+                  </option>
+                ))}
+              </select>
+            </PackageRow>
+          );
+        }
+
         if (field.type === "boolean") {
           return (
             <PackageRow key={field.key} label={field.label} description={description}>
@@ -1476,6 +1536,271 @@ function GenericPackageFields({
   );
 }
 
+const AGENT_MODEL_LABELS: Record<string, string> = {
+  "pi-advisor": "Advisor",
+  "pi-scout": "Scout",
+  "pi-grunt": "Grunt",
+  "pi-spawn": "Spawn",
+  "pi-timeline": "Timeline",
+  "pi-continuity": "Continuity",
+  "pylon-core": "Agent naming",
+};
+
+function hasAgentModelFields(settings: PackageSettingsReadModel | undefined): boolean {
+  if (!settings) return false;
+  if (settings.kind === "generic") {
+    return settings.packageId === "pylon-core" && settings.fields.some(field => field.key === "delegateNamingModel");
+  }
+  return ["advisor", "scout", "grunt", "spawn", "timeline", "continuity"].includes(settings.kind);
+}
+
+function AgentModelSettings({
+  packages,
+  models,
+  sessionThinkingLevels,
+  loading,
+  disabled,
+  onUpdate,
+}: {
+  packages: PackageSummary[];
+  models: ModelOptionReadModel[];
+  sessionThinkingLevels: ThinkingLevelReadModel[];
+  loading: boolean;
+  disabled: boolean;
+  onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
+}) {
+  if (loading && packages.length === 0) return <div className="settings-empty">Detecting agent settings…</div>;
+  if (packages.length === 0) {
+    return (
+      <div className="settings-empty">
+        <strong>No configurable agent models</strong>
+        <span>Install or enable a supported package first.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="agent-model-groups">
+      {packages.map(item => (
+        <section className="agent-model-group" key={item.id}>
+          <header>
+            <h3>{AGENT_MODEL_LABELS[item.id] ?? item.name}</h3>
+            {!item.enabled && <span>Package disabled</span>}
+          </header>
+          <div className="package-list">
+            <PackageModelFields
+              settings={item.settings!}
+              models={models}
+              sessionThinkingLevels={sessionThinkingLevels}
+              disabled={disabled}
+              onUpdate={settings => onUpdate(item, settings)}
+            />
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function PackageModelFields({
+  settings,
+  models,
+  sessionThinkingLevels,
+  disabled,
+  onUpdate,
+}: {
+  settings: PackageSettingsReadModel;
+  models: ModelOptionReadModel[];
+  sessionThinkingLevels: ThinkingLevelReadModel[];
+  disabled: boolean;
+  onUpdate: (settings: PackageSettingsReadModel) => void;
+}) {
+  const hiddenModels = useHiddenModels();
+
+  if (settings.kind === "generic") {
+    const field = settings.fields.find(candidate => candidate.key === "delegateNamingModel");
+    if (!field || field.type !== "model") return null;
+    return (
+      <PackageRow
+        label="Naming model"
+        description="Assigns short semantic names to delegated agents. Applies next session.">
+        <OptionalModelSelect
+          label="Agent naming model"
+          value={field.value}
+          models={models}
+          disabled={disabled}
+          onChange={value =>
+            onUpdate({
+              ...settings,
+              fields: settings.fields.map(candidate =>
+                candidate.key === field.key ? { ...candidate, value } : candidate,
+              ) as typeof settings.fields,
+            })
+          }
+        />
+      </PackageRow>
+    );
+  }
+
+  if (settings.kind === "advisor" || settings.kind === "scout") {
+    const noun = settings.kind === "advisor" ? "the advisor" : "both scouts";
+    const levels = thinkingLevels(
+      settings.mode === "model" ? settings.model : undefined,
+      models,
+      sessionThinkingLevels,
+    );
+    return (
+      <>
+        <PackageRow label="Model" description={`Disabled turns ${noun} off for every session.`}>
+          <ModelModeSelect
+            label={`${settings.kind} model`}
+            value={settings.mode === "model" ? settings.model! : settings.mode}
+            models={models}
+            disabled={disabled}
+            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
+          />
+        </PackageRow>
+        <PackageRow label="Thinking" description="Inherits the session level unless set here.">
+          <ThinkingSelect
+            label={`${settings.kind} thinking`}
+            value={settings.thinking}
+            levels={levels}
+            disabled={disabled || settings.mode === "disabled"}
+            onChange={thinking => onUpdate({ ...settings, thinking })}
+          />
+        </PackageRow>
+      </>
+    );
+  }
+
+  if (settings.kind === "grunt") {
+    return (
+      <>
+        <PackageRow label="Model" description="Disabled turns the grunt off for every session.">
+          <ModelModeSelect
+            label="Grunt model"
+            value={settings.mode === "model" ? settings.model! : settings.mode}
+            models={models}
+            disabled={disabled}
+            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
+          />
+        </PackageRow>
+        <PackageChips
+          label="Eligible thinking levels"
+          description="Levels a grunt run may use. At least one stays selected."
+          options={thinkingChipOptions()}
+          value={settings.thinkingLevels}
+          disabled={disabled}
+          onChange={levels => onUpdate({ ...settings, thinkingLevels: levels as ThinkingLevelReadModel[] })}
+        />
+      </>
+    );
+  }
+
+  if (settings.kind === "timeline") {
+    return (
+      <PackageRow
+        label="Timeline titles"
+        description="Generate semantic checkpoint and session titles with the session model or a selected model.">
+        <ModelModeSelect
+          label="Timeline title model"
+          value={
+            settings.checkpointTitleMode === "model" ? settings.checkpointTitleModel! : settings.checkpointTitleMode
+          }
+          models={models}
+          disabled={disabled}
+          onChange={value =>
+            onUpdate({
+              ...settings,
+              checkpointTitleMode: value === "disabled" || value === "session" ? value : "model",
+              checkpointTitleModel: value === "disabled" || value === "session" ? undefined : value,
+            })
+          }
+        />
+      </PackageRow>
+    );
+  }
+
+  if (settings.kind === "continuity") {
+    return (
+      <>
+        <ProfileRow
+          label="Planner"
+          description="Breaks a goal into the task list."
+          profile={settings.planner}
+          models={models}
+          disabled={disabled}
+          onChange={planner => onUpdate({ ...settings, planner })}
+        />
+        <ProfileRow
+          label="Executor"
+          description="Carries out each task in the list."
+          profile={settings.executor}
+          models={models}
+          disabled={disabled}
+          onChange={executor => onUpdate({ ...settings, executor })}
+        />
+        <ProfileRow
+          label="Memory reviewer"
+          description="Approves memories before they are stored."
+          profile={settings.memoryReviewer}
+          models={models}
+          disabled={disabled}
+          onChange={memoryReviewer => onUpdate({ ...settings, memoryReviewer })}
+        />
+        <ProfileRow
+          label="Compaction reviewer"
+          description="Checks the summary before history is dropped."
+          profile={settings.compactionReviewer}
+          models={models}
+          disabled={disabled}
+          onChange={compactionReviewer => onUpdate({ ...settings, compactionReviewer })}
+        />
+      </>
+    );
+  }
+
+  if (settings.kind === "spawn") {
+    const available = visibleModels(models, hiddenModels).map(model => ({ value: modelKey(model), label: model.name }));
+    const eligible = settings.models;
+    const options = [
+      ...available,
+      ...(eligible ?? [])
+        .filter(ref => !available.some(model => model.value === ref))
+        .map(ref => ({ value: ref, label: ref })),
+    ];
+    return (
+      <>
+        <PackageRow label="All available models" description="Let private agents use every model the session can see.">
+          <PackageSwitch
+            label="Toggle all available models"
+            checked={eligible === undefined}
+            disabled={disabled || !available.length}
+            onChange={all => onUpdate({ ...settings, models: all ? undefined : available.map(model => model.value) })}
+          />
+        </PackageRow>
+        <PackageChips
+          label="Eligible models"
+          description="Models a private agent may be spawned with. At least one stays selected."
+          options={options}
+          value={eligible ?? []}
+          disabled={disabled || eligible === undefined}
+          onChange={next => onUpdate({ ...settings, models: next })}
+        />
+        <PackageChips
+          label="Private-agent thinking"
+          description="Thinking levels a private agent may be spawned with."
+          options={thinkingChipOptions()}
+          value={settings.agentThinkingLevels}
+          disabled={disabled}
+          onChange={levels => onUpdate({ ...settings, agentThinkingLevels: levels as ThinkingLevelReadModel[] })}
+        />
+      </>
+    );
+  }
+
+  return null;
+}
+
 function PackageFields({
   settings,
   models,
@@ -1490,31 +1815,19 @@ function PackageFields({
   onUpdate: (settings: PackageSettingsReadModel) => void;
 }) {
   if (settings.kind === "generic") {
-    return <GenericPackageFields settings={settings} disabled={disabled} onUpdate={onUpdate} />;
+    return <GenericPackageFields settings={settings} models={models} disabled={disabled} onUpdate={onUpdate} />;
   }
 
   if (settings.kind === "timeline") {
     return (
       <div className="package-list">
-        <PackageRow
-          label="Timeline titles"
-          description="Generate short semantic checkpoint titles. An explicitly selected model also names new sessions; Disabled keeps original checkpoint prompt labels.">
-          <ModelModeSelect
-            label="Timeline title model"
-            value={
-              settings.checkpointTitleMode === "model" ? settings.checkpointTitleModel! : settings.checkpointTitleMode
-            }
-            models={models}
-            disabled={disabled}
-            onChange={value =>
-              onUpdate({
-                ...settings,
-                checkpointTitleMode: value === "disabled" || value === "session" ? value : "model",
-                checkpointTitleModel: value === "disabled" || value === "session" ? undefined : value,
-              })
-            }
-          />
-        </PackageRow>
+        <PackageModelFields
+          settings={settings}
+          models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
+          disabled={disabled}
+          onUpdate={onUpdate}
+        />
         <PackageRow
           label="Git timeout"
           description="Maximum time for each Timeline git operation. Applies to the next session.">
@@ -1591,32 +1904,15 @@ function PackageFields({
   }
 
   if (settings.kind === "advisor" || settings.kind === "scout") {
-    const noun = settings.kind === "advisor" ? "the advisor" : "both scouts";
-    const levels = thinkingLevels(
-      settings.mode === "model" ? settings.model : undefined,
-      models,
-      sessionThinkingLevels,
-    );
     return (
       <div className="package-list">
-        <PackageRow label="Model" description={`Disabled turns ${noun} off for every session.`}>
-          <ModelModeSelect
-            label={`${settings.kind} model`}
-            value={settings.mode === "model" ? settings.model! : settings.mode}
-            models={models}
-            disabled={disabled}
-            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
-          />
-        </PackageRow>
-        <PackageRow label="Thinking" description="Inherits the session level unless set here.">
-          <ThinkingSelect
-            label={`${settings.kind} thinking`}
-            value={settings.thinking}
-            levels={levels}
-            disabled={disabled || settings.mode === "disabled"}
-            onChange={thinking => onUpdate({ ...settings, thinking })}
-          />
-        </PackageRow>
+        <PackageModelFields
+          settings={settings}
+          models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
+          disabled={disabled}
+          onUpdate={onUpdate}
+        />
         {settings.kind === "advisor" && (
           <>
             <PackageRow
@@ -1745,15 +2041,13 @@ function PackageFields({
   if (settings.kind === "grunt") {
     return (
       <div className="package-list">
-        <PackageRow label="Model" description="Disabled turns the grunt off for every session.">
-          <ModelModeSelect
-            label="Grunt model"
-            value={settings.mode === "model" ? settings.model! : settings.mode}
-            models={models}
-            disabled={disabled}
-            onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
-          />
-        </PackageRow>
+        <PackageModelFields
+          settings={settings}
+          models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
+          disabled={disabled}
+          onUpdate={onUpdate}
+        />
         <PackageRow label="Execution mode" description="Isolated runs in a scratch workspace; direct runs in place.">
           <select
             aria-label="Execution mode"
@@ -1820,14 +2114,6 @@ function PackageFields({
             onChange={parentContextChars => onUpdate({ ...settings, parentContextChars })}
           />
         </PackageRow>
-        <PackageChips
-          label="Eligible thinking levels"
-          description="Levels a grunt run may use. At least one stays selected."
-          options={thinkingChipOptions()}
-          value={settings.thinkingLevels}
-          disabled={disabled}
-          onChange={levels => onUpdate({ ...settings, thinkingLevels: levels as ThinkingLevelReadModel[] })}
-        />
       </div>
     );
   }
@@ -1901,37 +2187,12 @@ function PackageFields({
           label="Agent profiles"
           description="Each profile picks a model and a thinking level. Unset profiles fall back to the session model."
         />
-        <ProfileRow
-          label="Planner"
-          description="Breaks a goal into the task list."
-          profile={settings.planner}
+        <PackageModelFields
+          settings={settings}
           models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
           disabled={disabled}
-          onChange={planner => onUpdate({ ...settings, planner })}
-        />
-        <ProfileRow
-          label="Executor"
-          description="Carries out each task in the list."
-          profile={settings.executor}
-          models={models}
-          disabled={disabled}
-          onChange={executor => onUpdate({ ...settings, executor })}
-        />
-        <ProfileRow
-          label="Memory reviewer"
-          description="Approves memories before they are stored."
-          profile={settings.memoryReviewer}
-          models={models}
-          disabled={disabled}
-          onChange={memoryReviewer => onUpdate({ ...settings, memoryReviewer })}
-        />
-        <ProfileRow
-          label="Compaction reviewer"
-          description="Checks the summary before history is dropped."
-          profile={settings.compactionReviewer}
-          models={models}
-          disabled={disabled}
-          onChange={compactionReviewer => onUpdate({ ...settings, compactionReviewer })}
+          onUpdate={onUpdate}
         />
       </div>
     );
@@ -2012,39 +2273,14 @@ function PackageFields({
     );
   }
   if (settings.kind === "spawn") {
-    const available = models.map(model => ({ value: modelKey(model), label: model.name }));
-    const eligible = settings.models;
-    const options = [
-      ...available,
-      ...(eligible ?? [])
-        .filter(ref => !available.some(model => model.value === ref))
-        .map(ref => ({ value: ref, label: ref })),
-    ];
     return (
       <div className="package-list">
-        <PackageRow label="All available models" description="Let private agents use every model the session can see.">
-          <PackageSwitch
-            label="Toggle all available models"
-            checked={eligible === undefined}
-            disabled={disabled || !available.length}
-            onChange={all => onUpdate({ ...settings, models: all ? undefined : available.map(model => model.value) })}
-          />
-        </PackageRow>
-        <PackageChips
-          label="Eligible models"
-          description="Models a private agent may be spawned with. At least one stays selected."
-          options={options}
-          value={eligible ?? []}
-          disabled={disabled || eligible === undefined}
-          onChange={next => onUpdate({ ...settings, models: next })}
-        />
-        <PackageChips
-          label="Private-agent thinking"
-          description="Thinking levels a private agent may be spawned with."
-          options={thinkingChipOptions()}
-          value={settings.agentThinkingLevels}
+        <PackageModelFields
+          settings={settings}
+          models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
           disabled={disabled}
-          onChange={levels => onUpdate({ ...settings, agentThinkingLevels: levels as ThinkingLevelReadModel[] })}
+          onUpdate={onUpdate}
         />
         <PackageRow label="Spawn timeout" description="Maximum child runtime. Set to 0 for unlimited.">
           <PackageNumber
@@ -2130,13 +2366,42 @@ function ModelModeSelect({
   onChange: (value: string) => void;
 }) {
   const hiddenModels = useHiddenModels();
-  const options = visibleModels(models, hiddenModels);
-  const selected = models.find(model => modelKey(model) === value);
-  if (selected && !options.some(model => modelKey(model) === value)) options.push(selected);
+  const options = selectableModels(models, hiddenModels, [value]);
   return (
     <select aria-label={label} value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
       <option value="disabled">Disabled</option>
       <option value="session">Use session model</option>
+      {options.map(model => (
+        <option value={modelKey(model)} key={modelKey(model)}>
+          {model.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function OptionalModelSelect({
+  label,
+  emptyLabel = "Disabled",
+  value,
+  models,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  emptyLabel?: string;
+  value?: string;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const hiddenModels = useHiddenModels();
+  const options = selectableModels(models, hiddenModels, value ? [value] : []);
+  const missing = value && !options.some(model => modelKey(model) === value);
+  return (
+    <select aria-label={label} value={value ?? ""} disabled={disabled} onChange={event => onChange(event.target.value)}>
+      <option value="">{emptyLabel}</option>
+      {missing && <option value={value}>{value}</option>}
       {options.map(model => (
         <option value={modelKey(model)} key={modelKey(model)}>
           {model.name}
@@ -2170,18 +2435,14 @@ function ProfileRow({
         <small>{description}</small>
       </span>
       <span className="package-row-control is-pair">
-        <select
-          aria-label={`${label} model`}
-          value={profile?.model ?? ""}
+        <OptionalModelSelect
+          label={`${label} model`}
+          emptyLabel="Not configured"
+          value={profile?.model}
+          models={models}
           disabled={disabled}
-          onChange={event => onChange(event.target.value ? { model: event.target.value } : undefined)}>
-          <option value="">Not configured</option>
-          {models.map(model => (
-            <option value={modelKey(model)} key={modelKey(model)}>
-              {model.name}
-            </option>
-          ))}
-        </select>
+          onChange={model => onChange(model ? { model } : undefined)}
+        />
         <ThinkingSelect
           label={`${label} thinking`}
           value={profile?.thinking}

@@ -2,11 +2,12 @@ import { useRef, type CSSProperties } from "react";
 import { agentColorId } from "../shared/format.ts";
 import { agentColorTokens, assignAgentColorHues, type AgentIdentity } from "../shared/agent-colors.ts";
 
-export type AgentColorMap = ReadonlyMap<string, CSSProperties>;
+export type AgentColorStyle = CSSProperties & { "--agent-color": string; "--agent-soft": string };
+export type AgentColorMap = ReadonlyMap<string, AgentColorStyle>;
 
-const colorForHue = (hue: number): CSSProperties => {
+const colorForHue = (hue: number): AgentColorStyle => {
   const { color, soft } = agentColorTokens(hue);
-  return { "--agent-color": color, "--agent-soft": soft } as CSSProperties;
+  return { "--agent-color": color, "--agent-soft": soft };
 };
 
 function agentColorMap(hues: ReadonlyMap<string, number>): AgentColorMap {
@@ -20,6 +21,6 @@ export function useAgentColors(sessionId: string | undefined, agents: AgentIdent
   return agentColorMap(registry.current.hues);
 }
 
-export function agentColor(agent: AgentIdentity, colors: AgentColorMap): CSSProperties {
+export function agentColor(agent: AgentIdentity, colors: AgentColorMap): AgentColorStyle {
   return colors.get(agentColorId(agent)) ?? colorForHue(0);
 }

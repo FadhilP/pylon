@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Exec } from "./capture.ts";
 import { loopbackUrl } from "./capture.ts";
 import { elementReferences } from "./element-ref.ts";
+import { BrowserScreencast, type ScreencastFrame } from "./browser-screencast.ts";
 import {
   HeliosCliError,
   PlaywrightCli,
@@ -63,6 +64,10 @@ export interface BrowserShutdownResult {
   cleanupWarnings: string[];
 }
 
+type ScreencastFactory = (
+  profileDirectory: string,
+  currentPage: () => PageIdentity | undefined,
+) => Pick<BrowserScreencast, "run">;
 type CliFactory = (exec: Exec) => Promise<PlaywrightCli>;
 interface Managed {
   record: BrowserSessionRecord;
@@ -76,6 +81,10 @@ interface Managed {
   heldButtons: Set<"left" | "middle" | "right">;
   heldKeys: Set<string>;
   pendingOperations: number;
+  viewportLocked?: boolean;
+  mirrorOwner?: string;
+  mirrorAbort?: AbortController;
+  mirrorDone?: Promise<void>;
   page?: PageIdentity;
   tabs?: PageIdentity[];
 }
@@ -197,15 +206,19 @@ export class BrowserSessionManager {
   private readonly createCli: CliFactory;
   private interactiveLeaseIdleMs: number;
   private resultTabLimit: number;
+  private readonly createScreencast: ScreencastFactory;
 
   constructor(
     exec: Exec,
     createCli: CliFactory = value => PlaywrightCli.create(value, { persistentClient: true }),
     interactiveLeaseIdleMs = INTERACTIVE_LEASE_IDLE_MS,
     resultTabLimit = MAX_RESULT_TABS,
+    createScreencast: ScreencastFactory = (profileDirectory, currentPage) =>
+      new BrowserScreencast(profileDirectory, currentPage),
   ) {
     this.exec = exec;
     this.createCli = createCli;
+    this.createScreencast = createScreencast;
     this.interactiveLeaseIdleMs = interactiveLeaseIdleMs;
     this.resultTabLimit = resultTabLimit;
   }
@@ -367,6 +380,7 @@ export class BrowserSessionManager {
       if (!managed.interactiveOwner && !(await this.releaseHeldInput(managed)))
         throw new Error("Helios could not reset prior browser input; close the browser session");
       managed.interactiveOwner = owner;
+      managed.viewportLocked = false;
       this.renewInteractive(managed, owner);
       return this.state(piSessionId, owner);
     });
@@ -392,8 +406,65 @@ export class BrowserSessionManager {
       if (managed.interactiveOwner) throw new Error("Helios browser is under direct user control in Pylon");
       if (!(await this.releaseHeldInput(managed)))
         throw new Error("Helios could not reset prior browser input; close the browser session");
-      return this.performOperation(managed, action, signal);
+      const result = await this.performOperation(managed, action, signal);
+      if (action.kind === "resize") managed.viewportLocked = true;
+      return result;
     });
+  }
+
+  async resizeForPanel(piSessionId: string, width: number, height: number, signal?: AbortSignal): Promise<void> {
+    const action = { kind: "resize", width, height } as const;
+    const managed = this.requireManaged(piSessionId, action);
+    await this.serialized(managed, async () => {
+      if (managed.viewportLocked || managed.interactiveOwner) return;
+      if (!(await this.releaseHeldInput(managed)))
+        throw new Error("Helios could not reset prior browser input; close the browser session");
+      await this.performOperation(managed, action, signal);
+    });
+  }
+
+  async streamFrames(
+    piSessionId: string,
+    owner: string,
+    width: number,
+    height: number,
+    emit: (frame: ScreencastFrame) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let managed = this.requireManaged(piSessionId, { kind: "screenshot" });
+    if (managed.record.ownership !== "owned" || !managed.record.profileDirectory)
+      throw new Error("Embedded mirroring is available only for Helios-owned browsers");
+    if (managed.mirrorOwner) {
+      if (managed.mirrorOwner !== owner) throw new Error("Helios browser mirror is already open");
+      this.stopMirror(managed);
+      await managed.mirrorDone;
+      managed = this.requireManaged(piSessionId, { kind: "screenshot" });
+    }
+    if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Browser mirror stopped");
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) controller.abort(signal.reason);
+    managed.mirrorOwner = owner;
+    managed.mirrorAbort = controller;
+    const screencast = this.createScreencast(managed.record.profileDirectory!, () => managed.page);
+    const running = screencast.run(width, height, emit, controller.signal);
+    managed.mirrorDone = running.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      await running;
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      signal.removeEventListener("abort", abort);
+      if (managed.mirrorAbort === controller) {
+        managed.mirrorOwner = undefined;
+        managed.mirrorAbort = undefined;
+        managed.mirrorDone = undefined;
+      }
+    }
   }
 
   async observeFrame(piSessionId: string, signal?: AbortSignal): Promise<BrowserOperationResult | undefined> {
@@ -443,6 +514,8 @@ export class BrowserSessionManager {
       throw new Error("Helios browser is under direct user control in Pylon");
     if (managed.closingRequested) throw new Error("Browser session is closing");
     managed.closingRequested = true;
+    this.stopMirror(managed);
+    await managed.mirrorDone;
     return this.serialized(managed, async () => {
       const startedAt = Date.now();
       await this.releaseHeldInput(managed);
@@ -472,9 +545,11 @@ export class BrowserSessionManager {
     const summary: BrowserShutdownResult = { failures: [], cleanupWarnings: [] };
     const sessions = [...this.sessions.values()];
     for (const managed of sessions) managed.closingRequested = true;
+    for (const managed of sessions) this.stopMirror(managed);
     await Promise.all(
       sessions.map(async managed => {
         await this.serialized(managed, async () => {
+          await managed.mirrorDone;
           if (managed.record.state === "closed") return;
           const action = managed.record.ownership === "owned" ? "close" : "detach";
           await this.releaseHeldInput(managed);
@@ -496,6 +571,10 @@ export class BrowserSessionManager {
       }),
     );
     return summary;
+  }
+
+  private stopMirror(managed: Managed): void {
+    managed.mirrorAbort?.abort(new Error("Browser mirror stopped"));
   }
 
   private requireManaged(piSessionId: string, action: BrowserAction): Managed {

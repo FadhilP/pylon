@@ -18,6 +18,7 @@
   "exports": {
     "./child-process": "./src/child-process.ts",
     "./context-packing": "./src/context-packing.ts",
+    "./delegate-names": "./src/delegate-names.ts",
     "./delegate-retry": "./src/delegate-retry.ts",
     "./executable": "./src/executable.ts",
     "./json-config": "./src/json-config.ts",
@@ -43,6 +44,7 @@
     "settings": "./src/web-settings.ts"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },

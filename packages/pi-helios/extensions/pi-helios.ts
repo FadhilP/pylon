@@ -25,6 +25,7 @@ const BROWSER_ACTIONS = [
   "start",
   "attach",
   "navigate",
+  "resize",
   "snapshot",
   "continue",
   "find",
@@ -98,6 +99,18 @@ type EmbeddedRequest = {
   respond(value: Promise<unknown>): void;
 };
 
+type EmbeddedStreamRequest = {
+  version: 1;
+  sessionId: string;
+  owner: string;
+  width: number;
+  height: number;
+  signal: AbortSignal;
+  claim(): boolean;
+  send(frame: { mimeType: "image/jpeg"; data: Buffer; sequence: number }): void;
+  respond(value: Promise<void>): void;
+};
+
 type AndroidToolingRequest = {
   version: 1;
   action: "status" | "install" | "remove";
@@ -141,7 +154,7 @@ async function embeddedBrowserRequest(manager: BrowserSessionManager, request: E
     return embeddedState(manager, id, owner);
   }
   if (request.action === "resize" && !manager.state(id, owner).controlled) {
-    await manager.operate(id, { kind: "resize", width: request.width!, height: request.height! }, signal);
+    await manager.resizeForPanel(id, request.width!, request.height!, signal);
     return embeddedState(manager, id, owner);
   }
 
@@ -250,6 +263,8 @@ const browserActionFields = {
   ),
   key: Type.Optional(Type.String({ maxLength: 64 })),
   value: Type.Optional(Type.String({ maxLength: 1000 })),
+  width: Type.Optional(Type.Integer({ minimum: 320, maximum: 1920, description: "Viewport width in CSS pixels" })),
+  height: Type.Optional(Type.Integer({ minimum: 240, maximum: 1080, description: "Viewport height in CSS pixels" })),
   depth: Type.Optional(
     Type.Integer({
       minimum: 1,
@@ -466,6 +481,10 @@ function browserAction(params: BrowserParams): BrowserAction {
     case "select":
       rejectExtra(params, ["target", "value"]);
       return { kind: "select", target: requireField(params, "target"), value: requireField(params, "value") };
+    case "resize":
+      rejectExtra(params, ["width", "height"]);
+      return { kind: "resize", width: requireField(params, "width"), height: requireField(params, "height") };
+
     case "back":
     case "forward":
     case "reload":
@@ -613,6 +632,32 @@ export default function heliosExtension(
       })(),
     );
   });
+  const disposeEmbeddedBrowserStream = pi.events.on("pylon:helios-browser-stream-request", (value: unknown) => {
+    const request = value && typeof value === "object" ? (value as Partial<EmbeddedStreamRequest>) : undefined;
+    if (
+      request?.version !== 1 ||
+      typeof request.sessionId !== "string" ||
+      !/^web:[A-Za-z0-9-]{1,128}$/u.test(request.owner ?? "") ||
+      !Number.isSafeInteger(request.width) ||
+      !Number.isSafeInteger(request.height) ||
+      !request.signal ||
+      typeof request.send !== "function" ||
+      typeof request.claim !== "function" ||
+      typeof request.respond !== "function" ||
+      !request.claim()
+    )
+      return;
+    request.respond(
+      manager.streamFrames(
+        request.sessionId,
+        request.owner!,
+        request.width!,
+        request.height!,
+        request.send as EmbeddedStreamRequest["send"],
+        request.signal,
+      ),
+    );
+  });
   const disposeAndroidTooling = pi.events.on("pylon:helios-android-tooling-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<AndroidToolingRequest>) : undefined;
     if (
@@ -713,6 +758,7 @@ export default function heliosExtension(
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-helios" });
     disposeWebScoutCapability();
     disposeEmbeddedBrowser();
+    disposeEmbeddedBrowserStream();
     disposeAndroidTooling();
     disposeHealth();
     const [summary, androidSummary] = await Promise.all([manager.shutdown(), androidManager.shutdown()]);
@@ -1042,6 +1088,7 @@ export default function heliosExtension(
       "Reuse returned snapshots; request another only when absent, truncated, or insufficient. Prefer targeted screenshots; use fullPage only for whole-page context.",
       "Use continuation cursors for remaining output; each chunk replaces prior refs. Refine truncated searches instead of broadening.",
       "Batch only known refs. Use plan only for deterministic, non-consequential steps; each match must resolve uniquely and execution stops on ambiguity or page change.",
+      "Use resize with CSS-pixel width and height for responsive layouts; swap dimensions for landscape. This is viewport manipulation, not full device emulation.",
       "For local HTML prototypes, use an explicit file: URL ending in .html or .htm; raw filesystem paths are not accepted.",
     ],
     parameters: browserSchema,

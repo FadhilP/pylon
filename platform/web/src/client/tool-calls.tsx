@@ -2,6 +2,7 @@
    A group is a header row, its calls are rows on the same 22px orb rail, and
    arguments and result share one inset panel — state lives on the orbs. */
 import { IconChevronDown } from "@tabler/icons-react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { formatToolDuration } from "../shared/format";
 import {
   aggregateToolCallTiming,
@@ -77,13 +78,31 @@ export function ToolCallTrack({
   variant = "group",
 }: {
   calls: ToolCallView[];
-  slots?: number;
+  slots?: number | "auto";
   variant?: "dock" | "group";
 }) {
-  const ticks = toolCallTrackTicks(calls, slots);
-  const emptySlots = slots === undefined ? 0 : Math.max(0, slots - ticks.length);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const [measuredSlots, setMeasuredSlots] = useState(32);
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (slots !== "auto" || !track) return;
+    const update = () => {
+      const tickWidth = track.querySelector("i")?.getBoundingClientRect().width ?? 3;
+      const gap = Number.parseFloat(getComputedStyle(track).columnGap) || 0;
+      const capacity = Math.max(1, Math.floor((track.clientWidth + gap) / (tickWidth + gap)));
+      setMeasuredSlots(current => (current === capacity ? current : capacity));
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [slots]);
+  const resolvedSlots = slots === "auto" ? measuredSlots : slots;
+  const ticks = toolCallTrackTicks(calls, resolvedSlots);
+  const emptySlots = resolvedSlots === undefined ? 0 : Math.max(0, resolvedSlots - ticks.length);
   return (
-    <span className={variant === "dock" ? "agent-dock-track" : "tool-call-track"} aria-hidden="true">
+    <span ref={trackRef} className={variant === "dock" ? "agent-dock-track" : "tool-call-track"} aria-hidden="true">
       {ticks.map(tick => (
         <i
           key={tick.key}

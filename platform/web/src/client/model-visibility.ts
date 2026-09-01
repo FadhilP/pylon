@@ -1,11 +1,8 @@
 import { useSyncExternalStore } from "react";
-import type { ModelOptionReadModel } from "../shared/protocol/events";
+import { modelKey } from "../shared/model-options.ts";
+export { modelKey, selectableModels, visibleModels } from "../shared/model-options.ts";
 
 const STORAGE_KEY = "pylon-hidden-models";
-
-export function modelKey(model: Pick<ModelOptionReadModel, "provider" | "id">): string {
-  return `${model.provider}/${model.id}`;
-}
 
 function readHiddenModels(): Set<string> {
   try {
@@ -41,8 +38,4 @@ function subscribe(listener: () => void): () => void {
 
 export function useHiddenModels(): Set<string> {
   return useSyncExternalStore(subscribe, () => hiddenModelKeys);
-}
-
-export function visibleModels(models: ModelOptionReadModel[], hidden: Set<string>): ModelOptionReadModel[] {
-  return models.filter(model => !hidden.has(modelKey(model)));
 }

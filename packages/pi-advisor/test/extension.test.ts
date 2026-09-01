@@ -62,6 +62,11 @@ test("parallel Advisor calls serialize and report running duration", async () =>
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
     };
   };
+  let delegatedName = "A1";
+  let resolveNaming!: (name: string) => void;
+  const namingSettled = new Promise<string>(resolve => {
+    resolveNaming = resolve;
+  });
   advisor(
     {
       on: () => {},
@@ -69,7 +74,13 @@ test("parallel Advisor calls serialize and report running duration", async () =>
         tool = value;
       },
       registerCommand: () => {},
-      events: { emit: () => {} },
+      events: {
+        emit: (channel: string, request: any) => {
+          if (channel === "pylon:delegate-name" && request.version === 2) {
+            request.respond({ version: 1, fallbackName: "A1", getName: () => delegatedName, settled: namingSettled });
+          }
+        },
+      },
       getActiveTools: () => [],
       setActiveTools: () => {},
     } as any,
@@ -101,6 +112,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     await started;
     await durationReported;
     const second = tool.execute("two", { request: "second" }, undefined, undefined, ctx);
+    delegatedName = "strategy-review";
+    resolveNaming(delegatedName);
     releaseFirst();
     const results = await Promise.all([first, second]);
     assert.equal(runningUpdate.details.state, "running");
@@ -111,6 +124,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.deepEqual(maxTokens, [4_000, 4_000]);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
+    assert.equal(results[0].details.agentName, "strategy-review");
+    assert.equal(results[1].details.agentName, "strategy-review");
     assert.equal(results[0].details.provider, "test");
     assert.equal(results[0].details.model, "model");
     assert.equal(Object.hasOwn(results[0].details, "failureMessage"), false);
@@ -173,7 +188,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
     assert.equal(providerError.details.failureCode, "invalid_response");
     assert.match(
       providerError.content[0].text,
-      /^\[A-[\w-]+ · Advisor\] Advisor failed nonfatally: invalid_response\.$/,
+      /^\[Advisor-[\w-]+ · Advisor\] Advisor failed nonfatally: invalid_response\.$/,
     );
     assert.ok(providerError.details.failureMessage.length <= 500);
     assert.doesNotMatch(providerError.details.failureMessage, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);

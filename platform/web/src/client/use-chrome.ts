@@ -8,10 +8,14 @@ import {
   type SyntaxTheme,
 } from "../shared/syntax-highlighting";
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "warm";
+
+export function isTheme(value: unknown): value is Theme {
+  return value === "light" || value === "dark" || value === "warm";
+}
 
 const THEME_KEY = "pylon-theme";
-const THEME_COLORS: Record<Theme, string> = { dark: "#111318", light: "#e9eaec" };
+const THEME_COLORS: Record<Theme, string> = { dark: "#111318", light: "#e9eaec", warm: "#eee8dd" };
 const SYNTAX_THEME_KEY = "pylon-syntax-theme";
 
 /**
@@ -38,7 +42,8 @@ export function rememberSetting(key: string, value: string | number): void {
 }
 
 function readInitialTheme(): Theme {
-  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const theme = document.documentElement.dataset.theme;
+  return isTheme(theme) ? theme : "dark";
 }
 
 /** Applies the theme to the document and the browser chrome, and remembers it. */

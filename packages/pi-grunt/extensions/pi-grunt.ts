@@ -34,24 +34,13 @@ import {
 import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
+import { requestDelegateName } from "pylon-core/delegate-names";
 
 const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
 const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
 
 const HEARTBEAT_MS = 1000;
 const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
-function delegatedName(pi: ExtensionAPI, callId: string): string {
-  let assigned: string | undefined;
-  pi.events.emit("pylon:delegate-name", {
-    version: 1,
-    kind: "grunt",
-    callId,
-    respond: (name: unknown) => {
-      if (typeof name === "string" && /^G\d+$/.test(name)) assigned = name;
-    },
-  });
-  return assigned ?? `G-${callId.replace(/[^a-z0-9]/gi, "").slice(-4) || "run"}`;
-}
 
 async function resolveExecutionMode(
   configured: ReturnType<typeof gruntMode>,
@@ -372,8 +361,14 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         });
       calls++;
       const started = Date.now();
-      const agent = { agentName: delegatedName(pi, id), startedAt: new Date(started).toISOString() };
-      const named = (value: string) => `[${agent.agentName} · Grunt] ${value}`;
+      const delegateName = requestDelegateName(pi, { kind: "grunt", callId: id, task });
+      const agent = {
+        delegateNameFallback: delegateName.fallbackName,
+        delegateNameKey: id,
+        startedAt: new Date(started).toISOString(),
+      };
+      const agentDetails = () => ({ ...agent, agentName: delegateName.getName() });
+      const named = (value: string) => `[${delegateName.getName()} · Grunt] ${value}`;
 
       const exec = pi.exec.bind(pi);
       const configuredMode = gruntMode(config);
@@ -413,7 +408,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           onUpdate?.({
             content: [{ type: "text", text }],
             details: {
-              ...agent,
+              ...agentDetails(),
               state: "running",
               mode,
               configuredMode,
@@ -431,7 +426,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         onUpdate?.({
           content: [{ type: "text", text: `Grunt ${runningText}…` }],
           details: {
-            ...agent,
+            ...agentDetails(),
             state: "running",
             mode,
             configuredMode,
@@ -568,7 +563,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         const workerFailureMessage = run.error ? sanitizeFailureMessage(run.error, "Grunt worker failed.") : undefined;
         // Keys both result shapes share; each mode then adds only what is specific to it.
         const baseDetails = (status: string, recovery: boolean) => ({
-          ...agent,
+          ...agentDetails(),
           status,
           mode,
           configuredMode,
@@ -601,6 +596,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             recovery && workerFailureMessage ? `Worker failure: ${workerFailureMessage}` : "",
             recovery && run.text ? `\nWorker report:\n${run.text}` : "",
           ].filter(Boolean);
+          await delegateName.settled;
+
           return {
             content: [{ type: "text" as const, text: named(lines.join("\n")) }],
             details: {
@@ -659,6 +656,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           recovery && workerFailureMessage ? `Worker failure: ${workerFailureMessage}` : "",
           recovery && run.text ? `\nWorker report:\n${run.text}` : "",
         ].filter(Boolean);
+        await delegateName.settled;
+
         return {
           content: [{ type: "text" as const, text: named(lines.join("\n")) }],
           details: {
@@ -685,6 +684,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         };
       } catch (error) {
         const failureMessage = sanitizeFailureMessage(error, "Grunt execution failed.");
+        await delegateName.settled;
         const liveUsage = addUsage(usage, attemptUsage);
         return {
           content: [
@@ -698,7 +698,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             },
           ],
           details: {
-            ...agent,
+            ...agentDetails(),
             status: "failed",
             mode,
             configuredMode,
@@ -723,7 +723,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           else
             onUpdate?.({
               content: [{ type: "text", text }],
-              details: { ...agent, state: "cleanup_warning", cleanupWarnings },
+              details: { ...agentDetails(), state: "cleanup_warning", cleanupWarnings },
             });
         }
         if (ctx.hasUI) ctx.ui.setStatus("pi-grunt", undefined);

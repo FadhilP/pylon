@@ -2640,7 +2640,7 @@ function ActiveAgents({
                 </span>
               </span>
             </span>
-            <ToolCallTrack calls={calls} slots={32} variant="dock" />
+            <ToolCallTrack calls={calls} slots="auto" variant="dock" />
           </button>
         );
       })}

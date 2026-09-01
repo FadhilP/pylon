@@ -18,13 +18,6 @@ import {
   type WheelEvent,
 } from "react";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../shared/protocol/helios";
-import {
-  ACTIVE_FRAME_INTERVAL_MS,
-  ACTIVE_FRAME_WINDOW_MS,
-  IDLE_FRAME_INTERVAL_MS,
-  METADATA_INTERVAL_MS,
-  framePollingDelay,
-} from "../shared/browser-polling";
 import { runtimeStore } from "./runtime/event-store";
 
 type Action = Omit<HeliosBrowserCommand, "expectedGeneration">;
@@ -57,30 +50,24 @@ export function BrowserPanel({
   onError: (cause: unknown, fallback: string) => void;
 }) {
   const [browser, setBrowser] = useState<HeliosBrowserResult>();
-  const [frame, setFrame] = useState("");
+  const [streamUrl, setStreamUrl] = useState("");
+  const [streamError, setStreamError] = useState("");
+  const [streamReady, setStreamReady] = useState(false);
   const [address, setAddress] = useState("about:blank");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
+  const streamTimeout = useRef<number | undefined>(undefined);
   const active = useRef(true);
   const moveQueued = useRef<{ x: number; y: number } | undefined>(undefined);
   const moveSending = useRef(false);
   const wheelQueued = useRef<{ x: number; y: number; deltaX: number; deltaY: number } | undefined>(undefined);
   const wheelSending = useRef(false);
-  const activeUntil = useRef(0);
-  const wakePolling = useRef<() => void>(() => undefined);
   const requestSequence = useRef(0);
   const appliedStateSequence = useRef(0);
-  const appliedFrameSequence = useRef(0);
   const handledMirrorRequest = useRef("");
-
-  const markActive = () => {
-    activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
-    wakePolling.current();
-  };
-
   const request = async (action: Action, silent = false) => {
     const snapshot = runtimeStore.getSnapshot();
     if (snapshot.connection !== "connected" || !snapshot.runtime?.ready) return;
@@ -105,10 +92,6 @@ export function BrowserPanel({
         onActiveChange(result.active);
         if (result.page?.url && document.activeElement !== addressRef.current) setAddress(result.page.url);
         setError("");
-      }
-      if (result.frame && sequence >= appliedFrameSequence.current) {
-        appliedFrameSequence.current = sequence;
-        setFrame(`data:${result.frame.mimeType};base64,${result.frame.data}`);
       }
       return result;
     } catch (cause) {
@@ -160,109 +143,99 @@ export function BrowserPanel({
   }, [browser?.active, browser?.state, connected, generation, mirrorRequest]);
 
   useEffect(() => {
-    if (!browser?.active || browser.ownership !== "owned" || browser.state !== "ready") return;
-    const controlled = browser.controlled;
-    let stopped = false;
-    let polling = false;
-    let timer: number | undefined;
-    let nextPollAt = 0;
-    let metadataDueAt = Date.now() + METADATA_INTERVAL_MS;
-    let release = Promise.resolve<unknown>(undefined);
-
-    const clearTimer = () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      timer = undefined;
-      nextPollAt = 0;
+    const clearStreamTimeout = () => {
+      if (streamTimeout.current !== undefined) window.clearTimeout(streamTimeout.current);
+      streamTimeout.current = undefined;
     };
-    const schedule = (delay: number) => {
-      clearTimer();
-      if (stopped || document.hidden) return;
-      nextPollAt = Date.now() + delay;
-      timer = window.setTimeout(poll, delay);
+    if (!connected || !browser?.active || browser.ownership !== "owned" || browser.state !== "ready") {
+      clearStreamTimeout();
+      setStreamUrl("");
+      setStreamError("");
+      setStreamReady(false);
+      return;
+    }
+    const refresh = () => {
+      clearStreamTimeout();
+      setStreamError("");
+      setStreamReady(false);
+      if (document.hidden) return setStreamUrl("");
+      setStreamUrl(`${runtimeStore.heliosBrowserStreamUrl(1920, 1080)}&stream=${Date.now()}`);
+      streamTimeout.current = window.setTimeout(
+        () => setStreamError("Live mirror received no frames. Restart Pylon after updating Helios, then retry."),
+        5_000,
+      );
     };
-    const poll = async () => {
-      timer = undefined;
-      nextPollAt = 0;
-      if (stopped || polling || document.hidden) return;
-      polling = true;
-      const startedAt = Date.now();
-      const frameResult = await request({ action: "frame" }, true).catch(() => undefined);
-      if (!frameResult) await request({ action: "status" }, true).catch(() => undefined);
-      if (controlled && !stopped && !document.hidden && Date.now() >= metadataDueAt) {
-        metadataDueAt = Date.now() + METADATA_INTERVAL_MS;
-        await request({ action: "tab-list" }, true).catch(() => undefined);
-      }
-      polling = false;
-      if (!stopped && !document.hidden) {
-        const delay =
-          (controlled ? framePollingDelay(Date.now(), activeUntil.current) : IDLE_FRAME_INTERVAL_MS) -
-          (Date.now() - startedAt);
-        schedule(Math.max(0, delay));
-      }
-    };
-    const wake = () => {
-      if (stopped || polling || document.hidden) return;
-      const now = Date.now();
-      if (timer !== undefined && nextPollAt <= now + ACTIVE_FRAME_INTERVAL_MS) return;
-      schedule(0);
-    };
-    const suspend = () => {
-      clearTimer();
-      moveQueued.current = undefined;
-      wheelQueued.current = undefined;
-      if (controlled) release = runtimeStore.heliosBrowser({ action: "release" }).catch(() => undefined);
-    };
-    const resume = async () => {
-      await release;
-      if (stopped || document.hidden) return;
-      const result = controlled
-        ? await request({ action: "acquire" }, true).catch(async () =>
-            request({ action: "status" }, true).catch(() => undefined),
-          )
-        : await request({ action: "status" }, true).catch(() => undefined);
-      if (!stopped && !document.hidden && result?.active && result.ownership === "owned") {
-        if (result.controlled) activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
-        schedule(0);
-      }
-    };
-    const visibility = () => {
-      if (document.hidden) suspend();
-      else void resume();
-    };
-
-    activeUntil.current = Date.now() + ACTIVE_FRAME_WINDOW_MS;
-    wakePolling.current = wake;
-    document.addEventListener("visibilitychange", visibility);
-    if (document.hidden) suspend();
-    else schedule(0);
+    document.addEventListener("visibilitychange", refresh);
+    refresh();
     return () => {
-      stopped = true;
-      clearTimer();
-      wakePolling.current = () => undefined;
+      clearStreamTimeout();
+      document.removeEventListener("visibilitychange", refresh);
+      setStreamUrl("");
+    };
+  }, [browser?.active, browser?.ownership, browser?.state, connected, generation]);
+
+  useEffect(() => {
+    if (!browser?.controlled) return;
+    let release = Promise.resolve<unknown>(undefined);
+    const visibility = () => {
+      if (document.hidden) {
+        moveQueued.current = undefined;
+        wheelQueued.current = undefined;
+        release = runtimeStore.heliosBrowser({ action: "release" }).catch(() => undefined);
+      } else {
+        void release.then(() => request({ action: "acquire" }, true).catch(() => undefined));
+      }
+    };
+    const metadata = window.setInterval(() => void request({ action: "tab-list" }, true).catch(() => undefined), 2_000);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.clearInterval(metadata);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, [browser?.active, browser?.controlled, browser?.ownership, browser?.state]);
+  }, [browser?.controlled]);
 
   useEffect(() => {
     if (!browser?.active || browser.ownership !== "owned" || browser.state !== "ready" || !viewportRef.current) return;
     let timer: number | undefined;
-    const observer = new ResizeObserver(() => {
+    let sending = false;
+    let pending: { width: number; height: number } | undefined;
+    let lastSent = "";
+    const flush = async () => {
+      timer = undefined;
+      if (sending || !pending || document.hidden) return;
+      const next = pending;
+      pending = undefined;
+      const key = `${next.width}x${next.height}`;
+      if (key === lastSent) return;
+      sending = true;
+      try {
+        await request({ action: "resize", ...next }, true);
+        lastSent = key;
+      } catch {
+        /* A later observation retries the latest size. */
+      } finally {
+        sending = false;
+        if (pending) timer = window.setTimeout(flush, 300);
+      }
+    };
+    const schedule = () => {
+      if (document.hidden) return;
+      pending = viewportSize(viewportRef.current);
       if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(
-        () => void request({ action: "resize", ...viewportSize(viewportRef.current) }, true).catch(() => undefined),
-        180,
-      );
-    });
+      timer = window.setTimeout(flush, 300);
+    };
+    const observer = new ResizeObserver(schedule);
     observer.observe(viewportRef.current);
+    document.addEventListener("visibilitychange", schedule);
+    schedule();
     return () => {
       observer.disconnect();
+      document.removeEventListener("visibilitychange", schedule);
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [browser?.active, browser?.ownership, browser?.state]);
-
+  }, [browser?.active, browser?.controlled, browser?.ownership, browser?.state]);
   const run = async (label: string, action: Action) => {
     if (busy) return;
-    markActive();
     setBusy(label);
     try {
       await request(action);
@@ -307,7 +280,6 @@ export function BrowserPanel({
     if (!browser?.controlled) return;
     const position = point(event.clientX, event.clientY);
     if (!position) return;
-    markActive();
     if (phase === "move") return sendMove(position);
     event.preventDefault();
     if (phase === "down") event.currentTarget.setPointerCapture(event.pointerId);
@@ -319,7 +291,6 @@ export function BrowserPanel({
     if (!browser?.controlled) return;
     const position = point(event.clientX, event.clientY);
     if (!position) return;
-    markActive();
     event.preventDefault();
     const previous = wheelQueued.current;
     wheelQueued.current = {
@@ -499,21 +470,38 @@ export function BrowserPanel({
           onKeyDown={event => {
             if (!browser.controlled) return;
             if (event.key === "Tab") event.preventDefault();
-            markActive();
             if (!event.repeat)
               void request({ action: "key", phase: "down", key: event.key }, true).catch(() => undefined);
           }}
           onKeyUp={event => {
             if (!browser.controlled) return;
-            markActive();
             void request({ action: "key", phase: "up", key: event.key }, true).catch(() => undefined);
           }}>
-          {frame ? (
-            <img ref={imageRef} src={frame} alt="Helios browser viewport" draggable={false} />
-          ) : (
+          {streamUrl && !streamError && (
+            <img
+              ref={imageRef}
+              src={streamUrl}
+              alt="Helios browser viewport"
+              draggable={false}
+              hidden={!streamReady}
+              onLoad={() => {
+                if (streamTimeout.current !== undefined) window.clearTimeout(streamTimeout.current);
+                streamTimeout.current = undefined;
+                setStreamReady(true);
+                setStreamError("");
+              }}
+              onError={() => {
+                if (streamTimeout.current !== undefined) window.clearTimeout(streamTimeout.current);
+                streamTimeout.current = undefined;
+                setStreamReady(false);
+                setStreamError("Live mirror unavailable. Restart Pylon after updating Helios, then retry.");
+              }}
+            />
+          )}
+          {(!streamUrl || !streamReady || streamError) && (
             <span>
-              <IconLoader2 className="spin" size={22} />
-              Loading viewport…
+              {!streamError && <IconLoader2 className="spin" size={22} />}
+              {streamError || "Loading viewport…"}
             </span>
           )}
           <small>

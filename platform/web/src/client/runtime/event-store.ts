@@ -1081,6 +1081,11 @@ export class RuntimeEventStore {
     return result;
   }
 
+  heliosBrowserStreamUrl(width: number, height: number): string {
+    const runtime = this.requireReadyRuntime();
+    return this.api.heliosBrowserStreamUrl(runtime.sessionGeneration, width, height);
+  }
+
   async heliosAndroidTooling(
     input: HeliosAndroidToolingInput,
     signal?: AbortSignal,

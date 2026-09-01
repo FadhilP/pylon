@@ -107,6 +107,18 @@ export class ApiClient {
     return url.toString();
   }
 
+  heliosBrowserStreamUrl(generation: number, width: number, height: number): string {
+    if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
+    const query = new URLSearchParams({
+      tabId: this.tabId,
+      generation: String(generation),
+      csrf: this.csrfToken,
+      width: String(width),
+      height: String(height),
+    });
+    return `/api/v1/helios-browser-stream?${query.toString()}`;
+  }
+
   async sessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
     const query = new URLSearchParams();
     if (input.projectId) query.set("projectId", input.projectId);

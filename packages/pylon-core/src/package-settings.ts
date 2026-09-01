@@ -26,6 +26,8 @@ export type BooleanPackageSettingField = FieldBase<"boolean", boolean>;
 export type IntegerPackageSettingField = FieldBase<"integer", number> & { min?: number; max?: number };
 export type NumberPackageSettingField = FieldBase<"number", number> & { min?: number; max?: number };
 export type EnumPackageSettingField = FieldBase<"enum", string> & { choices: readonly string[] };
+/** An optional provider/model reference. The empty string disables the feature. */
+export type ModelPackageSettingField = FieldBase<"model", string>;
 /** For string lists, min and max bound the number of list entries. */
 export type StringListPackageSettingField = FieldBase<"string-list", string[]> & {
   choices?: readonly string[];
@@ -38,6 +40,7 @@ export type PackageSettingField =
   | IntegerPackageSettingField
   | NumberPackageSettingField
   | EnumPackageSettingField
+  | ModelPackageSettingField
   | StringListPackageSettingField;
 
 export type PackageSettingValue<F extends PackageSettingField> = F["defaultValue"];
@@ -53,6 +56,7 @@ export type GenericPackageSettingReadField =
   | (Omit<IntegerPackageSettingField, "env"> & { value: number })
   | (Omit<NumberPackageSettingField, "env"> & { value: number })
   | (Omit<EnumPackageSettingField, "env"> & { value: string })
+  | (Omit<ModelPackageSettingField, "env"> & { value: string })
   | (Omit<StringListPackageSettingField, "env"> & { value: string[] });
 export interface GenericPackageSettingsReadModel {
   kind: "generic";
@@ -190,6 +194,18 @@ export function validPackageSettingField(value: unknown): value is PackageSettin
       validPackageSettingValue(value as EnumPackageSettingField, value.defaultValue)
     );
   }
+  if (value.type === "model") {
+    return (
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      value.step === undefined &&
+      value.unit === undefined &&
+      typeof value.defaultValue === "string" &&
+      value.defaultValue.length <= MAX_STRING_LENGTH
+    );
+  }
+
   if (value.type === "string-list") {
     return (
       value.step === undefined &&
@@ -214,6 +230,8 @@ export function validPackageSettingValue(field: PackageSettingField, value: unkn
     );
   if (field.type === "number") return boundedNumber(value) && bounded(value, field);
   if (field.type === "enum") return typeof value === "string" && field.choices.includes(value);
+  if (field.type === "model") return typeof value === "string" && value.length <= MAX_STRING_LENGTH;
+
   return (
     Array.isArray(value) &&
     (field.min === undefined || value.length >= field.min) &&

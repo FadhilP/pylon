@@ -33,6 +33,8 @@ import type {
   DriverEventListener,
   EditPromptInput,
   ForkInput,
+  HeliosBrowserFrame,
+  HeliosBrowserStreamInput,
   PapercutMutationInput,
   PiDriver,
   PromptInput,
@@ -206,6 +208,7 @@ class FakeDriver implements PiDriver {
   indexRebuilds = 0;
   newSessionParent?: string;
   heliosRequests: HeliosBrowserInput[] = [];
+  heliosStreamRequests: HeliosBrowserStreamInput[] = [];
   heliosAndroidToolingRequests: HeliosAndroidToolingCommand[] = [];
   stateqlHistoryLimits: number[] = [];
   stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
@@ -352,6 +355,15 @@ class FakeDriver implements PiDriver {
       state: "ready" as const,
       controlled: true,
     });
+  }
+  async heliosBrowserStream(
+    input: HeliosBrowserStreamInput,
+    send: (frame: HeliosBrowserFrame) => void,
+    signal: AbortSignal,
+  ) {
+    this.heliosStreamRequests.push(input);
+    send({ mimeType: "image/jpeg", data: Buffer.from("jpeg-frame"), sequence: 1 });
+    await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
   }
   heliosAndroidTooling(input: HeliosAndroidToolingCommand) {
     this.heliosAndroidToolingRequests.push(input);
@@ -1053,6 +1065,29 @@ test(
       assert.equal(browserStatus.headers.get("cache-control"), "no-store");
       assert.equal((await body(browserStatus)).controlled, true);
       assert.equal(driver.heliosRequests.at(-1)?.owner, "web:tab-owner");
+      const abortMirror = new AbortController();
+      const mirror = await fetch(
+        `${origin}/api/v1/helios-browser-stream?tabId=${tab}&generation=1&csrf=${csrf}&width=1600&height=900`,
+        { headers: { cookie }, signal: abortMirror.signal },
+      );
+      assert.equal(mirror.status, 200);
+      assert.match(mirror.headers.get("content-type") ?? "", /multipart\/x-mixed-replace/);
+      const mirrorReader = mirror.body!.getReader();
+      let mirrorBytes = Buffer.alloc(0);
+      while ((mirrorBytes.toString("latin1").match(/--helios-frame/g) ?? []).length < 2) {
+        const chunk = await mirrorReader.read();
+        assert.equal(chunk.done, false);
+        mirrorBytes = Buffer.concat([mirrorBytes, Buffer.from(chunk.value!)]);
+        assert.ok(mirrorBytes.length < 12 * 1024 * 1024);
+      }
+      assert.match(mirrorBytes.toString("latin1"), /Content-Type: image\/jpeg[\s\S]+jpeg-frame/);
+      assert.deepEqual(driver.heliosStreamRequests.at(-1), {
+        expectedGeneration: 1,
+        owner: "web:tab-owner",
+        width: 1600,
+        height: 900,
+      });
+      abortMirror.abort();
       assert.equal(
         (
           await fetch(`${origin}/api/v1/helios-browser`, {
@@ -2183,6 +2218,7 @@ test("dialog owner survives disconnect races and releases after reconnect grace"
 
     assert.equal((await prompt("guard-owner-loss")).status, 200);
     stream.abort();
+    await waitForDisconnect();
     await new Promise(resolve => setTimeout(resolve, 550));
     assert.notEqual(driver.answers.at(-1)?.requestId, "dialog-3");
     const otherBoot = await body(

@@ -732,6 +732,18 @@ test("spawned RPC dialogs cancel when the invoking parent has no UI", async () =
 
 test("private agents stay outside the normal session index and preserve creation policy", async () => {
   const f = await fixture();
+  const namingHandlers = f.busHandlers.get("pylon:delegate-name") ?? [];
+  namingHandlers.push((request: any) => {
+    if (request.version === 2) {
+      request.respond({
+        version: 1,
+        fallbackName: "Ada",
+        getName: () => "auth-inspector",
+        settled: Promise.resolve("auth-inspector"),
+      });
+    }
+  });
+  f.busHandlers.set("pylon:delegate-name", namingHandlers);
   try {
     const tool = f.tools.get("spawn_agent");
     const created = await tool.execute(
@@ -750,8 +762,7 @@ test("private agents stay outside the normal session index and preserve creation
     );
     const id = created.details.piSpawn.id;
     assert.match(created.content[0].text, /reply:inspect auth/);
-    assert.match(created.details.agentName, /^[A-Za-z-]+$/);
-    assert.doesNotMatch(created.details.agentName, /^(Agent|Thread)-/);
+    assert.equal(created.details.agentName, "auth-inspector");
     assert.ok(!(await SessionManager.list(f.cwd)).some(session => session.id === id));
     assert.ok(
       (await SessionManager.list(f.cwd, privateAgentDir(f.parent.getSessionId(), f.agentDir))).some(

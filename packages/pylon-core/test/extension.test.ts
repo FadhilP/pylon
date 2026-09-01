@@ -315,7 +315,7 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
 });
 
-test("delegated runs receive stable role-local names", () => {
+test("delegated runs receive stable role-local names", async () => {
   const runtime = harness();
   const allocate = (kind: string, callId: string) => {
     let name = "";
@@ -330,14 +330,14 @@ test("delegated runs receive stable role-local names", () => {
     return name;
   };
 
-  assert.equal(allocate("advisor", "advisor-1"), "A1");
-  assert.equal(allocate("advisor", "advisor-1"), "A1");
-  assert.equal(allocate("grunt", "grunt-1"), "G1");
-  assert.equal(allocate("repo_scout", "repo-1"), "S1");
-  assert.equal(allocate("web_scout", "web-1"), "S2");
+  assert.equal(allocate("advisor", "advisor-1"), "Advisor-1");
+  assert.equal(allocate("advisor", "advisor-1"), "Advisor-1");
+  assert.equal(allocate("grunt", "grunt-1"), "Grunt-1");
+  assert.equal(allocate("repo_scout", "repo-1"), "Scout-1");
+  assert.equal(allocate("web_scout", "web-1"), "Scout-2");
 
   for (const handler of runtime.handlers.get("session_tree") ?? [])
-    handler(
+    await handler(
       {},
       {
         sessionManager: {
@@ -346,7 +346,7 @@ test("delegated runs receive stable role-local names", () => {
       },
     );
   assert.equal(allocate("repo_scout", "repo-7"), "S7");
-  assert.equal(allocate("web_scout", "web-8"), "S8");
+  assert.equal(allocate("web_scout", "web-8"), "Scout-8");
 });
 
 test("shared worktree observer fingerprints one shell tool batch per turn", async () => {

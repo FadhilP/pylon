@@ -17,7 +17,6 @@ type BackgroundRun = {
   path: string;
   cwd: string;
   runId: string;
-  agentName: string;
   queued: number;
   started?: number;
   controller: AbortController;
@@ -51,10 +50,14 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     const settled = [...runs.values()].filter(run => terminal(run.state)).sort((a, b) => b.queued - a.queued);
     for (const run of settled.slice(MAX_TERMINAL_RUNS)) runs.delete(run.runId);
   };
+  const agentName = (run: BackgroundRun) => run.request.delegateName?.getName() ?? scientistName(run.id);
+
   const commonDetails = (run: BackgroundRun) => ({
     ...resultDetails(run.kind, run.id, run.path, run.cwd),
     runId: run.runId,
-    agentName: run.agentName,
+    agentName: agentName(run),
+    delegateNameFallback: run.request.delegateName?.fallbackName ?? scientistName(run.id),
+    ...(run.request.delegateNameKey ? { delegateNameKey: run.request.delegateNameKey } : {}),
     queuedAt: new Date(run.queued).toISOString(),
     ...(run.started === undefined ? {} : { startedAt: new Date(run.started).toISOString() }),
     background: true,
@@ -63,7 +66,7 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     content: [
       {
         type: "text" as const,
-        text: `${label(run.kind)} ${run.agentName} (${run.id}) background run ${run.runId} is queued.`,
+        text: `${label(run.kind)} ${agentName(run)} (${run.id}) background run ${run.runId} is queued.`,
       },
     ],
     details: {
@@ -78,7 +81,7 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     content: [
       {
         type: "text" as const,
-        text: `${label(run.kind)} ${run.agentName} (${run.id}) background run ${run.runId} is still running.`,
+        text: `${label(run.kind)} ${agentName(run)} (${run.id}) background run ${run.runId} is still running.`,
       },
     ],
     details: {
@@ -92,7 +95,7 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     content: [
       {
         type: "text" as const,
-        text: `${label(run.kind)} ${run.agentName} (${run.id}) queued background run ${run.runId} was cancelled.`,
+        text: `${label(run.kind)} ${agentName(run)} (${run.id}) queued background run ${run.runId} was cancelled.`,
       },
     ],
     details: { ...commonDetails(run), status: "cancelled", state: "cancelled" },
@@ -105,7 +108,6 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     runId: randomUUID(),
     parentSessionId: request.parentSessionId,
     toolCallId: request.toolCallId,
-    agentName: scientistName(request.id),
     queued: Date.now(),
     controller: new AbortController(),
     state,
@@ -163,7 +165,7 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
       content: [
         {
           type: "text" as const,
-          text: `${label(run.kind)} ${run.agentName} (${run.id}) started in background as run ${run.runId}. Continue independent work, then use ${run.kind === "agent" ? "spawn_agent" : "spawn_session"} status with id and runId.`,
+          text: `${label(run.kind)} ${agentName(run)} (${run.id}) started in background as run ${run.runId}. Continue independent work, then use ${run.kind === "agent" ? "spawn_agent" : "spawn_session"} status with id and runId.`,
         },
       ],
       details: {

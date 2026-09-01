@@ -42,14 +42,14 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     registry.captureBaseline();
     registry.reconcile();
     telemetry.rebuild(ctx);
-    delegates.rebuild(ctx);
+    await delegates.rebuild(ctx);
   });
   pi.on("model_select", async (event, ctx) => {
     await lineEdit.update(event.model, ctx.cwd);
   });
-  pi.on("session_tree", (_event, ctx) => {
+  pi.on("session_tree", async (_event, ctx) => {
     telemetry.rebuild(ctx);
-    delegates.rebuild(ctx);
+    await delegates.rebuild(ctx);
   });
   pi.on("agent_start", (_event, ctx) => worktree.agentStart(ctx));
   pi.on("agent_settled", async (_event, ctx) => {

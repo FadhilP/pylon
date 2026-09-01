@@ -167,6 +167,16 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       parentContextChars: 100,
     });
     grunt(pi, runWorker as any, async () => true);
+    events.on("pylon:delegate-name", (request: any) => {
+      if (request.version === 2) {
+        request.respond({
+          version: 1,
+          fallbackName: "G1",
+          getName: () => "worker-module",
+          settled: Promise.resolve("worker-module"),
+        });
+      }
+    });
     const ctx: any = {
       cwd,
       hasUI: false,
@@ -211,6 +221,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     );
     assert.equal(result.details.usage.input, 2);
     assert.equal(result.details.status, "completed");
+    assert.equal(result.details.agentName, "worker-module");
     assert.equal(result.details.applied, true);
     assert.equal(result.details.isolated, true);
     assert.equal(result.details.mode, "isolated");

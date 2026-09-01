@@ -852,7 +852,7 @@ test("history projection retains complete delegated activity with bounded event 
       content: [{ type: "text", text: "Repository report" }],
       isError: false,
       details: {
-        agentName: "S1",
+        agentName: "abcdefghijk-abcdefghijkl",
         startedAt: "2026-07-27T01:02:03.000Z",
         model: "provider/scout",
         thinking: "high",
@@ -876,7 +876,7 @@ test("history projection retains complete delegated activity with bounded event 
     request: "Map the runtime",
     response: "Repository report",
     status: "completed",
-    agentName: "S1",
+    agentName: "abcdefghijk-abcdefghijkl",
     startedAt: "2026-07-27T01:02:03.000Z",
     modelName: "provider/scout",
     thinkingLevel: "high",

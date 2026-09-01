@@ -13,7 +13,15 @@ const vite = await createServer({ server: { middlewareMode: true }, appType: "cu
 
 test("navigation", async t => {
   const navigation = await vite.ssrLoadModule("/src/client/navigation.ts");
-  const { REFERENCES, SURFACES, displacesConversation, referenceRailItems, surfaceDefinition } = navigation;
+  const {
+    REFERENCES,
+    SURFACES,
+    beginBrowserSessionSurfaceTransition,
+    browserSurfaceAfterSessionStatus,
+    displacesConversation,
+    referenceRailItems,
+    surfaceDefinition,
+  } = navigation;
 
   const context = (over: Record<string, unknown> = {}) => ({
     surface: "chat",
@@ -71,6 +79,47 @@ test("navigation", async t => {
       SURFACES.find((item: { id: string }) => item.id === "browser").available(context({ browserAvailable: false })),
       false,
     );
+  });
+
+  await t.test("browser surface follows active browser sessions across switches", () => {
+    const inactiveDestination = beginBrowserSessionSurfaceTransition(
+      new Set<string>(),
+      "session-a",
+      "session-b",
+      "browser",
+    );
+    assert.equal(inactiveDestination.requested, true);
+    assert.ok(inactiveDestination.browserSessions.has("session-a"));
+    assert.equal(browserSurfaceAfterSessionStatus("session-b", "session-b", false), "chat");
+    assert.equal(browserSurfaceAfterSessionStatus("session-b", "session-b", true), "browser");
+
+    const restored = beginBrowserSessionSurfaceTransition(
+      inactiveDestination.browserSessions,
+      "session-b",
+      "session-a",
+      "chat",
+    );
+    assert.equal(restored.requested, true);
+    assert.equal(browserSurfaceAfterSessionStatus("session-a", "session-a", true), "browser");
+
+    assert.equal(
+      browserSurfaceAfterSessionStatus("session-a", "session-b", true),
+      undefined,
+      "a stale session response must not select a surface",
+    );
+  });
+
+  await t.test("an explicit non-browser choice clears browser restoration", () => {
+    const departed = beginBrowserSessionSurfaceTransition(
+      new Set<string>(["session-a"]),
+      "session-a",
+      "session-b",
+      "chat",
+    );
+    assert.ok(!departed.browserSessions.has("session-a"));
+
+    const returned = beginBrowserSessionSurfaceTransition(departed.browserSessions, "session-b", "session-a", "chat");
+    assert.equal(returned.requested, false);
   });
 
   await t.test("rail groups are separated exactly once each", () => {
