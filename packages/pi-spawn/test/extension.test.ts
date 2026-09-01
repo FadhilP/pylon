@@ -326,7 +326,7 @@ test("synchronous mode remains the default and waits for completion", async () =
         settled = true;
         return result;
       });
-    await new Promise(resolve => setImmediate(resolve));
+    for (let attempt = 0; attempt < 10 && !release; attempt++) await new Promise(resolve => setImmediate(resolve));
     assert.equal(settled, false);
     release();
     const result = await pending;
@@ -799,6 +799,30 @@ test("private agents stay outside the normal session index and preserve creation
     );
     assert.equal(invalid.details.failureCode, "invalid");
     assert.equal(f.calls.length, 2);
+  } finally {
+    f.restore();
+  }
+});
+
+test("private-agent explicit systemPrompt takes precedence over the persisted default", async () => {
+  const f = await fixture(undefined, {
+    agentAvailability: "deferred",
+    sessionAvailability: "deferred",
+    privateAgentSystemPrompt: { mode: "append", text: "persisted default" },
+  });
+  try {
+    const tool = f.tools.get("spawn_agent");
+    await tool.execute("default", { action: "create", prompt: "first" }, undefined, undefined, f.ctx);
+    await tool.execute(
+      "explicit",
+      { action: "create", prompt: "second", systemPrompt: "explicit prompt" },
+      undefined,
+      undefined,
+      f.ctx,
+    );
+    assert.ok(f.calls[0].args.includes("persisted default"));
+    assert.ok(f.calls[1].args.includes("explicit prompt"));
+    assert.ok(!f.calls[1].args.includes("persisted default"));
   } finally {
     f.restore();
   }

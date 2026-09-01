@@ -247,6 +247,8 @@ export function validHookSettings(value: unknown): value is HookSettingsReadMode
 const genericApplyTimings = new Set(["immediate", "next-operation", "next-session", "reload"]);
 const MAX_GENERIC_PACKAGE_FIELDS = 50;
 const MAX_GENERIC_NUMBER = 1_000_000_000;
+const MAX_GENERIC_PROMPT_BYTES = 32_768;
+const genericPromptModes = new Set(["default", "append", "replace"]);
 
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every(key => allowed.includes(key));
@@ -292,17 +294,51 @@ function validGenericStringList(value: unknown, choices: string[] | undefined, m
   );
 }
 
+function validGenericPromptModes(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= genericPromptModes.size &&
+    value.every(mode => typeof mode === "string" && genericPromptModes.has(mode)) &&
+    new Set(value).size === value.length
+  );
+}
+
+function validGenericPromptValue(value: unknown, allowedModes: string[], maxBytes: number): boolean {
+  return (
+    record(value) &&
+    exactKeys(value, ["mode", "text"]) &&
+    typeof value.mode === "string" &&
+    allowedModes.includes(value.mode) &&
+    typeof value.text === "string" &&
+    new TextEncoder().encode(value.text).byteLength <= maxBytes &&
+    (value.mode !== "default" || value.text === "")
+  );
+}
+
+function validPromptDefaultText(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && new TextEncoder().encode(value).byteLength <= MAX_GENERIC_PROMPT_BYTES)
+  );
+}
+
 function validGenericPackageField(value: unknown): boolean {
   if (!record(value)) return false;
   const base = ["version", "key", "label", "type", "defaultValue", "value", "description", "unit", "apply"];
   if (
-    !exactKeys(value, [...base, "step", "min", "max", "choices"]) ||
+    !exactKeys(value, [...base, "step", "min", "max", "choices", "allowedModes", "maxBytes", "defaultText"]) ||
     value.version !== 1 ||
     !boundedString(value.key, 128) ||
     !boundedString(value.label, 200) ||
     (value.description !== undefined && (typeof value.description !== "string" || value.description.length > 500)) ||
     (value.unit !== undefined && !boundedString(value.unit, 64)) ||
     !genericApplyTimings.has(String(value.apply))
+  )
+    return false;
+  if (
+    value.type !== "prompt" &&
+    (value.allowedModes !== undefined || value.maxBytes !== undefined || value.defaultText !== undefined)
   )
     return false;
   if (value.type === "boolean") {
@@ -363,9 +399,26 @@ function validGenericPackageField(value: unknown): boolean {
       validGenericStringList(value.value, value.choices as string[] | undefined, value.min, value.max)
     );
   }
+  if (value.type === "prompt") {
+    return (
+      value.step === undefined &&
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      value.unit === undefined &&
+      validGenericPromptModes(value.allowedModes) &&
+      Number.isSafeInteger(value.maxBytes) &&
+      (value.maxBytes as number) >= 0 &&
+      (value.maxBytes as number) >= 1 &&
+      (value.defaultText === undefined ||
+        (typeof value.defaultText === "string" &&
+          new TextEncoder().encode(value.defaultText).byteLength <= (value.maxBytes as number))) &&
+      validGenericPromptValue(value.defaultValue, value.allowedModes, value.maxBytes as number) &&
+      validGenericPromptValue(value.value, value.allowedModes, value.maxBytes as number)
+    );
+  }
   return false;
 }
-
 function validGenericPackageSettings(value: Record<string, unknown>): boolean {
   return (
     exactKeys(value, ["kind", "packageId", "fields"]) &&
@@ -405,6 +458,8 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       Number.isSafeInteger(value.inputTokenBudget) &&
       (value.inputTokenBudget as number) >= 1_000 &&
       (value.inputTokenBudget as number) <= 1_000_000 &&
+      validGenericPromptValue(value.prompt, ["default", "append", "replace"], MAX_GENERIC_PROMPT_BYTES) &&
+      validPromptDefaultText(value.promptDefaultText) &&
       (value.mode !== "model" || boundedString(value.model, 400))
     );
   }
@@ -424,7 +479,9 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       value.maxCostUsd <= 100 &&
       Number.isSafeInteger(value.webSearchResults) &&
       (value.webSearchResults as number) >= 1 &&
-      (value.webSearchResults as number) <= 8
+      (value.webSearchResults as number) <= 8 &&
+      validGenericPromptValue(value.prompt, ["default", "append", "replace"], MAX_GENERIC_PROMPT_BYTES) &&
+      validPromptDefaultText(value.promptDefaultText)
     );
   }
   const validThinkingList = (levels: unknown) =>
@@ -451,7 +508,9 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       value.maxCostUsd <= 100 &&
       Number.isSafeInteger(value.parentContextChars) &&
       (value.parentContextChars as number) >= 0 &&
-      (value.parentContextChars as number) <= 12_000
+      (value.parentContextChars as number) <= 12_000 &&
+      validGenericPromptValue(value.prompt, ["default", "append", "replace"], MAX_GENERIC_PROMPT_BYTES) &&
+      validPromptDefaultText(value.promptDefaultText)
     );
   }
   if (value.kind === "continuity") {
@@ -469,6 +528,8 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       Number.isSafeInteger(value.compactionReviewerMaxOutputTokens) &&
       (value.compactionReviewerMaxOutputTokens as number) >= 256 &&
       (value.compactionReviewerMaxOutputTokens as number) <= 8_192 &&
+      validGenericPromptValue(value.prompt, ["default", "append"], MAX_GENERIC_PROMPT_BYTES) &&
+      validPromptDefaultText(value.promptDefaultText) &&
       ["planner", "executor", "memoryReviewer", "compactionReviewer"].every(key => {
         const profile = value[key];
         return (
@@ -515,7 +576,9 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       (value.titleMaxTokens as number) <= 256 &&
       Number.isSafeInteger(value.titleChangedFiles) &&
       (value.titleChangedFiles as number) >= 1 &&
-      (value.titleChangedFiles as number) <= 200
+      (value.titleChangedFiles as number) <= 200 &&
+      validGenericPromptValue(value.prompt, ["default", "append"], MAX_GENERIC_PROMPT_BYTES) &&
+      validPromptDefaultText(value.promptDefaultText)
     );
   }
   return (
@@ -539,6 +602,12 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
     (value.recentThreadMaxChars as number) <= 10_000 &&
     Number.isSafeInteger(value.recentThreadTotalChars) &&
     (value.recentThreadTotalChars as number) >= 1_000 &&
+    validGenericPromptValue(
+      value.privateAgentSystemPrompt,
+      ["default", "append", "replace"],
+      MAX_GENERIC_PROMPT_BYTES,
+    ) &&
+    validPromptDefaultText(value.promptDefaultText) &&
     (value.recentThreadTotalChars as number) <= 100_000
   );
 }
@@ -1609,17 +1678,19 @@ export function isFileSuggestionList(value: unknown): value is FileSuggestionLis
     typeof value.available === "boolean" &&
     Array.isArray(value.paths) &&
     value.paths.length <= 20 &&
-    value.paths.every(
-      path =>
-        typeof path === "string" &&
-        path.length > 0 &&
+    value.paths.every(path => {
+      if (typeof path !== "string") return false;
+      const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
+      return (
         path.length <= 500 &&
-        !path.startsWith("/") &&
-        !/^[A-Za-z]:/.test(path) &&
-        !path.includes("\\") &&
-        !path.includes("\0") &&
-        !path.split("/").some(part => part === "" || part === "." || part === ".."),
-    )
+        normalized.length > 0 &&
+        !normalized.startsWith("/") &&
+        !/^[A-Za-z]:/.test(normalized) &&
+        !normalized.includes("\\") &&
+        !normalized.includes("\0") &&
+        !normalized.split("/").some(part => part === "" || part === "." || part === "..")
+      );
+    })
   );
 }
 

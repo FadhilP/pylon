@@ -1,41 +1,33 @@
 # pi-guard
 
-Conservative destructive-command and path guard for [Pi](https://pi.dev).
+A conservative confirmation guard for destructive shell commands and risky write/edit paths in Pi.
 
-## Installation
+## Install and use
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-guard. Run `/reload` after installation.
+Reload Pi, then run `/guard` for session counters. Guard intercepts agent `bash`, `write`, and `edit`, plus user `!` and `!!` commands. For approvable risks it offers **Allow once**, **Always allow this session**, **Always allow on this project**, or **Deny**. Without confirmation UI, all risky actions fail closed, including remembered approvals.
 
-## Usage
+Session approvals last only for the extension runtime. Project approvals are stored in Pi's user-controlled agent directory, never the repository. Because Pi Bash is Bash on every platform, Guard blocks redirection to bare `nul` (which creates a file); use `/dev/null`, or explicit `./nul` if that file is intentional.
 
-Run `/guard` to view session counters.
+## Protected paths and policy
 
-Pi Guard intercepts agent `bash`, `write`, and `edit` calls plus user `!` and `!!` shell commands. For approvable risks it offers **Allow once**, **Always allow this session**, **Always allow on this project**, and **Deny**. Session approvals live only in the current extension instance; project approvals survive sessions in Pi's user-controlled agent directory (never the repository). Without confirmation UI, every risky command fails closed, including remembered approvals.
+Explicit absolute writes/edits outside the workspace need approval. A remembered external-directory approval covers its canonical parent and descendants; a target directly under a filesystem root remains exact-path scoped. Relative traversal and workspace symlink escapes are blocked. `.git` and `node_modules` are always blocked and cannot be approved; `.env` approval is exact-path only. Existing targets and nearest existing parents are canonicalized for every call.
 
-## Protected Paths
+Pylon may supply `guardRules` in `pylon:runtime-policy` version 2. Values are `allow`, `confirm`, or `block`; omitted categories keep standalone defaults. Invalid policy blocks every detected category.
 
-Explicit absolute write/edit targets outside the workspace require approval and fail closed without UI. Remembered session/project approval covers the resolved target's parent directory and all descendants, so generated sibling and nested files do not need one-by-one approval; the prompt shows the directory being remembered. A target directly under a filesystem root stays exact-path scoped rather than approving the whole drive. Relative traversal and workspace symlink escapes remain blocked. Writes inside `.git` or `node_modules` are always blocked and cannot be approved; `.env` approvals remain exact-path scoped. Existing targets and nearest existing parents are canonicalized on every call.
-
-## Runtime policy rules
-
-Pylon may include a sparse `guardRules` object in its existing `pylon:runtime-policy` `{ version: 2 }` event. Its keys are the exported `GUARD_RISK_CATEGORIES` IDs and values are `allow`, `confirm`, or `block`. Omitted categories retain defaults; standalone Pi keeps these same defaults. `allow` bypasses Guard, `confirm` shows the normal approval dialog, and `block` denies without prompting. An invalid `guardRules` payload blocks every detected category (fail closed).
-
-| Category IDs | Default |
+| Categories | Default |
 | --- | --- |
-| `command.privilege-escalation`, `command.recursive-deletion`, `command.destructive-git-reset`, `command.destructive-git-clean`, `command.forced-git-push`, `command.disk-modification`, `command.raw-device-write`, `command.recursive-permission-change` | `confirm` |
-| `path.git-internals`, `path.node-modules`, `path.workspace-escape` | `block` |
-| `path.outside-workspace`, `path.environment-file` | `confirm` |
+| privilege escalation, recursive deletion, destructive reset/clean, forced push, disk/raw-device changes, recursive permission changes | confirm |
+| `.git`, `node_modules`, workspace escape | block |
+| outside workspace, environment file | confirm |
 
-`src/policy.ts` exports `GuardAction`, `GuardRiskCategory`, `GuardRules`, `GuardRuntimePolicyEvent`, `validateGuardRules`, `mergeGuardRules`, and the default rules for a typed main-agent integration. Policy results include category, reason, and default action.
+## Integrations and limits
 
-## Integrations
+When Timeline is installed, Guard requests a checkpoint before destructive confirmation; Timeline failure never weakens Guard. Bounded `pi-guard:decision` events feed Focus and Pylon diagnostics.
 
-When Timeline is installed, Guard requests a checkpoint before showing destructive confirmation. Failure or absence of Timeline never weakens Guard. Versioned, bounded `pi-guard:decision` events feed Focus status and Pylon diagnostics.
-
-## Security and Limitations
-
-V2 deliberately uses a narrow command policy. Approvals are keyed to the policy version, canonical project directory, stable risk category, operation class, and exact command, exact protected path, or approved external directory. The policy version was bumped so old approvals cannot authorize the category-based policy. Command approval is shared by agent/user shell calls and path approval by `write`/`edit`. External-directory approval is pathname-based; targets are re-canonicalized before matching, but Pi Guard is not a filesystem sandbox and cannot eliminate filesystem race conditions. Project records are versioned per-key files with restrictive permissions where supported; malformed records grant nothing. It is not a shell parser, sandbox, malware detector, or substitute for OS or container isolation. Path confirmation covers `write` and `edit`; unrecognized commands and shell-based writes retain full user permissions. Review commands and resolved external targets before approval.
+Approvals are keyed by policy version, canonical project, category, operation, and exact command/path or approved external directory. Malformed records grant nothing. Guard is deliberately not a shell parser, filesystem sandbox, malware detector, or substitute for OS/container isolation. Shell-based writes and unrecognized commands retain your normal permissions; filesystem races remain possible. Review commands and resolved external targets before approving them.

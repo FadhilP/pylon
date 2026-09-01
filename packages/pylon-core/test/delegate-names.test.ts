@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDelegateNames, normalizeDelegateName, requestDelegateName } from "../src/delegate-names.ts";
+import {
+  DELEGATE_NAME_IMMUTABLE_FOOTER,
+  createDelegateNames,
+  delegateNamingPrompt,
+  NAME_PROMPT,
+  normalizeDelegateName,
+  requestDelegateName,
+} from "../src/delegate-names.ts";
 import { saveConfig } from "../src/config.ts";
 
 class Bus {
@@ -38,6 +45,13 @@ async function harness(completeName: (...args: any[]) => Promise<any>) {
   await coordinator.rebuild(ctx);
   return { root, pi: pi as any, coordinator, entries, ctx };
 }
+
+test("delegate naming customization is append-only and retains its immutable footer", () => {
+  assert.equal(delegateNamingPrompt(), NAME_PROMPT);
+  const prompt = delegateNamingPrompt({ mode: "append", text: "Prefer repository terms." });
+  assert.match(prompt, /## Operator customization\nPrefer repository terms\./);
+  assert.ok(prompt.endsWith(DELEGATE_NAME_IMMUTABLE_FOOTER));
+});
 
 test("delegate naming starts with the role fallback and settles to a bounded semantic name", async () => {
   let finish!: (value: any) => void;

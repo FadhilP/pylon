@@ -1,13 +1,13 @@
 {
   "name": "pi-continuity",
   "version": "0.1.0",
-  "description": "Read-only planning, durable workspace memory, and task continuity for Pi",
+  "description": "Planning, durable workspace memory, and task continuity for Pi",
   "type": "module",
   "keywords": [
     "pi-package"
   ],
   "engines": {
-    "node": ">=24.15.0"
+    "node": ">=22.19.0"
   },
   "files": [
     "extensions",

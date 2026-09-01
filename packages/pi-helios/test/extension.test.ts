@@ -291,11 +291,11 @@ test("visibility command changes future owned launches only", async () => {
       },
     },
   });
-  await commands.get("helios-visibility").handler("hide", ctx);
+  await commands.get("helios").handler("visibility hide", ctx);
   assert.match(notification, /hidden \(headless\)/);
   await tools.get("helios_browser").execute("id", { action: "start" }, undefined, undefined, ctx);
   assert.ok(!openArgs.includes("--headed"));
-  await commands.get("helios-visibility").handler("show", ctx);
+  await commands.get("helios").handler("visibility show", ctx);
   assert.match(notification, /Active owned session unchanged/);
 });
 
@@ -450,8 +450,7 @@ test("doctor checks pinned CLI without launching a browser", async () => {
     },
   });
   let notification = "";
-  await commands.get("helios-doctor").handler(
-    "",
+  await commands.get("helios").handler("doctor browser",
     context({
       ui: {
         notify(message: string) {
@@ -486,7 +485,7 @@ test("health diagnostics share cached work while doctor stays fresh", async () =
   const values = await Promise.all(responses);
   assert.ok(values.every(value => value.lines.some((line: string) => line.startsWith("Android sessions:"))));
   assert.equal(calls, 1);
-  await commands.get("helios-doctor").handler("", context());
+  await commands.get("helios").handler("doctor browser", context());
   assert.equal(calls, 2);
 });
 

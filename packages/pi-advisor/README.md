@@ -1,57 +1,37 @@
 # pi-advisor
 
-Tool-free strategic model consultation for [Pi](https://pi.dev).
+A tool-free second opinion for consequential Pi decisions. Advisor reviews a bounded, redacted conversation snapshot; it cannot inspect or change your files.
 
-## Installation
+## Install and configure
+
+Requires Pi and Node 22.19.0 or later. Install the Pylon bundle, then reload Pi:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-advisor. Run `/reload` after installation.
+| Command | Use |
+| --- | --- |
+| `/advisor` or `/advisor status` | Show configuration |
+| `/advisor select` | Choose a model in the TUI |
+| `/advisor set provider/model-id[:thinking]` | Set a model, for example `anthropic/claude-sonnet-4-5:high` |
+| `/advisor disable` / `/advisor reset` | Disable, or enable with the current main model and thinking level |
+| `/advisor help` | Show usage |
 
-## Configuration
+Thinking may be `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; no suffix uses the provider default. Advisor is inactive until selected or reset. `pi config` disables the extension persistently; `pi --no-extensions` disables it for one run. Its package settings are also available through Pylon Web.
 
-Run `/advisor` in TUI or `/advisor provider/model-id[:thinking]` in any mode. Example: `/advisor anthropic/claude-sonnet-4-5:high`.
+Selecting or resetting a model consents to sending the selected provider a redacted, bounded conversation snapshot. Explicit non-TUI commands and manually edited configuration also count as consent.
 
-Thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Without a suffix, the provider default applies. Advisor stays inactive until selection or `/advisor reset`.
+## Using Advisor well
 
-- `/advisor status` reports model, thinking level, and state.
-- `/advisor disable` disables consultations.
-- `/advisor reset` enables Advisor using the current main model and thinking level.
-- `pi config` can disable the extension.
-- `pi --no-extensions` disables all extensions for one run.
+Call `advisor({ request, evidence? })` before choosing an implementation only when credible approaches have meaningful tradeoffs, repository precedent is insufficient, and a wrong choice risks security/privacy, data loss, compatibility/migration failure, or broad regression. Supply focused evidence after initial reads or Scout work. Reconsult only for material new risk, contradicted assumptions, or ambiguous verification failure. Do not use it for local fixes, established patterns, routine refactors, tests, dependency-free changes, or easily reversible small diffs.
 
-Selecting or resetting to a model consents to sending that model and provider a redacted, bounded snapshot of the current Pi conversation. Explicit non-TUI commands and manually edited config also count as consent.
+There are at most three authenticated attempts per original user prompt. Unavailable models or credentials do not consume the limit. Evidence accepts at most eight workspace text ranges, each up to 200 lines. Paths must be workspace-relative or canonical workspace paths; traversal, escapes, `.git`, binary files, symlink escapes, and files over 1 MiB are rejected without failing the call. Usually provide 3–5 decisive non-overlapping definitions, callers, or checks.
 
-## Usage
+## Context, cost, and privacy
 
-### Consultation Timing
+Advisor prioritizes the request, supplied evidence, Continuity state, bounded Verify metadata, summaries, latest user request, and latest assistant text. It excludes raw shell/tool output and the executor system prompt. Complete records are packed under the budget; records that do not fit are omitted with bounded references rather than clipped. An oversized required request fails nonfatally.
 
-The executor may make at most three authenticated `advisor({ request, evidence?: [{ path, start, end, claim?, revision?, verification? }] })` attempts per original prompt. Unavailable model or credential checks do not consume quota.
+Calls target an estimated 32,768-token input cap, up to 8,192 output tokens, and a 15-minute timeout. A $0.50 estimated per-call ceiling can reduce output or reject input that exhausts the estimate. This is not a billing guarantee: provider tokenization, retries, and pricing differ. Usage UI reports provider usage, cache reads/writes, and cost; long cache retention follows `PI_CACHE_RETENTION=long`.
 
-Use one consultation before implementation only when both conditions hold: multiple credible approaches have meaningful tradeoffs and repository precedent does not clearly determine the solution; and a wrong choice risks security or privacy, data loss, compatibility or migration failure, or broad cross-module regression. Call it after focused reads or Scout establish evidence, before choosing an approach. Consult again after implementation only when implementation exposes new risks, contradicts assumptions, or verification fails ambiguously—not by default. Reserve the third for material contradictions, failures, or unresolved risks. Skip local fixes, established repository patterns, routine refactors, test additions, dependency-free changes, and decisions reversible in one small diff.
-
-### Evidence
-
-Evidence is limited to eight regular text ranges inside the workspace and 200 lines per range. Paths may be workspace-relative or canonical absolute workspace paths; traversal, out-of-workspace targets, symlink escapes, `.git`, binary files, and files over 1 MiB are rejected nonfatally. Usually provide 3–5 concise, non-overlapping ranges; use up to eight only when each range is independently necessary, and avoid redundant evidence. Prefer complete decisive definitions, callers, and checks over broad file slices; 150–300 total lines is a selection signal, not a hard cap. Exceed it when correctness requires more context. Scout gathers evidence; the main model makes the initial and final judgments. Advisor has no tools and cannot inspect or mutate files.
-
-## Context, Limits, and Cost
-
-### Context Packing
-
-Input priority is the executor request, relevance-ranked explicit workspace evidence, pi-continuity state, latest bounded Verify metadata, compaction or branch summaries, latest user request, then latest non-empty assistant text. Raw tool and shell results and the executor's full system prompt are excluded. The Advisor receives a separate minimal system contract preserving its tool-free review role, evidence skepticism, security boundaries, and executor authority. Snapshot records are never clipped: complete prioritized records are packed under the global input budget, while records that do not fit are omitted with bounded path/range references for focused retrieval. A required Advisor request fails nonfatally instead of being clipped when it cannot fit.
-
-### Budgets
-
-Calls use context-window-aware budgets with an estimated 32,768-token total input cap. Output is capped at an estimated 8,192 tokens and may be lowered by the cost preflight. Calls time out after 15 minutes and fail nonfatally.
-
-## Cost, Security, and Privacy
-
-### Cost
-
-Every call costs the selected model's rates. Advisor applies a $0.50 estimated-cost ceiling per call: model pricing and estimated uncached input cost determine the maximum output tokens, and calls fail nonfatally when estimated input alone exhausts the budget. Provider tokenization, retries, and reported pricing can differ, so this limits estimated cost rather than guaranteeing final billing. UI reports provider usage, cache reads and writes, and total cost. Long cache retention follows `PI_CACHE_RETENTION=long`; savings are never assumed.
-
-### Data Handling
-
-Snapshot redaction is defense in depth, not proof of secrecy. The package stores only model choice; snapshots remain in memory and never enter tool details. Advice persists as a normal tool result. Pi packages run with full user permissions; review source before installation.
+Configuration is stored at `<agent-dir>/pi-advisor/config.json`; Pylon Web's default agent directory is `~/.pylon/agent`, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden. Snapshots remain in memory and are never put in tool details; advice is retained as a normal Pi tool result. Redaction is defense in depth, not secrecy proof. Pi packages run with your user permissions; review source before installation.

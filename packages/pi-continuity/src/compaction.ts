@@ -81,6 +81,8 @@ export type ActiveWorkCompactionDetails = CompactionDetailsBase & {
   runId: string;
   timelineId: string;
   handoffEntryId?: string;
+  /** Optional only for persisted v3 entries created before deterministic folded records were added. */
+  records?: GenericCompactionRecord[];
 };
 export type GenericContinuityCompactionDetails = CompactionDetailsBase & {
   mode: "generic";
@@ -212,7 +214,11 @@ export function isContinuityCompactionDetails(value: unknown): value is AnyCompa
       (typeof details.currentTaskEntryId !== "string" || details.currentTaskEntryId.length > MAX_SOURCE_ENTRY_ID_CHARS))
   )
     return false;
-  if (details.mode === "active-work") return validLegacyBase(details);
+  if (details.mode === "active-work")
+    return (
+      validLegacyBase(details) &&
+      optional(details.records, records => boundedArray(records, MAX_GENERIC_RECORDS, validGenericRecord))
+    );
   return (
     Array.isArray(details.records) &&
     details.records.length <= MAX_GENERIC_RECORDS &&
@@ -674,6 +680,14 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
   const currentRequest = currentEntry?.type === "message" ? textContent((currentEntry.message as any).content) : "";
   const previousDetails = previous?.details;
   const previousCount = isContinuityCompactionDetails(previousDetails) ? previousDetails.sourceEntryCount : 0;
+  const recordStart = Math.max(0, boundary.handoffIndex + 1);
+  const excludedToolErrors = toolErrorExclusions(branchEntries, recordStart);
+  const records = selectGenericRecords(
+    branchEntries.slice(recordStart, sourceEnd).flatMap(entry => {
+      const record = genericRecord(entry, excludedToolErrors);
+      return record ? [record] : [];
+    }),
+  );
   const details: ActiveWorkCompactionDetails = {
     type: CONTINUITY_COMPACTION_TYPE,
     version: CONTINUITY_COMPACTION_VERSION,
@@ -684,6 +698,7 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
     ...(typeof currentEntry?.id === "string" && currentEntry.id ? { currentTaskEntryId: currentEntry.id } : {}),
     sourceEntryCount: previousCount + Math.max(0, sourceEnd - sourceStart),
     history,
+    records,
     supplements: [],
   };
   const metadata = [
@@ -717,7 +732,7 @@ function buildActiveDraft({ branchEntries, preparation, work, verification }: Bu
     safePaths,
     sourceStart,
     firstKeptIndex: selected.firstKeptIndex,
-    excludedToolErrors: toolErrorExclusions(branchEntries, sourceStart),
+    excludedToolErrors,
   };
 }
 

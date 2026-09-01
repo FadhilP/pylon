@@ -110,8 +110,8 @@ export function createTelemetry(pi: ExtensionAPI) {
     recordToolResult(event: any) {
       recordToolResult(meter, event);
     },
-    format() {
-      return formatTokenMeter(meter);
+    format(toolLimit?: number) {
+      return formatTokenMeter(meter, toolLimit);
     },
     dispose() {
       for (const dispose of disposers) dispose();

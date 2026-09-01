@@ -1,206 +1,58 @@
 # pi-helios
 
-Consent-gated browser and Android-emulator automation plus named Windows-window screenshots for [Pi](https://pi.dev). Helios never captures a desktop, exposes raw Playwright/Appium/ADB commands, controls physical Android devices, or monitors in background.
+Consent-gated browser automation, Android-emulator automation, and Windows-window screenshots for Pi. Helios never captures the desktop, exposes raw Playwright/Appium/ADB commands, controls physical Android devices, or monitors in the background.
 
-## Installation
+## Install and availability
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-Run `/reload` after installation. `@playwright/cli@0.1.18` is pinned as runtime dependency. Helios uses a persistent pinned Playwright client for active-session commands and a thin one-shot launcher for lifecycle and compatibility fallback. In the Pylon bundle, browser, Android, and capture schemas stay deferred until `search_tools` activates them; standalone Helios keeps all three tools active.
+Reload Pi. `@playwright/cli@0.1.18` is bundled. In Pylon, `helios_browser`, `helios_android`, and `helios_capture` are deferred until `search_tools` activates them; standalone Helios keeps them active. Its package settings are available through Pylon Web.
+Configuration is stored at `<agent-dir>/pi-helios/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-## Browser Setup
+## Browser setup and use
 
-### Owned Sessions
-
-Owned sessions use an isolated browser that is headless by default. Helios never downloads browsers during extension load or tool execution. If no compatible browser exists, run explicit setup from installed `pi-helios` package:
+Owned browsers are isolated, temporary, and headless by default. Helios never downloads a browser automatically. From the installed package, explicitly install compatible Chrome when needed:
 
 ```sh
 node node_modules/@playwright/cli/playwright-cli.js install-browser chrome
 ```
 
-Playwright browser downloads normally live under `%LOCALAPPDATA%\ms-playwright` on Windows or platform Playwright cache. Download and installed size vary by browser/version; allow several hundred MB and review CLI prompt before installation.
+Downloads normally use `%LOCALAPPDATA%\ms-playwright` on Windows or Playwright's platform cache and can require several hundred MB. Attached sessions use either a loopback CDP endpoint launched with a separate profile, or a supported Playwright MCP Bridge extension in Chrome/Edge. Never expose CDP to the network.
 
-### Attached Sessions
+| Tool | Main actions |
+| --- | --- |
+| `helios_browser` | `start`, `attach`, `close`, `detach`; navigation/resize; snapshot/find/screenshot; click/fill/press/hover/select/check; tab list/select/create/close |
+| `helios_android` | AVD/package/status; start/attach/close/detach; snapshot/find/screenshot; tap/fill/back/swipe |
+| `helios_capture` | Windows visible top-level window screenshot by required title substring |
 
-Attached sessions need no separate browser download when existing browser is compatible:
+Browser calls can batch up to 20 already-known ordered steps. A semantic browser plan resolves unique visible text/accessibility names for up to five non-consequential steps and fails closed on ambiguity/page change. Use latest snapshot/find refs (`e12`), not selectors. `find` takes one text or regex query up to 500 characters. `continue` reads a one-use cached snapshot chunk; new output/page changes invalidate cursors and old refs. Explicit snapshots are limited to 200 lines/20 KB, find to 80 lines/8 KB, and action snapshots to 60 lines/6 KB. URLs allow HTTP(S), `about:blank`, and explicit local `.html`/`.htm` files only. Screenshots are PNG up to 25 MB; snapshots and output are bounded/redacted.
 
-- **CDP:** launch Chrome/Chromium/Edge with remote debugging and separate profile, then attach to loopback HTTP origin such as `http://127.0.0.1:9222`. Never expose debugging port to network.
-- **Extension:** install and enable supported Playwright MCP Bridge extension in Chrome or Edge. Browser permissions and incognito policy still apply.
+`/helios visibility [show|hide|toggle]` controls future owned browser launches, and `/helios doctor browser` checks CLI readiness. Visibility persists but does not affect active or attached sessions. Text-only models can use bounded browser text; screenshots require an image-capable model. CDP/extension sessions are user-owned: Helios only detaches, never closes their browser/profile.
 
-Example CDP launch:
+In Pylon Web, an agent-started owned browser opens a Browser panel with a local bounded JPEG mirror. The panel may launch or directly control an owned browser; control has an idle lease and pauses agent actions. Attached browsers are never mirrored/controlled. The stream stays local to Pylon and outside Pi history/provider context.
 
-```sh
-chrome --remote-debugging-port=9222 --user-data-dir=C:\temp\pi-helios-cdp
-```
+## Android emulator setup and safety
 
-## Android Emulator Setup
+Helios starts one existing AVD or attaches to one running emulator. Install user-managed Android SDK `platform-tools`, `emulator`, and an AVD; set `ANDROID_SDK_ROOT`/`ANDROID_HOME` or use detected platform paths. In Pylon Web, **Android tooling → Install** installs pinned Appium/UiAutomator2 into Pylon data only after confirmation; it never changes global npm and preserves a valid install on failed repair. A global Appium or absolute non-symlink `APPIUM_PATH` is accepted if managed tooling is absent. `/helios doctor android` checks prerequisites.
 
-Helios can launch one existing Android Virtual Device (owned mode) or attach to one running Android emulator. Android SDK components, apps, system images, and AVDs remain user-managed.
+Start/attach needs visible confirmation and is unavailable without interactive UI. Attach accepts an even-port emulator serial and validates emulator/AVD identity. Owned start is visible by default; `headless: true` is opt-in. `close` stops only the emulator Helios launched; `detach` never stops an attached emulator. Fresh confirmation is required to list installed package IDs because they may be sensitive; inventory is all-or-nothing and capped at 128 KB/4,096 packages.
 
-1. Install an Android SDK with `platform-tools`, `emulator`, and at least one configured AVD.
-2. Set `ANDROID_SDK_ROOT` or `ANDROID_HOME`. Platform-default SDK directories are also detected (`%LOCALAPPDATA%\\Android\\Sdk`, `~/Library/Android/sdk`, or `~/Android/Sdk`).
-3. In Pylon Settings, select the Helios package and use **Android tooling → Install**. After explicit confirmation, Pylon installs repository-pinned Appium and UiAutomator2 versions into its own data directory. Setup never changes global npm packages and a failed repair preserves the previous valid installation.
+Actions use only refs from the latest snapshot/find. Stale, disabled, off-screen, malformed, or package-escaped targets are refused. Android source is capped at 1 MB/5,000 nodes; editable/password-like values and common credential patterns are redacted, but screenshots cannot be. System UI, permission controllers, launchers, settings, keyboards, installers, mixed-package trees, APK install/transfer, arbitrary capabilities/scripts/selectors, raw device commands, AVD creation/deletion, and physical devices are unsupported. Private Appium binds a random loopback port and never enables relaxed security. Optional live tests require `PI_HELIOS_ANDROID_LIVE=1`, AVD/package variables, and optionally attach serial.
 
-A manually managed global Appium installation or an absolute, non-symlink `APPIUM_PATH` remains supported when managed tooling is absent. Run `/helios-android-doctor` to check SDK tools, installed AVDs, Appium, and UiAutomator2. Helios starts a private Appium server bound to a reserved random loopback port; it never enables relaxed security.
+## Consent, privacy, and limitations
 
-### Android Usage
+Owned browser start needs no confirmation. Attach requires session-scoped confirmation identifying the endpoint/browser; closing an attached user tab needs fresh confirmation. Without UI, owned browser sessions work, but attachment and window capture are refused. Declining consent invokes no browser command. Cleanup uncertainty leaves a retryable `cleanup-required` session.
 
-`helios_android` exposes constrained actions:
+Returned snapshots/screenshots may contain private messages, passwords, tokens, customer data, and form values. Text snapshots redact form values/common credentials best-effort and report redaction/truncation counts; screenshots cannot be redacted. Returned content and images enter Pi history and go to the selected provider. Temporary Helios artifacts are private and removed on cleanup.
 
-- `avds`, `packages`, `status`
-- `start`, `attach`, `close`, `detach`
-- `snapshot`, `find`, `screenshot`
-- `tap`, `fill`, `back`, `swipe`
+Supervise purchases, messages, publishing, destructive actions, permissions, and secret entry. Upload/download, clipboard, dialogs, storage/cookies, network interception, tracing/video/PDF, arbitrary scripts, and browser chrome are unsupported.
 
-Start an owned existing AVD:
+`helios_capture` is Windows-only and captures a visible top-level window using `target: "window"` and a required title substring. Exact title wins; ambiguous matches fail. It revalidates window handle/process/visibility/bounds before `PrintWindow` and has no desktop fallback. Protected, elevated, GPU, minimized, hung, or unsupported windows may be blank or fail.
 
-```text
-{ action: "start", avd: "Pixel_8_API_35", appPackage: "com.example.app", appActivity: ".MainActivity" }
-```
+## Web Scout integration
 
-Owned starts are visible by default. Set `headless: true` only when a native emulator window is unnecessary. `close` deletes the Appium session, stops Helios's Appium server, revalidates emulator identity, and stops only the emulator process Helios launched.
-
-List every package ID visible to Android's default/current-user package-manager view on an already-running emulator without creating an Appium session:
-
-```text
-{ action: "packages", serial: "emulator-5554" }
-```
-
-Package inventory requires fresh visible confirmation because system and user-installed package IDs may reveal sensitive apps and the returned list may enter model/session history. Helios verifies the emulator identity, runs one fixed internal package-manager query, and returns the complete validated list or fails without partial output if its 128 KB / 4,096-package safety bound is exceeded.
-
-Attach to an already-running emulator by its even-port ADB serial:
-
-```text
-{ action: "attach", serial: "emulator-5554", appPackage: "com.example.app" }
-```
-
-Attachment verifies that the target is an emulator and resolves its AVD name. `detach` deletes the Appium session and stops Helios's Appium server but never stops the existing emulator. Both start and attach require visible confirmation and are unavailable without interactive UI.
-
-Snapshots expose bounded refs such as `a1`; `tap` and `fill` accept only refs from the latest snapshot or find result. Tap, fill, back, and swipe invalidate refs. Helios refetches source, verifies the expected package and element identity, and refuses stale, disabled, off-screen, malformed, or package-escaped targets.
-
-Android source is limited to 1 MB, 5,000 nodes, and bounded model output. Every editable-field value, password-like value, and common credential pattern is redacted from text snapshots. Screenshots cannot be redacted. Mixed-package actionable trees, permission controllers, launchers, settings, keyboards presented as separate UI trees, installers, and other system UI are outside the expected package and are refused.
-
-Helios uses only fixed internal SDK operations for device listing, package inventory, AVD identity, boot readiness, and owned-emulator shutdown. Confirmed Settings setup uses a committed lockfile to install fixed Appium and UiAutomator2 versions into a Pylon-owned directory, with shell-free subprocesses, a restricted child environment, private extension state, staging, verification, rollback, and cross-process leases that block changes during Android sessions. Starts reserve session identity and ports before asynchronous work; close and shutdown wait for in-flight startup cleanup. Helios does not expose raw ADB/Appium commands, caller-controlled shell access, selectors, scripts, arbitrary capabilities, APK installation, file transfer, physical-device control, AVD creation/deletion, or unknown-process cleanup.
-
-An opt-in local contract test is available with `PI_HELIOS_ANDROID_LIVE=1`, `PI_HELIOS_ANDROID_AVD`, `PI_HELIOS_ANDROID_PACKAGE`, and optional `PI_HELIOS_ANDROID_ACTIVITY`. Set `PI_HELIOS_ANDROID_ATTACH_SERIAL` as well to exercise attach/snapshot/screenshot/detach against an already-running emulator. Live tests are skipped by default.
-
-## Browser Usage
-
-### Actions and Batching
-
-`helios_browser` exposes constrained actions:
-
-- `start`, `attach`, `close`, `detach`
-- `navigate`, `back`, `forward`, `reload`, `resize`
-- `snapshot`, `continue`, `find`, `screenshot`
-- `click`, `fill`, `press`, `hover`, `select`, `check`, `uncheck`
-- `tabs` with `list`, `select`, `create`, or `close`
-
-Ordered actions can be sent in one batch (up to 20 steps):
-
-```text
-{ actions: [{ action: "start", url: "https://example.com" }, { action: "snapshot" }, { action: "close" }] }
-```
-
-Batch only steps whose targets and element references are already known. If a later action depends on inspecting an earlier snapshot or result, make a separate call instead. Batch output keeps compact intermediate status, page changes, warnings, and images; the final step keeps full text and snapshot output.
-
-For deterministic form work, a semantic plan can resolve one unique visible text or accessible name before each step (up to five steps):
-
-```text
-{ plan: [{ action: "fill", match: "Email", text: "person@example.com" }, { action: "click", match: "Continue" }] }
-```
-
-Plans fail closed on no match or ambiguity and stop before the next step after an observed page change. Successful intermediate find output is kept out of model context. Use plans only for non-consequential work; purchases, messages, publishing, destructive actions, permissions, and secret entry remain directly supervised.
-
-Use `resize` to test responsive layouts in CSS pixels without full device emulation:
-
-```text
-{ action: "resize", width: 390, height: 844 }
-```
-
-Swap width and height for landscape. The Pylon panel follows its available size by default, but an agent `resize` locks the logical page viewport so later panel resizing only scales the mirror. Taking direct control returns the viewport to panel-fit behavior.
-
-### Search, Snapshots, and Screenshots
-
-Prefer targeted search over a full snapshot when the element text is known:
-
-```text
-{ action: "find", text: "Add to cart" }
-{ action: "find", regex: "/sign (in|up)/i" }
-```
-
-`find` accepts exactly one plain-text or regular-expression query, searches the current accessibility snapshot, and returns matching nodes with nearby context and usable refs. Queries are limited to 500 characters. Keep queries narrow; large match sets return a bounded prefix, total match count, remaining counts, and a refinement hint.
-
-Browser actions may already return a usable snapshot. Request another only when output is absent, truncated, or insufficient. Prefer screenshots targeted to a returned element ref; use `fullPage` only when whole-page context is necessary.
-
-Snapshots compact exact unnamed `generic` accessibility wrappers by default while preserving their children, named or interactive generics, semantic roles, states, and other attributes. Use `snapshotMode: "full"` on an explicit `snapshot` only when an unnamed container ref is needed for a targeted snapshot or screenshot. Full snapshots remain redacted and bounded.
-
-Browser output uses action-specific limits: explicit snapshots allow up to 200 lines / 20 KB, `find` up to 80 lines / 8 KB, and snapshots emitted by other actions up to 60 lines / 6 KB. Line or byte limit, whichever comes first, adds deterministic remaining metadata and an opaque one-use continuation cursor. Use `{ action: "continue", cursor: "..." }` to read the next cached redacted chunk without another browser command. A continued chunk may return another cursor. New snapshot/find output and page-changing actions invalidate older cursors; each chunk also replaces usable element refs from the prior chunk. Prefer snapshot depth 4–6 first or target a returned ref for more detail. Web Scout uses its own smaller broker limits and supports the same continuation flow.
-
-Use element references from latest snapshot, such as `e12`; arbitrary selectors are rejected. URLs permit HTTP(S), `about:blank`, and explicit local `file:` URLs ending in `.html` or `.htm`; raw filesystem paths, remote file hosts, credentials, and other local file types are rejected. Local prototypes are trusted content and may load other local resources. Snapshot depth, text, output, errors, tabs, and screenshots are bounded. Screenshots remain limited to valid PNG files up to 25 MB.
-
-### Pylon Web
-
-In Pylon Web, an agent-started owned session automatically opens the **Browser** right panel and passively mirrors the viewport through a bounded local JPEG screencast targeting up to 30 FPS while the panel is visible. The stream uses an ephemeral loopback-only Chromium debugging endpoint inside the private owned profile, is pushed directly to the authenticated panel without entering the event journal, and stops when the panel disconnects. The panel can also launch a browser or take direct control to forward pointer, wheel, keyboard, resize, navigation, and tab controls. Direct control uses a short idle lease: agent browser actions pause while the panel owns the session, held keys/buttons are released when control ends, and inactivity releases the lease automatically. Attached user browsers are never mirrored or controllable from the embedded panel. Embedded frames stay local to Pylon and are not added to Pi history or sent to the model provider.
-
-The embedded surface is a JPEG stream rather than an iframe. Explicit agent screenshots remain bounded PNG artifacts; the live stream runs independently so it does not serialize with agent browser actions. IME input and precision dragging can still feel less responsive than a native browser window.
-
-### Visibility and Session Lifecycle
-
-Owned sessions are headless by default, isolated, temporary, and closed on explicit `close` or Pi session shutdown. Toggle future owned launches between shown and headless mode:
-
-```text
-/helios-visibility
-/helios-visibility show
-/helios-visibility hide
-/helios-visibility status
-```
-
-No argument toggles the setting. Changes persist and affect future owned launches; active owned and attached browsers remain unchanged. Headless mode shows no separate native browser window; use Pylon's live mirror for visual supervision. Purchases, messages, publishing, permissions, and destructive actions still require direct user supervision.
-
-Check pinned CLI readiness without launching a browser:
-
-```text
-/helios-doctor
-```
-
-Compatible owned-browser launch remains verified during `start`; Helios never installs a browser automatically.
-
-CDP/extension sessions are user-owned: Helios only `detach`s, never closes browser, kills process, or deletes profile. Shutdown cleanup is best effort after abrupt process termination.
-
-Text-only models may use approved bounded snapshots and interactions. Screenshots require image-capable model.
-
-## Consent and Privacy
-
-### Consent
-
-Starting an isolated Helios-owned browser requires no confirmation. Attaching to an existing browser requires confirmation naming endpoint/browser and warns that existing tabs, logins, and page data may be exposed. Attachment grant lasts for current Pi browser session. Closing attached user tab requires fresh confirmation.
-
-### Data Handling
-
-Snapshots and screenshots can contain passwords, private messages, tokens, customer data, and form content. Snapshot form values and common textual credential patterns are redacted, with redaction/truncation counts returned in tool details, but users must still supervise. Screenshots cannot be text-redacted. Selected model provider receives returned page text/images and page metadata; Pi session history retains tool results and attachments. Temporary Helios artifacts are private and removed after use/session cleanup.
-
-### Unsupported and Consequential Actions
-
-Consequential generic clicks cannot always be classified reliably. Supervise purchases, sending messages, publishing, destructive actions, permission prompts, and secret entry. Uploads, downloads, clipboard, dialogs, storage, cookies, user-controlled network interception, tracing, video, PDF, arbitrary scripts, and browser chrome are not supported.
-
-Without UI, isolated owned-browser sessions remain available; attachment and Windows-window capture are refused because they require confirmation. Declined consent invokes no browser command. Cancellation stops current CLI command while preserving healthy session when possible. Uncertain lifecycle cleanup leaves a retryable `cleanup-required` session; use `close` for owned sessions or `detach` for attached sessions.
-
-## Web Scout Broker
-
-When bundled with pi-scout, Helios advertises a versioned child-browser capability without sharing normal Helios sessions. Each approved `web_scout` call receives a one-use, 60-second grant for a dedicated headless owned browser. Generic `helios_browser` owned sessions retain their separate visibility setting. Child controls are limited to public navigation, bounded/continued snapshots, trusted link-URL resolution, and back navigation.
-
-Web Scout traffic uses an authenticated loopback proxy that validates and pins public DNS destinations for HTTP requests and HTTPS tunnels, including redirects and subresources. Private, loopback, link-local, metadata, reserved, multicast, documentation, and transition ranges are blocked. Generic `helios_browser` behavior remains unchanged.
-
-## Windows Window Capture
-
-`helios_capture` is Windows-window-only. **Breaking change from 0.1:** `target: "browser"`, browser `endpoint`, and browser-tab `title` were removed from `helios_capture`. Use `helios_browser` `start`/`attach`, then `screenshot`. Direct CDP WebSocket screenshot implementation no longer exists.
-
-```text
-target: window
-title: required window-title substring
-```
-
-Title matches visible top-level windows case-insensitively. Exact match wins; ambiguous partial matches fail. Helios resolves target before consent, then revalidates handle, process, visibility, and bounds before Win32 `PrintWindow`. No desktop fallback exists. Protected, elevated, GPU-accelerated, minimized, hung, or unsupported windows can produce blank/incomplete images or native failure.
+With pi-scout, Helios provides a separate one-use 60-second headless browser grant for approved `web_scout` calls; it does not share normal Helios sessions. The child can only navigate public pages, take bounded continued snapshots, resolve trusted links, and go back. Its authenticated loopback proxy pins public destinations and blocks private, loopback, metadata, reserved, documentation, multicast, and transition ranges for requests, redirects, and subresources.

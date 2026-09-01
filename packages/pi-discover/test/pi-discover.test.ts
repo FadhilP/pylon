@@ -1391,8 +1391,17 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.ok(statusCalls > statusCallsBeforeTurn);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "afterTurn");
 
-    await runtime.commands.get("discover-index").handler("status", ctx);
+    const stateEventsBeforeStatus = indexStates.length;
+    const gitCallsBeforeStatus = gitCalls.length;
+    await runtime.commands.get("discover-index").handler("", ctx);
     assert.match(notifications.at(-1)!.text, /index status/);
+    assert.equal(indexStates.length, stateEventsBeforeStatus, "bare status does not schedule index work");
+    assert.equal(gitCalls.length, gitCallsBeforeStatus, "bare status does not refresh, rebuild, or prune");
+
+    const stateEventsBeforeInvalid = indexStates.length;
+    await runtime.commands.get("discover-index").handler("refresh extra", ctx);
+    assert.equal(notifications.at(-1)!.level, "warning");
+    assert.equal(indexStates.length, stateEventsBeforeInvalid, "invalid input does not mutate lifecycle state");
 
     await runtime.commands.get("discover-index").handler("prune", ctx);
     assert.match(notifications.at(-1)!.text, /prune complete.*"removedWorkspaces":0/);

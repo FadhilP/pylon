@@ -33,6 +33,8 @@
     "packages/*/LICENSE",
     "packages/*/THIRD_PARTY_NOTICES.md",
     "skills",
+    "docs/pylon-web.png",
+    "docs/web",
     "platform/web/dist",
     "platform/web/dist-server",
     "README.md",

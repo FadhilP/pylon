@@ -10,6 +10,7 @@ import {
   IconCopy,
   IconFileText,
   IconGitBranch,
+  IconFolder,
   IconGitFork,
   IconLoader2,
   IconPaperclip,
@@ -51,6 +52,7 @@ import { renderMarkdown } from "../shared/markdown";
 import {
   fileMentionAtCaret,
   insertFileMention,
+  isExactSlashCommandSelection,
   isNearTranscriptBottom,
   scrollTopAfterPrepend,
   loginCommandProvider,
@@ -82,6 +84,7 @@ import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-
 import { exitDelay } from "./motion";
 import { OverviewOrb } from "./overview-primitives";
 import { useSyntaxHighlightingRevision } from "./use-chrome";
+import { FileTypeIcon } from "./files-panel";
 
 const markdownTags = [
   "a",
@@ -838,6 +841,18 @@ export function ConversationPanel({
         );
         return;
       }
+      if (
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing &&
+        suggestions.length &&
+        slashMatch &&
+        isExactSlashCommandSelection(slashMatch[1]!, suggestions[suggestionIndex]?.name)
+      ) {
+        event.preventDefault();
+        event.currentTarget.form?.requestSubmit();
+        return;
+      }
       if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
         event.preventDefault();
         if (suggestions.length) chooseSuggestion(suggestionIndex);
@@ -1163,7 +1178,7 @@ export function ConversationPanel({
           className={`composer-surface slash-suggestions${suggestions.length ? "" : " file-suggestions"}`}
           id={suggestions.length ? "slash-command-suggestions" : "file-mention-suggestions"}
           role="listbox"
-          aria-label={suggestions.length ? "Slash commands" : "Project files"}>
+          aria-label={suggestions.length ? "Slash commands" : "Project files and directories"}>
           {suggestions.map((command, index) => (
             <button
               className={index === suggestionIndex ? "is-selected" : ""}
@@ -1179,9 +1194,11 @@ export function ConversationPanel({
           ))}
           {suggestions.length === 0 &&
             fileSuggestions.map((path, index) => {
-              const separator = path.lastIndexOf("/");
-              const name = separator >= 0 ? path.slice(separator + 1) : path;
-              const directory = separator >= 0 ? path.slice(0, separator) : "";
+              const isDirectory = path.endsWith("/");
+              const displayPath = isDirectory ? path.slice(0, -1) : path;
+              const separator = displayPath.lastIndexOf("/");
+              const name = separator >= 0 ? displayPath.slice(separator + 1) : displayPath;
+              const directory = separator >= 0 ? displayPath.slice(0, separator) : "";
               return (
                 <button
                   className={index === suggestionIndex ? "is-selected" : ""}
@@ -1192,7 +1209,7 @@ export function ConversationPanel({
                   onPointerDown={event => event.preventDefault()}
                   onClick={() => chooseFileSuggestion(index)}>
                   <strong>
-                    <IconFileText size={13} />
+                    {isDirectory ? <IconFolder size={13} aria-hidden /> : <FileTypeIcon path={path} size={13} />}
                     {name}
                   </strong>
                   {directory && <span>{directory}</span>}

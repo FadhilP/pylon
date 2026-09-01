@@ -7,6 +7,9 @@ import {
   hasPendingV4Migration,
   migrateV4,
   recordPendingV4Migration,
+  MIGRATION_REVIEWER_IMMUTABLE_FOOTER,
+  MIGRATION_REVIEWER_PROMPT,
+  migrationReviewerPrompt,
   type MigrationJournal,
 } from "../src/memory-migration.ts";
 import type { NotebookNote } from "../src/memory.ts";
@@ -18,6 +21,13 @@ const fact = (key: string, scope: "user" | "project" = "project", owner = "owner
   scope,
   owner,
   evidencePaths: [],
+});
+
+test("migration customization is append-only and retains its immutable footer", () => {
+  assert.equal(migrationReviewerPrompt(), MIGRATION_REVIEWER_PROMPT);
+  const prompt = migrationReviewerPrompt({ mode: "append", text: "Keep diagnostic reasons short." });
+  assert.match(prompt, /## Operator customization\nKeep diagnostic reasons short\./);
+  assert.ok(prompt.endsWith(MIGRATION_REVIEWER_IMMUTABLE_FOOTER));
 });
 const fakeReviewer = (failAt = -1) => {
   let calls = 0;

@@ -297,11 +297,14 @@ test("timeline rejects incompatible targets before rollback capture", async () =
       setSessionName() {},
     };
     extension(pi, undefined, { artifactRoot: join(root, "timeline-artifacts") });
+    let idleWaits = 0;
     const ctx: any = {
       cwd: root,
       hasUI: true,
       mode: "tui",
-      waitForIdle: async () => {},
+      waitForIdle: async () => {
+        idleWaits++;
+      },
       ui: {
         notify: (message: string) => notices.push(message),
         setStatus() {},
@@ -317,14 +320,18 @@ test("timeline rejects incompatible targets before rollback capture", async () =
       },
     };
     await handlers.get("session_start")![0]({}, ctx);
+    await commands.get("timeline").handler("jump test-session:checkpoint-1", ctx);
+    assert.equal(idleWaits, 0, "invalid action does not wait or begin restore work");
+    assert.equal(selections.length, 0, "invalid action does not prompt for confirmation");
+    assert.equal(appended, 0, "invalid action does not checkpoint");
     await commands.get("timeline").handler("list", ctx);
     assert.match(notices.at(-1)!, new RegExp(`\\[blocked:HEAD\\] ${displayedTime} Old prompt`));
     assert.doesNotMatch(notices.at(-1)!, /branch:unknown|unsupported-without-head-ref|test-session:checkpoint/);
-    await commands.get("timeline").handler("", ctx);
+    await commands.get("timeline").handler("select", ctx);
     assert.equal(selections.length, 1);
     assert.ok(selections[0]!.every(row => row.includes(` ${displayedTime} Old prompt`)));
     assert.ok(selections[0]!.every(row => !row.includes("test-session:checkpoint")));
-    await commands.get("timeline").handler("jump test-session:checkpoint-1", ctx);
+    await commands.get("timeline").handler("restore test-session:checkpoint-1", ctx);
     assert.equal(appended, 0);
     assert.match(notices.at(-1)!, /HEAD commit differs/);
   } finally {

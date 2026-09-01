@@ -36,7 +36,7 @@ export function rankFilePaths(paths: string[], query: string): string[] {
       if (!validRelativePath(path)) return [];
       if (!needle) return [{ path, rank: 5 }];
       const lower = path.toLowerCase();
-      const name = basename(lower);
+      const name = basename(lower.endsWith("/") ? lower.slice(0, -1) : lower);
       const rank =
         name === needle
           ? 0
@@ -56,22 +56,35 @@ export function rankFilePaths(paths: string[], query: string): string[] {
 }
 
 function validRelativePath(path: string): boolean {
+  const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
   return (
-    path.length > 0 &&
     path.length <= 500 &&
-    !path.startsWith("/") &&
-    !/^[A-Za-z]:/.test(path) &&
-    !path.includes("\\") &&
-    !path.includes("\0") &&
-    !path.split("/").some(part => part === "." || part === ".." || part === "")
+    normalized.length > 0 &&
+    !normalized.startsWith("/") &&
+    !/^[A-Za-z]:/.test(normalized) &&
+    !normalized.includes("\\") &&
+    !normalized.includes("\0") &&
+    !normalized.split("/").some(part => part === "." || part === ".." || part === "")
   );
+}
+
+function includeDirectories(paths: string[]): string[] {
+  const entries = new Set(paths);
+  for (const path of paths) {
+    for (let separator = path.indexOf("/"); separator >= 0; separator = path.indexOf("/", separator + 1)) {
+      entries.add(path.slice(0, separator + 1));
+      if (entries.size >= MAX_PATHS * 2) return [...entries];
+    }
+  }
+  return [...entries];
 }
 
 async function inventory(cwd: string): Promise<string[] | undefined> {
   const existing = cache.get(cwd);
   if (existing && existing.expiresAt > Date.now()) return existing.paths;
 
-  const paths = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.path);
+  const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.path);
+  const paths = includeDirectories(files.slice(0, MAX_PATHS));
   if (cache.size >= MAX_CACHES) cache.delete(cache.keys().next().value!);
   cache.set(cwd, { expiresAt: Date.now() + CACHE_MS, paths });
   return paths;

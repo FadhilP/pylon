@@ -317,7 +317,7 @@ test("subsequent plan inherits timeline lineage from a fresh executor session", 
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    await app.commands.get("plan").handler("Plan another change", ctx);
+    await app.commands.get("plan").handler("start Plan another change", ctx);
 
     const nextRun = app.appended.find(entry => entry.customType === "pylon-run" && entry.data.role === "planner")?.data;
     assert.ok(nextRun);
@@ -400,9 +400,9 @@ test("explicit plan resets model context without replacing the visible session",
       })();
     });
     for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    await app.commands.get("continuity").handler("planner provider/planner:high", ctx);
-    await app.commands.get("continuity").handler("executor provider/executor:low", ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("continuity").handler("set planner provider/planner:high", ctx);
+    await app.commands.get("continuity").handler("set executor provider/executor:low", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await planningRun;
     await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
     assert.equal(newSessions, 0);
@@ -678,7 +678,7 @@ test("TUI approval waits for the scheduled planner response before showing choic
       })();
     });
     for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await planningRun;
     await waitFor(() => app.customMessages.some(entry => entry.message.customType === "pi-continuity-execution"));
     assert.equal(selections, 1);
@@ -737,7 +737,7 @@ test("dismissed TUI approval is offered again on the next settlement", async () 
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(
@@ -799,7 +799,7 @@ test("unavailable executor leaves TUI approval pending", async () => {
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(
@@ -863,7 +863,7 @@ test("approval survives a clarification turn and normalizes missing plan summary
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
 
     for (const handler of app.handlers.get("agent_settled") ?? []) await handler({}, ctx);
     assert.equal(selections, 0);
@@ -954,7 +954,7 @@ test("RPC settlement presents plan review and keeps Plan mode status until appro
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(
@@ -1033,7 +1033,7 @@ test("Inspector feedback makes an open RPC approval dialog stale without requeue
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(
@@ -1099,7 +1099,7 @@ test("RPC plan actions persist feedback, preserve todo IDs, and approve the revi
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(
@@ -1220,7 +1220,7 @@ test("interrupted approval reconciles forward once on reload", async () => {
     app = runtime();
     const sessionStart = app.handlers.get("session_start")![0];
     await sessionStart({}, ctx);
-    await app.commands.get("plan").handler("Ship change", ctx);
+    await app.commands.get("plan").handler("start Ship change", ctx);
     await app.tools
       .get("continuity_update")
       .execute(

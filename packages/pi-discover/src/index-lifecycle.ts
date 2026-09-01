@@ -19,12 +19,12 @@ export type IndexLifecycle = {
 const COMMAND_ACTIONS = ["refresh", "rebuild", "prune", "status"] as const;
 type CommandAction = (typeof COMMAND_ACTIONS)[number];
 
-const ACTIVITY: Record<CommandAction, string> = {
+const ACTIVITY: Record<Exclude<CommandAction, "status">, string> = {
   refresh: "Refreshing index...",
   rebuild: "Rebuilding index...",
   prune: "Pruning stale index entries...",
-  status: "Reading index status...",
 };
+const COMMAND_USAGE = "Usage: /discover-index [status|refresh|rebuild|prune|help]";
 
 /** Owns the background indexing state machine and everything that reports on it. */
 export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider): IndexLifecycle {
@@ -129,9 +129,23 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
     },
 
     async runCommand(args: string, ctx: any) {
-      const action = (args.trim() || "refresh") as CommandAction;
-      if (!COMMAND_ACTIONS.includes(action)) {
-        ctx.ui.notify("Usage: /discover-index [refresh|rebuild|prune|status]", "error");
+      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      if (parts.length === 1 && parts[0] === "help") {
+        ctx.ui.notify(COMMAND_USAGE, "info");
+        return;
+      }
+      if (parts.length > 1 || (parts.length === 1 && !COMMAND_ACTIONS.includes(parts[0] as CommandAction))) {
+        ctx.ui.notify(COMMAND_USAGE, "warning");
+        return;
+      }
+      const action: CommandAction = (parts[0] ?? "status") as CommandAction;
+      if (action === "status") {
+        try {
+          const result = await indexFor(ctx.cwd).status();
+          ctx.ui.notify(`pi-discover index status: ${JSON.stringify(result)}`, "info");
+        } catch (error) {
+          ctx.ui.notify(`pi-discover index status failed: ${boundedError(error)}`, "error");
+        }
         return;
       }
       await ctx.waitForIdle?.();
@@ -141,7 +155,7 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
       }
       ctx.ui.setStatus("pi-discover-index", ACTIVITY[action]);
       activeCwd = ctx.cwd;
-      indexing = action !== "status";
+      indexing = true;
       await publishState();
       try {
         const index = indexFor(ctx.cwd);
@@ -149,15 +163,12 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
         if (action === "prune") result = await index.prune();
         else {
           if (action === "refresh") await index.refresh();
-          else if (action === "rebuild") await index.rebuild();
+          else await index.rebuild();
           result = await index.status();
         }
         latestError = undefined;
         ready = true;
-        ctx.ui.notify(
-          `pi-discover index ${action === "status" ? "status" : `${action} complete`}: ${JSON.stringify(result)}`,
-          "info",
-        );
+        ctx.ui.notify(`pi-discover index ${action} complete: ${JSON.stringify(result)}`, "info");
       } catch (error) {
         latestError = boundedError(error);
         ctx.ui.notify(`pi-discover index ${action} failed: ${latestError}`, "error");
@@ -166,6 +177,6 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
         await publishState();
         ctx.ui.setStatus("pi-discover-index", undefined);
       }
-    },
+    }
   };
 }

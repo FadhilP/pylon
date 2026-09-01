@@ -377,7 +377,7 @@ test("keeps recall available from a Continuity boundary before context with acti
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
   };
   await invoke("session_start", { reason: "reload" });
-  await commands.get("sieve").handler("active disable", ctx);
+  await commands.get("sieve").handler("active-pruning off", ctx);
   assert.equal(activeTools.includes("sieve_recall"), true);
   branch.push({
     id: "native",
@@ -1973,7 +1973,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     },
   };
 
-  await Promise.all([command.handler("active enable", ctx), command.handler("threshold 12000", ctx)]);
+  await Promise.all([command.handler("active-pruning on", ctx), command.handler("threshold 12000", ctx)]);
   assert.deepEqual(await loadConfig(settingsPath), {
     version: 1,
     activePruning: true,
@@ -1982,11 +1982,11 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     rolloverHighMultiplier: 8,
     rolloverLowMultiplier: 4,
   });
-  await command.handler("active disable", ctx);
+  await command.handler("active-pruning off", ctx);
   await command.handler("threshold reset", ctx);
-  await command.handler("active enable", ctx);
+  await command.handler("active-pruning on", ctx);
 
-  await command.handler("observe", ctx);
+  await command.handler("mode observe", ctx);
   assert.equal(hook(context), undefined);
   assert.equal((context.messages[1].content[0] as { text: string }).text.length, oversizedLength);
   await command.handler("status", ctx);
@@ -1999,7 +1999,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   );
   assert.match(notification, /actual transformations 0.*projected observe transformations 1/);
 
-  await command.handler("enable", ctx);
+  await command.handler("mode enabled", ctx);
   const outbound = hook(context);
   assert.notEqual(outbound.messages[1], context.messages[1]);
   await command.handler("status", ctx);
@@ -2026,7 +2026,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((await loadConfig(settingsPath)).rolloverHighMultiplier, 10);
   assert.equal((await loadConfig(settingsPath)).rolloverLowMultiplier, 5);
   await command.handler("rollover reset", ctx);
-  await command.handler("active disable", ctx);
+  await command.handler("active-pruning off", ctx);
   await command.handler("status", ctx);
   assert.match(
     notification,
@@ -2036,7 +2036,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   );
   assert.match(notification, /Active-result pruning: disabled/);
 
-  await command.handler("active enable", ctx);
+  await command.handler("active-pruning on", ctx);
   assert.deepEqual(await loadConfig(settingsPath), {
     version: 1,
     activePruning: true,
@@ -2046,9 +2046,9 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     rolloverLowMultiplier: 4,
   });
   assert.equal(activeTools.includes("sieve_recall"), true);
-  await command.handler("observe", ctx);
+  await command.handler("mode observe", ctx);
   assert.equal(activeTools.includes("sieve_recall"), false);
-  await command.handler("enable", ctx);
+  await command.handler("mode enabled", ctx);
   assert.equal(activeTools.includes("sieve_recall"), true);
 
   await command.handler("projection standard-v2", ctx);
@@ -2070,7 +2070,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal(publishedStates.at(-1).stability.standardChangesByKind.ageThreshold, 1);
 
   const comparisonsBeforeReset = publishedStates.at(-1).stability.standardComparisons;
-  await command.handler("projection standard", ctx);
+  await command.handler("projection standard-v2", ctx);
   await command.handler("projection standard-v2", ctx);
   hook({ messages: [user("v2-before"), v2Source, user("v2-after"), user("v2-age-two")] });
   assert.equal(
@@ -2078,9 +2078,9 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     comparisonsBeforeReset,
     "mode changes reset consecutive comparison state",
   );
-  await command.handler("observe", ctx);
+  await command.handler("mode observe", ctx);
   hook({ messages: [user("v2-before"), v2Source] });
-  await command.handler("enable", ctx);
+  await command.handler("mode enabled", ctx);
   hook({ messages: [user("v2-before"), v2Source] });
   assert.equal(
     publishedStates.at(-1).stability.standardComparisons,
@@ -2207,7 +2207,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   );
   assert.equal(ambiguousRecall.details.found, false);
   activeTools.push("later-tool");
-  await command.handler("active disable", ctx);
+  await command.handler("active-pruning off", ctx);
   assert.deepEqual(await loadConfig(settingsPath), {
     version: 1,
     activePruning: false,
@@ -2221,7 +2221,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.deepEqual(hook({ messages: [user("first"), activeSource] }).messages[1], activeSource);
 
   await command.handler("threshold 1000", ctx);
-  await command.handler("disable", ctx);
+  await command.handler("mode disabled", ctx);
   assert.equal(hook(context), undefined);
   await command.handler("reset-stats", ctx);
   await command.handler("status", ctx);
@@ -2230,7 +2230,7 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.match(notification, /actual transformations 0.*projected observe transformations 0/);
   assert.match(notification, /Latest call .*scanned 0; .* transformations 0/);
   await command.handler("what", ctx);
-  assert.match(notification, /^Usage: \/sieve enable\|observe\|disable/);
+  assert.match(notification, /^Usage: \/sieve \[status\|mode/);
   assert.deepEqual(await loadConfig(settingsPath), {
     version: 1,
     activePruning: false,
@@ -2240,16 +2240,16 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
     rolloverLowMultiplier: 4,
   });
 
-  await command.handler("projection standard", ctx);
+  await command.handler("projection standard-v2", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2");
   assert.match(notification, /projection mode set to standard v2/);
   await command.handler("projection legacy", ctx);
-  assert.equal((await loadConfig(settingsPath)).projectionMode, "legacy", "legacy remains a compatibility alias");
+  assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2", "legacy alias is rejected without mutation");
   await command.handler("projection stable", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "stable");
   assert.match(notification, /projection mode set to stable \(experimental\)/);
-  await command.handler("active enable", ctx);
-  await command.handler("enable", ctx);
+  await command.handler("active-pruning on", ctx);
+  await command.handler("mode enabled", ctx);
   const continuityCall = (id: string) => ({
     role: "assistant",
     content: [{ type: "toolCall", id, name: "bash", arguments: {} }],

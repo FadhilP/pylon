@@ -58,6 +58,28 @@ export const pylonCoreSettings = definePackageSettings({
       description: "Optional background model that assigns short semantic names to delegated agents.",
       apply: "next-session",
     },
+    {
+      version: 1,
+      key: "delegateNamingPrompt",
+      label: "Delegate naming instructions",
+      type: "prompt",
+      defaultValue: { mode: "default", text: "" },
+      allowedModes: ["default", "append"],
+      maxBytes: 32_768,
+      description: "Additional instructions for delegate naming. Output and parser contracts remain fixed.",
+      apply: "next-session",
+    },
+    {
+      version: 1,
+      key: "mainPrompt",
+      label: "Main agent system prompt",
+      type: "prompt",
+      defaultValue: { mode: "default", text: "" },
+      allowedModes: ["default", "append", "replace"],
+      maxBytes: 32_768,
+      description: "Customize Pi's system prompt. Replace mode overrides SYSTEM.md; APPEND_SYSTEM.md remains additive.",
+      apply: "next-session",
+    },
   ],
 } as const);
 
@@ -68,6 +90,8 @@ export type PylonCoreConfig = {
   delegateMaxAttempts?: number;
   delegateRetryBaseMs?: number;
   delegateNamingModel?: string;
+  delegateNamingPrompt?: import("./package-settings.ts").PromptPackageSettingValue;
+  mainPrompt?: import("./package-settings.ts").PromptPackageSettingValue;
 };
 export type EffectivePylonCoreConfig = {
   version: 1;
@@ -76,6 +100,8 @@ export type EffectivePylonCoreConfig = {
   delegateMaxAttempts: number;
   delegateRetryBaseMs: number;
   delegateNamingModel: string;
+  delegateNamingPrompt: import("./package-settings.ts").PromptPackageSettingValue;
+  mainPrompt: import("./package-settings.ts").PromptPackageSettingValue;
 };
 export const defaultConfig = (): PylonCoreConfig => ({ version: 1, lineEditEnabled: true });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pylon-core", "config.json");
@@ -88,6 +114,8 @@ export function effectiveConfig(config: PylonCoreConfig): EffectivePylonCoreConf
     delegateMaxAttempts: effectivePackageSettingValue(fields.delegateMaxAttempts, config.delegateMaxAttempts) as number,
     delegateRetryBaseMs: effectivePackageSettingValue(fields.delegateRetryBaseMs, config.delegateRetryBaseMs) as number,
     delegateNamingModel: effectivePackageSettingValue(fields.delegateNamingModel, config.delegateNamingModel) as string,
+    delegateNamingPrompt: effectivePackageSettingValue(fields.delegateNamingPrompt, config.delegateNamingPrompt) as import("./package-settings.ts").PromptPackageSettingValue,
+    mainPrompt: effectivePackageSettingValue(fields.mainPrompt, config.mainPrompt) as import("./package-settings.ts").PromptPackageSettingValue,
   };
 }
 

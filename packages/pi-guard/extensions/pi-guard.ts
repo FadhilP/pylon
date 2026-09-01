@@ -6,6 +6,7 @@ import {
   BLOCK_GUARD_RULES,
   commandRisk,
   GUARD_RISK_CATEGORIES,
+  hasBashNulRedirect,
   mergeGuardRules,
   pathRisk,
   POLICY_VERSION,
@@ -16,6 +17,7 @@ import {
 
 const APPROVAL_RECORD_VERSION = 1;
 const choices = ["Allow once", "Always allow this session", "Always allow on this project", "Deny"] as const;
+const bashNulRedirectReason = "Bash redirection to bare 'nul'; use /dev/null, or ./nul for an intentional file";
 
 type ApprovalIdentity = {
   policyVersion: number;
@@ -298,6 +300,10 @@ export default function guardExtension(pi: ExtensionAPI) {
         deny(ctx, reason, event.toolCallId);
         return block(blockedMessage(reason));
       }
+      if (hasBashNulRedirect(command)) {
+        deny(ctx, bashNulRedirectReason, event.toolCallId);
+        return block(blockedMessage(bashNulRedirectReason));
+      }
       const risk = commandRisk(command);
       if (!risk) return;
       const verdict = await decide(ctx, risk, command, "command", command, event.toolCallId);
@@ -321,6 +327,12 @@ export default function guardExtension(pi: ExtensionAPI) {
 
   pi.on("user_bash", async (event, ctx) => {
     if (!enabled) return;
+    if (hasBashNulRedirect(event.command)) {
+      deny(ctx, bashNulRedirectReason);
+      return {
+        result: { output: blockedMessage(bashNulRedirectReason), exitCode: 126, cancelled: true, truncated: false },
+      };
+    }
     const risk = commandRisk(event.command);
     if (!risk) return;
     const verdict = await decide(ctx, risk, event.command, "command", event.command);
@@ -330,9 +342,18 @@ export default function guardExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("guard", {
     description: "Show Pi Guard status",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
+      const value = args.trim().toLowerCase();
+      if (value === "help") {
+        ctx.ui.notify("Usage: /guard [status|help]", "info");
+        return;
+      }
+      if (value && value !== "status") {
+        ctx.ui.notify("Usage: /guard [status|help]", "warning");
+        return;
+      }
       ctx.ui.notify(
-        `Pi Guard ${enabled ? "active" : "disabled by policy"}. Blocked: ${blocked}. Approved: ${confirmed}.`,
+        `Pi Guard: ${enabled ? "active" : "disabled by policy"}\nApproved: ${confirmed} · Blocked: ${blocked}`,
         "info",
       );
     },

@@ -114,6 +114,11 @@ export function commandRisk(command: string): GuardRisk | undefined {
   return match && risk(match[1], match[2]);
 }
 
+/** Bash treats bare `nul` as a normal file, including on Windows. */
+export function hasBashNulRedirect(command: string): boolean {
+  return /(?<!>)(?:\d+|&)?(?:>>?|>\|)\s*(?:"nul"|'nul'|nul)(?=$|[\s;|&)])/i.test(command);
+}
+
 function missingPath(error: unknown) {
   const code = (error as NodeJS.ErrnoException)?.code;
   return code === "ENOENT" || code === "ENOTDIR";

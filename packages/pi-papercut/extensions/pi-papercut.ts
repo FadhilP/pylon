@@ -19,8 +19,10 @@ import { loadProjectState, updateProjectState } from "../src/storage.ts";
 import { effectiveConfig, loadConfig } from "../src/config.ts";
 
 const STATUSES = ["open", "resolved", "dismissed", "all"] as const;
+const LIFECYCLE_ACTIONS = ["resolve", "dismiss", "reopen"] as const;
 const Status = StringEnum(STATUSES);
-const Action = StringEnum(["capture", "list", "resolve", "dismiss", "reopen"] as const);
+const Lifecycle = StringEnum(LIFECYCLE_ACTIONS);
+const Action = StringEnum(["capture", "list", ...LIFECYCLE_ACTIONS] as const);
 
 const MAX_QUERY_LENGTH = 200;
 const MAX_MESSAGE_LENGTH = 500;
@@ -28,6 +30,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 type ListStatus = PapercutStatus | "all";
 type ToolAction = "capture" | "list" | LifecycleAction;
+type LifecycleToolAction = { action: LifecycleAction; ids: string[]; note?: string };
 type ToolContext = {
   cwd: string;
   model?: { provider?: string; id?: string };
@@ -35,6 +38,7 @@ type ToolContext = {
 };
 type ToolParams = {
   action?: ToolAction;
+  actions?: LifecycleToolAction[];
   message?: string;
   status?: ListStatus;
   limit?: number;
@@ -74,6 +78,34 @@ function assertOnlyAllowedFields(action: ToolAction, params: ToolParams) {
   );
   if (extra.length)
     throw new Error(`${extra.join(", ")} ${extra.length === 1 ? "is" : "are"} not valid when ${whileDoing}`);
+}
+
+const isLifecycleAction = (value: unknown): value is LifecycleAction =>
+  (LIFECYCLE_ACTIONS as readonly unknown[]).includes(value);
+
+function assertLifecycleRequest(
+  action: LifecycleAction,
+  params: { ids?: string[]; note?: string },
+): asserts params is { ids: string[]; note?: string } {
+  if (!params.ids?.length) throw new Error("ids are required when updating papercuts");
+  if (action === "resolve" && !params.note?.trim()) throw new Error("note is required when resolving papercuts");
+}
+
+function assertBatchRequest(params: ToolParams): asserts params is ToolParams & { actions: LifecycleToolAction[] } {
+  const extra = Object.keys(params).filter(key => key !== "actions" && params[key as keyof ToolParams] !== undefined);
+  if (extra.length) throw new Error(`${extra.join(", ")} ${extra.length === 1 ? "is" : "are"} not valid with actions`);
+  if (!params.actions?.length) throw new Error("actions must contain at least one lifecycle update");
+  if (params.actions.length > 20) throw new Error("actions cannot contain more than 20 lifecycle updates");
+  let idCount = 0;
+  for (const item of params.actions) {
+    if (!item || typeof item !== "object" || !isLifecycleAction(item.action))
+      throw new Error("actions may only contain resolve, dismiss, or reopen updates");
+    const itemExtra = Object.keys(item).filter(key => !["action", "ids", "note"].includes(key));
+    if (itemExtra.length) throw new Error(`${itemExtra.join(", ")} is not valid in a lifecycle update`);
+    assertLifecycleRequest(item.action, item);
+    idCount += item.ids.length;
+  }
+  if (idCount > 100) throw new Error("actions cannot update more than 100 papercuts");
 }
 
 function parseListRequest(request: any, defaultLimit = 25) {
@@ -158,6 +190,25 @@ export default function papercutExtension(pi: ExtensionAPI) {
     const saved = await updateProjectState(agentDir, ctx.cwd, state => {
       const updated = updatePapercuts(state, action, ids, note);
       return { state: updated.state, result: updated.records };
+    });
+    if (isBoundSession(ctx)) adoptState(saved.state, true, true);
+    return saved.result;
+  };
+
+  const runLifecycleBatch = async (ctx: ToolContext, actions: LifecycleToolAction[]) => {
+    const saved = await updateProjectState(agentDir, ctx.cwd, state => {
+      let next = state;
+      const seen = new Set<string>();
+      const results: Array<{ action: LifecycleAction; records: PapercutRecord[] }> = [];
+      for (const item of actions) {
+        const updated = updatePapercuts(next, item.action, item.ids, item.note);
+        const repeated = updated.records.find(record => seen.has(record.id));
+        if (repeated) throw new Error(`papercut ${shortId(repeated.id)} appears in more than one action`);
+        for (const record of updated.records) seen.add(record.id);
+        next = updated.state;
+        results.push({ action: item.action, records: updated.records });
+      }
+      return { state: next, result: results };
     });
     if (isBoundSession(ctx)) adoptState(saved.state, true, true);
     return saved.result;
@@ -274,15 +325,27 @@ export default function papercutExtension(pi: ExtensionAPI) {
     reopen: "Reopened",
   };
 
-  const lifecycleAction = async (ctx: ToolContext, action: LifecycleAction, params: ToolParams) => {
-    if (!params.ids?.length) throw new Error("ids are required when updating papercuts");
-    if (action === "resolve" && !params.note?.trim()) throw new Error("note is required when resolving papercuts");
-    const records = await runLifecycle(ctx, action, params.ids, params.note);
+  const lifecycleText = (action: LifecycleAction, records: PapercutRecord[]) => {
     const plural = records.length === 1 ? "" : "s";
     const ids = records.map(record => shortId(record.id)).join(", ");
+    return `${LIFECYCLE_VERB[action]} papercut${plural}: ${ids}.`;
+  };
+
+  const lifecycleAction = async (ctx: ToolContext, action: LifecycleAction, params: ToolParams) => {
+    assertLifecycleRequest(action, params);
+    const records = await runLifecycle(ctx, action, params.ids, params.note);
     return {
-      content: [{ type: "text" as const, text: `${LIFECYCLE_VERB[action]} papercut${plural}: ${ids}.` }],
+      content: [{ type: "text" as const, text: lifecycleText(action, records) }],
       details: { action, records },
+    };
+  };
+
+  const lifecycleBatchAction = async (ctx: ToolContext, params: ToolParams) => {
+    assertBatchRequest(params);
+    const actions = await runLifecycleBatch(ctx, params.actions);
+    return {
+      content: [{ type: "text" as const, text: actions.map(item => lifecycleText(item.action, item.records)).join("\n") }],
+      details: { actions },
     };
   };
 
@@ -290,7 +353,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
     name: "papercut",
     label: "Papercut",
     description:
-      "Capture, list, or update the durable project papercut backlog. Omit action to capture. Supports unique ID prefixes, atomic batches, credential rejection, and bounded output.",
+      "Capture, list, or update the durable project papercut backlog. Omit action to capture. Supports unique ID prefixes, atomic same-action batches, atomic heterogeneous lifecycle actions, credential rejection, and bounded output.",
     promptSnippet: "Capture or manage small, actionable project workflow frictions",
     promptGuidelines: [
       "Use papercut immediately when concrete non-blocking friction caused by the repository, tooling, or workflow makes work unnecessarily harder—for example an avoidable retry, undocumented setup step, flaky command, stale cache, misleading error, or non-obvious gotcha. In one or two sentences record what you were doing, what got in the way, and optionally a tentative cause or improvement; then continue the current task. Do not log actual bugs or tracked work, expected failures, user mistakes, generic preferences, speculative ideas, or intentionally repeat known entries; incidental recurrence is deduplicated automatically.",
@@ -300,6 +363,23 @@ export default function papercutExtension(pi: ExtensionAPI) {
     parameters: Type.Object(
       {
         action: Type.Optional(Action),
+        actions: Type.Optional(
+          Type.Array(
+            Type.Object(
+              {
+                action: Lifecycle,
+                ids: Type.Array(Type.String({ minLength: 4, maxLength: 36 }), {
+                  minItems: 1,
+                  maxItems: 100,
+                  uniqueItems: true,
+                }),
+                note: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+              },
+              { additionalProperties: false },
+            ),
+            { minItems: 1, maxItems: 20 },
+          ),
+        ),
         message: Type.Optional(
           Type.String({
             minLength: 1,
@@ -325,6 +405,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
     ),
     async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
       const params = rawParams as ToolParams;
+      if (params.actions !== undefined) return lifecycleBatchAction(ctx as ToolContext, params);
       const action = params.action ?? "capture";
       assertOnlyAllowedFields(action, params);
       if (action === "capture") return captureAction(ctx as ToolContext, params);
@@ -334,11 +415,20 @@ export default function papercutExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("papercuts", {
-    description: "List project papercuts: /papercuts [open|resolved|dismissed|all]",
+    description: "List project papercuts by status",
     handler: async (args, ctx) => {
+      const value = args.trim().toLowerCase();
+      const usage = "Usage: /papercuts [open|resolved|dismissed|all|help]";
+      if (value === "help") {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      const status = value || "open";
+      if (!isListStatus(status)) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
       try {
-        const status = args.trim() || "open";
-        if (!isListStatus(status)) throw new Error("usage: /papercuts [open|resolved|dismissed|all]");
         ctx.ui.notify(formatList(await list(ctx, status), status), "info");
       } catch (error: any) {
         ctx.ui.notify(error?.message ?? String(error), "error");

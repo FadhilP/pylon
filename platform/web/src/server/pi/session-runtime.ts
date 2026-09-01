@@ -25,6 +25,9 @@ import {
 } from "pylon-core/src/worktree.ts";
 import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts";
 import { listSessionInventory, resolveUniqueSession, type SessionInventoryEntry } from "pylon-core/session-inventory";
+import { truncateUtf8 } from "pylon-core/src/utf8.ts";
+import { NAME_PROMPT } from "pylon-core/src/delegate-names.ts";
+import { configPath as pylonCoreConfigPath, effectiveConfig as effectivePylonCoreConfig, loadConfig as loadPylonCoreConfig } from "pylon-core/src/config.ts";
 import {
   buildSessionContext,
   createAgentSessionRuntime,
@@ -181,6 +184,15 @@ import {
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
+import {
+  packageSettingsKeys,
+  packageSettingsRevision,
+  patchPackageSettings,
+  PylonSettingsTool,
+  type PylonSettingsToolRequest,
+  type PylonSettingsToolResponse,
+} from "./pylon-settings-tool.ts";
+import { pylonCoreWebTools } from "./pylon-core-web-tools.ts";
 import {
   continuityCompactionInterruptionId,
   decodeHistoryCursor,
@@ -381,13 +393,13 @@ function compactionDisplay(details: unknown): CompactionDisplayReadModel | undef
     !Array.isArray(raw.supplements) ||
     raw.supplements.length > 8 ||
     !raw.supplements.every(supplement) ||
-    (generic &&
+    ((generic || raw.records !== undefined) &&
       (!Array.isArray(raw.records) ||
         raw.records.length > MAX_COMPACTION_DISPLAY_RECORDS ||
         !raw.records.every(record)))
   )
     return undefined;
-  const records = generic
+  const records = Array.isArray(raw.records)
     ? (raw.records as Array<Record<string, unknown>>)
     : (raw.supplements as Array<Record<string, unknown>>).map(item => ({
         sourceEntryId: item.sourceEntryId,
@@ -1039,6 +1051,7 @@ export class SessionRuntime implements PiDriver {
   private readonly sessionIndex = new SessionIndex();
   private readonly promptAttachments = new PromptAttachmentBridge();
   private readonly workspaceApplyTool = new WorkspaceApplyTool();
+  private readonly pylonSettingsTool = new PylonSettingsTool();
   private hookSettings?: HookSettingsStore;
   private hookInjection?: HookInjectionBridge;
   private projectRegistry?: ProjectRegistry;
@@ -1120,15 +1133,17 @@ export class SessionRuntime implements PiDriver {
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     this.gitBranch = this.readDisplayGitBranch(target.cwd);
     this.packageCatalog = new PackageCatalog(target.repositoryRoot, target.agentDir);
+    this.pylonSettingsTool.setHandler(request => this.handlePylonSettingsTool(request));
     this.hookSettings = new HookSettingsStore(target.agentDir);
     const packageScanStartedAt = performance.now();
     const packageScan = this.packageCatalog.scan().finally(() => {
       packageExtensionsMs += performance.now() - packageScanStartedAt;
     });
-    const [packageState, modelRuntime, hookSettings] = await Promise.all([
+    const [packageState, modelRuntime, hookSettings, pylonCoreConfig] = await Promise.all([
       packageScan,
       this.options.modelRuntime ?? createPylonModelRuntime(target.agentDir),
       this.hookSettings.read(),
+      loadPylonCoreConfig(pylonCoreConfigPath(target.agentDir)).then(effectivePylonCoreConfig),
     ]);
     this.hookInjection = new HookInjectionBridge(hookSettings);
     this.packageState = packageState;
@@ -1139,9 +1154,12 @@ export class SessionRuntime implements PiDriver {
     const createRuntime = await createPylonRuntimeFactory({
       agentDir: target.agentDir,
       additionalExtensionPaths: this.packageState.extensionPaths,
+      mainPrompt: pylonCoreConfig.mainPrompt,
       extensionFactories: [
         this.promptAttachments.extension,
         this.workspaceApplyTool.extension,
+        this.pylonSettingsTool.extension,
+        pylonCoreWebTools,
         this.hookInjection!.extension,
         ...(this.options.extensionFactories ?? []),
       ],
@@ -1463,6 +1481,23 @@ export class SessionRuntime implements PiDriver {
         let settingsError: string | undefined;
         try {
           settings = await catalog.readSettings(item.id, state);
+          if (settings?.kind === "generic" && settings.packageId === "pylon-core") {
+            settings = {
+              ...settings,
+              fields: settings.fields.map(field => {
+                if (field.type !== "prompt") return field;
+                const defaultText =
+                  field.key === "mainPrompt"
+                    ? runtime.session.systemPrompt
+                    : field.key === "delegateNamingPrompt"
+                      ? NAME_PROMPT
+                      : field.defaultText;
+                return defaultText === undefined
+                  ? field
+                  : { ...field, defaultText: truncateUtf8(defaultText, field.maxBytes) };
+              }),
+            };
+          }
         } catch (error) {
           settingsError = error instanceof Error ? error.message.slice(0, 500) : "Settings unavailable";
         }
@@ -1513,7 +1548,7 @@ export class SessionRuntime implements PiDriver {
       .runtime.getCommands()
       .find(command => command.name === "plan" && command.source === "extension");
     if (!plan) throw new Error("Plan mode is unavailable");
-    await session.prompt("/plan", { source: "rpc" });
+    await session.prompt("/plan start", { source: "rpc" });
     try {
       return await this.acceptPrompt(session, input);
     } catch (error) {
@@ -2587,6 +2622,56 @@ export class SessionRuntime implements PiDriver {
     return this.withSettingsUpdate(async () => {
       await catalog.updateSettings(input.packageId, input.settings);
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
+    });
+  }
+
+  private async handlePylonSettingsTool(request: PylonSettingsToolRequest): Promise<PylonSettingsToolResponse> {
+    const catalog = this.packageCatalog;
+    if (!catalog || !this.gate.ready) throw new Error("runtime is not ready");
+    if (request.type === "list") {
+      const state = await catalog.scan();
+      const packages = await Promise.all(
+        state.packages
+          .filter(item => item.settingsPath)
+          .map(async item => {
+            const settings = await catalog.readSettings(item.id, state);
+            if (!settings) throw new Error(`${item.id} has no configurable settings`);
+            return {
+              packageId: item.id,
+              description: item.description,
+              kind: settings.kind,
+              keys: packageSettingsKeys(settings),
+              revision: packageSettingsRevision(settings),
+            };
+          }),
+      );
+      return { packages };
+    }
+
+    const read = async () => {
+      const settings = await catalog.readSettings(request.packageId);
+      if (!settings) throw new Error(`${request.packageId} has no configurable settings`);
+      return { packageId: request.packageId, revision: packageSettingsRevision(settings), settings };
+    };
+    if (request.type === "get") return read();
+
+    const prepare = async () => {
+      const current = await read();
+      if (current.revision !== request.revision) {
+        throw new Error(`${request.packageId} settings changed; call get again before updating`);
+      }
+      const patched = patchPackageSettings(current.settings, request.changes);
+      return { ...current, settings: patched.settings, changes: patched.changes };
+    };
+    if (request.type === "preview") return prepare();
+
+    return this.withSettingsUpdate(async () => {
+      const prepared = await prepare();
+      if (prepared.changes.length === 0) return prepared;
+      this.assertPackageModels(prepared.settings);
+      await catalog.updateSettings(request.packageId, prepared.settings);
+      const updated = await read();
+      return { ...updated, changes: prepared.changes };
     });
   }
 

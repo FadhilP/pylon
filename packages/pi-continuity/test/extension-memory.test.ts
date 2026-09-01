@@ -203,7 +203,7 @@ test("plan mode permits memory list but blocks memory mutations", async () => {
   try {
     const app = runtime();
     for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
-    await app.commands.get("plan").handler("Inspect memory", ctx);
+    await app.commands.get("plan").handler("start Inspect memory", ctx);
     assert.ok(app.active().includes("memory"));
     const guard = app.handlers.get("tool_call")![0];
     assert.equal(await guard({ toolName: "memory", input: { action: "list" } }, ctx), undefined);
@@ -359,13 +359,13 @@ test("explicit V4 migration command requires UI confirmation and a reviewer", as
     });
     await assert.rejects(response!, /invalid memory migration fields/);
     const command = app.commands.get("memory").handler;
-    await command("migrate-v4", ctx);
+    await command("migrate", ctx);
     assert.match(notices.at(-1) ?? "", /Interactive UI required/);
     ctx.hasUI = true;
-    await command("migrate-v4", ctx);
+    await command("migrate", ctx);
     assert.doesNotMatch(notices.at(-1) ?? "", /migration failed/i);
     confirmed = true;
-    await command("migrate-v4", ctx);
+    await command("migrate", ctx);
     assert.match(notices.at(-1) ?? "", /Memory Reviewer is not configured/);
     assert.equal(
       JSON.parse(await readFile(join(continuityRoot, "memory-v6", "migration.json"), "utf8")).status,

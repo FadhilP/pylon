@@ -5,9 +5,23 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { defaultConfig, loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import {
+  CHECKPOINT_TITLE_PROMPT,
+  SESSION_TITLE_IMMUTABLE_FOOTER,
+  SESSION_TITLE_PROMPT,
+  sessionTitlePrompt,
+} from "../src/prompts.ts";
 
 const runtimeSettings = { gitTimeoutMs: 120_000, titleTimeoutMs: 30_000, titleMaxTokens: 32, titleChangedFiles: 20 };
+const timelinePromptDefaultText = `Session titles:\n${SESSION_TITLE_PROMPT}\n\nCheckpoint titles:\n${CHECKPOINT_TITLE_PROMPT}`;
 
+
+test("Timeline naming customization remains append-only before its output footer", () => {
+  assert.equal(sessionTitlePrompt(), SESSION_TITLE_PROMPT);
+  const prompt = sessionTitlePrompt({ mode: "append", text: "Use repository vocabulary." });
+  assert.match(prompt, /## Operator customization\nUse repository vocabulary\./);
+  assert.ok(prompt.endsWith(SESSION_TITLE_IMMUTABLE_FOOTER));
+});
 test("Timeline settings preserve title modes and persist bounded runtime settings", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-timeline-config-"));
   try {
@@ -17,6 +31,8 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
       editRollbackDefault: false,
       checkpointTitleMode: "disabled",
       ...runtimeSettings,
+      prompt: { mode: "default", text: "" },
+      promptDefaultText: timelinePromptDefaultText,
     });
     await updateSettings(
       {
@@ -28,6 +44,7 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
         titleTimeoutMs: 45_000,
         titleMaxTokens: 64,
         titleChangedFiles: 50,
+        prompt: { mode: "append", text: "Prefer project terminology." },
       },
       { agentDir },
     );
@@ -40,6 +57,8 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
       titleTimeoutMs: 45_000,
       titleMaxTokens: 64,
       titleChangedFiles: 50,
+      prompt: { mode: "append", text: "Prefer project terminology." },
+      promptDefaultText: timelinePromptDefaultText,
     });
     const path = join(agentDir, "pi-timeline", "config.json");
     assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
@@ -50,9 +69,16 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
       titleTimeoutMs: 45_000,
       titleMaxTokens: 64,
       titleChangedFiles: 50,
+      prompt: { mode: "append", text: "Prefer project terminology." },
     });
     await updateSettings(
-      { kind: "timeline", editRollbackDefault: false, checkpointTitleMode: "session", ...runtimeSettings },
+      {
+        kind: "timeline",
+        editRollbackDefault: false,
+        checkpointTitleMode: "session",
+        ...runtimeSettings,
+        prompt: { mode: "default", text: "" },
+      },
       { agentDir },
     );
     assert.deepEqual(await readSettings({ agentDir }), {
@@ -60,6 +86,8 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
       editRollbackDefault: false,
       checkpointTitleMode: "session",
       ...runtimeSettings,
+      prompt: { mode: "default", text: "" },
+      promptDefaultText: timelinePromptDefaultText,
     });
     await assert.rejects(
       updateSettings(

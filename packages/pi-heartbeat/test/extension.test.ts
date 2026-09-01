@@ -9,18 +9,20 @@ import extension from "../extensions/pi-heartbeat.ts";
 function harness() {
   const handlers = new Map<string, (...args: any[]) => any>();
   const tools = new Map<string, any>();
+  const commands = new Map<string, any>();
   const events: Array<{ name: string; value: any }> = [];
   let sessionId = `heartbeat-test-${process.pid}-${Date.now()}`;
   extension({
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     registerTool: (tool: any) => tools.set(tool.name, tool),
-    registerCommand: () => {},
+    registerCommand: (name: string, command: any) => commands.set(name, command),
     events: { emit: (name: string, value: any) => events.push({ name, value }) },
   } as any);
   const ctx = { cwd: process.cwd(), hasUI: false, mode: "print", sessionManager: { getSessionId: () => sessionId } };
   return {
     handlers,
     tools,
+    commands,
     ctx,
     events,
     setSessionId: (value: string) => {
@@ -147,6 +149,29 @@ test("completed job remains in context until its output is fetched", async () =>
       "heartbeat_start",
     ]);
     assert.equal(handlers.get("context")!({ messages: [] }), undefined);
+  } finally {
+    await handlers.get("session_shutdown")!();
+  }
+});
+
+
+test("/heartbeat validates syntax, reports unavailable state, and cancels known jobs", async () => {
+  const { handlers, tools, commands, ctx } = harness();
+  const notifications: Array<{ text: string; level: string }> = [];
+  const commandCtx = { ...ctx, ui: { notify: (text: string, level: string) => notifications.push({ text, level }) } };
+  await commands.get("heartbeat").handler("list", commandCtx);
+  assert.match(notifications.at(-1)?.text ?? "", /unavailable/i);
+  assert.equal(notifications.at(-1)?.level, "warning");
+
+  await handlers.get("session_start")!({}, ctx);
+  try {
+    await commands.get("heartbeat").handler("cancel", commandCtx);
+    assert.equal(notifications.at(-1)?.level, "warning");
+    const started = await tools
+      .get("heartbeat_start")
+      .execute("start", { command: `node -e \"setTimeout(()=>{},10000)\"`, otherWork: "cancel it" }, undefined, undefined, ctx);
+    await commands.get("heartbeat").handler(`cancel ${started.details.id}`, commandCtx);
+    assert.match(notifications.at(-1)?.text ?? "", /Cancellation requested/);
   } finally {
     await handlers.get("session_shutdown")!();
   }

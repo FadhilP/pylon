@@ -7,6 +7,7 @@ import {
   commandRisk,
   DEFAULT_GUARD_RULES,
   GUARD_RISK_CATEGORIES,
+  hasBashNulRedirect,
   mergeGuardRules,
   pathRisk,
   validateGuardRules,
@@ -34,6 +35,13 @@ test("command categories have stable IDs and confirmation defaults", () => {
   }
   assert.equal(commandRisk("rm file.txt"), undefined);
   assert.equal(commandRisk("git push origin main"), undefined);
+});
+
+test("bare Bash nul redirections are distinguished from valid or explicit targets", () => {
+  for (const command of ["tool > nul", "tool 2>NUL", "tool &>>\"nul\"", "tool >|'nul'"])
+    assert.equal(hasBashNulRedirect(command), true, command);
+  for (const command of ["tool > /dev/null", "tool > ./nul", "tool > null", "tool > nul.txt"])
+    assert.equal(hasBashNulRedirect(command), false, command);
 });
 
 test("sparse rules validate and merge over safe defaults", () => {

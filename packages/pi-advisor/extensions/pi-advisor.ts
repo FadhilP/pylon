@@ -5,12 +5,14 @@ import { Type } from "typebox";
 import { requestDelegateName, type DelegateNameHandle } from "pylon-core/delegate-names";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
 import { advisorBudget } from "../src/budget.ts";
-import { ADVISOR_PROMPT } from "../src/prompts.ts";
+import { ADVISOR_IMMUTABLE_FOOTER, ADVISOR_PROMPT } from "../src/prompts.ts";
+import { composePackagePrompt } from "pylon-core/package-settings";
 import {
   advisorInputTokenBudget,
   advisorMaxCalls,
   advisorMaxCostUsd,
   advisorMaxOutputTokens,
+  advisorPrompt,
   advisorTimeoutMs,
   configPath,
   loadConfig,
@@ -199,6 +201,7 @@ export default function advisorExtension(
     thinking?: string;
     userMessage: Message;
     cacheRetention: "short" | "long";
+    systemPrompt: string;
   };
   type PrepareResult = { ok: true; call: PreparedCall } | { ok: false; result: ReturnType<typeof textResult> };
 
@@ -211,6 +214,8 @@ export default function advisorExtension(
     const maxOutputTokens = advisorMaxOutputTokens(config.maxOutputTokens);
     const timeoutMs = advisorTimeoutMs(config.timeoutMs);
     const inputTokenBudget = advisorInputTokenBudget(config.inputTokenBudget);
+    // Snapshot once at operation start; retries and provider invocation share this exact prompt.
+    const systemPrompt = composePackagePrompt(ADVISOR_PROMPT, advisorPrompt(config.prompt), ADVISOR_IMMUTABLE_FOOTER);
     if (calls >= maxCalls)
       return {
         ok: false,
@@ -273,7 +278,7 @@ export default function advisorExtension(
     const continuationPrefix = previousAdvice
       ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
       : "";
-    const reservedInputTokens = Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
+    const reservedInputTokens = Math.ceil((systemPrompt.length + continuationPrefix.length) / 4) + 256;
     const snapshot = buildSnapshot(
       messages,
       model.contextWindow,
@@ -329,6 +334,7 @@ export default function advisorExtension(
         thinking,
         userMessage,
         cacheRetention,
+        systemPrompt,
       },
     };
   };
@@ -393,6 +399,7 @@ export default function advisorExtension(
           thinking,
           userMessage,
           cacheRetention,
+          systemPrompt,
         } = prepared.call;
         let contextTokens: number | null = null;
         const contextLimit = model.contextWindow;
@@ -423,7 +430,7 @@ export default function advisorExtension(
                 complete: completeAdvisor,
                 retryWait,
                 model,
-                request: { systemPrompt: ADVISOR_PROMPT, messages: [userMessage] },
+                request: { systemPrompt, messages: [userMessage] },
                 completeOptions: {
                   apiKey: auth.apiKey,
                   headers: auth.headers,
@@ -560,7 +567,7 @@ export default function advisorExtension(
     let selected = value;
     if (!selected) {
       if (ctx.mode !== "tui") {
-        ctx.ui.notify("Usage: /advisor <provider/model-id[:thinking]>|disable|reset|status", "info");
+        ctx.ui.notify("Advisor model selection is available only in Pi TUI.", "error");
         return;
       }
       selected =
@@ -597,17 +604,23 @@ export default function advisorExtension(
   };
 
   pi.registerCommand("advisor", {
-    description: "Select model and thinking, reset, or show status",
+    description: "Show or configure the Advisor model",
     handler: async (args, ctx) => {
-      const subcommands: Record<string, (ctx: any) => Promise<void>> = {
-        disable: disableAdvisor,
-        reset: resetAdvisor,
-        status: showAdvisorStatus,
-      };
-      const value = args.trim();
-      const subcommand = subcommands[value];
-      if (subcommand) return subcommand(ctx);
-      return selectAdvisorModel(value, ctx);
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage = "Usage: /advisor [status|set <provider/model[:thinking]>|select|disable|reset|help]";
+      if ((action === "status" && parts.length === 1) || parts.length === 0) return showAdvisorStatus(ctx);
+      if (action === "disable" && parts.length === 1) return disableAdvisor(ctx);
+      if (action === "reset" && parts.length === 1) return resetAdvisor(ctx);
+      if (action === "set" && parts.length === 2) return selectAdvisorModel(parts[1]!, ctx);
+      if (action === "select" && parts.length === 1) {
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify("Advisor model selection is available only in Pi TUI.", "error");
+          return;
+        }
+        return selectAdvisorModel("", ctx);
+      }
+      ctx.ui.notify(usage, action === "help" && parts.length === 1 ? "info" : "warning");
     },
   });
 }

@@ -226,17 +226,19 @@ export function createToolRegistry(pi: ExtensionAPI) {
 
   /** Backs `/pylon tools [status|enable <tool...>|disable <tool...>]`. */
   const manageTools = (args: string, ctx: any) => {
-    const [action = "status", ...names] = args.trim().split(/\s+/).filter(Boolean);
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const [action = "status", ...names] = parts;
+    const usage = "Usage: /pylon tools [status|enable <tool...>|disable <tool...>]";
     const effective = () => pi.getActiveTools();
-    if (action === "status") {
+    if (action === "status" && names.length === 0) {
       ctx.ui.notify(
         `Baseline: ${[...baseline].sort().join(", ") || "none"}\nEffective: ${effective().sort().join(", ") || "none"}\nRestrictive gates: ${hasGate() ? "active" : "none"}`,
         "info",
       );
       return;
     }
-    if (!["enable", "disable"].includes(action) || !names.length) {
-      ctx.ui.notify("Usage: /pylon tools [status|enable <tool...>|disable <tool...>]", "error");
+    if (!( ["enable", "disable"] as const).includes(action as "enable") || !names.length) {
+      ctx.ui.notify(usage, "warning");
       return;
     }
     const known = new Set((pi.getAllTools?.() ?? effective().map(name => ({ name }))).map((tool: any) => tool.name));

@@ -51,6 +51,16 @@ export const scoutSettingFields = {
     max: 8,
     apply: "next-operation",
   },
+  prompt: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "prompt",
+    label: "System prompt",
+    type: "prompt",
+    defaultValue: { mode: "default", text: "" },
+    allowedModes: ["default", "append", "replace"],
+    maxBytes: 32_768,
+    apply: "next-operation",
+  },
 } satisfies Record<string, PackageSettingField>;
 export const scoutSettings = definePackageSettings({
   version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
@@ -67,6 +77,7 @@ export type ScoutConfig = {
   repoTimeoutMs?: number;
   maxCostUsd?: number;
   webSearchResults?: number;
+  prompt?: { mode: "default" | "append" | "replace"; text: string };
 };
 export const isScoutEnabled = (config: ScoutConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
@@ -84,6 +95,7 @@ export const scoutMaxCostUsd = (value?: unknown): number | undefined => {
 };
 export const webSearchResults = (value?: unknown): number =>
   effectivePackageSettingValue(scoutSettingFields.webSearchResults, value, process.env);
+export const scoutPrompt = (value?: unknown) => effectivePackageSettingValue(scoutSettingFields.prompt, value);
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-scout", "config.json");
 
 export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
@@ -110,6 +122,7 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
         ...(value.repoTimeoutMs !== undefined ? { repoTimeoutMs: value.repoTimeoutMs } : {}),
         ...(value.maxCostUsd !== undefined ? { maxCostUsd: value.maxCostUsd } : {}),
         ...(value.webSearchResults !== undefined ? { webSearchResults: value.webSearchResults } : {}),
+        ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
       } satisfies ScoutConfig;
     },
     defaultConfig,

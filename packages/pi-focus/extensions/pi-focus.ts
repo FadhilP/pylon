@@ -189,9 +189,28 @@ export default function focusExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("ui", {
-    description: "Configure focused TUI: enable, disable, compact, comfortable, bell, theme, status",
+    description: "Configure focused TUI density, completion bell, theme, and status",
     handler: async (args, ctx) => {
-      const action = args.trim().toLowerCase() || "status";
+      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const usage = "Usage: /ui [status|enable|disable|density <compact|comfortable>|bell <on|off>|theme|help]";
+      const action = parts[0] ?? "status";
+      const valid =
+        (parts.length === 0 && action === "status") ||
+        (parts.length === 1 && ["status", "enable", "disable", "theme", "help"].includes(action)) ||
+        (parts.length === 2 && action === "density" && ["compact", "comfortable"].includes(parts[1]!)) ||
+        (parts.length === 2 && action === "bell" && ["on", "off"].includes(parts[1]!));
+      if (!valid) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
+      if (action === "help") {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify("Focused UI is available only in TUI mode.", "error");
+        return;
+      }
       if (action === "disable") {
         enabled = false;
         restore(ctx);
@@ -204,15 +223,15 @@ export default function focusExtension(pi: ExtensionAPI) {
         ctx.ui.notify("Focused UI enabled.", "info");
         return;
       }
-      if (action === "compact" || action === "comfortable") {
-        density = action;
+      if (action === "density") {
+        density = parts[1] as Density;
         enabled = true;
         apply(ctx);
         ctx.ui.notify(`UI density: ${density}`, "info");
         return;
       }
-      if (action === "bell on" || action === "bell off") {
-        completionBell = action === "bell on";
+      if (action === "bell") {
+        completionBell = parts[1] === "on";
         ctx.ui.notify(`Completion bell: ${completionBell ? "enabled" : "disabled"}`, "info");
         return;
       }
@@ -224,14 +243,10 @@ export default function focusExtension(pi: ExtensionAPI) {
         );
         return;
       }
-      if (action === "status") {
-        ctx.ui.notify(
-          `UI: ${enabled ? "enabled" : "disabled"}\nDensity: ${density}\nCompletion bell: ${completionBell ? "enabled" : "disabled"}\nTheme: run /ui theme to apply focus-dark`,
-          "info",
-        );
-        return;
-      }
-      ctx.ui.notify("Usage: /ui enable|disable|compact|comfortable|bell on|bell off|theme|status", "info");
+      ctx.ui.notify(
+        `UI: ${enabled ? "enabled" : "disabled"}\nDensity: ${density}\nCompletion bell: ${completionBell ? "enabled" : "disabled"}\nTheme: run /ui theme to apply focus-dark`,
+        "info",
+      );
     },
   });
 }

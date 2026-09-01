@@ -124,7 +124,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("discover-index", {
-    description: "Refresh, rebuild, prune, or report the local pi-discover index",
+    description: "Report, refresh, rebuild, or prune the local pi-discover index",
     handler: (args, ctx) => index.runCommand(args, ctx),
   });
 }

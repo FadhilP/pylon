@@ -1114,8 +1114,7 @@ export class ServerTransport {
           })
           .then(result => accepted(result.sessionGeneration));
       case "timeline": {
-        const action = command.action === "restore" ? "jump" : command.action;
-        const message = `/timeline ${action}${command.checkpointId ? ` ${command.checkpointId}` : ""}`;
+        const message = `/timeline ${command.action}${command.checkpointId ? ` ${command.checkpointId}` : ""}`;
         return this.driver.prompt({
           commandId: command.commandId,
           expectedGeneration: command.expectedGeneration,

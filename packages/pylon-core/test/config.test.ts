@@ -22,6 +22,8 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
       delegateMaxAttempts: 3,
       delegateRetryBaseMs: 1_000,
       delegateNamingModel: "",
+      delegateNamingPrompt: { mode: "default", text: "" },
+      mainPrompt: { mode: "default", text: "" },
     });
     await updateSettings(
       {
@@ -49,6 +51,8 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
       delegateMaxAttempts: 5,
       delegateRetryBaseMs: 200,
       delegateNamingModel: "cheap/namer",
+      delegateNamingPrompt: { mode: "default", text: "" },
+      mainPrompt: { mode: "default", text: "" },
     });
     assert.equal(JSON.parse(await readFile(configPath(agentDir), "utf8")).lineEditEnabled, false);
   } finally {

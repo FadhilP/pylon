@@ -5,6 +5,7 @@ import {
   gruntMaxTurns,
   gruntModes,
   gruntParentContextChars,
+  gruntPrompt,
   gruntSettingFields,
   gruntThinkingLevels,
   gruntTimeoutMs,
@@ -13,11 +14,12 @@ import {
   thinkingLevels,
   type ThinkingLevel,
 } from "./config.ts";
+import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "./prompts.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
-    kind: "grunt",
+    kind: "grunt" as const,
     mode:
       config.disabled === true
         ? "disabled"
@@ -33,6 +35,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     maxTurns: gruntMaxTurns(config.maxTurns),
     maxCostUsd: gruntMaxCostUsd(config.maxCostUsd),
     parentContextChars: gruntParentContextChars(config.parentContextChars),
+    prompt: gruntPrompt(config.prompt),
+    promptDefaultText: `Isolated mode:\n${WORKER_PROMPT}\n\nDirect mode:\n${DIRECT_WORKER_PROMPT}`,
   };
 }
 
@@ -60,6 +64,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       maxTurns: value.maxTurns,
       maxCostUsd: value.maxCostUsd,
       parentContextChars: value.parentContextChars,
+      prompt: value.prompt,
       ...(value.mode === "model" ? { model: value.model.trim() } : {}),
     },
     configPath(agentDir),

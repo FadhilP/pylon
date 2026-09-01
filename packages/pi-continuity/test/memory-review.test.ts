@@ -6,6 +6,8 @@ import {
   preflightMemoryProposals,
   resolveExactUserQuote,
   reviewedRecord,
+  MEMORY_REVIEWER_IMMUTABLE_FOOTER,
+  memoryReviewerPrompt,
   type PreflightProposal,
   type ReviewPacket,
 } from "../src/memory-review.ts";
@@ -33,6 +35,7 @@ const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
   scope: "user",
   owner: "default",
   trigger: "replying",
+
   guidance: "Keep replies short.",
   authority: "user_instruction",
   origin: "agent",
@@ -43,6 +46,12 @@ const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
   createdAt: "2025-01-01T00:00:00.000Z",
   updatedAt: "2025-01-01T00:00:00.000Z",
   ...overrides,
+});
+
+test("memory reviewer customization is append-only and retains its immutable footer", () => {
+  const prompt = memoryReviewerPrompt({ mode: "append", text: "Use terse reasons." });
+  assert.match(prompt, /## Operator customization\nUse terse reasons\./);
+  assert.ok(prompt.endsWith(MEMORY_REVIEWER_IMMUTABLE_FOOTER));
 });
 const packet = (proposals: ReviewPacket["proposals"], notes: NotebookNote[] = []): ReviewPacket => ({
   version: 2,

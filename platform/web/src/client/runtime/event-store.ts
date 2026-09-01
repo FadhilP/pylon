@@ -90,7 +90,12 @@ import {
 } from "../../shared/transcript";
 import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
 import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
-import { pendingMessageId, reconcilePendingQueue, type PendingMessageReadModel } from "../../shared/pending-messages";
+import {
+  pendingMessageId,
+  promptCommandType,
+  reconcilePendingQueue,
+  type PendingMessageReadModel,
+} from "../../shared/pending-messages";
 import { completionRecord, recordCompletion, validCompletionSessionIds } from "../../shared/session-completions";
 
 export type { PendingMessageReadModel } from "../../shared/pending-messages";
@@ -310,12 +315,16 @@ export class RuntimeEventStore {
     const runtime = this.snapshot.runtime;
     if (!runtime || this.snapshot.connection !== "connected" || !runtime.ready)
       throw new Error("Runtime is not connected");
-    const type =
-      runtime.conversation.workStartedAt || runtime.conversation.queue.items?.length ? "queuePrompt" : "prompt";
     const id = commandId();
     const commandName = /^\s*\/([^\s]+)/.exec(message)?.[1];
-    const knownCommand = Boolean(
-      commandName && runtime.sessionControls.commands?.some(command => command.name === commandName),
+    const matchedCommand = commandName
+      ? runtime.sessionControls.commands?.find(command => command.name === commandName)
+      : undefined;
+    const knownCommand = Boolean(matchedCommand);
+    const type = promptCommandType(
+      Boolean(runtime.conversation.workStartedAt),
+      Boolean(runtime.conversation.queue.items?.length),
+      matchedCommand?.source,
     );
     if (!knownCommand) {
       const pending: PendingMessageReadModel = {

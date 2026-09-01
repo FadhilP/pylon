@@ -4,6 +4,7 @@ import {
   loadConfig,
   saveConfig,
   spawnSettings,
+  SPAWN_DEFAULT_PROMPT_POLICY,
   thinkingLevels,
   toolAvailabilities,
   type ThinkingLevel,
@@ -43,6 +44,11 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
       primitiveFields.recentThreadTotalChars!,
       config.recentThreadTotalChars,
     ),
+    privateAgentSystemPrompt: effectivePackageSettingValue(
+      primitiveFields.privateAgentSystemPrompt!,
+      config.privateAgentSystemPrompt,
+    ),
+    promptDefaultText: SPAWN_DEFAULT_PROMPT_POLICY,
   };
 }
 
@@ -56,7 +62,8 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
     !validPackageSettingValue(primitiveFields.spawnTimeoutMs!, value.spawnTimeoutMs) ||
     !validPackageSettingValue(primitiveFields.recentThreadLimit!, value.recentThreadLimit) ||
     !validPackageSettingValue(primitiveFields.recentThreadMaxChars!, value.recentThreadMaxChars) ||
-    !validPackageSettingValue(primitiveFields.recentThreadTotalChars!, value.recentThreadTotalChars)
+    !validPackageSettingValue(primitiveFields.recentThreadTotalChars!, value.recentThreadTotalChars) ||
+    !validPackageSettingValue(primitiveFields.privateAgentSystemPrompt!, value.privateAgentSystemPrompt)
   ) {
     throw new Error("invalid Spawn settings");
   }
@@ -71,6 +78,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       recentThreadLimit: value.recentThreadLimit,
       recentThreadMaxChars: value.recentThreadMaxChars,
       recentThreadTotalChars: value.recentThreadTotalChars,
+      privateAgentSystemPrompt: value.privateAgentSystemPrompt,
     },
     configPath(agentDir),
   );

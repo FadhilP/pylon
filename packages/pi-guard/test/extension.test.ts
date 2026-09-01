@@ -222,6 +222,35 @@ test("malformed records, cancellation, UI errors, and no UI fail closed", { conc
   assert.equal(unavailable.block, true);
 });
 
+test("bare nul redirection is blocked before Bash can create a file", { concurrency: false }, async () => {
+  const { root, agent } = await paths();
+  process.env.PI_CODING_AGENT_DIR = agent;
+  const app = harness();
+  const prompts: any[] = [];
+  const ctx = context(root, [], prompts);
+
+  const agentResult = await app.tool(
+    { type: "tool_call", toolName: "bash", toolCallId: "nul-agent", input: { command: "tool > nul 2>&1" } },
+    ctx,
+  );
+  assert.equal(agentResult.block, true);
+  assert.match(agentResult.reason, /use \/dev\/null/);
+  assert.equal(await app.tool({ type: "tool_call", toolName: "bash", input: { command: "tool > /dev/null" } }, ctx), undefined);
+
+  const heartbeatResult = await app.tool(
+    { type: "tool_call", toolName: "heartbeat_start", toolCallId: "nul-heartbeat", input: { command: "tool 2>NUL" } },
+    ctx,
+  );
+  assert.equal(heartbeatResult.block, true);
+  assert.equal(app.decisions.at(-1).toolCallId, "nul-heartbeat");
+
+  const userResult = await app.user({ command: "tool > 'nul'" }, ctx);
+  assert.equal(userResult.result.cancelled, true);
+  assert.equal(userResult.result.exitCode, 126);
+  assert.match(userResult.result.output, /use \/dev\/null/);
+  assert.deepEqual(prompts, [], "invalid redirections are blocked without an approval prompt");
+});
+
 test("Guard uses the effective runtime-policy timeout", { concurrency: false }, async () => {
   const { root, outside, agent } = await paths();
   process.env.PI_CODING_AGENT_DIR = agent;

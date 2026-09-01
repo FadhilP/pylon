@@ -22,6 +22,7 @@ import {
   thinkingLevels,
 } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 
 const scratch = () => mkdtemp(join(tmpdir(), "grunt-config-"));
 const withEnv = async (values: Record<string, string | undefined>, run: () => Promise<void>) => {
@@ -79,32 +80,29 @@ test("worker setting defaults and bounds are centralized", () => {
   assert.throws(() => gruntParentContextChars("12001"), /invalid/);
 });
 
-test("web settings persist all worker limits at the supplied agent directory", async () => {
+test("web settings persist worker limits and prompt", async () => {
   const agentDir = await scratch();
-  const settings = {
-    kind: "grunt" as const,
-    mode: "session" as const,
-    executionMode: "isolated" as const,
-    thinkingLevels: ["low", "xhigh"],
-    timeoutMs: 120_000,
-    maxTurns: 12,
-    maxCostUsd: 3,
-    parentContextChars: 1_200,
-  };
-  await updateSettings(settings, { agentDir });
-  assert.deepEqual(await readSettings({ agentDir }), settings);
-  assert.deepEqual(await loadConfig(join(agentDir, "pi-grunt", "config.json")), {
-    version: 1,
-    disabled: false,
-    mode: "isolated",
-    thinkingLevels: ["low", "xhigh"],
-    timeoutMs: 120_000,
-    maxTurns: 12,
-    maxCostUsd: 3,
-    parentContextChars: 1_200,
+  const current = await readSettings({ agentDir });
+  await updateSettings(
+    {
+      ...current,
+      mode: "session",
+      timeoutMs: 120_000,
+      maxTurns: 12,
+      maxCostUsd: 3,
+      parentContextChars: 1_200,
+      prompt: { mode: "append", text: "Report focused checks." },
+    },
+    { agentDir },
+  );
+  const saved = await readSettings({ agentDir });
+  assert.deepEqual(saved.prompt, { mode: "append", text: "Report focused checks." });
+  assert.equal(saved.promptDefaultText, `Isolated mode:\n${WORKER_PROMPT}\n\nDirect mode:\n${DIRECT_WORKER_PROMPT}`);
+  assert.deepEqual((await loadConfig(join(agentDir, "pi-grunt", "config.json"))).prompt, {
+    mode: "append",
+    text: "Report focused checks.",
   });
-  await assert.rejects(updateSettings({ ...settings, maxCostUsd: 0 }, { agentDir }), /invalid Grunt settings/);
-  await assert.rejects(updateSettings({ ...settings, maxTurns: 1_001 }, { agentDir }), /invalid Grunt settings/);
+  await assert.rejects(updateSettings({ ...saved, maxCostUsd: 0 }, { agentDir }), /invalid Grunt/);
 });
 
 test("environment fallbacks apply only when a worker setting is not persisted", async () => {

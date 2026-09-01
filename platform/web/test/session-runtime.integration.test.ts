@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
@@ -1165,6 +1164,7 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     shutdowns: 0,
     unavailable: 0,
     notifications: 0,
+    planArgs: [] as string[],
   };
   let cancelNextReplacement = true;
   let cancelRecoverySwitch = false;
@@ -1199,6 +1199,11 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
         if (!cancelNextReplacement) return;
         cancelNextReplacement = false;
         if (!(await ctx.ui.confirm("Cancel replacement?", "Test cancellation"))) return { cancel: true };
+      });
+      pi.registerCommand("plan", {
+        handler: async args => {
+          observations.planArgs.push(args.trim());
+        },
       });
       pi.registerCommand("phase0-probe", {
         handler: async (_args, ctx) => {
@@ -1300,6 +1305,15 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
     await driver.prompt({ commandId: "empty-command", expectedGeneration: 1, message: "/phase0-empty" });
     assert.equal((await driver.snapshot()).commandResult?.command, "phase0-empty");
     driver.dismissCommandResult("empty-command", 1);
+    await driver.prompt({
+      commandId: "planned-empty-command",
+      expectedGeneration: 1,
+      message: "/phase0-empty",
+      planMode: true,
+    });
+    assert.deepEqual(observations.planArgs, ["start"]);
+    assert.equal((await driver.snapshot()).commandResult?.command, "phase0-empty");
+    driver.dismissCommandResult("planned-empty-command", 1);
     await driver.prompt({ commandId: "compact-failure", expectedGeneration: 1, message: "/compact:2 fail" });
     assert.deepEqual((await driver.snapshot()).commandResult, {
       id: "compact-failure",
@@ -1419,8 +1433,21 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.ok(first.operational.tools.policies.length > 0);
     const initialPackages = await driver.listPackages();
     assert.ok(initialPackages.packages.some(item => item.id === "pi-timeline" && item.active));
+    const coreSettings = initialPackages.packages.find(item => item.id === "pylon-core")?.settings;
+    assert.equal(coreSettings?.kind, "generic");
+    if (coreSettings?.kind !== "generic") throw new Error("pylon-core settings are unavailable");
+    const mainPrompt = coreSettings.fields.find(field => field.key === "mainPrompt");
+    assert.equal(mainPrompt?.type, "prompt");
+    assert.ok(mainPrompt?.type === "prompt" && mainPrompt.defaultText?.includes("coding agent"));
     const allThinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-    assert.deepEqual(initialPackages.packages.find(item => item.id === "pi-spawn")?.settings, {
+    const defaultPrompt = { mode: "default", text: "" } as const;
+    const assertPromptSettings = (actual: unknown, expected: unknown): void => {
+      assert.ok(actual && typeof actual === "object");
+      const { promptDefaultText, ...persisted } = actual as Record<string, unknown>;
+      assert.ok(typeof promptDefaultText === "string" && promptDefaultText.length > 0);
+      assert.deepEqual(persisted, expected);
+    };
+    assertPromptSettings(initialPackages.packages.find(item => item.id === "pi-spawn")?.settings, {
       kind: "spawn",
       agentAvailability: "deferred",
       sessionAvailability: "deferred",
@@ -1429,6 +1456,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       recentThreadLimit: 8,
       recentThreadMaxChars: 800,
       recentThreadTotalChars: 12_000,
+      privateAgentSystemPrompt: defaultPrompt,
     });
 
     const initialActiveTools = first.activeTools;
@@ -1481,9 +1509,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         recentThreadLimit: 4,
         recentThreadMaxChars: 400,
         recentThreadTotalChars: 4_000,
+        privateAgentSystemPrompt: defaultPrompt,
       },
     });
-    assert.deepEqual((await driver.listPackages()).packages.find(item => item.id === "pi-spawn")?.settings, {
+    assertPromptSettings((await driver.listPackages()).packages.find(item => item.id === "pi-spawn")?.settings, {
       kind: "spawn",
       agentAvailability: "active",
       sessionAvailability: "deferred",
@@ -1492,6 +1521,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       recentThreadLimit: 4,
       recentThreadMaxChars: 400,
       recentThreadTotalChars: 4_000,
+      privateAgentSystemPrompt: defaultPrompt,
     });
 
     const generation = configured.sessionGeneration;
@@ -1507,11 +1537,12 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
           maxCostUsd: 0.5,
           maxOutputTokens: 8_192,
           inputTokenBudget: 32_768,
+          prompt: defaultPrompt,
         },
       ],
       [
         "pi-scout",
-        { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 },
+        { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5, prompt: defaultPrompt },
       ],
       [
         "pi-grunt",
@@ -1524,12 +1555,13 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
           maxCostUsd: 2,
           parentContextChars: 0,
           maxTurns: 40,
+          prompt: defaultPrompt,
         },
       ],
     ] as const) {
       const updated = await driver.updatePackageSettings({ packageId, settings });
       assert.equal(updated.sessionGeneration, generation);
-      assert.deepEqual((await driver.listPackages()).packages.find(item => item.id === packageId)?.settings, settings);
+      assertPromptSettings((await driver.listPackages()).packages.find(item => item.id === packageId)?.settings, settings);
     }
     const unchangedRuntime = await driver.snapshot();
     assert.deepEqual(unchangedRuntime.activeTools, initialActiveTools);
@@ -1537,7 +1569,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     const scoutDisabled = await driver.updatePackageSettings({
       packageId: "pi-scout",
-      settings: { kind: "scout", mode: "disabled", repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 },
+      settings: { kind: "scout", mode: "disabled", repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5, prompt: defaultPrompt },
     });
     const gruntDisabled = await driver.updatePackageSettings({
       packageId: "pi-grunt",
@@ -1550,6 +1582,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         maxCostUsd: 2,
         parentContextChars: 0,
         maxTurns: 40,
+        prompt: defaultPrompt,
       },
     });
     assert.equal(scoutDisabled.sessionGeneration, generation);
@@ -1567,9 +1600,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         maxCostUsd: 3,
         parentContextChars: 1_200,
         maxTurns: 12,
+        prompt: defaultPrompt,
       },
     });
-    assert.deepEqual((await driver.listPackages()).packages.find(item => item.id === "pi-grunt")?.settings, {
+    assertPromptSettings((await driver.listPackages()).packages.find(item => item.id === "pi-grunt")?.settings, {
       kind: "grunt",
       mode: "session",
       executionMode: "direct",
@@ -1578,6 +1612,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       maxCostUsd: 3,
       parentContextChars: 1_200,
       maxTurns: 12,
+      prompt: defaultPrompt,
     });
 
     await assert.rejects(
@@ -1592,6 +1627,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
           maxCostUsd: 0.5,
           maxOutputTokens: 8_192,
           inputTokenBudget: 32_768,
+          prompt: defaultPrompt,
         },
       }),
       /unavailable/,
@@ -1605,7 +1641,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       assert.equal(nextSnapshot.operational.timeline.availability, "unavailable");
       const nextPackages = await next.listPackages();
       assert.ok(nextPackages.packages.some(item => item.id === "pi-timeline" && !item.enabled && !item.active));
-      assert.deepEqual(nextPackages.packages.find(item => item.id === "pi-spawn")?.settings, {
+      assertPromptSettings(nextPackages.packages.find(item => item.id === "pi-spawn")?.settings, {
         kind: "spawn",
         agentAvailability: "active",
         sessionAvailability: "deferred",
@@ -1614,6 +1650,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         recentThreadLimit: 4,
         recentThreadMaxChars: 400,
         recentThreadTotalChars: 4_000,
+        privateAgentSystemPrompt: defaultPrompt,
       });
       assert.deepEqual((next as any).hookInjection.settings, futureHooks);
     } finally {
@@ -2107,7 +2144,7 @@ test("driver pages the complete visible branch after compaction", { timeout: 20_
   }
 });
 
-test("driver projects active-work compaction supplements and history as folded display", async () => {
+test("driver projects deterministic active-work records as folded display without reviewer supplements", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-active-compaction-"));
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
@@ -2115,14 +2152,6 @@ test("driver projects active-work compaction supplements and history as folded d
   await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
   const session = SessionManager.create(cwd, sessionDir);
   const keptEntryId = session.appendMessage({ role: "user", content: "Continue", timestamp: Date.now() });
-  const supplement = (sourceEntryId: string, role: "user" | "assistant" | "tool", category: string, quote: string) => ({
-    sourceEntryId,
-    role,
-    category,
-    quote,
-    sourceHash: "a".repeat(64),
-    quoteHash: createHash("sha256").update(quote).digest("hex"),
-  });
   const compactionEntryId = session.appendCompaction("## Active work summary", keptEntryId, 2_000, {
     type: "pi-continuity-compaction",
     version: 3,
@@ -2134,12 +2163,13 @@ test("driver projects active-work compaction supplements and history as folded d
       read: [{ path: "src/read.ts", sourceEntryId: "read-source" }],
       modified: [{ path: "src/changed.ts", sourceEntryId: "changed-source" }],
     },
-    supplements: [
-      supplement("user-source", "user", "constraint", "Preserve behavior"),
-      supplement("assistant-source", "assistant", "outcome", "Implemented the route"),
-      supplement("failed-source", "tool", "error", "permission denied"),
-      supplement("result-source", "tool", "outcome", "all checks passed"),
+    records: [
+      { sourceEntryId: "user-source", role: "user", text: "Preserve behavior" },
+      { sourceEntryId: "assistant-source", role: "assistant", text: "Implemented the route" },
+      { sourceEntryId: "failed-source", role: "tool", text: "permission denied", isError: true },
+      { sourceEntryId: "result-source", role: "tool", text: "all checks passed" },
     ],
+    supplements: [],
   });
 
   session.appendMessage({

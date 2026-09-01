@@ -1,29 +1,29 @@
 # pi-heartbeat
 
-Bounded background shell jobs for [Pi](https://pi.dev).
+Bounded background Bash jobs for Pi, for work that can run while the agent does other concrete independent work.
 
-## Installation
+## Install and use
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-heartbeat. Run `/reload` after installation.
+Reload Pi afterward. Pylon Web exposes package settings.
+Configuration is stored at `<agent-dir>/pi-heartbeat/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-## Usage
+| Tool / command | Use |
+| --- | --- |
+| `heartbeat_start` | Start a long job and return its ID |
+| `heartbeat_status` | Check a job or collect its result |
+| `heartbeat_cancel` | Cancel an active job |
+| `/heartbeat [list [running|all]|status ID|cancel ID|help]` | Manage jobs; bare command lists running jobs |
 
-Tools: `heartbeat_start`, `heartbeat_status`, and `heartbeat_cancel`.
+Up to four jobs run at once. Jobs use Pi's configured Bash shell on every platform, so commands use normal `bash` syntax. Use normal `bash` when there is no independent work to do while waiting. Optional `todoId` links a Continuity todo; `purpose` is `verification`, `build`, or `other`. Pylon only exposes status while a job is active or has an unread result, and cancel while it is active. Targeted status snapshots may repeat or omit prior output; list status is metadata-only, and running-job checks must be more than 30 seconds apart.
 
-User command: `/heartbeat [list|status ID|cancel ID]`.
+## Lifecycle, safety, and limits
 
-`heartbeat_start` starts up to four long Bash jobs and returns an ID immediately. It uses Pi's configured Bash shell on every platform, including Windows, so commands have the same shell syntax as normal `bash`. It requires concrete independent work while waiting; otherwise use normal `bash`. Pylon exposes `heartbeat_status` only while a job is active or has an unread result, and exposes `heartbeat_cancel` only while a job is active. Accepted targeted status checks include a small current stdout/stderr snapshot; snapshots may repeat or omit earlier output. List status remains metadata-only, and running-job checks must be more than 30 seconds apart.
+Jobs and logs exist only in the current extension runtime. Reload, session replacement, or exit kills their process trees, waits up to five seconds, and deletes external logs. UTF-8 output tails, full logs, and returned output are bounded. There is no automatic polling or extra model call. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity explicitly updates linked todos.
 
-Optional arguments include `todoId` and `purpose` (`verification`, `build`, or `other`). Use `purpose: "verification"` for long declared project checks while independent work remains. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity updates explicitly linked todos.
-
-## Job Lifecycle
-
-Jobs and logs exist only in the current extension runtime. Reload, session replacement, or exit kills process trees, waits at most five seconds, then deletes external logs. UTF-8 tails and full-log writes are ordered; output and log sizes remain bounded. No automatic polling or extra model calls occur.
-
-## Security and Limitations
-
-Commands have the same authority as Pi `bash`: they can modify files and are not sandboxed. Deliberately detached grandchildren may escape process-tree termination. Continuity plan mode blocks Heartbeat tools.
+Jobs have the same authority as Pi `bash`, can modify files, and are not sandboxed. Deliberately detached grandchildren may escape process-tree termination. Continuity plan mode blocks Heartbeat tools.

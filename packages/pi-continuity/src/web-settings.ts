@@ -5,6 +5,7 @@ import {
   DEFAULT_KEEP_RECENT_TOKENS,
   compactionReviewerMaxOutputTokens,
   compactionReviewTimeoutMs,
+  continuityPrompt,
   configPath,
   continuitySettingFields,
   loadConfig,
@@ -15,6 +16,8 @@ import {
 } from "./config.ts";
 import { validPackageSettingValue } from "pylon-core/package-settings";
 import { withFileLock, writeJsonAtomic } from "./storage.ts";
+import { MEMORY_REVIEWER_PROMPT } from "./memory-review.ts";
+import { MIGRATION_REVIEWER_PROMPT } from "./memory-migration.ts";
 
 const validReserveTokens = (value: unknown): value is number =>
   Number.isSafeInteger(value) && (value as number) >= 1_000 && (value as number) <= 1_000_000;
@@ -90,6 +93,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     keepRecentTokens: config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
     compactionReviewTimeoutMs: compactionReviewTimeoutMs(config.compactionReviewTimeoutMs),
     compactionReviewerMaxOutputTokens: compactionReviewerMaxOutputTokens(config.compactionReviewerMaxOutputTokens),
+    prompt: config.prompt ?? { mode: "default", text: "" },
+    promptDefaultText: `Memory review:\n${MEMORY_REVIEWER_PROMPT}\n\nMemory migration:\n${MIGRATION_REVIEWER_PROMPT}`,
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
     ...(config.memoryReviewer ? { memoryReviewer: config.memoryReviewer } : {}),
@@ -125,6 +130,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
         ...(compactionReviewer ? { compactionReviewer } : {}),
         compactionReviewTimeoutMs: value.compactionReviewTimeoutMs,
         compactionReviewerMaxOutputTokens: value.compactionReviewerMaxOutputTokens,
+        prompt: value.prompt,
       }),
       configPath(agentDir),
     );

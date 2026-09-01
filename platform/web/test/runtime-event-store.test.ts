@@ -1,12 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reconcilePendingQueue, type PendingMessageReadModel } from "../src/shared/pending-messages.ts";
+import {
+  promptCommandType,
+  reconcilePendingQueue,
+  type PendingMessageReadModel,
+} from "../src/shared/pending-messages.ts";
 import {
   MAX_UNSEEN_COMPLETIONS,
   completionRecord,
   recordCompletion,
   validCompletionSessionIds,
 } from "../src/shared/session-completions.ts";
+
+test("extension slash commands bypass the prompt queue while prompt and skill commands preserve ordering", () => {
+  assert.equal(promptCommandType(true, false, "extension"), "prompt");
+  assert.equal(promptCommandType(false, true, "extension"), "prompt");
+  assert.equal(promptCommandType(true, false, "prompt"), "queuePrompt");
+  assert.equal(promptCommandType(true, false, "skill"), "queuePrompt");
+  assert.equal(promptCommandType(true, false), "queuePrompt");
+  assert.equal(promptCommandType(false, false), "prompt");
+});
 
 test("pending queue reconciliation preserves delivery and removes restored entries", () => {
   const pending = (commandId: string): PendingMessageReadModel => ({

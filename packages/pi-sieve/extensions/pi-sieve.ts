@@ -976,28 +976,29 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     }
   };
 
-  const PROJECTION_VALUES = ["stable", "standard-v2", "standard", "legacy"] as const;
   const USAGE =
-    "Usage: /sieve enable|observe|disable|status|projection <standard|standard-v2|stable>|reflow" +
-    "|rollover <high low|reset>|active <enable|disable>|threshold " +
-    `<${MIN_SIEVE_THRESHOLD}-${MAX_SIEVE_THRESHOLD}|reset>|reset-stats`;
+    "Usage: /sieve [status|mode <enabled|observe|disabled>|projection <stable|standard-v2>|active-pruning <on|off>|threshold <integer|reset>|rollover <high> <low>|rollover reset|reflow|reset-stats|help]";
 
-  type Subcommand = {
-    /** Whether this subcommand claims the given argument list. */
-    matches(parts: string[]): boolean;
-    run(parts: string[], ctx: any): Promise<void> | void;
-  };
-
-  /** Matches `<name>` with no argument. */
-  const bare = (name: string, run: Subcommand["run"]): Subcommand => ({
-    matches: parts => parts.length === 1 && parts[0] === name,
-    run,
-  });
-  /** Matches `<name> <value>` where the value is one of `values`. */
-  const withValue = (name: string, values: readonly string[], run: Subcommand["run"]): Subcommand => ({
-    matches: parts => parts.length === 2 && parts[0] === name && values.includes(parts[1]),
-    run,
-  });
+  const showStatus = (ctx: any) =>
+    ctx.ui.notify(
+      statusText({
+        mode,
+        projectionMode,
+        threshold,
+        latestMode,
+        latestStats,
+        cumulativeActual,
+        cumulativeProjected,
+        activePruning,
+        activeRecalls,
+        activeRecalledChars,
+        rolloverHighMultiplier,
+        rolloverLowMultiplier,
+        epoch,
+        stability,
+      }),
+      "info",
+    );
 
   const setMode = (nextMode: SieveMode, ctx: any) => {
     if (mode !== nextMode) requestEpoch("configuration-change");
@@ -1019,48 +1020,77 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
     );
   };
 
-  const subcommands: Subcommand[] = [
-    withValue("active", ["enable", "disable"], async (parts, ctx) => {
-      if (!(await saveSetting(ctx, "active-result setting", { activePruning: parts[1] === "enable" }))) return;
-      requestEpoch("configuration-change");
-      refreshRecallTool();
-      publishState();
-      ctx.ui.notify(
-        `pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}; cached prefix will reset.`,
-        "info",
-      );
-    }),
-    withValue("projection", PROJECTION_VALUES, async (parts, ctx) => {
-      const next: ProjectionMode = parts[1] === "standard" ? "standard-v2" : (parts[1] as ProjectionMode);
-      if (!(await saveSetting(ctx, "projection mode", { projectionMode: next }))) return;
-      requestEpoch("configuration-change");
-      publishState();
-      ctx.ui.notify(
-        `pi-sieve projection mode set to ${projectionModeLabel(projectionMode)}; cached prefix will reset.`,
-        "info",
-      );
-    }),
-    bare("reflow", (_parts, ctx) => {
-      stability.explicitReflows++;
-      requestEpoch("explicit-reflow");
-      persistTelemetry();
-      publishState();
-      ctx.ui.notify("pi-sieve will rebuild projections on the next provider call; cached prefix will reset.", "info");
-    }),
-    bare("enable", (_parts, ctx) => setMode("enabled", ctx)),
-    bare("observe", (_parts, ctx) => setMode("observe", ctx)),
-    bare("disable", (_parts, ctx) => setMode("disabled", ctx)),
-    bare("reset-stats", (_parts, ctx) => {
-      resetTelemetry();
-      persistTelemetry();
-      publishState();
-      ctx.ui.notify("pi-sieve statistics reset.", "info");
-    }),
-    {
-      matches: parts => parts[0] === "rollover" && (parts.length === 3 || (parts.length === 2 && parts[1] === "reset")),
-      run: async (parts, ctx) => {
-        const reset = parts[1] === "reset";
-        const high = reset ? DEFAULT_ROLLOVER_HIGH_MULTIPLIER : Number(parts[1]);
+  pi.registerCommand("sieve", {
+    description: "Configure tool-result projection, active-result pruning, thresholds, and cache rollover",
+    handler: async (args, ctx) => {
+      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const value = parts[1];
+      const usage = () => ctx.ui.notify(USAGE, "warning");
+      if ((parts.length === 0 || (parts.length === 1 && action === "status"))) {
+        showStatus(ctx);
+        return;
+      }
+      if (parts.length === 1 && action === "help") {
+        ctx.ui.notify(USAGE, "info");
+        return;
+      }
+      if (parts.length === 2 && action === "mode" && ["enabled", "observe", "disabled"].includes(value!)) {
+        setMode(value as SieveMode, ctx);
+        return;
+      }
+      if (parts.length === 2 && action === "active-pruning" && ["on", "off"].includes(value!)) {
+        if (!(await saveSetting(ctx, "active-result setting", { activePruning: value === "on" }))) return;
+        requestEpoch("configuration-change");
+        refreshRecallTool();
+        publishState();
+        ctx.ui.notify(
+          `pi-sieve active-result pruning ${activePruning ? "enabled" : "disabled"}; cached prefix will reset.`,
+          "info",
+        );
+        return;
+      }
+      if (parts.length === 2 && action === "projection" && ["stable", "standard-v2"].includes(value!)) {
+        if (!(await saveSetting(ctx, "projection mode", { projectionMode: value as ProjectionMode }))) return;
+        requestEpoch("configuration-change");
+        publishState();
+        ctx.ui.notify(
+          `pi-sieve projection mode set to ${projectionModeLabel(projectionMode)}; cached prefix will reset.`,
+          "info",
+        );
+        return;
+      }
+      if (parts.length === 1 && action === "reflow") {
+        stability.explicitReflows++;
+        requestEpoch("explicit-reflow");
+        persistTelemetry();
+        publishState();
+        ctx.ui.notify("pi-sieve will rebuild projections on the next provider call; cached prefix will reset.", "info");
+        return;
+      }
+      if (parts.length === 1 && action === "reset-stats") {
+        resetTelemetry();
+        persistTelemetry();
+        publishState();
+        ctx.ui.notify("pi-sieve statistics reset.", "info");
+        return;
+      }
+      if (action === "threshold" && parts.length === 2) {
+        const reset = value === "reset";
+        const candidate = reset ? SIEVE_THRESHOLD : Number(value);
+        if (!Number.isSafeInteger(candidate) || candidate < MIN_SIEVE_THRESHOLD || candidate > MAX_SIEVE_THRESHOLD) {
+          ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "warning");
+          return;
+        }
+        if (!(await saveSetting(ctx, "threshold", { threshold: candidate }))) return;
+        requestEpoch("configuration-change");
+        publishState();
+        ctx.ui.notify(`pi-sieve threshold ${reset ? "reset" : "set"} to ${threshold}; cached prefix will reset.`, "info");
+        return;
+      }
+      if (action === "rollover" && (parts.length === 3 || (parts.length === 2 && value === "reset"))) {
+        const reset = value === "reset";
+        const high = reset ? DEFAULT_ROLLOVER_HIGH_MULTIPLIER : Number(value);
         const low = reset ? DEFAULT_ROLLOVER_LOW_MULTIPLIER : Number(parts[2]);
         if (
           !Number.isSafeInteger(high) ||
@@ -1071,75 +1101,17 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         ) {
           ctx.ui.notify(
             `Rollover multipliers must be integers from ${MIN_ROLLOVER_MULTIPLIER} to ${MAX_ROLLOVER_MULTIPLIER}, with high greater than low.`,
-            "info",
+            "warning",
           );
           return;
         }
-        if (
-          !(await saveSetting(ctx, "rollover settings", { rolloverHighMultiplier: high, rolloverLowMultiplier: low }))
-        )
-          return;
+        if (!(await saveSetting(ctx, "rollover settings", { rolloverHighMultiplier: high, rolloverLowMultiplier: low }))) return;
         requestEpoch("configuration-change");
         publishState();
-        ctx.ui.notify(
-          `pi-sieve rollover ${reset ? "reset" : "set"} to ${high}T → ${low}T; cached prefix will reset.`,
-          "info",
-        );
-      },
-    },
-    {
-      matches: parts =>
-        parts.length === 2 && parts[0] === "threshold" && (parts[1] === "reset" || /^\d+$/.test(parts[1])),
-      run: async (parts, ctx) => {
-        const reset = parts[1] === "reset";
-        const candidate = reset ? SIEVE_THRESHOLD : Number(parts[1]);
-        if (!Number.isSafeInteger(candidate) || candidate < MIN_SIEVE_THRESHOLD || candidate > MAX_SIEVE_THRESHOLD) {
-          ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "info");
-          return;
-        }
-        if (!(await saveSetting(ctx, "threshold", { threshold: candidate }))) return;
-        requestEpoch("configuration-change");
-        publishState();
-        ctx.ui.notify(
-          `pi-sieve threshold ${reset ? "reset" : "set"} to ${threshold}; cached prefix will reset.`,
-          "info",
-        );
-      },
-    },
-    bare("status", (_parts, ctx) => {
-      ctx.ui.notify(
-        statusText({
-          mode,
-          projectionMode,
-          threshold,
-          latestMode,
-          latestStats,
-          cumulativeActual,
-          cumulativeProjected,
-          activePruning,
-          activeRecalls,
-          activeRecalledChars,
-          rolloverHighMultiplier,
-          rolloverLowMultiplier,
-          epoch,
-          stability,
-        }),
-        "info",
-      );
-    }),
-  ];
-
-  pi.registerCommand("sieve", {
-    description: "Configure cache-stable outbound tool-result projections, rollback mode, and recall",
-    handler: async (args, ctx) => {
-      // A bare /sieve has always shown usage rather than defaulting to status.
-      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const subcommand = subcommands.find(candidate => candidate.matches(parts));
-      if (!subcommand) {
-        ctx.ui.notify(USAGE, "info");
+        ctx.ui.notify(`pi-sieve rollover ${reset ? "reset" : "set"} to ${high}T → ${low}T; cached prefix will reset.`, "info");
         return;
       }
-      await subcommand.run(parts, ctx);
+      usage();
     },
   });
 }

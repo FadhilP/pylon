@@ -76,6 +76,16 @@ export const advisorSettingFields = {
     env: "PI_ADVISOR_INPUT_TOKEN_BUDGET",
     apply: "next-operation",
   },
+  prompt: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "prompt",
+    label: "System prompt",
+    type: "prompt",
+    defaultValue: { mode: "default", text: "" },
+    allowedModes: ["default", "append", "replace"],
+    maxBytes: 32_768,
+    apply: "next-operation",
+  },
 } satisfies Record<string, PackageSettingField>;
 export const advisorSettings = definePackageSettings({
   version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
@@ -93,6 +103,7 @@ export type AdvisorConfig = {
   maxCostUsd?: number;
   maxOutputTokens?: number;
   inputTokenBudget?: number;
+  prompt?: { mode: "default" | "append" | "replace"; text: string };
 };
 export const advisorMaxCalls = (value?: unknown): number =>
   effectivePackageSettingValue(advisorSettingFields.maxCalls, value, process.env);
@@ -104,6 +115,7 @@ export const advisorMaxOutputTokens = (value?: unknown): number =>
   effectivePackageSettingValue(advisorSettingFields.maxOutputTokens, value, process.env);
 export const advisorInputTokenBudget = (value?: unknown): number =>
   effectivePackageSettingValue(advisorSettingFields.inputTokenBudget, value, process.env);
+export const advisorPrompt = (value?: unknown) => effectivePackageSettingValue(advisorSettingFields.prompt, value);
 
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-advisor", "config.json");
 export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
@@ -129,6 +141,7 @@ export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
       ...(value.maxCostUsd !== undefined ? { maxCostUsd: value.maxCostUsd } : {}),
       ...(value.maxOutputTokens !== undefined ? { maxOutputTokens: value.maxOutputTokens } : {}),
       ...(value.inputTokenBudget !== undefined ? { inputTokenBudget: value.inputTokenBudget } : {}),
+      ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
     } satisfies AdvisorConfig;
   } catch (error: any) {
     if (error?.code === "ENOENT") return { version: 1 };

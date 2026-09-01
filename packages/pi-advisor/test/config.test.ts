@@ -14,6 +14,7 @@ import {
   saveConfig,
 } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import { ADVISOR_PROMPT } from "../src/prompts.ts";
 
 test("config persists and malformed config deactivates advisor", async () => {
   const dir = await mkdtemp(join(tmpdir(), "advisor-config-"));
@@ -34,49 +35,31 @@ test("unsupported config is quarantined", async () => {
   assert.ok((await readdir(dir)).some(name => name.startsWith("config.json.corrupt-")));
 });
 
-test("Advisor settings use persisted values and validate package bounds", async () => {
+test("Advisor settings persist prompt and validate package bounds", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "advisor-web-settings-"));
+  const current = await readSettings({ agentDir });
   await updateSettings(
     {
-      kind: "advisor",
+      ...current,
       mode: "session",
       maxCalls: 4,
       timeoutMs: 120_000,
       maxCostUsd: 1.25,
       maxOutputTokens: 4_096,
       inputTokenBudget: 40_000,
+      prompt: { mode: "append", text: "Prefer concise reviews." },
     },
     { agentDir },
   );
-  assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "advisor",
-    mode: "session",
-    maxCalls: 4,
-    timeoutMs: 120_000,
-    maxCostUsd: 1.25,
-    maxOutputTokens: 4_096,
-    inputTokenBudget: 40_000,
-  });
+  const saved = await readSettings({ agentDir });
+  assert.deepEqual(saved.prompt, { mode: "append", text: "Prefer concise reviews." });
+  assert.equal(saved.promptDefaultText, ADVISOR_PROMPT);
   const config = await loadConfig(configPath(agentDir));
   assert.equal(advisorMaxCalls(config.maxCalls), 4);
   assert.equal(advisorTimeoutMs(config.timeoutMs), 120_000);
   assert.equal(advisorMaxCostUsd(config.maxCostUsd), 1.25);
   assert.equal(advisorMaxOutputTokens(config.maxOutputTokens), 4_096);
-  await assert.rejects(
-    updateSettings(
-      {
-        kind: "advisor",
-        mode: "session",
-        maxCalls: 0,
-        timeoutMs: 120_000,
-        maxCostUsd: 1.25,
-        maxOutputTokens: 4_096,
-        inputTokenBudget: 40_000,
-      },
-      { agentDir },
-    ),
-    /invalid Advisor settings/,
-  );
+  await assert.rejects(updateSettings({ ...saved, maxCalls: 0 }, { agentDir }), /invalid Advisor/);
 });
 
 test("model refs accept thinking suffix without breaking colon model IDs", () => {

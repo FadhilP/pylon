@@ -36,14 +36,17 @@ function harness() {
   const pi = {
     events,
     getActiveTools: () => [...active],
-    getAllTools: () => ["read", "edit", "write", "advisor", "repo_scout", "continuity_update"].map(name => ({ name })),
+    getAllTools: () => [...new Set(["read", "edit", "write", "advisor", "repo_scout", "continuity_update", ...tools.keys()])].map(name => ({ name })),
     setActiveTools: (tools: string[]) => {
       if (failReconcile) throw Error("forced reconcile failure");
       active = [...tools];
     },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     registerCommand: (name: string, command: any) => commands.set(name, command),
-    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerTool: (tool: any) => {
+      tools.set(tool.name, tool);
+      if (!active.includes(tool.name)) active.push(tool.name);
+    },
     appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
     exec: async (command: string) => ({ code: command === "git" ? 0 : 1, stdout: "", stderr: "" }),
   };
@@ -61,6 +64,40 @@ function harness() {
   };
 }
 
+test("Pylon docs stay out of the base prompt and load through a deferred confined tool", async () => {
+  const runtime = harness();
+  assert.equal(runtime.handlers.has("before_agent_start"), false);
+  for (const handler of runtime.handlers.get("session_start") ?? []) {
+    await handler({ reason: "startup" }, { cwd: process.cwd(), sessionManager: { getBranch: () => [] } });
+  }
+  assert.equal(runtime.active().includes("pylon_docs"), false);
+  const tool = runtime.tools.get("pylon_docs");
+  assert.ok(tool);
+  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, { mode: "tui" });
+  const tui = JSON.parse(listed.content[0].text);
+  assert.equal(tui.host, "tui");
+  assert.ok(tui.documents.some((entry: any) => entry.path === "docs/web/README.md"));
+  runtime.events.emit("pylon:host-context", { version: 1, host: "web" });
+  const web = JSON.parse(
+    (await tool.execute("list-web", { action: "list" }, undefined, undefined, { mode: "rpc" })).content[0].text,
+  );
+  assert.equal(web.host, "web");
+  assert.equal(web.recommendedStart, "docs/web/README.md");
+  const read = await tool.execute(
+    "read",
+    { action: "read", path: "packages/pi-timeline/README.md" },
+    undefined,
+    undefined,
+    { mode: "rpc" },
+  );
+  assert.match(read.content[0].text, /^Current host: Pylon Web/);
+  assert.match(read.content[0].text, /also read the relevant docs\/web guide/);
+  assert.match(read.content[0].text, /# pi-timeline/);
+  const escaped = await tool.execute("escape", { action: "read", path: "../../README.md" }, undefined, undefined, {
+    mode: "rpc",
+  });
+  assert.match(escaped.content[0].text, /path is unavailable/);
+});
 test("numbered line tools default on and honor an explicit disable", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "pylon-core-toggle-"));
@@ -69,7 +106,7 @@ test("numbered line tools default on and honor an explicit disable", async () =>
     const enabled = harness();
     for (const handler of enabled.handlers.get("session_start") ?? [])
       await handler({ reason: "startup" }, { cwd: root, sessionManager: { getBranch: () => [] } });
-    assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "read"]);
+    assert.deepEqual([...enabled.tools.keys()].sort(), ["edit", "pylon_docs", "read"]);
 
     await mkdir(join(root, "pylon-core"), { recursive: true });
     const persisted = JSON.stringify({ version: 1, lineEditEnabled: false });
@@ -80,7 +117,7 @@ test("numbered line tools default on and honor an explicit disable", async () =>
         { reason: "startup" },
         { cwd: root, model: { cost: { input: 1, output: 10 } }, sessionManager: { getBranch: () => [] } },
       );
-    assert.equal(disabled.tools.size, 0);
+    assert.deepEqual([...disabled.tools.keys()], ["pylon_docs"]);
     assert.equal(await readFile(join(root, "pylon-core", "config.json"), "utf8"), persisted);
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -103,7 +140,7 @@ test("numbered line tools follow session model pricing without persisting the ch
     const ctx = { cwd: root, sessionManager: { getBranch: () => [] } };
 
     await start({ reason: "startup" }, { ...ctx, model: model(1, 2.99) });
-    assert.equal(runtime.tools.size, 0, "low-ratio startup keeps Pi's built-in tools");
+    assert.deepEqual([...runtime.tools.keys()], ["pylon_docs"], "low-ratio startup keeps only the docs custom tool");
 
     await select({ model: model(1, 3), previousModel: model(1, 2.99), source: "set" }, ctx);
     assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
@@ -221,10 +258,11 @@ test("compact command waits for completion and reports actionable failures", asy
   options.onError(new Error("provider unavailable"));
   await failed;
   assert.deepEqual(notifications, [
+    ["Compaction complete.", "info"],
     ["Compaction failed. Reason: provider unavailable. Retry; if it keeps failing, try a different model.", "error"],
   ]);
   options.onComplete();
-  assert.equal(notifications.length, 1);
+  assert.equal(notifications.length, 2);
 
   await runtime.commands.get("compact").handler(
     "",
@@ -270,18 +308,18 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   assert.equal(acknowledged, true);
   assert.deepEqual(new Set(runtime.active()), new Set(["read", "advisor", "continuity_update"]));
   runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-continuity" });
-  assert.deepEqual(new Set(runtime.active()), new Set(["read", "edit", "repo_scout", "advisor"]));
+  assert.deepEqual(new Set(runtime.active()), new Set(["read", "edit", "repo_scout", "advisor", "pylon_docs"]));
   let diagnostic = "";
-  await runtime.commands.get("pylon").handler("", {
+  await runtime.commands.get("pylon").handler("status", {
     ui: {
       notify: (text: string) => {
         diagnostic = text;
       },
     },
   });
-  assert.match(diagnostic, /Effective:/);
+  assert.match(diagnostic, /Pylon:/);
   assert.match(diagnostic, /Rejected: 1/);
-  assert.match(diagnostic, /Guard authority: blocked: destructive Git command/);
+  assert.match(diagnostic, /Guard: blocked: destructive Git command/);
   runtime.events.on("pylon:health-request", (request: any) =>
     request.respond(
       Promise.resolve({
@@ -313,6 +351,7 @@ test("extension validates, unregisters, diagnoses, and cleans listener", async (
   for (const handler of runtime.handlers.get("session_shutdown") ?? []) handler();
   assert.equal(runtime.events.count("pylon:tool-policy"), 0);
   assert.equal(runtime.events.count("pi-guard:decision"), 0);
+  assert.equal(runtime.events.count("pylon:host-context"), 0);
 });
 
 test("delegated runs receive stable role-local names", async () => {
@@ -862,7 +901,7 @@ test("rolls back unregister state when reconcile fails", async () => {
   runtime.fail(true);
   runtime.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-test" });
   let diagnostic = "";
-  await runtime.commands.get("pylon").handler("", {
+  await runtime.commands.get("pylon").handler("doctor", {
     ui: {
       notify: (text: string) => {
         diagnostic = text;
@@ -889,7 +928,7 @@ test("isolates and diagnoses acknowledgement failures", async () => {
   );
   assert.ok(runtime.active().includes("test_tool"));
   let diagnostic = "";
-  await runtime.commands.get("pylon").handler("", {
+  await runtime.commands.get("pylon").handler("doctor", {
     ui: {
       notify: (text: string) => {
         diagnostic = text;

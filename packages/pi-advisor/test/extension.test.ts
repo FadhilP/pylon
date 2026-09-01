@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import advisor from "../extensions/pi-advisor.ts";
 import { saveConfig } from "../src/config.ts";
+import { ADVISOR_IMMUTABLE_FOOTER, ADVISOR_PROMPT } from "../src/prompts.ts";
 
 test("parallel Advisor calls serialize and report running duration", async () => {
   const previousDir = process.env.PI_CODING_AGENT_DIR;
@@ -17,6 +18,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     timeoutMs: 5_000,
     maxCostUsd: 1,
     inputTokenBudget: 20_000,
+    prompt: { mode: "append", text: "Use terse operator notes." },
   });
   let tool: any;
   let active = 0;
@@ -31,6 +33,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     releaseFirst = resolve;
   });
   const prompts: string[] = [];
+  const systemPrompts: string[] = [];
   const sessionIds: string[] = [];
   const maxTokens: number[] = [];
   let runningUpdate: any;
@@ -49,6 +52,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     active++;
     maxActive = Math.max(maxActive, active);
     prompts.push(request.messages[0].content[0].text);
+    systemPrompts.push(request.systemPrompt);
     sessionIds.push(options.sessionId);
     maxTokens.push(options.maxTokens);
     if (calls === 1) {
@@ -122,6 +126,12 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.equal(calls, 2);
     assert.deepEqual(sessionIds, ["session:advisor", "session:advisor"]);
     assert.deepEqual(maxTokens, [4_000, 4_000]);
+    // The effective append prompt reaches the provider, while the Advisor contract remains last.
+    assert.ok(systemPrompts[0].startsWith(`${ADVISOR_PROMPT}
+
+## Operator customization
+Use terse operator notes.`));
+    assert.ok(systemPrompts[0].endsWith(ADVISOR_IMMUTABLE_FOOTER));
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
     assert.equal(results[0].details.agentName, "strategy-review");

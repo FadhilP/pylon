@@ -13,6 +13,7 @@ import {
   parseModelRef,
   repoTimeoutMs,
   scoutMaxCostUsd,
+  scoutPrompt,
   isScoutEnabled,
   saveConfig,
   thinkingLevels,
@@ -21,11 +22,17 @@ import {
 } from "../src/config.ts";
 import { repoResult } from "../src/result.ts";
 import { buildParentContext } from "../src/parent-context.ts";
-import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
+import {
+  REPO_SCOUT_IMMUTABLE_FOOTER,
+  REPO_SCOUT_PROMPT,
+  WEB_SCOUT_IMMUTABLE_FOOTER,
+  WEB_SCOUT_PROMPT,
+} from "../src/prompts.ts";
 import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClaims } from "../src/result.ts";
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "pylon-core/redact";
+import { composePackagePrompt } from "pylon-core/package-settings";
 import { requestDelegateName } from "pylon-core/delegate-names";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
 
@@ -334,6 +341,11 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         details: { failureCode, ...extra },
       });
       const config = await loadConfig();
+      const systemPrompt = composePackagePrompt(
+        REPO_SCOUT_PROMPT,
+        scoutPrompt(config.prompt),
+        REPO_SCOUT_IMMUTABLE_FOOTER,
+      );
       const retryPolicy = await loadDelegateRetryPolicy();
       if (!isScoutEnabled(config))
         return refuse("Repo Scout inactive. Configure it with /scout or use /scout reset.", "disabled");
@@ -429,7 +441,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
               "--thinking",
               thinking,
               "--system-prompt",
-              REPO_SCOUT_PROMPT,
+              systemPrompt,
             ];
             run = await runChild(args, {
               cwd: ctx.cwd,
@@ -612,6 +624,11 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         details: { failureCode, ...extra },
       });
       const config = await loadConfig();
+      const systemPrompt = composePackagePrompt(
+        WEB_SCOUT_PROMPT,
+        scoutPrompt(config.prompt),
+        WEB_SCOUT_IMMUTABLE_FOOTER,
+      );
       if (!isScoutEnabled(config))
         return refuse("Web Scout inactive. Configure it with /scout or use /scout reset.", "disabled");
       const task = params.task.trim();
@@ -787,23 +804,32 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
   });
 
   pi.registerCommand("scout", {
-    description: "Select model and thinking, reset, or show status",
+    description: "Show or configure the Scout model",
     handler: async (args, ctx) => {
-      const value = args.trim();
-      if (value === "disable") {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage = "Usage: /scout [status|set <provider/model[:thinking]>|select|enable|disable|reset|help]";
+      if (action === "disable" && parts.length === 1) {
         const config = await loadConfig();
         await saveConfig({ ...config, disabled: true });
         await refreshTool();
         ctx.ui.notify("Scout disabled.", "info");
         return;
       }
-      if (value === "reset") {
+      if (action === "enable" && parts.length === 1) {
+        const config = await loadConfig();
+        await saveConfig({ ...config, disabled: false });
+        await refreshTool();
+        ctx.ui.notify("Scout enabled.", "info");
+        return;
+      }
+      if (action === "reset" && parts.length === 1) {
         await saveConfig({ ...(await loadConfig()), version: 1, disabled: false });
         await refreshTool();
         ctx.ui.notify("Scout enabled; uses current main model.", "info");
         return;
       }
-      if (value === "status") {
+      if ((action === "status" && parts.length === 1) || parts.length === 0) {
         const config = await loadConfig();
         const resolved = await resolveModel(ctx, config);
         ctx.ui.notify(
@@ -812,12 +838,15 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         );
         return;
       }
-      let selected = value;
-      if (!selected) {
+      let selected: string | undefined;
+      let interactive = false;
+      if (action === "set" && parts.length === 2) selected = parts[1];
+      else if (action === "select" && parts.length === 1) {
         if (ctx.mode !== "tui") {
-          ctx.ui.notify("Usage: /scout <provider/model-id[:thinking]>|disable|reset|status", "info");
+          ctx.ui.notify("Scout model selection is available only in Pi TUI.", "error");
           return;
         }
+        interactive = true;
         selected =
           (await ctx.ui.select(
             "Scout model",
@@ -825,8 +854,11 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
               ? ctx.scopedModels.map(({ model }) => model)
               : ctx.modelRegistry.getAvailable()
             ).map(modelName),
-          )) ?? "";
+          )) ?? undefined;
         if (!selected) return;
+      } else {
+        ctx.ui.notify(usage, action === "help" && parts.length === 1 ? "info" : "warning");
+        return;
       }
       const ref = parseModelRef(selected);
       const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);
@@ -835,7 +867,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         return;
       }
       let thinking: ThinkingLevel | undefined = ref.thinking;
-      if (!value && ctx.mode === "tui") {
+      if (interactive) {
         thinking = (await ctx.ui.select("Scout thinking level", [...thinkingLevels])) as ThinkingLevel | undefined;
         if (!thinking) return;
       }

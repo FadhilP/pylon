@@ -37,11 +37,22 @@ export const continuitySettingFields = {
     key: "compactionReviewerMaxOutputTokens",
     label: "Compaction reviewer maximum output",
     type: "integer",
-    defaultValue: 1_200,
+    defaultValue: 4_096,
     min: 256,
     max: 8_192,
     unit: "tokens",
     env: "PI_CONTINUITY_COMPACTION_REVIEWER_MAX_OUTPUT_TOKENS",
+    apply: "next-operation",
+  },
+  prompt: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "prompt",
+    label: "Continuity reviewer instructions",
+    type: "prompt",
+    defaultValue: { mode: "default", text: "" },
+    allowedModes: ["default", "append"],
+    maxBytes: 32_768,
+    description: "Additional instructions for memory review and migration. Output and safety contracts remain fixed.",
     apply: "next-operation",
   },
 } satisfies Record<string, PackageSettingField>;
@@ -54,6 +65,8 @@ export const compactionReviewTimeoutMs = (value?: unknown): number =>
   effectivePackageSettingValue(continuitySettingFields.compactionReviewTimeoutMs, value, process.env);
 export const compactionReviewerMaxOutputTokens = (value?: unknown): number =>
   effectivePackageSettingValue(continuitySettingFields.compactionReviewerMaxOutputTokens, value, process.env);
+export const continuityPrompt = (value?: unknown) =>
+  effectivePackageSettingValue(continuitySettingFields.prompt, value) as import("pylon-core/package-settings").PromptPackageSettingValue;
 export type ContinuityConfig = {
   version: 2;
   memoryEnabled?: boolean;
@@ -64,6 +77,7 @@ export type ContinuityConfig = {
   compactionReviewer?: ModelProfile;
   compactionReviewTimeoutMs?: number;
   compactionReviewerMaxOutputTokens?: number;
+  prompt?: import("pylon-core/package-settings").PromptPackageSettingValue;
 };
 export const defaultConfig = (): ContinuityConfig => ({
   version: 2,
@@ -94,6 +108,7 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
           "compactionReviewer",
           "compactionReviewTimeoutMs",
           "compactionReviewerMaxOutputTokens",
+          "prompt",
         ].includes(key),
     ) ||
     (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") ||
@@ -121,6 +136,7 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
     ...(value.compactionReviewerMaxOutputTokens !== undefined
       ? { compactionReviewerMaxOutputTokens: value.compactionReviewerMaxOutputTokens }
       : {}),
+    ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
   };
 };
 export const isContinuityConfig = (value: any) => normalizeConfig(value) !== undefined;

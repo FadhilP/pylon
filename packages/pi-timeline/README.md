@@ -1,61 +1,45 @@
 # pi-timeline
 
-Git-backed filesystem checkpoints paired with Pi user prompts.
+Git-backed filesystem checkpoints paired with Pi prompts, so you can inspect, restore, or fork working-tree states without changing branches.
 
-## Installation
+## Install and requirements
+
+Requires Pi, Node 22.19.0 or later, a non-bare Git repository with an existing `HEAD`, and a safe index state:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-timeline. Run `/reload` after installation.
+Reload Pi afterward. Package settings are available through Pylon Web.
+Configuration is stored at `<agent-dir>/pi-timeline/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-## Requirements
-
-- Non-bare Git repository
-- Existing `HEAD`
-- Safe index state
-
-## Usage
-
-Commands: `/timeline`, `/timeline list`, `/timeline jump ID`, `/timeline fork ID`, and `/timeline clear`.
-
-Launcher: `pi-timeline resume`.
+| Command | Use |
+| --- | --- |
+| `/timeline`, `/timeline list`, `/timeline select` | View checkpoints |
+| `/timeline restore ID` | Restore after confirmation |
+| `/timeline fork ID` | Fork from a checkpoint |
+| `/timeline clear` | Retire this session's records and refs |
+| `/timeline help` | Show usage |
+| `pi-timeline resume` | Resume launcher |
 
 Every restore requires confirmation. Native `/tree` remains conversation-only.
 
-## Checkpoint Behavior
+## Checkpoints and titles
 
-### Capture and Storage
+Timeline stores synthetic commits under `refs/pi-timeline/...` in every participating repository. It recursively includes initialized nested repositories from Git links/non-ignored embedded repositories, without requiring `.gitmodules`. A hidden session-start baseline means the first displayed change is measured from session start while the checkpoint still contains the complete worktree; later change labels compare to the previous checkpoint.
 
-Snapshots use `refs/pi-timeline/...` synthetic commits in each participating repository. Initialized nested repositories are discovered recursively from Git links and non-ignored embedded repositories without requiring `.gitmodules`; their worktrees and indexes are checkpointed with the outer repository. Timeline also captures a hidden session-start baseline: the first checkpoint’s displayed changes are measured from that baseline, while the checkpoint itself still contains the complete worktree, including pre-session changes. Later changes are measured from the preceding session checkpoint. Automatic checkpoints run only after mutation-capable tools change or may change Git-backed worktree state; read-only turns and unchanged `bash` calls skip capture. With Pylon, shell mutation detection shares one exact worktree comparison per model turn with Continuity; standalone Timeline retains per-call comparison. Explicit rollback and Guard checkpoints remain unconditional. `HEAD`, branch, stash, and ignored files remain untouched. Checkpoints record the symbolic HEAD ref, or detached state, for display only. `/timeline list` and the selector show branch state, ISO timestamp, then prompt message; internal checkpoint IDs remain available for direct `jump` and `fork` commands but are not shown in rows. Restore confirmation shows compatibility details.
+Automatic capture occurs only after mutation-capable tools change or may change Git-backed state. Read-only turns and unchanged Bash skip it; rollback and Guard checkpoints are unconditional. With Pylon, shell detection is shared once per turn with Continuity; standalone Timeline compares per call. Checkpoints do not change `HEAD`, branch, stash, or ignored files. They record branch/detached state only for display.
 
-### Checkpoint Titles
+Semantic checkpoint titles are off by default. Pylon Web settings can enable current-session or separate-model titles. The filesystem checkpoint is always written first; a bounded background title request then uses short prompt/response/changed-path excerpts. Until valid output arrives, the prompt remains label. Each changed turn can add model cost. Session titles similarly run once after the first settled turn and never replace existing/manual/cleared names.
 
-Semantic checkpoint titles are disabled by default. In Pylon package settings, they can use the current session model or a separately selected model. Timeline always persists the filesystem checkpoint first, then launches a bounded title-only request in the background using short request, response, and changed-path excerpts. Until a valid title arrives—and whenever naming is disabled or unavailable—the original user prompt remains the label. Generated titles are stored as append-only session metadata and survive reloads. Because each changed turn can create an extra model call, prefer a cheap model.
+## Lifecycle and integrations
 
-### Compatibility and Cleanup
+Format V6 stores the session-start baseline. V4+ records Git common-directory identity, allowing a Pylon session moved between linked worktree and registered checkout to retain refs/restoration. V3 migrates only from its original checkout; unprovable relocation fails closed. Git operations time out after two minutes.
 
-Checkpoint format v6 persists the session-start diff baseline; existing formats retain their original `HEAD` fallback. Formats v4 and later record the Git common-directory identity separately from each physical checkout. This lets a session retain its Timeline refs and restore capability while Pylon moves it between a linked worktree and the registered checkout. Version 3 checkpoints are migrated only while loaded from their original checkout; relocation fails closed if that identity cannot be proven.
+Ordinary untracked files are included; common credential files (`.env*`, `.npmrc`, `.pypirc`, key files) are refused. On startup Timeline removes refs for deleted sessions with no live lease; failed session discovery/repository access fails closed. Ephemeral-session refs are removed on clean shutdown.
 
-Ordinary untracked files are included; common credential paths such as `.env*`, `.npmrc`, `.pypirc`, key files, and credential files are refused. Git operations time out after two minutes. `/timeline clear` retires current-session checkpoint records and deletes their refs. Timeline catalogs each session-owned Git root and protects active sessions with process leases. On session startup it removes refs whose owning Pi session was deleted and has no live lease; failed session discovery or repository access fails closed. Ephemeral-session refs are removed on clean shutdown.
+Valid Continuity `pylon-run` metadata groups planner/executor/reviewer checkpoints into one run timeline; linked checkpoint selection switches to its owner before restore/fork. Other sessions remain session-local. Matching successful Verify metadata attaches by exact worktree identity. Before Guard asks for destructive approval, Timeline attempts a recoverable checkpoint; Guard still controls approval/blocking.
 
-### Session Titles
+## Safety and limitations
 
-After the first settled turn, Timeline launches one bounded title-only model request using short excerpts from the first prompt and final response. An explicitly configured Timeline title model is used for both checkpoint and session titles; otherwise session titles use the active session model. The request runs in the background, so it does not extend turn completion. Invalid or unavailable model output falls back to the first prompt. Existing names, manual renames, and manually cleared names remain untouched.
-
-## Integrations
-
-### Continuity Runs
-
-Sessions carrying valid `pylon-run` metadata share one run timeline. Checkpoints from planner, executor, and future reviewer sessions appear together. Selecting a linked-session checkpoint switches to its owning session before restoring or forking. Sessions without metadata retain session-local behavior. Timeline reads persisted metadata only and does not require pi-continuity.
-
-Each subsequent explicit plan gets a new run ID but inherits the pylon timeline ID already attached to its current planner or executor session. Timeline groups sessions by that stable lineage, so checkpoints survive repeated plans and fresh executor handoffs. Checkpoints from unrelated lineages stay excluded, and `/timeline clear` remains owner-session scoped.
-
-### Verify and Guard
-
-Matching successful Verify metadata remains attached to checkpoints using exact worktree identity. Before Guard asks approval for a destructive action, Timeline attempts a recoverable checkpoint; Guard still owns approval and blocking.
-
-## Security and Limitations
-
-Timeline refuses escaped or cyclic nested repositories, repository graphs over 100 physical roots, unmerged or active Git operations, cross-repository or cross-`HEAD` restore, and noninteractive restore. Timeline never checks out or switches branches: same-commit branch differences are informational, and restore changes only the index and working tree. Git state is inspected at capture and command boundaries rather than watched continuously. Restore rechecks repository identity and exact HEAD immediately before filesystem mutation, so UI compatibility labels never replace the authoritative safety check. Extensions execute with full user permissions; review source.
+Timeline refuses escaped/cyclic nested repositories, over 100 physical roots, active/unmerged Git operations, cross-repository or cross-`HEAD` restore, and noninteractive restore. It never checks out or switches branches; restore changes only the index and working tree. It rechecks repository identity and exact `HEAD` immediately before mutation. Git state is checked at capture/command boundaries, not continuously. Extensions run with your permissions; review source.

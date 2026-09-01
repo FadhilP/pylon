@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createDelegateNames } from "../src/delegate-names.ts";
+import { createPylonDocsTool } from "../src/docs-tool.ts";
 import { runDoctor } from "../src/doctor.ts";
 import { createLineEditMode } from "../src/line-edit-mode.ts";
 import { createTelemetry } from "../src/telemetry.ts";
@@ -14,6 +15,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   const worktree = createWorktreeObserver(pi);
   const delegates = createDelegateNames(pi);
   const lineEdit = createLineEditMode(pi);
+  const docs = createPylonDocsTool(pi, import.meta.url);
   let guardDiagnostic: string | undefined;
 
   const disposers = [
@@ -43,6 +45,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     registry.reconcile();
     telemetry.rebuild(ctx);
     await delegates.rebuild(ctx);
+    docs.sessionStart();
   });
   pi.on("model_select", async (event, ctx) => {
     await lineEdit.update(event.model, ctx.cwd);
@@ -60,6 +63,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   pi.on("tool_result", event => telemetry.recordToolResult(event));
   pi.on("turn_end", (_event, ctx) => worktree.turnEnd(ctx));
   pi.on("session_shutdown", () => {
+    docs.shutdown();
     for (const dispose of disposers) dispose();
     worktree.reset();
     registry.clear();
@@ -74,6 +78,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         const complete = () => {
           if (settled) return;
           settled = true;
+          ctx.ui.notify("Compaction complete.", "info");
           resolve();
         };
         const fail = (error: unknown) => {
@@ -98,18 +103,39 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("tokens", {
-    description: "Show estimated payload tokens used by each tool in the current session branch",
-    handler: async (_args, ctx) => {
-      ctx.ui.notify(telemetry.format(), "info");
+    description: "Show estimated tool payload tokens for the current session branch",
+    handler: async (args, ctx) => {
+      const value = args.trim().toLowerCase();
+      if (value === "help") {
+        ctx.ui.notify("Usage: /tokens [all|help]", "info");
+        return;
+      }
+      if (value && value !== "all") {
+        ctx.ui.notify("Usage: /tokens [all|help]", "warning");
+        return;
+      }
+      ctx.ui.notify(telemetry.format(value === "all" ? undefined : 5), "info");
     },
   });
 
   pi.registerCommand("pylon", {
-    description: "Show policies or manage tools with /pylon tools",
+    description: "Show Pylon status, run diagnostics, or manage active tools",
     handler: async (args, ctx) => {
-      const value = args.trim();
-      if (value === "tools" || value.startsWith("tools "))
-        return registry.manageTools(value.slice("tools".length), ctx);
+      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage = "Usage: /pylon [status|doctor|tools [status|enable <tool...>|disable <tool...>]|help]";
+      if (action === "help" && parts.length === 1) {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      if (action === "tools") return registry.manageTools(parts.slice(1).join(" "), ctx);
+      if (
+        !(["status", "doctor"] as const).includes(action as "status") ||
+        (parts.length !== 1 && !(action === "status" && parts.length === 0))
+      ) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
       const policyLines = [...registry.policies.values()]
         .sort((a, b) => a.owner.localeCompare(b.owner))
         .map(
@@ -118,7 +144,7 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
         );
       const missing = KNOWN_ADAPTERS.filter(owner => !registry.policies.has(owner));
       const diagnosis =
-        value.toLowerCase() === "doctor"
+        action === "doctor"
           ? await runDoctor({
               pi,
               ctx,
@@ -127,18 +153,28 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
               lineEditConfigError: lineEdit.configError,
             })
           : undefined;
-      const lines = [
-        ...(diagnosis ? ["Pylon doctor", ...diagnosis.lines, ""] : []),
-        `Baseline: ${[...registry.baseline].join(", ") || "none"}`,
-        `Effective: ${pi.getActiveTools().join(", ") || "none"}`,
-        `Discovery selection: ${[...registry.selectedTools].join(", ") || "none"}`,
-        ...(policyLines.length ? policyLines : ["Policies: none"]),
-        `Known adapters absent or standalone: ${missing.join(", ") || "none"}`,
-        `Rejected: ${registry.rejected.length}${registry.rejected.length ? ` (${registry.rejected.at(-1)})` : ""}`,
-        `Last reconcile error: ${registry.lastError ?? "none"}`,
-        `Last acknowledge error: ${registry.lastAcknowledgeError ?? "none"}`,
-        `Guard authority: ${guardDiagnostic ?? "active independently; no decision this session"}`,
-      ];
+      const lines =
+        action === "status"
+          ? [
+              `Pylon: ${registry.lastError || registry.lastAcknowledgeError ? "degraded" : "ready"}`,
+              `Tools: ${pi.getActiveTools().length} active · ${registry.baseline.size} baseline`,
+              `Policies: ${registry.policies.size} · Rejected: ${registry.rejected.length}`,
+              `Guard: ${guardDiagnostic ?? "active independently; no decision this session"}`,
+            ]
+          : [
+              "Pylon doctor",
+              ...(diagnosis?.lines ?? []),
+              "",
+              `Baseline: ${[...registry.baseline].join(", ") || "none"}`,
+              `Effective: ${pi.getActiveTools().join(", ") || "none"}`,
+              `Discovery selection: ${[...registry.selectedTools].join(", ") || "none"}`,
+              ...(policyLines.length ? policyLines : ["Policies: none"]),
+              `Known adapters absent or standalone: ${missing.join(", ") || "none"}`,
+              `Rejected: ${registry.rejected.length}${registry.rejected.length ? ` (${registry.rejected.at(-1)})` : ""}`,
+              `Last reconcile error: ${registry.lastError ?? "none"}`,
+              `Last acknowledge error: ${registry.lastAcknowledgeError ?? "none"}`,
+              `Guard authority: ${guardDiagnostic ?? "active independently; no decision this session"}`,
+            ];
       ctx.ui.notify(
         lines.join("\n"),
         registry.lastError || registry.lastAcknowledgeError || registry.rejected.length || diagnosis?.warning

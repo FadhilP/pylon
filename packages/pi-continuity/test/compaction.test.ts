@@ -126,6 +126,29 @@ test("keeps the latest complete turn without duplicating its retained request", 
   assert.equal(result.details?.type, CONTINUITY_COMPACTION_TYPE);
 });
 
+test("active-work compaction persists deterministic folded records without a reviewer", () => {
+  const entries = [
+    handoff(),
+    user("Discarded constraint", "old-user"),
+    assistant("Discarded decision", "old-assistant"),
+    toolResult("discarded result", false, "old-result"),
+    toolResult("discarded failure", true, "old-error"),
+    user("Current request", "current"),
+    assistant("Retained response", "suffix"),
+  ];
+  const result = build(entries, work(), 1);
+  assert.equal(result.details?.mode, "active-work");
+  if (result.details?.mode !== "active-work") assert.fail("expected active-work details");
+  assert.deepEqual(result.details.records, [
+    { sourceEntryId: "old-user", role: "user", text: "Discarded constraint" },
+    { sourceEntryId: "old-assistant", role: "assistant", text: "Discarded decision" },
+    { sourceEntryId: "old-result", role: "tool", text: "discarded result" },
+    { sourceEntryId: "old-error", role: "tool", text: "discarded failure", isError: true },
+    { sourceEntryId: "current", role: "user", text: "Current request" },
+  ]);
+  assert.deepEqual(result.details.supplements, []);
+});
+
 test("isolates approved-plan history at the latest valid handoff", () => {
   const entries = [
     user("Secret planning discussion must stay out"),
@@ -145,7 +168,7 @@ test("repeated compaction merges structured file history without parsing its ren
   const readCall = assistant([{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "src/first.ts" } }]);
   const firstEntries = [
     handoff(),
-    user("First scoped task"),
+    user("First scoped task", "first-scoped"),
     readCall,
     user("Current task", "current"),
     assistant("Current progress"),
@@ -169,6 +192,9 @@ test("repeated compaction merges structured file history without parsing its ren
     result.details?.history.read.map(item => item.path),
     ["src/first.ts"],
   );
+  assert.equal(result.details?.mode, "active-work");
+  if (result.details?.mode === "active-work")
+    assert.equal(result.details.records?.some(record => record.sourceEntryId === "first-scoped"), true);
 });
 
 test("preserves ordinary nested paths in compaction history and working set", () => {

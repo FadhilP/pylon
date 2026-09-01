@@ -415,7 +415,7 @@ function commandFailureMessage(stderr: string): string {
   ) {
     return "Playwright browser is not installed; run the matching `playwright-cli install-browser` setup command";
   }
-  return "Playwright CLI command failed; run /helios-doctor for diagnostics";
+  return "Playwright CLI command failed; run /helios doctor browser for diagnostics";
 }
 
 type SnapshotSource = string | { file: string };
@@ -448,8 +448,17 @@ function parseJson(result: ExecResult, privateDirectory: string, sessionName: st
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new HeliosCliError("invalid-output", "Playwright CLI returned an unexpected result");
   const object = value as Record<string, unknown>;
-  if (result.code !== 0 || object.isError === true) {
-    const raw = typeof object.error === "string" ? object.error : "Playwright CLI command failed";
+  const nested =
+    object.result && typeof object.result === "object" && !Array.isArray(object.result)
+      ? (object.result as Record<string, unknown>)
+      : undefined;
+  if (result.code !== 0 || object.isError === true || nested?.isError === true) {
+    const raw =
+      typeof object.error === "string"
+        ? object.error
+        : nested?.isError === true && typeof nested.error === "string"
+          ? nested.error
+          : "Playwright CLI command failed";
     const sanitized = raw
       .replaceAll(privateDirectory, "<private Helios directory>")
       .replace(/[\r\n]+/g, " ")
@@ -593,6 +602,7 @@ export class PlaywrightCli {
       outputDir: join(this.directory, "artifacts"),
       outputMode: "stdout",
       codegen: "none",
+      allowUnrestrictedFileAccess: !webIsolation,
       browser: {
         isolated: false,
         userDataDir: profileDirectory,

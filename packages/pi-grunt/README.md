@@ -1,115 +1,52 @@
 # pi-grunt
 
-Sequential delegated implementation worker for Pi. Grunt uses a separately configured worker model while the main model waits. Isolated Git-worktree execution is default; manually enabled direct mode edits the current working directory. It can implement a compact slice or an entire non-difficult change.
+A sequential delegated implementation worker for already-designed Pi tasks. It uses a separately configured model while the main model waits. Isolated Git worktrees are the default; direct mode deliberately edits the current directory.
 
-## Installation
+## Install and configuration
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-grunt. Run `/reload` after installation.
+Reload Pi afterward. Grunt settings, including allowed requested thinking levels, are available through Pylon Web.
 
-## Setup and Configuration
+| Command | Use |
+| --- | --- |
+| `/grunt` or `/grunt status` | Show configuration and run summary |
+| `/grunt set provider/model-id` / `/grunt select` | Choose worker model |
+| `/grunt mode isolated|direct|dynamic` | Select execution mode |
+| `/grunt enable|disable|reset` | Enable, disable, or use current main model in isolated mode |
 
-```text
-/grunt provider/model-id
-/grunt status
-/grunt reset
-/grunt isolated
-/grunt direct
-/grunt dynamic
-/grunt disable
-```
+Grunt is inactive until configured or reset. Dynamic mode chooses isolated only in a Git worktree with `HEAD`; otherwise it chooses direct. Default allowed requested thinking levels are `medium` and `high` (provider capabilities still apply).
+Configuration is stored at `<agent-dir>/pi-grunt/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-### Modes
+| Environment variable | Default and limit |
+| --- | --- |
+| `PI_GRUNT_TIMEOUT_MS` | 15 minutes; at most 2 hours |
+| `PI_GRUNT_MAX_TURNS` | 40 turns |
+| `PI_GRUNT_MAX_COST_USD` | $2 reported child cost |
+| `PI_GRUNT_PARENT_CONTEXT_CHARS` | 0 (off); at most 12,000 redacted characters |
 
-Grunt stays inactive until you select a model or run `/grunt reset`. Reset enables Grunt with the current main model and restores isolated mode. `/grunt direct` opts into direct execution; `/grunt isolated` switches back. `/grunt dynamic` chooses isolated mode when the current directory belongs to a Git worktree with a `HEAD` commit, otherwise direct mode. The selected mode persists in Grunt's global config and is shown by `/grunt status`. Pylon package settings choose the thinking levels the main model may request on each `grunt` call; the backward-compatible default is `medium` and `high`. Provider model capabilities still apply.
+Workers also have a fixed 262,144-token reported-context limit. Limits stop future turns after a paid response; they cannot undo incurred cost.
 
-### Limits
+## Delegate focused implementation slices
 
-Environment controls:
+Use `grunt({ task, thinking, suggestedPaths?, targetedContext?, checkCommands? })` for mechanical multi-file work or bounded, already-designed changes with clear anchors and checks. Keep diagnosis, architecture/public API/security/concurrency choices, cross-cutting semantics, and small known-file changes in the main model. Give the worker the chosen design, exact anchors, constraints, non-goals, acceptance criteria, and up to eight existing focused checks. `targetedContext` is capped at 4,000 characters; suggested paths are guidance, not an allowlist.
 
-- `PI_GRUNT_TIMEOUT_MS`: wall-clock timeout; default 15 minutes, maximum two hours.
-- `PI_GRUNT_MAX_TURNS`: maximum child turns before another turn is blocked; default 40.
-- `PI_GRUNT_MAX_COST_USD`: maximum reported child cost before another turn is blocked; default `$2`.
-- `PI_GRUNT_PARENT_CONTEXT_CHARS`: redacted parent-context budget; default `0` (disabled), maximum 12,000. Handoffs should be self-contained.
+Calls are unlimited per original prompt but dependent slices must be sequential: inspect and verify one result before handing off the next. The parent owns review, recovery, and final verification. Do not delegate simple repair or verification of a previous worker result. The worker must stop rather than decide architectural ownership, public API, security-sensitive behavior, destructive migrations, conflicting requirements, or material scope expansion.
 
-Workers have a fixed 262,144-token reported-context limit. After each assistant response, Grunt counts `totalTokens - cacheRead` when native totals are available, otherwise `input + output + cacheWrite`. Exceeding the limit terminates the child and leaves any isolated edits unapplied.
+## Execution modes and lifecycle
 
-## When to Delegate
+**Isolated mode** requires a Git repository with `HEAD`. Grunt creates a detached temporary worktree, copies parent dirty/deleted tracked files and non-ignored untracked files, and disables checkout/baseline hooks. On normal completion it derives a patch against the baseline, verifies parent `HEAD` and dirty fingerprints before and immediately before integration, then applies it. Worker commits are included. A setup failure is a tool error.
 
-Route by expected main-model effort avoided, not changed LOC alone.
+Only a normal child `stop` can integrate. Blocked, aborted, timed-out, budget/output-limited, failed, stale, or unapplicable isolated work never changes the parent. If isolated edits remain, their unapplied patch is stored under the Pi agent directory and reported for recovery. Successful output omits duplicate reports/changed paths because Git state is authoritative; incomplete outcomes retain diagnostics and worker report.
 
-### Keep in the Main Model
+**Direct mode** runs in the current directory, including outside Git. Changes are immediate and a failure/cancellation may leave partial edits; there is no rollback, stale-parent check, patch artifact, or changed-path list. Dynamic mode falls back to direct if later isolation setup fails; explicit isolated mode does not.
 
-Keep these in the main model:
+Ignored dependency directories (`node_modules`, `.venv`, `venv`) are not copied. The worker is told to skip checks requiring them rather than install or repeatedly probe. It gets a replacement concise system prompt, the handoff, optional bounded redacted parent context, and built-in read/search/edit/shell tools. It loads its line-edit extension and Sieve; unrelated extensions, skills, templates, context files, and persistent child sessions are disabled.
 
-- Diagnosis and bug investigation.
-- Architecture, public API, security, concurrency, or cross-cutting semantic decisions.
-- Ordinary semantic changes around 50–300 LOC where a fresh worker would repeat discovery.
-- Any task whose handoff cannot name exact anchors and decisive checks.
+## Safety and privacy
 
-### Delegate These Tasks
-
-Use Grunt mainly for:
-
-- Mechanical or repetitive multi-file work.
-- Bounded, already-designed implementation slices with exact files and symbols.
-- Changes typically around 300–500+ LOC where worker execution displaces substantial main-model work.
-- Work with focused validation and little expected repair.
-
-### Handoffs and Review
-
-Every handoff should name exact files and symbols, chosen design, constraints, non-goals, acceptance criteria, and focused checks. Provide `suggestedPaths` whenever reliable anchors are known. Use `targetedContext` only for directly applicable snippets or project instructions such as relevant `AGENTS.md` rules. Never copy broad conversation history. Omit uncertain paths or context rather than adding noise. Suggested paths guide scope but are not an allowlist.
-
-The main model uses the lowest configured thinking level that fits the delegated work.
-
-Grunt calls are unlimited per original user prompt. Dependent slices remain sequential: invoke Grunt for one slice, inspect its applied changes, run focused verification, then invoke Grunt for the next slice. Do not issue dependent calls in one assistant response because later handoffs cannot incorporate earlier results.
-
-Advisor remains optional. Use it at least once when delegated work follows consequential architecture, exposes new uncertainty, or needs recovery review.
-
-After any Grunt result, the main model owns recovery. It should inspect completed changes or a partial patch artifact, then fix small/local defects and finish small remaining work directly. It should not spawn another worker merely to verify or repair the previous worker. Re-delegation is reserved for remaining work that is still medium or large, self-contained, easy to validate, and likely cheaper than main-model completion.
-
-## Execution Behavior
-
-`grunt({ task, thinking, suggestedPaths?, targetedContext?, checkCommands? })` starts one synchronous child Pi process. `targetedContext` is capped at 4,000 characters; `checkCommands` accepts up to eight focused existing checks. The child receives the built-in `read`, `grep`, `find`, `ls`, `edit`, `write`, and `bash` tools. Optional parent context is bounded and redacted. `suggestedPaths` guides scope but is not an allowlist.
-
-### Isolated Mode
-
-In isolated mode, Grunt requires a Git repository with a `HEAD` commit. It creates a detached temporary worktree, then mirrors only dirty/deleted tracked paths and non-ignored untracked paths because Git already checked out clean tracked files. Checkout and baseline-commit hooks are disabled. After normal completion, Grunt derives a binary patch against the immutable baseline commit, verifies that the parent's `HEAD` and dirty-file fingerprints remain unchanged, rechecks immediately before integration, then applies the patch. Worker commits remain included. Successful results omit changed-path and worker-report duplication; the main model inspects authoritative Git state. Non-completed results retain changed paths, scope diagnostics, and the worker report for recovery. Isolation setup failures throw tool errors, so Pi marks them as errors in the TUI.
-
-### Direct and Dynamic Modes
-
-In direct mode, Grunt runs in Pi's current working directory and works outside Git repositories. Edits happen immediately. Failure, timeout, cancellation, or a blocked report may leave partial changes. Direct mode provides no rollback, stale-parent check, patch artifact, or derived changed-path list.
-
-Dynamic mode checks for a Git worktree and valid `HEAD` before each Grunt call. It then uses the existing isolated or direct path; resolved mode is shown in tool output. If isolation setup later fails, dynamic mode falls back to direct execution and reports the setup failure. Explicit isolated mode still throws.
-
-Ignored dependency directories such as `node_modules`, `.venv`, and `venv` are not copied. When present in the parent but unavailable to the worker, Grunt tells the worker to skip checks requiring them instead of installing or repeatedly probing for them.
-
-### Worker Context
-
-The worker receives:
-
-- Grunt's concise replacement system prompt; Pi's general default system prompt is not appended.
-- The exact `task` handoff.
-- Optional `targetedContext`, for directly applicable snippets or project instructions only.
-- Optional `suggestedPaths`, explicitly marked as guidance rather than an allowlist.
-- Optional focused `checkCommands`.
-- A note listing detected ignored dependency directories unavailable in the worktree.
-- Optional redacted parent conversation context when `PI_GRUNT_PARENT_CONTEXT_CHARS` is greater than `0`. This uses at most the latest 10 user/assistant text or summary entries, caps each at 1,200 characters, removes tool payloads, applies pattern-based secret redaction, then enforces the configured total character limit.
-- Tool results generated after the worker chooses to inspect or execute something.
-
-The isolated repository snapshot is available on disk but is not inserted into the model prompt. Unrelated extensions, skills, prompt templates, context files, and persistent child sessions are disabled. Grunt explicitly loads its line-edit extension and Pi Sieve so bulky `bash`, `grep`, `find`, and `ls` results can be pruned from later worker turns and recovered with `sieve_recall`. Parent conversation context is disabled by default.
-
-The worker must stop when it encounters architectural ownership, public API decisions, security-sensitive behavior, destructive migrations, conflicting requirements, or material scope expansion. It must not commit, stash, reset, clean, install dependencies, publish, or use network commands.
-
-## Safety
-
-In isolated mode, Grunt resolves the temporary worktree's Git top-level and verifies it differs from the parent. The child process is spawned with that worktree as its OS working directory, and results include isolation verification metadata. Worker patches are collected only from that worktree. Direct mode intentionally skips these guarantees and is labeled `DIRECT` in status and tool output.
-
-Blocked, aborted, timed-out, budget-limited, output-limited, failed, stale, or unapplicable work never changes the parent worktree. Only a normal model `stop` can integrate changes. When isolated edits exist, Grunt stores their unapplied patch under the Pi agent directory and reports its path. Successful patches are applied only after the stale-parent checks. Same-repository transactions are queued through cleanup; independent repositories may run independently. Cleanup failures are warnings and never disguise an already-applied result.
-
-Timeout, turn, reported-cost, and reported-context limits bound runaway workers. Token, turn, and cost limits are checked after each paid model response, so they prevent another turn rather than undoing cost already incurred. Per-run details separate worker outcome from integration outcome and report worker tokens, cache usage, turns, cost, and changed-file count when isolation provides it. `/grunt status` aggregates session worker runs, integrations, attention-required outcomes, turns, and cost. These metrics intentionally exclude main-model handoff, review, repair, and verification cost; measure those from the parent session when comparing end-to-end effectiveness. The main model must inspect applied changes and run final verification before completion.
-
-Worktree isolation protects the parent repository from ordinary worker edits; it is not a security sandbox. Pi extensions and child tools run with user permissions. Review package source before installation. Task/context text is sent to the selected model provider under that provider's terms and pricing.
+Isolation protects the parent from ordinary worker edits, not from code with your permissions. Direct runs are labeled `DIRECT`. The child must not commit, stash, reset, clean, install dependencies, publish, or use network commands. Task/context text is sent to the selected provider under its terms and pricing. Inspect applied changes and run final verification before completion.

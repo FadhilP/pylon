@@ -19,7 +19,7 @@ Pylon is optimized for **cost efficiency and output quality rather than speed**.
 
 ## Web App Setup (Recommended)
 
-Requires Node.js 22.19 or newer.
+Requires Node.js 22.19.0 or newer.
 
 ```sh
 npm install --global @fadhilp/pylon
@@ -29,9 +29,13 @@ pylon
 
 Open [http://127.0.0.1:3141](http://127.0.0.1:3141) (loopback only) and use **Settings** to configure providers, package models, and package options. Recommended for OpenAI subscriptions: main GPT 5.6 Sol Medium, Advisor Sol High, Scout Luna Medium, Grunt Terra.
 
+See the complete [Pylon Web guide](./docs/web/README.md) for workspaces, sessions, surfaces, settings, safety, storage, and troubleshooting.
+
 - `PYLON_CWD` sets the project directory, `PYLON_PORT` the port (`3141`), `PYLON_NO_UPDATE_CHECK=1` disables the startup update check.
 - Sessions, settings, and package state live in `~/.pylon/agent` (`PI_CODING_AGENT_DIR` overrides). Existing `~/.pi/agent` data is copied on first run; `pylon migrate` retries.
 - Manage Pi-native extensions in **Settings → Extensions**. Extensions run arbitrary code with the server's permissions — review sources before enabling.
+- Pylon Web agents can use the deferred `pylon_settings` tool to inspect package settings and apply revision-checked updates after confirmation. The tool does not expose hooks, project policy, trust, extensions, Guard controls, credentials, or raw configuration files.
+- Agents can activate the deferred `pylon_docs` tool to list and read the shipped Web and package documentation on demand; documentation is not injected into every prompt.
 
 ## Terminal Setup (Alternative)
 
@@ -44,12 +48,12 @@ pi install npm:@fadhilp/pylon   # or an absolute path to a local checkout
 Reload Pi with `/reload`, then pick models for the child agents — they stay unavailable until configured:
 
 ```text
-/advisor
-/grunt
-/scout
+/advisor select
+/grunt select
+/scout select
 ```
 
-Each command opens a model selector in TUI mode; `reset` uses the current main model, `disable` turns it off, `status` shows configuration. Run `/pylon doctor` to check models, credentials, dependencies, and package health.
+Use each command without arguments to show status; `set provider/model[:thinking]` configures non-interactively, `reset` uses the current main model, and `disable` turns the package off. Run `/pylon doctor` to check models, credentials, dependencies, and package health.
 
 ## Bundled Packages
 

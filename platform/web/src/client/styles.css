@@ -399,7 +399,6 @@
   .app-error-toast button:hover { background: var(--surface-hover); color: var(--text); }
   .app-recovery-toast button { width: auto; height: auto; flex-basis: auto; padding: 3px 5px; color: var(--accent-text); font-size: 12px; }
   .agents-panel.has-selection > header { box-shadow: inset 3px 0 var(--agent-color); }
-  .agents-panel.has-selection > header > div > svg { color: var(--agent-color); }
   /* Agents panel layout. Keep these values in sync with prototypes/agents.html. */
   .agents-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
   .agents-filterbar { display: flex; min-height: 39px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
@@ -805,10 +804,11 @@
   .prompt-file button:hover { background: var(--surface-hover); color: var(--text); }
   .composer-drop-overlay { position: absolute; z-index: 35; inset: 5px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px dashed var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface-raised)); color: var(--accent-text); font-size: 12px; pointer-events: none; animation: drop-target-in var(--motion-fast) var(--motion-ease-out); }
   .prompt-error { margin: -4px 4px 7px; color: var(--red); font-size: 12px; }
-  .prompt-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+  .prompt-toolbar { position: relative; display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
   .prompt-left, .prompt-right { display: flex; min-width: 0; align-items: center; gap: 7px; }
   .prompt-right { justify-content: flex-end; }
   .composer-popover-root { position: relative; flex: 0 0 auto; }
+  .model-control { position: static; }
   .composer-plus { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 5px; background: transparent; color: var(--text-soft); transition: color var(--motion-fast) ease, transform 100ms ease; }
   .composer-plus:active:not(:disabled) { transform: scale(0.94); }
   .composer-plus:hover:not(:disabled), .composer-plus.is-active { background: transparent; color: var(--accent-text); }
@@ -838,7 +838,7 @@
   .model-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Same size as the model name and the metrics beside it, so the whole bar sits on one baseline. */
   .model-trigger small { color: var(--thinking-text, var(--text-muted)); font-size: 13px; font-weight: 550; white-space: nowrap; }
-  .model-popover { right: 0; width: min(600px, calc(100vw - 20px)); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
+  .model-popover { right: 0; width: min(600px, 100%); padding: 0; overflow: hidden; border: 1px solid var(--line-strong); box-shadow: var(--shadow); }
   .model-note { display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--amber-soft); color: var(--amber); font-size: 12px; }
   .model-note > svg { flex: 0 0 auto; }
   .model-search { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); }
@@ -879,6 +879,15 @@
   .model-foot strong { color: var(--text); font-weight: 620; }
   .model-foot small { color: var(--accent-text); white-space: nowrap; }
   .model-help { padding: 0 12px 10px; color: var(--text-muted); font-size: 12px; }
+  @container (max-width: 520px) {
+    .model-trigger { max-width: 145px; padding-inline: 6px; }
+    .model-trigger > span, .model-trigger small { font-size: 12px; }
+    .model-list { --model-rail-width: 176px; }
+    .model-axis, .model-row { min-width: 0; grid-template-columns: minmax(0, 1fr) var(--model-rail-width); gap: 8px; padding: 0 8px; }
+    .model-axis > span:nth-child(2), .model-axis > span:nth-child(3), .model-row-fact { display: none; }
+    .model-foot { align-items: flex-start; flex-direction: column; gap: 2px; }
+    .model-help { line-height: 1.35; }
+  }
   .prompt-metrics { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; color: var(--text-muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .prompt-metrics span + span { padding-left: 10px; border-left: 1px solid var(--line); }
   .queue-surface { gap: 0; padding: 0; animation: request-in var(--motion-standard) var(--motion-ease-out); }
@@ -1915,6 +1924,21 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 /* Multi-select sets were stacked checkbox fieldsets a full row tall
    each; chips carry the same choices without the row losing shape. */
 .package-row.is-stacked { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+.prompt-setting-editor { display: grid; width: 100%; min-width: 0; gap: 12px; }
+.prompt-setting-mode { display: grid; grid-template-columns: 72px minmax(180px, 280px); align-items: center; gap: 10px; width: 100%; }
+.prompt-setting-mode > span { color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.prompt-setting-mode select { width: 100%; min-width: 0; }
+.prompt-setting-panel { display: grid; min-width: 0; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-raised); }
+.prompt-setting-panel > header, .prompt-setting-panel > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.prompt-setting-panel > header strong { font-size: 12px; font-weight: 650; }
+.prompt-setting-panel > header span, .prompt-setting-panel > footer { color: var(--text-muted); font-size: 11px; }
+.prompt-setting-panel textarea { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 220px; max-height: 560px; padding: 12px 13px; border: 1px solid var(--line-strong); border-radius: 7px; outline: 0; background: var(--surface); color: var(--text); font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; resize: vertical; tab-size: 2; }
+.prompt-setting-panel textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.prompt-setting-panel.is-default textarea { min-height: 300px; background: var(--surface-subtle); color: var(--text-soft); cursor: text; }
+.prompt-setting-panel.is-custom { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: color-mix(in srgb, var(--accent-soft) 24%, var(--surface-raised)); }
+.prompt-setting-panel.is-custom textarea { min-height: 220px; }
+.prompt-setting-empty { margin: 0; padding: 18px; border: 1px dashed var(--line-strong); border-radius: 7px; background: var(--surface-subtle); color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+@media (max-width: 640px) { .prompt-setting-mode { grid-template-columns: minmax(0, 1fr); } .prompt-setting-panel { padding: 10px; } .prompt-setting-panel textarea, .prompt-setting-panel.is-default textarea { min-height: 200px; } }
 .package-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .package-chip { position: relative; display: inline-flex; min-height: 28px; align-items: center; padding: 0 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; cursor: pointer; transition: border-color var(--motion-fast) ease, color var(--motion-fast) ease; }
 .package-chip:hover { border-color: var(--line-strong); color: var(--text-soft); }
@@ -2257,6 +2281,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
    one place rather than in a selector per view. */
 .rail-item.is-active svg { color: var(--rail-tone, var(--accent-text)); }
 .inspector-header > div > svg, .inspector > header > div > svg { color: var(--rail-tone, var(--text-muted)); }
+.agents-panel.has-selection > header > div > svg { color: var(--agent-color); }
 .rail-item > small { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 12px; line-height: 14px; }
 .rail-item.is-live::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 5px; height: 5px; border-radius: 999px; background: var(--green); }
 /* An icon-only rail is only learnable if the labels come back on hover. */

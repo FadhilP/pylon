@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { configPath, defaultConfig, effectiveConfig, loadConfig } from "../src/config.ts";
+import {
+  configuredPrivateAgentSystemPrompt,
+  configPath,
+  defaultConfig,
+  effectiveConfig,
+  loadConfig,
+  SPAWN_DEFAULT_PROMPT_POLICY,
+} from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
 const deferred = {
@@ -17,7 +24,14 @@ const primitiveDefaults = {
   recentThreadLimit: 8,
   recentThreadMaxChars: 800,
   recentThreadTotalChars: 12_000,
+  privateAgentSystemPrompt: { mode: "default", text: "" },
 };
+
+test("private-agent prompt default is absent while append and replace reduce to their text", () => {
+  assert.equal(configuredPrivateAgentSystemPrompt({ mode: "default", text: "" }), undefined);
+  assert.equal(configuredPrivateAgentSystemPrompt({ mode: "append", text: "default agent" }), "default agent");
+  assert.equal(configuredPrivateAgentSystemPrompt({ mode: "replace", text: "replacement agent" }), "replacement agent");
+});
 
 test("Spawn custom settings preserve model validation and persist transcript defaults", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-spawn-config-"));
@@ -29,6 +43,7 @@ test("Spawn custom settings preserve model validation and persist transcript def
       sessionAvailability: "deferred",
       agentThinkingLevels: allThinking,
       ...primitiveDefaults,
+      promptDefaultText: SPAWN_DEFAULT_PROMPT_POLICY,
     });
 
     await updateSettings(
@@ -42,6 +57,7 @@ test("Spawn custom settings preserve model validation and persist transcript def
         recentThreadLimit: 4,
         recentThreadMaxChars: 400,
         recentThreadTotalChars: 4_000,
+        privateAgentSystemPrompt: { mode: "append", text: "You are a careful specialist." },
       },
       { agentDir },
     );
@@ -55,6 +71,8 @@ test("Spawn custom settings preserve model validation and persist transcript def
       recentThreadLimit: 4,
       recentThreadMaxChars: 400,
       recentThreadTotalChars: 4_000,
+      privateAgentSystemPrompt: { mode: "append", text: "You are a careful specialist." },
+      promptDefaultText: SPAWN_DEFAULT_PROMPT_POLICY,
     });
     assert.deepEqual(JSON.parse(await readFile(configPath(agentDir), "utf8")), {
       version: 1,
@@ -66,6 +84,7 @@ test("Spawn custom settings preserve model validation and persist transcript def
       recentThreadLimit: 4,
       recentThreadMaxChars: 400,
       recentThreadTotalChars: 4_000,
+      privateAgentSystemPrompt: { mode: "append", text: "You are a careful specialist." },
     });
     await assert.rejects(
       updateSettings(

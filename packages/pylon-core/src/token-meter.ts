@@ -366,8 +366,8 @@ export function meterFromBranch(entries: readonly any[]): TokenMeter {
 
 export const estimatedTokens = (characters: number): number => Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
 
-export function formatTokenMeter(meter: TokenMeter): string {
-  const rows = [...meter.byTool.entries()].sort(
+export function formatTokenMeter(meter: TokenMeter, toolLimit = Number.POSITIVE_INFINITY): string {
+  const allRows = [...meter.byTool.entries()].sort(
     (a, b) => b[1].argumentChars + b[1].resultChars - a[1].argumentChars - a[1].resultChars || a[0].localeCompare(b[0]),
   );
   let totalCalls = 0,
@@ -375,14 +375,18 @@ export function formatTokenMeter(meter: TokenMeter): string {
     totalOutput = 0,
     totalImages = 0,
     totalErrors = 0;
-  const lines = rows.map(([name, usage]) => {
+  for (const [, usage] of allRows) {
     totalCalls += usage.calls;
     totalInput += usage.resultChars;
     totalOutput += usage.argumentChars;
     totalImages += usage.images;
     totalErrors += usage.errors;
-    return `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.resultChars)}; output ~${estimatedTokens(usage.argumentChars)}; total ~${estimatedTokens(usage.argumentChars + usage.resultChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`;
-  });
+  }
+  const rows = allRows.slice(0, toolLimit);
+  const lines = rows.map(([name, usage]) =>
+    `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.resultChars)}; output ~${estimatedTokens(usage.argumentChars)}; total ~${estimatedTokens(usage.argumentChars + usage.resultChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`,
+  );
+  if (rows.length < allRows.length) lines.push(`… ${allRows.length - rows.length} more tools; use /tokens all`);
   const packageLines = [...meter.byPackage.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(

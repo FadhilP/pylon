@@ -4,6 +4,7 @@ import {
   advisorMaxCalls,
   advisorMaxCostUsd,
   advisorMaxOutputTokens,
+  advisorPrompt,
   advisorSettingFields,
   advisorTimeoutMs,
   configPath,
@@ -11,6 +12,7 @@ import {
   saveConfig,
   thinkingLevels,
 } from "./config.ts";
+import { ADVISOR_PROMPT } from "./prompts.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
@@ -24,6 +26,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     maxCostUsd: advisorMaxCostUsd(config.maxCostUsd),
     maxOutputTokens: advisorMaxOutputTokens(config.maxOutputTokens),
     inputTokenBudget: advisorInputTokenBudget(config.inputTokenBudget),
+    prompt: advisorPrompt(config.prompt),
+    promptDefaultText: ADVISOR_PROMPT,
   };
 }
 
@@ -48,6 +52,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       maxCostUsd: value.maxCostUsd,
       maxOutputTokens: value.maxOutputTokens,
       inputTokenBudget: value.inputTokenBudget,
+      prompt: value.prompt,
       ...(value.mode === "session" ? { useMainModel: true } : {}),
       ...(value.mode === "model" ? { advisorModel: value.model.trim() } : {}),
       ...(value.mode !== "disabled" && value.thinking ? { thinking: value.thinking } : {}),

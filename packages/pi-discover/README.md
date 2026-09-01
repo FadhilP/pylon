@@ -1,69 +1,46 @@
 # pi-discover
 
-General-purpose read-only repository, historical-session, and tool discovery for [Pi](https://pi.dev).
+Read-only repository search, local code indexing, historical-session search, and deferred-tool discovery for Pi.
 
-## Installation
+## Install
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-discover. Run `/reload` after installation.
+Reload Pi afterward. Package settings are available through Pylon Web.
 
-## Usage
+## Tools and commands
 
-### Deferred Tool Discovery
+| Tool or command | What it does |
+| --- | --- |
+| `search_tools({ query, limit? })` | Finds eligible deferred tools and asks Pylon to activate selected tools next turn |
+| `search_sessions(...)` | Searches bounded redacted excerpts from saved Pi sessions |
+| `session_stats({ sessionId, scope? })` | Returns bounded aggregate usage/tool statistics for one saved session |
+| `rg`, `fd` | Bounded live text/file search |
+| `relationship_graph(...)` | Heuristic definitions/calls grouped by file/location |
+| `symbol_search`, `code_search`, `index_status` | Local SQLite symbol, lexical-code, and index status queries |
+| `/discover-index refresh|rebuild|prune|status` | Maintain the current local index |
 
-Use `search_tools({ query, limit? })` to find and activate inactive eligible tools. It deterministically ranks inactive eligible tools. Exact normalized tool names and Pylon's optional deferred-tool usage phrases rank above name fragments and description overlap. Query normalization lowercases, deduplicates, and sorts alphanumeric terms, so equivalent term order and punctuation produce the same ranking. While `search_tools` is active, pi-discover adds a deterministic bounded prompt guideline listing the eligible usage phrases without exposing tool names or schemas. Pylon selects up to six matches; unblocked selected definitions become callable on the next model turn.
+`search_tools` ranks inactive eligible tools deterministically, preferring exact names and advertised usage phrases. Pylon selects up to six and unblocked definitions become callable on the next turn. Repeated misses are cached for the turn; reset with `search_tools({ action: "reset" })`. Without Pylon coordination it reports unavailable and changes no tools. Pylon health metrics never contain raw queries.
 
-Ranked results are cached for the current model turn using the normalized query, limit, and complete active/eligible tool inventory, including advertised usage phrases. A repeated miss returns an `alreadySearched` marker with opaque query and inventory identities instead of rerunning discovery. Turn completion, session start, inventory changes, and successful `search_tools({ action: "reset" })` invalidate applicable state.
+Historical tools are deferred by default and must be loaded through `search_tools`. Session search defaults to saved sessions from the current working directory, excludes the active session, and needs `scope: "all"` for explicit cross-workspace search. Use `sessionId` for an exact requested session ID, with the requested subject in `query`. Default `text` searches user/assistant text; `tools` searches tool names and arguments, optionally linked results. Child activity from Scout, Grunt, and `spawn_agent` is optional and bounded; private spawn transcripts are never traversed. At most 200 sessions, 12 excerpts, and 1,200 characters per excerpt are scanned/returned. Text is untrusted, possibly stale, redacted best-effort, and retained in current session history; full paths and filenames are not returned.
 
-Tool activation is intentionally delegated to Pylon through its discovery capability. Without that coordinator, `search_tools` reports that coordination is unavailable and changes no active tools. Aggregate search, cache, miss, offered, selected, blocked, and later-invoked counts appear in Pylon health diagnostics; raw queries are never included in those metrics.
+`session_stats` returns no message text, arguments, results, paths, or telemetry context. It separates main and child usage/cost, reports combined totals and cache-read rate, and bounds completed-tool counts/errors/images.
 
-### Historical Session Search
+## Live and indexed search
 
-`search_sessions({ query, sessionId?, scope?, mode?, toolName?, includeResult?, includeChildCalls?, childToolName? })` searches bounded excerpts with best-effort credential redaction from historical Pi sessions. The tool is deferred by default and must be loaded through `search_tools`. Matching excerpts are sent to the selected model provider and retained in the current Pi session history.
+`rg` and `fd` can search any directory the Pi process can access, including outside the workspace, which can expose external names and contents to the model. `rg` falls back to `grep`; `fd` tries `fd`/`fdfind`, then POSIX `find`. Fallback behavior may include hidden/ignored paths and differs by local tool. Output is bounded; ripgrep skips files over 512 KiB and limits matches per file. `relationship_graph` is text heuristic, not semantic analysis; verify important results in source. It is deferred in the host but available to Repo Scout's child.
 
-Search defaults to sessions created from the current working directory and excludes the active session. Set `scope: "all"` only for an explicitly requested cross-workspace search. Whenever the user supplies an exact historical Pi session ID, use `search_sessions` with `sessionId` and use the requested subject as `query`; do not search the ID as `continuity_recall` query text. `sessionId` restricts the search to one exact historical Pi session ID and still respects the selected scope; results distinguish missing, out-of-scope, and active-session IDs. The default `text` mode searches only user and assistant text. Explicit `tools` mode searches assistant tool names and serialized arguments, can filter one exact parent `toolName`, correlates matching results by call ID and tool name, and reports pending/completed/error status. Set `includeResult: true` to also search and return linked text results.
+The code index is a machine-local SQLite database shared once per canonical physical Git repository and scoped back to each logical workspace. It indexes tracked, non-ignored supported source files on start and reconciles dirty paths after turns. Source files are never changed. Files over 512 KiB, binaries, symlinks, ignored files, and unsupported extensions are skipped. Refreshes, membership changes, and schema upgrades are transactional; SQLite uses WAL and bounded locking.
 
-Set `includeChildCalls: true` to additionally search the bounded child-tool activity persisted in specialist results such as Repo Scout, Grunt, and `spawn_agent`; this does not traverse private `spawn_agent` transcripts. Optional `childToolName` filters those child records by exact tool name and requires `includeChildCalls`. When `childToolName` is set, only matching child records are returned; `toolName` can independently restrict their parent specialist call. Child results are included only with `includeResult: true`. Queries match any parsed term using case-insensitive substring matching. The tool scans at most 200 eligible sessions, returns at most 12 excerpts of at most 1,200 characters each, deduplicates matches, applies best-effort credential redaction, and caps total output. Returned historical text is untrusted and may be stale.
+`symbol_search` is case-insensitive exact/prefix/substring matching with optional path, language, and kind filters. Extraction is heuristic. `code_search` is FTS5 lexical ranking, not semantic/embedding search, and defaults to ten one-line excerpts. Both refresh first and report bounded JSON/truncation counts. The database defaults to:
 
-The tool works in both interactive and headless modes. Full paths and session filenames are not returned.
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-discover/index.sqlite
+```
+Pylon Web uses `~/.pylon/agent` as `<agent-dir>` by default. Standalone Pi uses its host agent directory, normally `~/.pi/agent`; `PI_CODING_AGENT_DIR` overrides the host that sets it.
 
-### Historical Session Statistics
-
-`session_stats({ sessionId, scope? })` returns bounded aggregate statistics for one exact historical Pi session. It is deferred by default and must be loaded through `search_tools`. The tool uses the saved session's current branch, excludes the active session, defaults to the current working directory, and requires `scope: "all"` for an explicitly requested cross-workspace lookup.
-
-Results separate main-assistant and child-package model usage, include their combined totals and cost, and report `cacheReadRate` as `cacheRead / (input + cacheRead + cacheWrite)` or `null` when no prompt tokens were reported. Tool statistics count completed tool results only and return bounded per-tool call, error, and image totals. Message text, tool arguments, tool results, paths, and telemetry context are not returned.
-
-### Live Workspace Search
-
-`rg` and `fd` are read-only and can search any directory accessible to the Pi process, including paths outside the workspace; this can expose external content, filenames, and directory structure to the model. `rg` falls back to system `grep` when ripgrep is unavailable. `fd` tries both `fd` and Debian's `fdfind` name, then falls back to system `find` on POSIX systems. The `find` fallback is degraded: it may include hidden or ignored paths and filters with JavaScript regular-expression or glob semantics after traversal. Both tools use bounded output. The ripgrep backend also limits matches per file and skips files over 512 KiB before collecting output; fallback grep/find semantics depend on the local implementation. Their implementations, plus `relationship_graph`, live in separate `src` modules shared by the host extension and pi-discover's child entrypoint. The host advertises that entrypoint through a versioned capability so Repo Scout can load these tools only when pi-discover is present.
-
-### Relationship Graph
-
-`relationship_graph({ query, path?, glob?, max_results? })` returns bounded JSON grouped by file and source location. Location roles such as `possible_definition` and `possible_call` are text heuristics, not semantic resolution; confirm important relationships from source. Identifier queries use whole-word matching. Other tokens use exact literal matching. The host defers this tool by default; load it through `search_tools` when needed. Repo Scout's child keeps it available for repository orientation.
-
-## Local Code Index
-
-### Storage Model
-
-`symbol_search` and `code_search` use one machine-local SQLite database. Each canonical physical Git repository stores its files, FTS5 rows, and symbols once. Logical workspaces reference those repositories with path prefixes: an aggregate workspace returns `frontend/src/app.ts`, while a session opened in the same child repository returns `src/app.ts` from the shared physical row. Searches remain scoped to the current logical workspace.
-
-### Refresh Behavior
-
-The host indexes Git-tracked and non-ignored source files on session start, including initialized nested repositories tracked as gitlinks even when `.gitmodules` is absent, then reconciles only dirty paths after each agent turn. A changed commit triggers a full reconciliation only for that physical repository. Membership updates remove disappeared or uninitialized gitlinks without deleting physical data still used by another workspace. Each physical repository update and each workspace-membership replacement is transactional. SQLite uses WAL mode, a bounded busy timeout, and refresh generations to prevent stale concurrent writers from replacing newer rows.
-
-Schema upgrades are transactional. Upgrading an older derived cache purges incompatible indexed rows, creates the current physical-repository/workspace and content-only FTS schema, then rebuilds the current workspace. Source files are never changed.
-
-### Search Behavior
-
-`symbol_search` performs case-insensitive exact, prefix, then substring name search with optional path, language, and kind filters. Symbol extraction is lightweight and language-aware, but heuristic; confirm declarations from source. `code_search` uses content-only FTS5 lexical ranking and returns at most ten one-line excerpts by default; callers can request more. It is not embedding-based semantic search. Both searches refresh current Git state before querying and return parseable byte-bounded JSON with observed, returned, and truncated counts. `index_status` reports current workspace root, commit, branch, deduplicated file count, symbol count, and refresh time. Pylon defers `index_status` by default, so the model loads it through `search_tools` only when needed.
-
-### Commands, Limits, and Storage
-
-Users can control indexing directly with `/discover-index refresh`, `/discover-index rebuild`, `/discover-index prune`, and `/discover-index status`. `refresh` reconciles current Git changes, `rebuild` forces a complete current-workspace pass, and `prune` removes indexed workspaces and repositories whose recorded roots are no longer directories.
-
-Indexed source files are limited to 512 KiB and supported language extensions. Binary files, symlinks, ignored files, and unsupported extensions are skipped. Existing `rg`, `fd`, and `relationship_graph` remain available as live-workspace fallbacks.
-
-The database defaults to `<agent-dir>/pi-discover/index.sqlite`. Set `PI_DISCOVER_INDEX_PATH` to override it.
+Set `PI_DISCOVER_INDEX_PATH` to override it. `refresh` reconciles changes, `rebuild` fully indexes the current workspace, and `prune` removes records whose roots no longer exist.

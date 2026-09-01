@@ -13,6 +13,7 @@ import {
   type InlineExtension,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import type { PromptPackageSettingValue } from "pylon-core/package-settings";
 
 export function createPylonModelRuntime(agentDir: string): Promise<ModelRuntime> {
   const fixedAgentDir = resolve(agentDir);
@@ -28,6 +29,7 @@ export async function createPylonRuntimeFactory(options: {
   extensionFactories?: InlineExtension[];
   eventBus?: EventBus;
   modelRuntime?: ModelRuntime;
+  mainPrompt?: PromptPackageSettingValue;
   onStartupPhase?: (phase: "extension-loading" | "session-create", durationMs: number) => void;
 }): Promise<CreateAgentSessionRuntimeFactory> {
   const eventBus = options.eventBus ?? createEventBus();
@@ -54,6 +56,12 @@ export async function createPylonRuntimeFactory(options: {
         additionalExtensionPaths: options.additionalExtensionPaths ?? [],
         eventBus,
         extensionFactories: options.extensionFactories,
+        ...(options.mainPrompt?.mode === "replace"
+          ? { systemPromptOverride: () => options.mainPrompt!.text }
+          : {}),
+        ...(options.mainPrompt?.mode === "append" && options.mainPrompt.text
+          ? { appendSystemPromptOverride: (base: string[]) => [...base, options.mainPrompt!.text] }
+          : {}),
       },
     });
     options.onStartupPhase?.("extension-loading", performance.now() - extensionLoadingStartedAt);

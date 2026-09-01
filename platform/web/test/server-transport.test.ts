@@ -1654,6 +1654,7 @@ test(
           maxCostUsd: 0.5,
           maxOutputTokens: 8_192,
           inputTokenBudget: 32_768,
+          prompt: { mode: "default", text: "" },
         },
         commandId: "settings-once",
         expectedGeneration: 1,

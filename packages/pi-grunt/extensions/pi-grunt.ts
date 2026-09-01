@@ -12,6 +12,7 @@ import {
   gruntMaxTurns,
   gruntMode,
   gruntParentContextChars,
+  gruntPrompt,
   gruntThinkingLevels,
   gruntTimeoutMs,
   isGruntEnabled,
@@ -31,10 +32,16 @@ import {
   removeIsolatedWorktree,
   type IsolatedWorktree,
 } from "../src/isolation.ts";
-import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
+import {
+  DIRECT_WORKER_IMMUTABLE_FOOTER,
+  DIRECT_WORKER_PROMPT,
+  WORKER_IMMUTABLE_FOOTER,
+  WORKER_PROMPT,
+} from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
 import { requestDelegateName } from "pylon-core/delegate-names";
+import { composePackagePrompt } from "pylon-core/package-settings";
 
 const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
 const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
@@ -250,8 +257,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     if (integrationStatus === "completed") stats.integrated++;
     else stats.requiresAttention++;
   };
-  const resolveModel = async (ctx: any) => {
-    const config = await loadConfig();
+  const resolveModel = async (ctx: any, config: Awaited<ReturnType<typeof loadConfig>>) => {
     if (!config.model) return ctx.model;
     const ref = parseModelRef(config.model);
     return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
@@ -352,7 +358,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         return refuse(`Grunt thinking level is not enabled: ${params.thinking}.`, "invalid");
       const task = params.task.trim();
       if (!task) return refuse("Grunt task must not be empty.", "invalid");
-      const model = await resolveModel(ctx);
+      const model = await resolveModel(ctx, config);
       if (!model) return refuse("Grunt unavailable: no selected model.", "unavailable");
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey)
@@ -374,6 +380,12 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
       const configuredMode = gruntMode(config);
       const setup = await prepareIsolation(exec, ctx.cwd, configuredMode, signal);
       const { mode, isolationFallback } = setup;
+      // The configuration is snapshotted above; use the selected execution-mode base unchanged.
+      const systemPrompt = composePackagePrompt(
+        mode === "isolated" ? WORKER_PROMPT : DIRECT_WORKER_PROMPT,
+        gruntPrompt(config.prompt),
+        mode === "isolated" ? WORKER_IMMUTABLE_FOOTER : DIRECT_WORKER_IMMUTABLE_FOOTER,
+      );
       // Reassigned when a transient failure is retried in a fresh worktree.
       let isolated = setup.isolated;
       const isolatedAttempts: IsolatedWorktree[] = isolated ? [isolated] : [];
@@ -492,7 +504,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               "--thinking",
               params.thinking,
               "--system-prompt",
-              isolated ? WORKER_PROMPT : DIRECT_WORKER_PROMPT,
+              systemPrompt,
               prompt,
             ];
             run = await runWorker(args, {
@@ -768,37 +780,47 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
   });
 
   pi.registerCommand("grunt", {
-    description: "Select worker model, execution mode, reset, disable, or show status",
+    description: "Show or configure the Grunt worker",
     handler: async (args, ctx) => {
-      const value = args.trim();
-      if (value === "disable") {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage =
+        "Usage: /grunt [status|set <provider/model>|select|mode <isolated|direct|dynamic>|enable|disable|reset|help]";
+      if (action === "disable" && parts.length === 1) {
         await saveConfig({ ...(await loadConfig()), version: 1, disabled: true });
         await refreshTool();
         ctx.ui.notify("Grunt disabled.", "info");
         return;
       }
-      if (value === "reset") {
+      if (action === "enable" && parts.length === 1) {
+        await saveConfig({ ...(await loadConfig()), version: 1, disabled: false });
+        await refreshTool();
+        ctx.ui.notify("Grunt enabled.", "info");
+        return;
+      }
+      if (action === "reset" && parts.length === 1) {
         await saveConfig({ version: 1, disabled: false, mode: "isolated" });
         await refreshTool();
         ctx.ui.notify("Grunt reset to current main model in isolated mode.", "info");
         return;
       }
-      if (value === "isolated" || value === "direct" || value === "dynamic") {
+      if (action === "mode" && parts.length === 2 && ["isolated", "direct", "dynamic"].includes(parts[1]!)) {
+        const mode = parts[1] as "isolated" | "direct" | "dynamic";
         const config = await loadConfig();
-        await saveConfig({ ...config, mode: value });
+        await saveConfig({ ...config, mode });
         await refreshTool();
         const message =
-          value === "isolated"
+          mode === "isolated"
             ? "Grunt mode: isolated Git worktree."
-            : value === "direct"
+            : mode === "direct"
               ? "Grunt mode: DIRECT. Worker edits affect the current working directory immediately."
               : "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.";
-        ctx.ui.notify(message, value === "direct" ? "warning" : "info");
+        ctx.ui.notify(message, mode === "direct" ? "warning" : "info");
         return;
       }
-      if (value === "status") {
+      if ((action === "status" && parts.length === 1) || parts.length === 0) {
         const config = await loadConfig();
-        const model = await resolveModel(ctx);
+        const model = await resolveModel(ctx, config);
         const state = config.disabled
           ? "disabled"
           : !isGruntEnabled(config)
@@ -815,10 +837,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         );
         return;
       }
-      let selected = value;
-      if (!selected) {
+      let selected: string | undefined;
+      if (action === "set" && parts.length === 2) selected = parts[1];
+      else if (action === "select" && parts.length === 1) {
         if (ctx.mode !== "tui") {
-          ctx.ui.notify("Usage: /grunt <provider/model-id>|isolated|direct|dynamic|status|reset|disable", "info");
+          ctx.ui.notify("Grunt model selection is available only in Pi TUI.", "error");
           return;
         }
         selected =
@@ -828,8 +851,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               ? ctx.scopedModels.map(({ model }) => model)
               : ctx.modelRegistry.getAvailable()
             ).map(modelName),
-          )) ?? "";
+          )) ?? undefined;
         if (!selected) return;
+      } else {
+        ctx.ui.notify(usage, action === "help" && parts.length === 1 ? "info" : "warning");
+        return;
       }
       const ref = parseModelRef(selected);
       const model = ref && ctx.modelRegistry.find(ref.provider, ref.id);

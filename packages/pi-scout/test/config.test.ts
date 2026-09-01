@@ -15,6 +15,7 @@ import {
   scoutMaxCostUsd,
 } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
 
 test("config is atomic, validated, and corrupt input is preserved", async () => {
   const dir = await mkdtemp(join(tmpdir(), "scout-config-"));
@@ -48,52 +49,30 @@ test("config is atomic, validated, and corrupt input is preserved", async () => 
   assert.deepEqual(await loadConfig(path), { version: 1 });
 });
 
-test("Pylon Scout settings round-trip optional OpenAI/Exa search", async () => {
+test("Scout settings round-trip prompt", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "scout-web-settings-"));
-  assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "scout",
-    mode: "disabled",
-    webSearch: false,
-    repoTimeoutMs: DEFAULT_REPO_TIMEOUT_MS,
-    maxCostUsd: DEFAULT_SCOUT_MAX_COST_USD,
-    webSearchResults: 5,
-  });
+  const current = await readSettings({ agentDir });
   await updateSettings(
     {
-      kind: "scout",
+      ...current,
       mode: "session",
-      thinking: "high",
-      webSearch: true,
       repoTimeoutMs: 120_000,
       maxCostUsd: 0,
       webSearchResults: 6,
+      prompt: { mode: "replace", text: "Gather only release evidence." },
     },
     { agentDir },
   );
-  assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "scout",
-    mode: "session",
-    thinking: "high",
-    webSearch: true,
-    repoTimeoutMs: 120_000,
-    maxCostUsd: 0,
-    webSearchResults: 6,
-  });
-  assert.deepEqual(await loadConfig(configPath(agentDir)), {
-    version: 1,
-    disabled: false,
-    thinking: "high",
-    webSearch: true,
-    repoTimeoutMs: 120_000,
-    maxCostUsd: 0,
-    webSearchResults: 6,
+  const saved = await readSettings({ agentDir });
+  assert.deepEqual(saved.prompt, { mode: "replace", text: "Gather only release evidence." });
+  assert.equal(saved.promptDefaultText, `Repository Scout:\n${REPO_SCOUT_PROMPT}\n\nWeb Scout:\n${WEB_SCOUT_PROMPT}`);
+  assert.deepEqual((await loadConfig(configPath(agentDir))).prompt, {
+    mode: "replace",
+    text: "Gather only release evidence.",
   });
   await assert.rejects(
-    updateSettings(
-      { kind: "scout", mode: "session", webSearch: "yes", repoTimeoutMs: 120_000, maxCostUsd: 0, webSearchResults: 6 },
-      { agentDir },
-    ),
-    /invalid Scout settings/,
+    updateSettings({ ...saved, prompt: { mode: "default", text: "not allowed" } }, { agentDir }),
+    /invalid Scout/,
   );
 });
 test("Scout stays inactive until configured or explicitly reset", () => {

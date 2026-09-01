@@ -3,6 +3,10 @@ export function loginCommandProvider(value: string): string | undefined | null {
   return match ? match[1]?.trim() || undefined : null;
 }
 
+export function isExactSlashCommandSelection(query: string, selectedName?: string): boolean {
+  return Boolean(selectedName && selectedName.toLowerCase() === query.toLowerCase());
+}
+
 export const WORKSPACE_FILE_DRAG_TYPE = "application/x-pylon-workspace-file";
 
 export interface FileMention {

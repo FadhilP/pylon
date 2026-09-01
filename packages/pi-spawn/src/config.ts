@@ -11,6 +11,8 @@ import {
 export const toolAvailabilities = ["deferred", "active"] as const;
 export type ToolAvailability = (typeof toolAvailabilities)[number];
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export const SPAWN_DEFAULT_PROMPT_POLICY =
+  "Pi generates the default system prompt for each private agent at spawn time from its enabled tools, working directory, loaded instructions, resources, skills, and runtime context. There is no single static default prompt.";
 export type ThinkingLevel = (typeof thinkingLevels)[number];
 
 export const spawnSettings = definePackageSettings({
@@ -64,6 +66,18 @@ export const spawnSettings = definePackageSettings({
       unit: "characters",
       apply: "reload",
     },
+    {
+      version: 1,
+      key: "privateAgentSystemPrompt",
+      label: "Private-agent default system prompt",
+      type: "prompt",
+      defaultValue: { mode: "default", text: "" },
+      allowedModes: ["default", "append", "replace"],
+      maxBytes: 32_768,
+      defaultText: SPAWN_DEFAULT_PROMPT_POLICY,
+      description: "Used only when creating a private agent without systemPrompt. Default means absent; append and replace both use text because Spawn has no package base prompt.",
+      apply: "next-operation",
+    },
   ],
 } as const);
 
@@ -77,6 +91,7 @@ export type SpawnConfig = {
   recentThreadLimit?: number;
   recentThreadMaxChars?: number;
   recentThreadTotalChars?: number;
+  privateAgentSystemPrompt?: import("pylon-core/package-settings").PromptPackageSettingValue;
 };
 export type EffectiveSpawnConfig = {
   version: 1;
@@ -88,6 +103,7 @@ export type EffectiveSpawnConfig = {
   recentThreadLimit: number;
   recentThreadMaxChars: number;
   recentThreadTotalChars: number;
+  privateAgentSystemPrompt: import("pylon-core/package-settings").PromptPackageSettingValue;
 };
 export const defaultConfig = (): SpawnConfig => ({
   version: 1,
@@ -127,8 +143,15 @@ export function effectiveConfig(config: SpawnConfig): EffectiveSpawnConfig {
       fields.recentThreadTotalChars,
       config.recentThreadTotalChars,
     ) as number,
+    privateAgentSystemPrompt: effectivePackageSettingValue(
+      fields.privateAgentSystemPrompt,
+      config.privateAgentSystemPrompt,
+    ) as import("pylon-core/package-settings").PromptPackageSettingValue,
   };
 }
+export const configuredPrivateAgentSystemPrompt = (
+  setting: import("pylon-core/package-settings").PromptPackageSettingValue,
+): string | undefined => (setting.mode === "default" ? undefined : setting.text);
 
 export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
   try {

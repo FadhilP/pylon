@@ -22,28 +22,6 @@ export class WorkspaceApplyTool {
     hidden: true,
     factory: pi => {
       const bridge = this;
-      pi.on("session_start", () => {
-        let coordinated = false;
-        pi.events.emit("pylon:tool-policy", {
-          version: 1,
-          kind: "register",
-          owner: "pylon-core",
-          managedTools: ["apply_session_changes"],
-          enabledTools: ["apply_session_changes"],
-          deferredTools: ["apply_session_changes"],
-          toolUsage: {
-            apply_session_changes:
-              "apply this session's changes to the registered project's current branch after explicit user approval",
-          },
-          acknowledge: () => {
-            coordinated = true;
-          },
-        });
-        if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter(name => name !== "apply_session_changes"));
-      });
-      pi.on("session_shutdown", () => {
-        pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pylon-core" });
-      });
       pi.on("before_agent_start", () => {
         if (!bridge.result) return;
         const content = bridge.result;

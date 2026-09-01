@@ -790,49 +790,69 @@ export default function heliosExtension(
     ctx.ui.setStatus?.("pi-helios", undefined);
   });
 
-  pi.registerCommand("helios-doctor", {
-    description: "Check pinned Playwright CLI readiness",
-    handler: async (_args, ctx) => {
-      try {
-        const version = await diagnosePlaywrightCli(exec);
-        healthDiagnostic = Promise.resolve(version);
-        ctx.ui.notify(`Helios CLI ready: ${version}. CLI compatibility is verified.`, "info");
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : "Helios CLI diagnostic failed", "error");
-      }
-    },
-  });
-
-  pi.registerCommand("helios-android-doctor", {
-    description: "Check Android SDK, AVD, Appium, and UiAutomator2 readiness",
-    handler: async (_args, ctx) => {
-      try {
-        const [android, appium] = await Promise.all([diagnoseAndroid(exec), resolveAppium(exec)]);
-        ctx.ui.notify(
-          `Helios Android ready: ${android.adbVersion}; Appium ${appium.version}; ${android.avds.length} AVD(s): ${android.avds.join(", ") || "none"}.`,
-          "info",
-        );
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : "Helios Android diagnostic failed", "error");
-      }
-    },
-  });
-
-  pi.registerCommand("helios-visibility", {
-    description: "Toggle whether future Helios-owned browsers are shown or headless",
+  pi.registerCommand("helios", {
+    description: "Inspect Helios status, run diagnostics, or configure future browser visibility",
     handler: async (args, ctx) => {
-      const action = args.trim().toLowerCase() || "toggle";
-      if (!(["toggle", "show", "hide", "status"] as const).includes(action as "toggle")) {
-        ctx.ui.notify("Usage: /helios-visibility [show|hide|toggle|status]", "warning");
+      const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const usage = "Usage: /helios [status|doctor <browser|android>|visibility [show|hide|toggle]|help]";
+      const action = parts[0] ?? "status";
+      const valid =
+        (parts.length === 0 && action === "status") ||
+        (parts.length === 1 && ["status", "visibility", "help"].includes(action)) ||
+        (parts.length === 2 && action === "doctor" && ["browser", "android"].includes(parts[1]!)) ||
+        (parts.length === 2 && action === "visibility" && ["show", "hide", "toggle"].includes(parts[1]!));
+      if (!valid) {
+        ctx.ui.notify(usage, "warning");
         return;
       }
-      if (action === "toggle") ownedHeaded = !ownedHeaded;
-      if (action === "show") ownedHeaded = true;
-      if (action === "hide") ownedHeaded = false;
-      if (action !== "status") {
-        const config = await loadConfig(settingsPath);
-        await saveConfig({ ...config, version: 1, headed: ownedHeaded }, settingsPath);
+      if (action === "help") {
+        ctx.ui.notify(usage, "info");
+        return;
       }
+      if (action === "status") {
+        const sessions = manager.summary();
+        const androidSessions = androidManager.summary();
+        ctx.ui.notify(
+          `Helios browser sessions: ${sessions.total} (${sessions.owned} owned, ${sessions.attached} attached).\nHelios Android sessions: ${androidSessions.total} (${androidSessions.owned} owned, ${androidSessions.attached} attached).\nFuture Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.`,
+          "info",
+        );
+        return;
+      }
+      if (action === "doctor") {
+        try {
+          if (parts[1] === "browser") {
+            const version = await diagnosePlaywrightCli(exec);
+            healthDiagnostic = Promise.resolve(version);
+            ctx.ui.notify(`Helios CLI ready: ${version}. CLI compatibility is verified.`, "info");
+          } else {
+            const [android, appium] = await Promise.all([diagnoseAndroid(exec), resolveAppium(exec)]);
+            ctx.ui.notify(
+              `Helios Android ready: ${android.adbVersion}; Appium ${appium.version}; ${android.avds.length} AVD(s): ${android.avds.join(", ") || "none"}.`,
+              "info",
+            );
+          }
+        } catch (error) {
+          ctx.ui.notify(
+            error instanceof Error ? error.message : `Helios ${parts[1]} diagnostic failed`,
+            "error",
+          );
+        }
+        return;
+      }
+      if (parts.length === 1) {
+        ctx.ui.notify(
+          `Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.`,
+          "info",
+        );
+        return;
+      }
+
+      const visibility = parts[1];
+      if (visibility === "toggle") ownedHeaded = !ownedHeaded;
+      if (visibility === "show") ownedHeaded = true;
+      if (visibility === "hide") ownedHeaded = false;
+      const config = await loadConfig(settingsPath);
+      await saveConfig({ ...config, version: 1, headed: ownedHeaded }, settingsPath);
       const active = manager.get(sessionId(ctx));
       const unchanged = active?.ownership === "owned" ? " Active owned session unchanged." : "";
       ctx.ui.notify(

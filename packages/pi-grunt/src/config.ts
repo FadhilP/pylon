@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  definePackageSettings,
   effectivePackageSettingValue,
   validPackageSettingValue,
   type PackageSettingField,
@@ -66,7 +67,22 @@ export const gruntSettingFields = {
     env: "PI_GRUNT_PARENT_CONTEXT_CHARS",
     apply: "next-operation",
   },
+  prompt: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "prompt",
+    label: "System prompt",
+    type: "prompt",
+    defaultValue: { mode: "default", text: "" },
+    allowedModes: ["default", "append", "replace"],
+    maxBytes: 32_768,
+    apply: "next-operation",
+  },
 } satisfies Record<string, PackageSettingField>;
+export const gruntSettings = definePackageSettings({
+  version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  packageId: "pi-grunt",
+  fields: Object.values(gruntSettingFields),
+});
 
 export type GruntConfig = {
   version: 1;
@@ -78,6 +94,7 @@ export type GruntConfig = {
   maxTurns?: number;
   maxCostUsd?: number;
   parentContextChars?: number;
+  prompt?: { mode: "default" | "append" | "replace"; text: string };
 };
 export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
   config.thinkingLevels ?? defaultThinkingLevels;
@@ -94,6 +111,7 @@ export const gruntMaxCostUsd = (value?: unknown): number =>
   effectivePackageSettingValue(gruntSettingFields.maxCostUsd, value, process.env);
 export const gruntParentContextChars = (value?: unknown): number =>
   effectivePackageSettingValue(gruntSettingFields.parentContextChars, value, process.env);
+export const gruntPrompt = (value?: unknown) => effectivePackageSettingValue(gruntSettingFields.prompt, value);
 
 export async function loadConfig(path = configPath()): Promise<GruntConfig> {
   return loadJsonConfig(
@@ -124,6 +142,7 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
         ...(value.maxTurns !== undefined ? { maxTurns: value.maxTurns } : {}),
         ...(value.maxCostUsd !== undefined ? { maxCostUsd: value.maxCostUsd } : {}),
         ...(value.parentContextChars !== undefined ? { parentContextChars: value.parentContextChars } : {}),
+        ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
       } satisfies GruntConfig;
     },
     () => ({ version: 1 }),

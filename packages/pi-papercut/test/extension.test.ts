@@ -168,7 +168,7 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   assert.match(notifications[1].text, /Documented setup and added a regression test/i);
   assert.match(notifications[2].text, /Papercuts \(all, 1\)/i);
   assert.match(notifications[3].text, /usage: \/papercuts/i);
-  assert.equal(notifications[3].level, "error");
+  assert.equal(notifications[3].level, "warning");
 
   const request = <T>(channel: string, value: Record<string, unknown>) =>
     new Promise<T>((resolve, reject) => {
@@ -207,5 +207,74 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   assert.equal(
     app.emitted.some(item => item.channel === "pi-papercut:state-change" && item.value.counts.total === 0),
     true,
+  );
+});
+
+
+test("mixed lifecycle batches commit once and roll back together", async () => {
+  const cwd = join(root, "batch-repo");
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  const app = runtime();
+  const ctx = context(cwd);
+  const tool = app.tools.get("papercut");
+  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+
+  await tool.execute("capture-one", { message: "First batch friction." }, undefined, undefined, ctx);
+  await tool.execute("capture-two", { message: "Second batch friction." }, undefined, undefined, ctx);
+  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, ctx);
+  const [first, second] = listed.details.records.map((record: any) => record.id.slice(0, 8));
+  const changesBefore = app.emitted.filter(item => item.channel === "pi-papercut:state-change").length;
+
+  const batch = await tool.execute(
+    "batch",
+    {
+      actions: [
+        { action: "resolve", ids: [first], note: "Fixed and verified." },
+        { action: "dismiss", ids: [second], note: "No project action warranted." },
+      ],
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(batch.content[0].text, /Resolved papercut.*Dismissed papercut/s);
+  assert.deepEqual(
+    batch.details.actions.map((item: any) => item.action),
+    ["resolve", "dismiss"],
+  );
+  assert.equal(
+    app.emitted.filter(item => item.channel === "pi-papercut:state-change").length,
+    changesBefore + 1,
+  );
+
+  const afterBatch = await tool.execute("all", { action: "list", status: "all" }, undefined, undefined, ctx);
+  assert.deepEqual(
+    Object.fromEntries(afterBatch.details.records.map((record: any) => [record.id.slice(0, 8), record.status])),
+    { [first]: "resolved", [second]: "dismissed" },
+  );
+
+  await assert.rejects(
+    tool.execute(
+      "rollback",
+      {
+        actions: [
+          { action: "reopen", ids: [first] },
+          { action: "dismiss", ids: ["deadbeef"], note: "Missing target." },
+        ],
+      },
+      undefined,
+      undefined,
+      ctx,
+    ),
+    /unknown papercut id/,
+  );
+  const afterFailure = await tool.execute("all-again", { action: "list", status: "all" }, undefined, undefined, ctx);
+  assert.deepEqual(
+    Object.fromEntries(afterFailure.details.records.map((record: any) => [record.id.slice(0, 8), record.status])),
+    { [first]: "resolved", [second]: "dismissed" },
+  );
+  assert.equal(
+    app.emitted.filter(item => item.channel === "pi-papercut:state-change").length,
+    changesBefore + 1,
   );
 });

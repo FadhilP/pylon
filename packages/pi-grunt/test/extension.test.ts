@@ -165,6 +165,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       maxTurns: 12,
       maxCostUsd: 3,
       parentContextChars: 100,
+      prompt: { mode: "replace", text: "Perform only operator-defined implementation steps." },
     });
     grunt(pi, runWorker as any, async () => true);
     events.on("pylon:delegate-name", (request: any) => {
@@ -247,6 +248,10 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     await access(sieveExtension);
     assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "read,grep,find,ls,edit,write,bash,sieve_recall");
     assert.ok(childArgs.includes("--system-prompt"));
+    // Replacement reaches the child session while immutable CLI sandbox/tool boundaries remain present.
+    const customizedPrompt = childArgs[childArgs.indexOf("--system-prompt") + 1] ?? "";
+    assert.match(customizedPrompt, /^Perform only operator-defined implementation steps\./);
+    assert.match(customizedPrompt, /Preserve unrelated changes/);
     assert.ok(!childArgs.includes("--append-system-prompt"));
     assert.match(childArgs.at(-1) ?? "", /Targeted context.*exported-constant convention/s);
     assert.match(childArgs.at(-1) ?? "", /Focused checks:\n- npm test -- worker/);
@@ -292,12 +297,12 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     await access(blocked.details.artifactPath);
     await assert.rejects(access(join(cwd, "src", "blocked.ts")));
 
-    await commands.get("grunt").handler("dynamic", ctx);
+    await commands.get("grunt").handler("mode dynamic", ctx);
     assert.deepEqual(notifications.at(-1), {
       text: "Grunt mode: dynamic. Uses isolation with a Git HEAD; DIRECT otherwise.",
       level: "info",
     });
-    await commands.get("grunt").handler("direct", ctx);
+    await commands.get("grunt").handler("mode direct", ctx);
     assert.deepEqual(notifications.at(-1), {
       text: "Grunt mode: DIRECT. Worker edits affect the current working directory immediately.",
       level: "warning",

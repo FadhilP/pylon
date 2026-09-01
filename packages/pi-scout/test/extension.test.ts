@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
+import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
 class Bus {
@@ -271,6 +272,7 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
     assert.equal(Object.hasOwn(results[0].details, "failureMessage"), false);
     assert.ok(childArgs.every(args => !args.includes("--continue")));
     assert.ok(childArgs.every(args => args.includes("--system-prompt")));
+    assert.ok(childArgs.every(args => args[args.indexOf("--system-prompt") + 1] === REPO_SCOUT_PROMPT));
     assert.ok(childArgs.every(args => !args.includes("--append-system-prompt")));
     assert.ok(childArgs.every(args => args.includes("read,search_excerpt,ls")));
     assert.ok(childOptions.every(options => options.resultMaxBytes === false));
@@ -602,6 +604,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
       assert.ok(childArgs.includes(flag));
     assert.ok(childArgs.includes("scout_browser"));
     assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "scout_browser");
+    assert.equal(childArgs[childArgs.indexOf("--system-prompt") + 1], WEB_SCOUT_PROMPT);
     assert.equal(childArgs.filter(value => value === "-e").length, 1);
     assert.equal(childArgs.includes("scout_web_search"), false);
   } finally {

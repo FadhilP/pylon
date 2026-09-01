@@ -1,5 +1,6 @@
 import { configPath, effectiveTimelineSettings, loadConfig, saveConfig, timelineSettingFields } from "./config.ts";
 import { validPackageSettingValue } from "pylon-core/package-settings";
+import { CHECKPOINT_TITLE_PROMPT, SESSION_TITLE_PROMPT } from "./prompts.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
@@ -13,6 +14,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
         : "disabled",
     ...(config.checkpointTitleModel ? { checkpointTitleModel: config.checkpointTitleModel } : {}),
     ...effectiveTimelineSettings(config),
+    prompt: config.prompt ?? { mode: "default", text: "" },
+    promptDefaultText: `Session titles:\n${SESSION_TITLE_PROMPT}\n\nCheckpoint titles:\n${CHECKPOINT_TITLE_PROMPT}`,
   };
 }
 
@@ -37,6 +40,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       titleTimeoutMs: value.titleTimeoutMs,
       titleMaxTokens: value.titleMaxTokens,
       titleChangedFiles: value.titleChangedFiles,
+      prompt: value.prompt,
     },
     configPath(agentDir),
   );

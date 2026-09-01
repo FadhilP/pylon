@@ -94,6 +94,7 @@ import {
   DEFAULT_KEEP_RECENT_TOKENS,
   compactionReviewerMaxOutputTokens,
   compactionReviewTimeoutMs,
+  continuityPrompt,
   loadConfig,
   parseModelRef,
   saveConfig,
@@ -1032,6 +1033,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       model,
       auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
       profile,
+      prompt: continuityPrompt(config.prompt),
       sessionId: expectedSession,
       onTelemetry: value =>
         pi.events.emit("pi-continuity:memory-migration-telemetry", {
@@ -2155,6 +2157,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
           model,
           auth: { apiKey: auth.apiKey, headers: auth.headers, env: auth.env },
           profile,
+          prompt: continuityPrompt(config.prompt),
           packet: preflight.packet,
           sessionId: proposalSession,
           signal,
@@ -2695,11 +2698,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
     request.respond(operation);
   });
   const planCommand = {
-    description: "Start, approve, cancel, or inspect plan",
+    description: "Start, approve, cancel, review, or inspect a plan",
     handler: async (args: string, ctx: any) => {
-      const value = args.trim();
-      if (value === "review") {
-        if (!work?.runId) return void ctx.ui.notify("No active pylon run.", "error");
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage =
+        "Usage: /plan [status|start [goal]|approve|approve-current|changes <feedback>|cancel|review|help]";
+      if (action === "help" && parts.length === 1) {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      if (action === "review" && parts.length === 1) {
+        if (!work?.runId) return void ctx.ui.notify("No active Pylon run.", "error");
         pi.appendEntry(RUN_ENTRY_TYPE, {
           version: 1,
           runId: work.runId,
@@ -2711,41 +2721,59 @@ export default function continuityExtension(pi: ExtensionAPI) {
         pi.sendUserMessage(
           "Review completed implementation. Inspect Verify result, Scout evidence, changed files, and Timeline checkpoints. Use Advisor only for consequential unresolved findings.",
         );
+        ctx.ui.notify("Implementation review started.", "info");
         return;
       }
-      if (value === "approve-current") {
-        await approvePlan(ctx, false);
+      if (action === "approve-current" && parts.length === 1) {
+        if (await approvePlan(ctx, false)) ctx.ui.notify("Plan approved using the current context.", "info");
         return;
       }
-      if (value === "approve") {
-        await approvePlan(ctx, true);
+      if (action === "approve" && parts.length === 1) {
+        if (await approvePlan(ctx, true)) ctx.ui.notify("Plan approved with a fresh execution context.", "info");
         return;
       }
-      if (value === "cancel") {
-        planApproval.pending = undefined;
-        if (work) {
-          work.mode = "cancelled";
-          delete work.approval;
-          await saveWork();
+      if (action === "cancel" && parts.length === 1) {
+        if (!work) {
+          ctx.ui.notify("No active plan to cancel.", "warning");
+          return;
         }
+        planApproval.pending = undefined;
+        work.mode = "cancelled";
+        delete work.approval;
+        await saveWork();
         gate(false);
         refresh(ctx);
+        ctx.ui.notify("Plan cancelled. Execution tools restored.", "info");
         return;
       }
-      if (value.startsWith("deny")) {
-        const feedback = value.slice("deny".length).trim();
-        if (!feedback) return void ctx.ui.notify("Plan feedback required.", "error");
+      if (action === "changes") {
+        const feedback = parts.slice(1).join(" ").trim();
+        if (!feedback) {
+          ctx.ui.notify("Plan feedback is required. Usage: /plan changes <feedback>", "warning");
+          return;
+        }
         await requestPlanChanges(feedback);
+        ctx.ui.notify("Plan changes requested.", "info");
         return;
       }
-      if (value === "status") {
-        ctx.ui.notify(work ? `${work.mode}: ${work.goal}` : "No active work.", "info");
+      if (action === "status" && parts.length === 1) {
+        ctx.ui.notify(
+          work
+            ? `Plan: ${work.mode}\nGoal: ${work.goal || "not set"}\nRevision: ${work.planRevision ?? "not submitted"}\nTodos: ${work.todos.filter(todo => todo.status === "done").length}/${work.todos.length} complete`
+            : "No active work.",
+          "info",
+        );
+        return;
+      }
+      if (action !== "start") {
+        ctx.ui.notify(usage, "warning");
         return;
       }
       if (ctx.isIdle?.() === false) {
         ctx.ui.notify("Wait for the current response before starting a plan.", "warning");
         return;
       }
+      const goal = parts.slice(1).join(" ");
       planApproval.context = ctx;
       const config = await loadConfig();
       const baseModel = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
@@ -2755,7 +2783,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         return;
       }
       const previousRun = findRunEntry(ctx.sessionManager.getEntries?.() ?? []);
-      work = fresh(value);
+      work = fresh(goal);
       work.runId = randomUUID();
       work.timelineId = previousRun ? runTimelineId(previousRun) : work.runId;
       work.baseModel = baseModel;
@@ -2772,9 +2800,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
       gate(true);
       await saveWork();
       refresh(ctx);
-      if (value)
+      ctx.ui.notify(goal ? `Planning started: ${goal}` : "Planning started.", "info");
+      if (goal)
         pi.sendUserMessage(
-          `Plan this task without modifying project files. Use continuity_update set_plan; put the approach in planSummary, concrete paths/symbols in workingSet, unresolved assumptions or gaps in assumptions, and completion checks in acceptanceCriteria. Keep todos outcome-level: ${value}`,
+          `Plan this task without modifying project files. Use continuity_update set_plan; put the approach in planSummary, concrete paths/symbols in workingSet, unresolved assumptions or gaps in assumptions, and completion checks in acceptanceCriteria. Keep todos outcome-level: ${goal}`,
         );
     },
   };
@@ -2850,27 +2879,37 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
   pi.registerCommand("plan", planCommand);
   pi.registerCommand("continuity", {
-    description: "Configure Continuity models or show status",
+    description: "Show or configure Continuity model profiles",
     handler: async (args, ctx) => {
-      const [roleRaw, ...rest] = args.trim().split(/\s+/);
-      const role = roleRaw as "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
-      const value = rest.join(" ");
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage =
+        "Usage: /continuity [status|set <role> <provider/model[:thinking]>|select <role>|reset <role>|help]\nRoles: planner, executor, memory-reviewer, compaction-reviewer";
+      const roles = {
+        planner: "planner",
+        executor: "executor",
+        "memory-reviewer": "memoryReviewer",
+        "compaction-reviewer": "compactionReviewer",
+      } as const;
       const config = await loadConfig();
-      if (!roleRaw || roleRaw === "status") {
+      if ((action === "status" && parts.length === 1) || parts.length === 0) {
         ctx.ui.notify(
           `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${config.compactionReviewer?.model ?? "not configured"} · thinking: ${config.compactionReviewer?.thinking ?? "default"}`,
           "info",
         );
         return;
       }
-      if (!(["planner", "executor", "memoryReviewer", "compactionReviewer"] as string[]).includes(role)) {
-        ctx.ui.notify(
-          "Usage: /continuity [status|planner|executor|memoryReviewer|compactionReviewer] [provider/model[:thinking]|reset]",
-          "info",
-        );
+      if (action === "help" && parts.length === 1) {
+        ctx.ui.notify(usage, "info");
         return;
       }
-      if (value === "reset") {
+      const roleName = parts[1] as keyof typeof roles | undefined;
+      const role = roleName && roles[roleName];
+      if (!role) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
+      if (action === "reset" && parts.length === 2) {
         await updateConfig(current => {
           const next = { ...current };
           delete next[role];
@@ -2885,23 +2924,31 @@ export default function continuityExtension(pi: ExtensionAPI) {
             ? "Memory Reviewer reset; memory proposals are unavailable."
             : role === "compactionReviewer"
               ? "Compaction Reviewer reset; compaction remains deterministic without supplemental review."
-              : `${role} reset; uses current session model and thinking.`,
+              : `${roleName} reset; uses current session model and thinking.`,
           "info",
         );
         return;
       }
-      let selected = value;
-      if (!selected && ctx.mode === "tui")
+      let selected: string | undefined;
+      let interactive = false;
+      if (action === "set" && parts.length === 3) selected = parts[2];
+      else if (action === "select" && parts.length === 2) {
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify("Continuity model selection is available only in Pi TUI.", "error");
+          return;
+        }
+        interactive = true;
         selected =
           (await ctx.ui.select(
-            `${role} model`,
+            `${roleName} model`,
             (ctx.scopedModels.length
               ? ctx.scopedModels.map(({ model }) => model)
               : ctx.modelRegistry.getAvailable()
             ).map(modelName),
-          )) ?? "";
-      if (!selected) {
-        ctx.ui.notify(`Usage: /continuity ${role} <provider/model[:thinking]>|reset`, "info");
+          )) ?? undefined;
+        if (!selected) return;
+      } else {
+        ctx.ui.notify(usage, "warning");
         return;
       }
       const ref = parseModelRef(selected);
@@ -2911,8 +2958,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
         return;
       }
       let thinking: ThinkingLevel | undefined = ref.thinking;
-      if (!value && ctx.mode === "tui") {
-        thinking = (await ctx.ui.select(`${role} thinking level`, [...thinkingLevels])) as ThinkingLevel | undefined;
+      if (interactive) {
+        thinking = (await ctx.ui.select(`${roleName} thinking level`, [...thinkingLevels])) as ThinkingLevel | undefined;
         if (!thinking) return;
       }
       await updateConfig(current => ({
@@ -2923,13 +2970,30 @@ export default function continuityExtension(pi: ExtensionAPI) {
         memory.reviewerConfigured = true;
         gate(work?.mode === "planning");
       }
-      ctx.ui.notify(`${role}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`, "info");
+      ctx.ui.notify(`${roleName}: ${modelName(model)} · thinking: ${thinking ?? "current session level"}`, "info");
     },
   });
   pi.registerCommand("todos", {
-    description: "Show continuity todos",
-    handler: async (_a, ctx) =>
-      ctx.ui.notify(work?.todos.map(t => `${t.id} ${t.status} ${t.text}`).join("\n") || "No todos.", "info"),
+    description: "Show Continuity todos",
+    handler: async (args, ctx) => {
+      const value = args.trim().toLowerCase();
+      if (value === "help") {
+        ctx.ui.notify("Usage: /todos [help]", "info");
+        return;
+      }
+      if (value) {
+        ctx.ui.notify("Usage: /todos [help]", "warning");
+        return;
+      }
+      const todos = work?.todos ?? [];
+      const done = todos.filter(todo => todo.status === "done").length;
+      ctx.ui.notify(
+        todos.length
+          ? `Todos: ${done}/${todos.length} complete\n${todos.map(todo => `${todo.id}  ${todo.status}  ${todo.text}`).join("\n")}`
+          : "No todos.",
+        "info",
+      );
+    },
   });
   /** Rollback may only restore from inside the protected backup directory; anything else is refused. */
   const assertInsideBackupRoot = (backup: string, label: string) => {
@@ -3101,15 +3165,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
     );
   };
 
-  const showMemoryNotes = async (ctx: any) => {
-    const owned = notesForOwners(memory.notes, project!.owner);
+  const showMemoryNotes = async (ctx: any, scope?: MemoryScope) => {
+    const all = notesForOwners(memory.notes, project!.owner).filter(note => !scope || note.scope === scope);
+    const shown = all.slice(0, 20);
     return void ctx.ui.notify(
-      owned
-        .map(
-          note =>
-            `${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}]\nWhen ${note.trigger}\n${note.guidance}`,
-        )
-        .join("\n\n") || "No notes.",
+      shown.length
+        ? `${shown
+            .map(
+              note =>
+                `${note.scope}/${note.id} r${note.revision} [${note.authority}/${note.origin}]\nWhen ${note.trigger}\n${note.guidance}`,
+            )
+            .join("\n\n")}${shown.length < all.length ? `\n\n… ${all.length - shown.length} more notes` : ""}`
+        : "No notes.",
       "info",
     );
   };
@@ -3131,14 +3198,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return void ctx.ui.notify("Project memory removed.", "info");
   };
 
-  const memorySubcommands: Record<string, (ctx: any) => Promise<void>> = {
-    "migrate-v4": runMigrateV4,
-    backups: listMemoryBackups,
-    rollback: rollbackMigration,
-    owners: showMemoryOwners,
-    show: showMemoryNotes,
-    "forget project": forgetProjectMemory,
-  };
 
   /** Resolves the note a scoped `edit`/`forget <id>` subcommand names, or notifies and returns undefined. */
   const scopedNote = (ctx: any, scope: MemoryScope, id: string) => {
@@ -3214,28 +3273,55 @@ export default function continuityExtension(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("memory", {
-    description: "Show, edit, or forget user and project notebook notes",
+    description: "Show and manage user or project notebook notes",
     handler: async (args, ctx) => {
       if (!memory.enabled) return void ctx.ui.notify("Continuity memory is disabled in package settings.", "info");
-      const sub = args.trim();
-      if (sub === "off" || sub === "on") {
-        memory.activationEnabled = sub === "on";
-        return void ctx.ui.notify(`Prospective memory activation ${sub} for this session.`, "info");
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = parts[0] ?? "status";
+      const usage =
+        "Usage: /memory [status|list [user|project]|edit <user|project> <id>|forget <user|project> [id]|owners|backups|migrate|rollback|activation <on|off>|help]";
+      if (action === "help" && parts.length === 1) {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      if (action === "activation" && parts.length === 2 && ["on", "off"].includes(parts[1]!)) {
+        memory.activationEnabled = parts[1] === "on";
+        ctx.ui.notify(`Prospective memory activation ${parts[1]} for this session.`, "info");
+        return;
       }
       project = await resolveProject(ctx.cwd);
       memory.state = await readMemory();
       memory.notes = memory.state.notes;
-      const subcommand = memorySubcommands[sub];
-      if (subcommand) return subcommand(ctx);
-      const scoped = /^(edit|forget)\s+(user|project)\s+([0-9a-f-]+)$/i.exec(sub);
-      if (scoped) {
-        const [, verb, scope, id] = scoped as unknown as [string, string, MemoryScope, string];
-        return verb.toLowerCase() === "edit" ? editMemoryNote(ctx, scope, id) : forgetMemoryNote(ctx, scope, id);
+      if ((action === "status" && parts.length === 1) || parts.length === 0) {
+        const owned = notesForOwners(memory.notes, project.owner);
+        ctx.ui.notify(
+          `Memory: enabled\nActivation: ${memory.activationEnabled ? "on" : "off"}\nNotes: ${owned.length} (${owned.filter(note => note.scope === "user").length} user · ${owned.filter(note => note.scope === "project").length} project)`,
+          "info",
+        );
+        return;
       }
-      ctx.ui.notify(
-        `Activation ${memory.activationEnabled ? "on" : "off"}; ${notesForOwners(memory.notes, project.owner).length} current-owner notes. Usage: /memory show|migrate-v4|edit user <id>|edit project <id>|forget user <id>|forget project <id>|forget project|owners|backups|rollback|on|off`,
-        "info",
-      );
+      if (action === "list" && parts.length <= 2) {
+        const scope = parts[1];
+        if (scope && scope !== "user" && scope !== "project") {
+          ctx.ui.notify(usage, "warning");
+          return;
+        }
+        return showMemoryNotes(ctx, scope as MemoryScope | undefined);
+      }
+      if (action === "owners" && parts.length === 1) return showMemoryOwners(ctx);
+      if (action === "backups" && parts.length === 1) return listMemoryBackups(ctx);
+      if (action === "migrate" && parts.length === 1) return runMigrateV4(ctx);
+      if (action === "rollback" && parts.length === 1) return rollbackMigration(ctx);
+      if (action === "forget" && parts.length === 2 && parts[1] === "project") return forgetProjectMemory(ctx);
+      if ((action === "edit" || action === "forget") && parts.length === 3) {
+        const scope = parts[1];
+        const id = parts[2]!;
+        if ((scope === "user" || scope === "project") && /^[0-9a-f-]+$/i.test(id))
+          return action === "edit"
+            ? editMemoryNote(ctx, scope, id)
+            : forgetMemoryNote(ctx, scope, id);
+      }
+      ctx.ui.notify(usage, "warning");
     },
   });
 }

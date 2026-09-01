@@ -2,6 +2,25 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.5.0",
+    date: "Sep 1, 2026",
+    title: "Custom prompts, agent-managed settings, and complete documentation",
+    summary:
+      "Pylon makes agent instructions and package settings safely customizable, ships comprehensive product documentation, and brings clearer commands, composer behavior, and runtime safeguards across the workspace.",
+    notes: [
+      "Added default, append, and replace prompt controls where appropriate for the main agent, delegate naming, Advisor, Scout, Grunt, Continuity reviewers, Timeline titles, and Spawn private agents, while retaining immutable safety, validation, and output contracts.",
+      "Added a deferred pylon_settings tool under pylon-core that lets agents list, inspect, and update validated package settings through revision-checked writes and explicit confirmation, without exposing credentials, hooks, trust, extensions, Guard controls, or raw configuration files.",
+      "Shipped a complete Pylon Web guide covering setup, workspaces, sessions, surfaces, settings, safety, storage, and troubleshooting, plus a deferred host-aware pylon_docs tool that prioritizes Web panels or Pi TUI commands without injecting documentation into every prompt.",
+      "Standardized bundled slash commands around explicit status, help, selection, and action forms with stricter argument validation and clearer success or failure feedback, including plan, model, Timeline, indexing, UI, Sieve, Helios, and core controls.",
+      "Made exact slash-command selections submit directly, kept extension commands interactive instead of queuing behind active work, aligned Timeline restore routing, and added directory-aware @ mentions with file-type icons and safer path validation.",
+      "Added responsive model controls and dedicated prompt editors to package Settings, including readable defaults, mode-specific guidance, UTF-8 limits, and compact layouts for narrow composer widths.",
+      "Preserved deterministic folded source records in active-work compactions, displayed them alongside generic compactions, raised the compaction review output default to 4,096 tokens, and added clearer compaction completion feedback.",
+      "Strengthened runtime safeguards by blocking accidental Bash redirects to bare nul, surfacing nested Playwright CLI failures, preserving unrestricted local-file access only outside web isolation, and improving Helios diagnostic guidance.",
+      "Restored Node.js 22.19 compatibility across bundled packages and improved token reports with concise top-tool output plus an explicit full-detail mode.",
+    ],
+  },
+
+  {
     version: "2.4.0",
     date: "Sep 1, 2026",
     title: "Named agents, live browser streaming, and deeper repository diffs",

@@ -66,6 +66,8 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
+    assert.ok(existsSync(join(packageRoot, "docs", "web", "README.md")));
+    assert.ok(existsSync(join(packageRoot, "docs", "pylon-web.png")));
 
     const adapterCheck = spawnSync(
       process.execPath,
@@ -80,10 +82,13 @@ test("packed package installs and launches its production web app", { timeout: 2
        const { createJiti } = await import(pathToFileURL(installedRequire.resolve("jiti")).href);
        const jiti = createJiti(join(packageRoot, "package.json"));
        const settings = await jiti.import(join(packageRoot, "packages", "pi-advisor", "src", "web-settings.ts"));
+       const docs = await jiti.import(join(packageRoot, "packages", "pylon-core", "src", "docs-tool.ts"));
        const tokenMeter = await jiti.import(installedRequire.resolve("pylon-core/token-meter"));
+       const coreExtension = join(packageRoot, "packages", "pylon-core", "extensions", "pylon-core.ts");
+       const listedDocs = await docs.listPylonDocs(pathToFileURL(coreExtension).href);
        installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
        installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
-       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function") process.exit(1);`,
+       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function" || !listedDocs.some(item => item.path === "docs/web/README.md")) process.exit(1);`,
         packageRoot,
       ],
       { encoding: "utf8", timeout: 30_000 },

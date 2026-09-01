@@ -1,44 +1,31 @@
 # pi-focus
 
-Low-noise extension-first TUI package for [Pi](https://pi.dev), built from an audit of real tool-heavy sessions.
+A quieter, extension-first Pi TUI with the included `focus-dark` theme.
 
-## Installation
+## Install
+
+Requires Pi and Node 22.19.0 or later:
 
 ```sh
 pi install git:github.com/FadhilP/pylon
 ```
 
-This installs the complete Pylon bundle, including pi-focus and the `focus-dark` theme. Run `/reload` after installation.
+Reload Pi, then apply the palette once with `/ui theme` or select `focus-dark` in `/settings`.
 
-Apply the palette once with `/ui theme`, or select `focus-dark` through `/settings`.
+## TUI controls
 
-## Usage
+| Command | Effect |
+| --- | --- |
+| `/ui` | Show current UI state |
+| `/ui enable` / `/ui disable` | Enable Focus or restore built-in UI for this runtime |
+| `/ui density compact|comfortable` | Choose layout density |
+| `/ui bell on|off` | Toggle a settled-run terminal bell for this runtime |
+| `/ui theme` | Apply the included theme |
 
-```text
-/ui status
-/ui compact
-/ui comfortable
-/ui disable
-/ui enable
-/ui bell on
-/ui bell off
-/ui theme
-```
+`compact` uses one-line header/footer. `comfortable` adds secondary key hints on terminals at least 80 columns wide. `/ui` is TUI-only. Disable the package persistently through `pi config`.
 
-`compact` uses a one-line header and footer. `comfortable` adds secondary key hints on terminals at least 80 columns wide. Unicode and ANSI-styled labels are measured by terminal cell width.
+## What changes
 
-`bell on` enables an opt-in terminal bell after each settled agent run for the current runtime; `bell off` disables it. `disable` restores the built-in header, footer, editor, and working indicator for the current runtime. Disable the package persistently through `pi config`.
+Focus provides restrained message/tool surfaces, readable diff/syntax/Markdown/thinking/warning/error colors, a compact workspace/session header, responsive usage/context/cost footer, a keybinding-preserving editor with model and thinking level, a quieter working indicator, and transient Scout/Advisor/Grunt child-model status.
 
-## What Changes
-
-- Restrained neutral tool and message surfaces instead of full neon status blocks.
-- Readable diff, syntax, Markdown, thinking, warning, and error colors.
-- Compact workspace and session header.
-- Responsive footer grouping workspace, active state or extension status, usage, context pressure, and cost.
-- Built-in `CustomEditor` wrapper preserving Pi keybindings while showing model and thinking level.
-- Quieter working indicator.
-- Transient Scout, Advisor, and Grunt child-model widget.
-
-## Limitations
-
-The extension API cannot restructure built-in user or assistant transcript rows, remove internal thinking separators, or change built-in tool-row composition without overriding tool execution. Those remain Pi-core work. The theme safely improves their contrast and visual weight.
+The Pi extension API cannot restructure built-in transcript rows, remove internal thinking separators, or change built-in tool rows without taking over tool execution. Focus improves their contrast and visual weight but does not change those core behaviors.

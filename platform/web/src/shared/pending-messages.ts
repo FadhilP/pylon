@@ -16,6 +16,14 @@ export function pendingMessageId(id: string): string {
   return `pending-${id}`.slice(0, 128);
 }
 
+export function promptCommandType(
+  activeWork: boolean,
+  hasQueuedPrompts: boolean,
+  commandSource?: "extension" | "prompt" | "skill",
+): "prompt" | "queuePrompt" {
+  return commandSource === "extension" || (!activeWork && !hasQueuedPrompts) ? "prompt" : "queuePrompt";
+}
+
 export function reconcilePendingQueue(
   pending: PendingMessageReadModel[],
   previousQueue: QueuedPromptReadModel[],

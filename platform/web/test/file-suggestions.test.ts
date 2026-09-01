@@ -15,9 +15,11 @@ test("file suggestions include tracked and visible untracked files only", async 
   try {
     await exec("git", ["init", "--quiet"], { cwd: root, windowsHide: true });
     await mkdir(join(root, "src"));
-    await writeFile(join(root, ".gitignore"), "ignored.txt\n", "utf8");
+    await writeFile(join(root, ".gitignore"), "ignored.txt\nignored/\n", "utf8");
     await writeFile(join(root, "src", "tracked.ts"), "tracked\n", "utf8");
     await writeFile(join(root, "src", "untracked.ts"), "untracked\n", "utf8");
+    await mkdir(join(root, "ignored"));
+    await writeFile(join(root, "ignored", "secret.ts"), "ignored\n", "utf8");
     await Promise.all(
       Array.from({ length: 16 }, (_, index) =>
         writeFile(join(root, "src", `extra-${String(index).padStart(2, "0")}.ts`), "extra\n", "utf8"),
@@ -44,11 +46,16 @@ test("file suggestions include tracked and visible untracked files only", async 
     assert.equal((await suggestGitFiles(root, "")).paths.length, 15);
     assert.equal((await suggestGitFiles(root, "ignored")).paths.length, 0);
     assert.deepEqual(await suggestGitFiles(root, "inner-file"), { available: true, paths: ["nested/inner-file.ts"] });
+    assert.deepEqual(await suggestGitFiles(root, "nested"), {
+      available: true,
+      paths: ["nested/", "nested/inner-file.ts"],
+    });
+    assert.equal((await suggestGitFiles(root, "src")).paths.filter(path => path === "src/").length, 1);
     await mkdir(join(nonGit, "docs"));
     await writeFile(join(nonGit, "docs", "notes.md"), "notes\n", "utf8");
-    const plain = await suggestGitFiles(nonGit, "note");
+    const plain = await suggestGitFiles(nonGit, "docs");
     assert.equal(plain.available, true);
-    assert.deepEqual(plain.paths, ["docs/notes.md"]);
+    assert.deepEqual(plain.paths, ["docs/", "docs/notes.md"]);
   } finally {
     await Promise.all([root, nonGit].map(path => rm(path, { recursive: true, force: true })));
   }

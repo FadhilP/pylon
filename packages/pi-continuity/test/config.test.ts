@@ -12,6 +12,10 @@ import {
   updateConfig,
 } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import { MEMORY_REVIEWER_PROMPT } from "../src/memory-review.ts";
+import { MIGRATION_REVIEWER_PROMPT } from "../src/memory-migration.ts";
+
+const promptDefaultText = `Memory review:\n${MEMORY_REVIEWER_PROMPT}\n\nMemory migration:\n${MIGRATION_REVIEWER_PROMPT}`;
 
 test("model profiles parse, persist, and reset to defaults", async () => {
   assert.deepEqual(parseModelRef("provider/model:high"), { provider: "provider", id: "model", thinking: "high" });
@@ -96,7 +100,9 @@ test("web settings persist the global compaction reserve without changing unrela
     reserveTokens: 16_384,
     keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
     compactionReviewTimeoutMs: 60_000,
-    compactionReviewerMaxOutputTokens: 1_200,
+    compactionReviewerMaxOutputTokens: 4_096,
+    prompt: { mode: "default", text: "" },
+    promptDefaultText,
   });
   await updateSettings(
     {
@@ -108,6 +114,7 @@ test("web settings persist the global compaction reserve without changing unrela
       compactionReviewerMaxOutputTokens: 1_500,
       planner: { model: "provider/planner" },
       compactionReviewer: { model: "provider/compaction", thinking: "low" },
+      prompt: { mode: "append", text: "Prefer concise review reasons." },
     },
     { agentDir },
   );
@@ -120,6 +127,8 @@ test("web settings persist the global compaction reserve without changing unrela
     compactionReviewerMaxOutputTokens: 1_500,
     planner: { model: "provider/planner" },
     compactionReviewer: { model: "provider/compaction", thinking: "low" },
+    prompt: { mode: "append", text: "Prefer concise review reasons." },
+    promptDefaultText,
   });
   assert.deepEqual(JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8")), {
     theme: "dark",

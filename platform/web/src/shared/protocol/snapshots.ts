@@ -613,13 +613,31 @@ export type GenericPackageSettingReadField =
       min?: number;
       max?: number;
       apply: GenericPackageSettingApplyTiming;
-    };
+    }
 
+  | {
+      version: 1;
+      key: string;
+      label: string;
+      type: "prompt";
+      defaultValue: { mode: "default" | "append" | "replace"; text: string };
+      value: { mode: "default" | "append" | "replace"; text: string };
+      allowedModes: Array<"default" | "append" | "replace">;
+      maxBytes: number;
+      defaultText?: string;
+      description?: string;
+      apply: GenericPackageSettingApplyTiming;
+    };
 export interface GenericPackageSettingsReadModel {
   kind: "generic";
   packageId: string;
   fields: GenericPackageSettingReadField[];
 }
+export interface PromptSettingReadModel {
+  mode: "default" | "append" | "replace";
+  text: string;
+}
+
 export type PackageSettingsReadModel =
   | GenericPackageSettingsReadModel
   | {
@@ -631,6 +649,8 @@ export type PackageSettingsReadModel =
       timeoutMs: number;
       maxCostUsd: number;
       maxOutputTokens: number;
+      prompt: PromptSettingReadModel;
+      promptDefaultText?: string;
       inputTokenBudget: number;
     }
   | {
@@ -642,6 +662,8 @@ export type PackageSettingsReadModel =
       repoTimeoutMs: number;
       maxCostUsd: number;
       webSearchResults: number;
+      prompt: PromptSettingReadModel;
+      promptDefaultText?: string;
     }
   | {
       kind: "grunt";
@@ -653,6 +675,8 @@ export type PackageSettingsReadModel =
       maxTurns: number;
       maxCostUsd: number;
       parentContextChars: number;
+      prompt: PromptSettingReadModel;
+      promptDefaultText?: string;
     }
   | {
       kind: "continuity";
@@ -665,6 +689,8 @@ export type PackageSettingsReadModel =
       compactionReviewer?: PackageModelProfileReadModel;
       compactionReviewTimeoutMs: number;
       compactionReviewerMaxOutputTokens: number;
+      prompt: PromptSettingReadModel;
+      promptDefaultText?: string;
     }
   | {
       kind: "sieve";
@@ -683,6 +709,8 @@ export type PackageSettingsReadModel =
       titleTimeoutMs: number;
       titleMaxTokens: number;
       titleChangedFiles: number;
+      prompt: PromptSettingReadModel;
+      promptDefaultText?: string;
     }
   | {
       kind: "spawn";
@@ -694,6 +722,8 @@ export type PackageSettingsReadModel =
       recentThreadLimit: number;
       recentThreadMaxChars: number;
       recentThreadTotalChars: number;
+      privateAgentSystemPrompt: PromptSettingReadModel;
+      promptDefaultText?: string;
     };
 
 export interface PackageModelProfileReadModel {

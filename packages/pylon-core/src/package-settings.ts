@@ -5,7 +5,33 @@
 export const PACKAGE_SETTINGS_DESCRIPTOR_VERSION = 1 as const;
 
 export type PackageSettingApplyTiming = "immediate" | "next-operation" | "next-session" | "reload";
-export type PackageSettingPrimitive = boolean | number | string | string[];
+export type PromptPackageSettingMode = "default" | "append" | "replace";
+/** A complete prompt-setting update; mode and text must always travel together. */
+export type PromptPackageSettingValue = { mode: PromptPackageSettingMode; text: string };
+
+/**
+ * Composes a package-owned prompt with an operator customization. Runtime/tool metadata
+ * stays outside this string. An immutable footer is retained for contract-sensitive
+ * prompts when customization is active.
+ */
+export function composePackagePrompt(
+  basePrompt: string,
+  setting: PromptPackageSettingValue,
+  immutableFooter = "",
+): string {
+  if (setting.mode === "default") return basePrompt;
+  const customization = `## Operator customization
+${setting.text}`;
+  const footer = immutableFooter ? `
+
+${immutableFooter}` : "";
+  return setting.mode === "append"
+    ? `${basePrompt}
+
+${customization}${footer}`
+    : `${setting.text}${footer}`;
+}
+export type PackageSettingPrimitive = boolean | number | string | string[] | PromptPackageSettingValue;
 
 type FieldBase<T extends string, V> = {
   version: typeof PACKAGE_SETTINGS_DESCRIPTOR_VERSION;
@@ -34,6 +60,14 @@ export type StringListPackageSettingField = FieldBase<"string-list", string[]> &
   min?: number;
   max?: number;
 };
+export type PromptPackageSettingField = FieldBase<"prompt", PromptPackageSettingValue> & {
+  /** Modes the package intentionally supports. Include "replace" only when replacement is permitted. */
+  allowedModes: readonly PromptPackageSettingMode[];
+  /** UTF-8 byte limit for prompt text, up to 32768. */
+  maxBytes: number;
+  /** Read-only default prompt shown by settings surfaces; never persisted as the customization value. */
+  defaultText?: string;
+};
 
 export type PackageSettingField =
   | BooleanPackageSettingField
@@ -41,7 +75,8 @@ export type PackageSettingField =
   | NumberPackageSettingField
   | EnumPackageSettingField
   | ModelPackageSettingField
-  | StringListPackageSettingField;
+  | StringListPackageSettingField
+  | PromptPackageSettingField;
 
 export type PackageSettingValue<F extends PackageSettingField> = F["defaultValue"];
 
@@ -57,7 +92,8 @@ export type GenericPackageSettingReadField =
   | (Omit<NumberPackageSettingField, "env"> & { value: number })
   | (Omit<EnumPackageSettingField, "env"> & { value: string })
   | (Omit<ModelPackageSettingField, "env"> & { value: string })
-  | (Omit<StringListPackageSettingField, "env"> & { value: string[] });
+  | (Omit<StringListPackageSettingField, "env"> & { value: string[] })
+  | (Omit<PromptPackageSettingField, "env"> & { value: PromptPackageSettingValue });
 export interface GenericPackageSettingsReadModel {
   kind: "generic";
   packageId: string;
@@ -75,6 +111,8 @@ const MAX_CHOICES = 100;
 const MAX_LIST_ITEMS = 100;
 const MAX_STRING_LENGTH = 500;
 const MAX_ABSOLUTE_NUMBER = 1_000_000_000;
+const MAX_PROMPT_BYTES = 32_768;
+const promptModes = new Set<PromptPackageSettingMode>(["default", "append", "replace"]);
 const packageIdPattern = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i;
 const applyTimings = new Set<PackageSettingApplyTiming>(["immediate", "next-operation", "next-session", "reload"]);
 
@@ -120,6 +158,28 @@ function validBounds(field: Record<string, unknown>, integer: boolean): boolean 
   );
 }
 
+function validPromptModes(value: unknown): value is PromptPackageSettingMode[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= promptModes.size &&
+    value.every(mode => typeof mode === "string" && promptModes.has(mode as PromptPackageSettingMode)) &&
+    new Set(value).size === value.length
+  );
+}
+
+function validPromptValue(field: PromptPackageSettingField, value: unknown): value is PromptPackageSettingValue {
+  return (
+    plainRecord(value) &&
+    exactKeys(value, ["mode", "text"]) &&
+    typeof value.mode === "string" &&
+    field.allowedModes.includes(value.mode as PromptPackageSettingMode) &&
+    typeof value.text === "string" &&
+    Buffer.byteLength(value.text, "utf8") <= field.maxBytes &&
+    (value.mode !== "default" || value.text === "")
+  );
+}
+
 /** Validates a data-only descriptor before it is used by a package. */
 export function validPackageSettingsDescriptor(value: unknown): value is PackageSettingsDescriptor {
   if (
@@ -151,7 +211,7 @@ export function validPackageSettingField(value: unknown): value is PackageSettin
   if (!plainRecord(value)) return false;
   const base = ["version", "key", "label", "type", "defaultValue", "description", "unit", "step", "env", "apply"];
   if (
-    !exactKeys(value, [...base, "min", "max", "choices"]) ||
+    !exactKeys(value, [...base, "min", "max", "choices", "allowedModes", "maxBytes", "defaultText"]) ||
     value.version !== PACKAGE_SETTINGS_DESCRIPTOR_VERSION ||
     !boundedString(value.key, MAX_KEY_LENGTH) ||
     !boundedString(value.label, MAX_LABEL_LENGTH) ||
@@ -159,6 +219,11 @@ export function validPackageSettingField(value: unknown): value is PackageSettin
     (value.unit !== undefined && !boundedString(value.unit, MAX_UNIT_LENGTH)) ||
     (value.env !== undefined && !boundedString(value.env, MAX_ENV_LENGTH)) ||
     !applyTimings.has(value.apply as PackageSettingApplyTiming)
+  )
+    return false;
+  if (
+    value.type !== "prompt" &&
+    (value.allowedModes !== undefined || value.maxBytes !== undefined || value.defaultText !== undefined)
   )
     return false;
 
@@ -214,6 +279,25 @@ export function validPackageSettingField(value: unknown): value is PackageSettin
       validPackageSettingValue(value as StringListPackageSettingField, value.defaultValue)
     );
   }
+  if (value.type === "prompt") {
+    return (
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      value.step === undefined &&
+      value.unit === undefined &&
+      value.env === undefined &&
+      validPromptModes(value.allowedModes) &&
+      Number.isSafeInteger(value.maxBytes) &&
+      (value.maxBytes as number) >= 1 &&
+      (value.maxBytes as number) <= MAX_PROMPT_BYTES &&
+      (value.defaultText === undefined ||
+        (typeof value.defaultText === "string" &&
+          Buffer.byteLength(value.defaultText, "utf8") <= (value.maxBytes as number))) &&
+      validPromptValue(value as PromptPackageSettingField, value.defaultValue)
+    );
+  }
+
   return false;
 }
 
@@ -231,6 +315,7 @@ export function validPackageSettingValue(field: PackageSettingField, value: unkn
   if (field.type === "number") return boundedNumber(value) && bounded(value, field);
   if (field.type === "enum") return typeof value === "string" && field.choices.includes(value);
   if (field.type === "model") return typeof value === "string" && value.length <= MAX_STRING_LENGTH;
+  if (field.type === "prompt") return validPromptValue(field, value);
 
   return (
     Array.isArray(value) &&
@@ -305,8 +390,14 @@ export function effectivePackageSettingsReadModel(
         ...publicField,
         defaultValue: Array.isArray(publicField.defaultValue)
           ? [...publicField.defaultValue]
-          : publicField.defaultValue,
-        value: Array.isArray(value) ? [...value] : value,
+          : publicField.type === "prompt"
+            ? { ...publicField.defaultValue }
+            : publicField.defaultValue,
+        value: Array.isArray(value)
+          ? [...value]
+          : field.type === "prompt"
+            ? { ...(value as PromptPackageSettingValue) }
+            : value,
       } as GenericPackageSettingReadField;
     }),
   };
@@ -345,6 +436,8 @@ export function extractPackageSettingsUpdate(
     "max",
     "choices",
     "apply",
+    "allowedModes",
+    "maxBytes",
   ];
   for (const field of update.fields) {
     if (
@@ -364,7 +457,11 @@ export function extractPackageSettingsUpdate(
     if (!submitted.has(field.key) || !validPackageSettingValue(field, value)) {
       throw new Error(`${field.key} has an invalid value`);
     }
-    values[field.key] = Array.isArray(value) ? [...value] : (value as boolean | number | string);
+    values[field.key] = Array.isArray(value)
+      ? [...value]
+      : field.type === "prompt"
+        ? { ...(value as PromptPackageSettingValue) }
+        : (value as boolean | number | string);
   }
   return values;
 }

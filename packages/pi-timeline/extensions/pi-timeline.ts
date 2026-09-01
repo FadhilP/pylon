@@ -7,11 +7,11 @@ import { capture, makePortable, worktreeFingerprint, type Snapshot } from "../sr
 import { restore } from "../src/restore.ts";
 import { classifyCompatibility, type GitState } from "../src/compatibility.ts";
 import {
-  CHECKPOINT_TITLE_PROMPT,
+  checkpointTitlePrompt,
   normalizeGeneratedTitle,
   promptText,
   promptTitle,
-  SESSION_TITLE_PROMPT,
+  sessionTitlePrompt,
   titleExcerpt,
 } from "../src/prompts.ts";
 import { git, setGitTimeoutMs } from "../src/git.ts";
@@ -502,7 +502,7 @@ export default function timelineExtension(
       };
       const response = await completeTitle(
         model,
-        { systemPrompt: SESSION_TITLE_PROMPT, messages: [message] },
+        { systemPrompt: sessionTitlePrompt(timelineConfig.prompt), messages: [message] },
         {
           apiKey: auth.apiKey,
           headers: auth.headers,
@@ -590,7 +590,7 @@ export default function timelineExtension(
       };
       const response = await completeTitle(
         model,
-        { systemPrompt: CHECKPOINT_TITLE_PROMPT, messages: [message] },
+        { systemPrompt: checkpointTitlePrompt(timelineConfig.prompt), messages: [message] },
         {
           apiKey: auth.apiKey,
           headers: auth.headers,
@@ -1157,6 +1157,7 @@ export default function timelineExtension(
     for (const [id] of owned) checkpoints.records.delete(id);
     checkpoints.failures.clear();
     refresh(ctx);
+    ctx.ui.notify("Timeline checkpoints cleared.", "info");
     publishState();
     await establishSessionBaseline(ctx);
   };
@@ -1206,6 +1207,7 @@ export default function timelineExtension(
       checkpoints.paired = true;
       pendingContext = `Filesystem restored from user prompt ${id}. Later changes may not exist.`;
       refresh(ctx);
+      ctx.ui.notify("Timeline restored.", "info");
     } catch (e: any) {
       await restore(source, ctx.cwd).catch(() => {});
       if (old) await ctx.navigateTree(old, { summarize: false }).catch(() => {});
@@ -1259,6 +1261,7 @@ export default function timelineExtension(
               operation: "linked-jump-restore",
               content: `Filesystem restored from linked run checkpoint ${id}.`,
               failure: "Timeline restore failed; source files restored",
+              notify: "Timeline restored.",
               navigateTo: target.record.continuationEntryId,
             });
             return;
@@ -1270,6 +1273,7 @@ export default function timelineExtension(
                 operation: "linked-fork-restore",
                 content: `Filesystem restored in forked Pi session from linked run checkpoint ${id}.`,
                 failure: "Child restore failed; source files restored",
+                notify: "Timeline fork restored.",
               }),
           });
         },
@@ -1293,32 +1297,42 @@ export default function timelineExtension(
   };
 
   pi.registerCommand("timeline", {
-    description: "List, view, fork, or clear Git-backed prompt checkpoints",
+    description: "List, select, restore, fork, or clear Git-backed prompt checkpoints",
     handler: async (args, ctx) => {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = (parts[0] ?? "list").toLowerCase();
+      const id = parts[1];
+      const usage = "Usage: /timeline [list|select|restore <id>|fork <id>|clear|help]";
+      const valid =
+        (parts.length === 0 && action === "list") ||
+        (parts.length === 1 && ["list", "select", "clear", "help"].includes(action)) ||
+        (parts.length === 2 && ["restore", "fork"].includes(action));
+      if (!valid) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
+      if (action === "help") {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
       await ctx.waitForIdle();
       if (!enabled) {
         ctx.ui.notify("Timeline is disabled for this session.", "warning");
         return;
       }
       await load(ctx);
-      const [actionRaw, idRaw] = args.trim().split(/\s+/, 2);
-      const action = actionRaw || "select";
       if (action === "list") return listCheckpoints(ctx);
       if (action === "clear") return clearCheckpoints(ctx);
       if (ctx.mode !== "tui" && ctx.mode !== "rpc") {
         ctx.ui.notify("Timeline restore requires interactive confirmation.", "error");
         return;
       }
-      if (action !== "select") {
-        if (!idRaw) {
-          ctx.ui.notify("Unknown or unavailable checkpoint.", "error");
-          return;
-        }
-        return restoreCheckpoint(ctx, idRaw, action);
+      if (action === "select") {
+        const selection = await promptForCheckpoint(ctx);
+        if (!selection) return;
+        return restoreCheckpoint(ctx, selection.id, selection.mode);
       }
-      const selection = await promptForCheckpoint(ctx);
-      if (!selection) return;
-      return restoreCheckpoint(ctx, selection.id, selection.mode);
+      return restoreCheckpoint(ctx, id!, action === "restore" ? "jump" : "fork");
     },
   });
 }

@@ -233,18 +233,49 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
   pi.registerCommand("heartbeat", {
     description: "List, inspect, or cancel background jobs",
     handler: async (args, ctx) => {
-      const [action = "list", id] = args.trim().split(/\s+/);
-      if (!manager) return;
-      let text: string;
-      if (action === "cancel" && id) {
-        const job = manager.jobs.get(id);
-        if (job) await manager.stop(job);
-        text = job ? `Cancellation requested for ${id}.` : "Unknown job.";
-      } else if (action === "status" && id) {
-        const job = manager.jobs.get(id);
-        text = job ? inspectJob(job).text : "Unknown job.";
-      } else text = [...manager.jobs.values()].map(summaryLine).join("\n") || "No jobs.";
-      ctx.ui.notify(text, "info");
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const action = (parts[0] ?? "list").toLowerCase();
+      const id = parts[1];
+      const usage = "Usage: /heartbeat [list [running|all]|status <id>|cancel <id>|help]";
+      const valid =
+        (parts.length === 0 && action === "list") ||
+        (action === "help" && parts.length === 1) ||
+        (action === "list" && (parts.length === 1 || (parts.length === 2 && ["running", "all"].includes(id!.toLowerCase())))) ||
+        (["status", "cancel"].includes(action) && parts.length === 2);
+      if (!valid) {
+        ctx.ui.notify(usage, "warning");
+        return;
+      }
+      if (action === "help") {
+        ctx.ui.notify(usage, "info");
+        return;
+      }
+      if (!manager) {
+        ctx.ui.notify("Heartbeat is unavailable for this session.", "warning");
+        return;
+      }
+      if (action === "cancel") {
+        const job = manager.jobs.get(id!);
+        if (!job) {
+          ctx.ui.notify("Unknown job.", "warning");
+          return;
+        }
+        await manager.stop(job);
+        ctx.ui.notify(`Cancellation requested for ${job.id}.`, "info");
+        return;
+      }
+      if (action === "status") {
+        const job = manager.jobs.get(id!);
+        if (!job) {
+          ctx.ui.notify("Unknown job.", "warning");
+          return;
+        }
+        ctx.ui.notify(inspectJob(job).text, "info");
+        return;
+      }
+      const all = id?.toLowerCase() === "all";
+      const jobs = (all ? [...manager.jobs.values()] : manager.running()).slice(0, 20);
+      ctx.ui.notify(jobs.length ? jobs.map(summaryLine).join("\n") : "No jobs.", "info");
     },
   });
 }

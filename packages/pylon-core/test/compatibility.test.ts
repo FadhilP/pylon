@@ -109,10 +109,10 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     assert.ok(!active.includes("web_scout"));
 
     ctx.mode = "tui";
-    await commands.get("advisor").handler("", ctx);
-    await commands.get("grunt").handler("", ctx);
-    await commands.get("scout").handler("", ctx);
-    await commands.get("continuity").handler("planner", ctx);
+    await commands.get("advisor").handler("select", ctx);
+    await commands.get("grunt").handler("select", ctx);
+    await commands.get("scout").handler("select", ctx);
+    await commands.get("continuity").handler("select planner", ctx);
     assert.deepEqual(
       selections.filter(({ title }) => title.endsWith("model")),
       [
@@ -129,10 +129,10 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
 
     selections.length = 0;
     ctx.scopedModels = [];
-    await commands.get("advisor").handler("", ctx);
-    await commands.get("grunt").handler("", ctx);
-    await commands.get("scout").handler("", ctx);
-    await commands.get("continuity").handler("planner", ctx);
+    await commands.get("advisor").handler("select", ctx);
+    await commands.get("grunt").handler("select", ctx);
+    await commands.get("scout").handler("select", ctx);
+    await commands.get("continuity").handler("select planner", ctx);
     assert.deepEqual(
       selections.filter(({ title }) => title.endsWith("model")),
       [
@@ -153,6 +153,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       "grunt",
       "index_status",
       "memory",
+      "pylon_docs",
       "relationship_graph",
       "search_sessions",
       "session_stats",
@@ -165,6 +166,10 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       { name: "grunt", usage: "delegate a large mechanical implementation slice to an isolated synchronous worker" },
       { name: "index_status", usage: "inspect local repository code-index status" },
       { name: "memory", usage: "inspect durable notes or propose grounded reviewer-gated memory changes" },
+      {
+        name: "pylon_docs",
+        usage: "read shipped Pylon and Pylon Web documentation for product-specific questions",
+      },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
       {
         name: "search_sessions",
@@ -179,7 +184,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
     ]);
     capabilities[0].select(["web_scout"]);
     assert.ok(active.includes("web_scout"));
-    await commands.get("plan").handler("compatibility", ctx);
+    await commands.get("plan").handler("start compatibility", ctx);
     assert.ok(active.includes("read"));
     assert.ok(active.includes("repo_scout"));
     assert.ok(!active.includes("edit"));

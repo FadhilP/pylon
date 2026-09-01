@@ -5,10 +5,12 @@ import {
   repoTimeoutMs,
   saveConfig,
   scoutMaxCostUsd,
+  scoutPrompt,
   scoutSettingFields,
   thinkingLevels,
   webSearchResults,
 } from "./config.ts";
+import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "./prompts.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
@@ -28,6 +30,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     repoTimeoutMs: repoTimeoutMs(config.repoTimeoutMs),
     maxCostUsd: scoutMaxCostUsd(config.maxCostUsd) ?? 0,
     webSearchResults: webSearchResults(config.webSearchResults),
+    prompt: scoutPrompt(config.prompt),
+    promptDefaultText: `Repository Scout:\n${REPO_SCOUT_PROMPT}\n\nWeb Scout:\n${WEB_SCOUT_PROMPT}`,
   };
 }
 
@@ -53,6 +57,7 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       repoTimeoutMs: value.repoTimeoutMs,
       maxCostUsd: value.maxCostUsd,
       webSearchResults: value.webSearchResults,
+      prompt: value.prompt,
       ...(value.mode === "model" ? { model: value.model.trim() } : {}),
       ...(value.mode !== "disabled" && value.thinking ? { thinking: value.thinking } : {}),
     },

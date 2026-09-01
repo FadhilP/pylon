@@ -140,3 +140,98 @@ test("generic updates extract only values validated by the authoritative descrip
     /invalid value/,
   );
 });
+
+
+test("prompt settings enforce authorized modes, default semantics, and UTF-8 byte limits", () => {
+  const promptDescriptor = definePackageSettings({
+    version: 1,
+    packageId: "pi-prompt-example",
+    fields: [
+      {
+        version: 1,
+        key: "instructions",
+        label: "Instructions",
+        type: "prompt",
+        defaultValue: { mode: "default", text: "" },
+        allowedModes: ["default", "append"] as const,
+        maxBytes: 4,
+        defaultText: "Base",
+        apply: "next-operation",
+      },
+    ],
+  });
+  const prompt = promptDescriptor.fields[0]!;
+
+  const readModel = effectivePackageSettingsReadModel(promptDescriptor, {}, {});
+  assert.equal(readModel.fields[0]?.type === "prompt" ? readModel.fields[0].defaultText : undefined, "Base");
+  assert.equal(validPackageSettingValue(prompt, { mode: "append", text: "😀" }), true);
+  assert.equal(validPackageSettingValue(prompt, { mode: "append", text: "😀a" }), false);
+  assert.equal(validPackageSettingValue(prompt, { mode: "replace", text: "x" }), false);
+  assert.equal(validPackageSettingValue(prompt, { mode: "default", text: "keep this" }), false);
+  assert.throws(
+    () =>
+      definePackageSettings({
+        ...promptDescriptor,
+        fields: [{ ...prompt, allowedModes: [] }],
+      }),
+    /invalid package settings descriptor/,
+  );
+  assert.throws(
+    () =>
+      definePackageSettings({
+        ...promptDescriptor,
+        fields: [{ ...prompt, maxBytes: 32_769 }],
+      }),
+    /invalid package settings descriptor/,
+  );
+  assert.throws(
+    () =>
+      definePackageSettings({
+        ...promptDescriptor,
+        fields: [{ ...prompt, defaultText: "Too long" }],
+      }),
+    /invalid package settings descriptor/,
+  );
+});
+
+test("prompt updates are atomically extracted against descriptor permissions", () => {
+  const promptDescriptor = definePackageSettings({
+    version: 1,
+    packageId: "pi-prompt-example",
+    fields: [
+      {
+        version: 1,
+        key: "instructions",
+        label: "Instructions",
+        type: "prompt",
+        defaultValue: { mode: "default", text: "" },
+        allowedModes: ["default", "append"] as const,
+        maxBytes: 32_768,
+        apply: "next-operation",
+      },
+    ],
+  });
+  const current = effectivePackageSettingsReadModel(promptDescriptor, {}, {});
+  const append = { mode: "append" as const, text: "Use short answers." };
+  const update = {
+    ...current,
+    fields: current.fields.map(field =>
+      field.key === "instructions"
+        ? { ...field, value: append, allowedModes: ["default", "append", "replace"] }
+        : field,
+    ),
+  };
+  const values = extractPackageSettingsUpdate(promptDescriptor, update);
+  assert.deepEqual(values, { instructions: append });
+  assert.notEqual(values.instructions, append);
+  assert.throws(
+    () =>
+      extractPackageSettingsUpdate(promptDescriptor, {
+        ...update,
+        fields: update.fields.map(field =>
+          field.key === "instructions" ? { ...field, value: { mode: "replace", text: "override" } } : field,
+        ),
+      }),
+    /invalid value/,
+  );
+});

@@ -59,6 +59,17 @@ export const timelineSettingFields = {
     env: "PI_TIMELINE_TITLE_CHANGED_FILES",
     apply: "next-session",
   },
+  prompt: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "prompt",
+    label: "Timeline naming instructions",
+    type: "prompt",
+    defaultValue: { mode: "default", text: "" },
+    allowedModes: ["default", "append"],
+    maxBytes: 32_768,
+    description: "Additional instructions for session and checkpoint naming. Output and parser contracts remain fixed.",
+    apply: "next-session",
+  },
 } satisfies Record<string, PackageSettingField>;
 export const timelineSettings = definePackageSettings({
   version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
@@ -75,8 +86,9 @@ export interface TimelineConfig {
   titleTimeoutMs?: number;
   titleMaxTokens?: number;
   titleChangedFiles?: number;
+  prompt?: import("pylon-core/package-settings").PromptPackageSettingValue;
 }
-export type TimelineRuntimeSettings = { [K in keyof typeof timelineSettingFields]: number };
+export type TimelineRuntimeSettings = { [K in Exclude<keyof typeof timelineSettingFields, "prompt">]: number };
 export const effectiveTimelineSettings = (config: TimelineConfig): TimelineRuntimeSettings => ({
   gitTimeoutMs: effectivePackageSettingValue(timelineSettingFields.gitTimeoutMs, config.gitTimeoutMs, process.env),
   titleTimeoutMs: effectivePackageSettingValue(
@@ -134,6 +146,7 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
     ...(value.titleTimeoutMs !== undefined ? { titleTimeoutMs: value.titleTimeoutMs } : {}),
     ...(value.titleMaxTokens !== undefined ? { titleMaxTokens: value.titleMaxTokens } : {}),
     ...(value.titleChangedFiles !== undefined ? { titleChangedFiles: value.titleChangedFiles } : {}),
+    ...(value.prompt !== undefined ? { prompt: value.prompt } : {}),
   };
 }
 

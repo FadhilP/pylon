@@ -5,7 +5,13 @@ import { defineTool, getAgentDir, SessionManager, type ExtensionAPI } from "@ear
 import { Type } from "typebox";
 import { requestDelegateName } from "pylon-core/delegate-names";
 import { createBackgroundRuns } from "../src/background.ts";
-import { configPath, effectiveConfig, loadConfig, thinkingLevels } from "../src/config.ts";
+import {
+  configPath,
+  configuredPrivateAgentSystemPrompt,
+  effectiveConfig,
+  loadConfig,
+  thinkingLevels,
+} from "../src/config.ts";
 import { MAX_DEPTH, SPAWN_TOOLS } from "../src/constants.ts";
 import {
   defaultName,
@@ -434,6 +440,7 @@ export default async function spawnExtension(
       if (params.action === "create") {
         const blocked = startGuard(params);
         if (blocked) return blocked;
+        const operationConfig = effectiveConfig(await loadConfig(configPath(agentDir)));
         const thinking =
           params.thinking ??
           (ctx.thinkingLevel && allowedThinking.includes(ctx.thinkingLevel)
@@ -441,10 +448,16 @@ export default async function spawnExtension(
             : config.agentThinkingLevels
               ? allowedThinking[0]
               : undefined);
+        // An explicit systemPrompt, including an intentionally empty value if the tool schema permits it,
+        // always wins over the persisted default captured for this new private-agent operation.
+        const systemPrompt =
+          params.systemPrompt !== undefined
+            ? params.systemPrompt
+            : configuredPrivateAgentSystemPrompt(operationConfig.privateAgentSystemPrompt);
         const policy = {
           model: selectedModel,
           ...(thinking ? { thinking } : {}),
-          ...(params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+          ...(systemPrompt !== undefined ? { systemPrompt } : {}),
           ...(params.tools !== undefined ? { tools: params.tools } : {}),
           disableSpecialists: params.disableSpecialists ?? true,
         };

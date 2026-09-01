@@ -400,6 +400,7 @@ test("owned visibility controls config and headed CLI flag", async () => {
     assert.ok(configArg);
     const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.equal(config.browser.launchOptions.headless, true);
+    assert.equal(config.allowUnrestrictedFileAccess, true);
   } finally {
     await cli.dispose();
   }
@@ -420,6 +421,7 @@ test("web isolation config uses a capability endpoint without proxy credentials"
     const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.deepEqual(config.browser.launchOptions.proxy, { server });
     assert.deepEqual(config.browser.contextOptions, { acceptDownloads: false, serviceWorkers: "block" });
+    assert.equal(config.allowUnrestrictedFileAccess, false);
   } finally {
     await cli.dispose();
   }
@@ -489,6 +491,29 @@ test("adapter rejects unsafe inputs and malformed or oversized output", async ()
   );
 });
 
+test("adapter surfaces nested Playwright CLI errors", async () => {
+  const cli = await PlaywrightCli.create(async () => ({
+    code: 1,
+    stdout: JSON.stringify({
+      session: SESSION,
+      result: {
+        isError: true,
+        error: 'Error: Access to "file:" protocol is blocked. Attempted URL: "file:///tmp/prototype.html"',
+      },
+    }),
+    stderr: "",
+    killed: false,
+  }));
+  try {
+    await assert.rejects(
+      cli.run(SESSION, { kind: "open", profileDirectory: cli.directory, headed: false }),
+      /Access to "file:" protocol is blocked/,
+    );
+  } finally {
+    await cli.dispose();
+  }
+});
+
 test("adapter safely identifies missing browser stderr", async () => {
   const missing = await PlaywrightCli.create(async () => ({
     code: 1,
@@ -520,7 +545,7 @@ test("adapter safely identifies missing browser stderr", async () => {
     const unknown = await PlaywrightCli.create(async () => ({ code: 1, stdout: "", stderr, killed: false }));
     await assert.rejects(
       unknown.run(SESSION, { kind: "tab-list" }),
-      (error: any) => error.message === "Playwright CLI command failed; run /helios-doctor for diagnostics",
+      (error: any) => error.message === "Playwright CLI command failed; run /helios doctor browser for diagnostics",
     );
     await unknown.dispose();
   }
