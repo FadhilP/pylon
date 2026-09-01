@@ -92,6 +92,8 @@ import {
 } from "../src/worktree.ts";
 import {
   DEFAULT_KEEP_RECENT_TOKENS,
+  compactionReviewerMaxOutputTokens,
+  compactionReviewTimeoutMs,
   loadConfig,
   parseModelRef,
   saveConfig,
@@ -1686,6 +1688,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
               profile,
               packet,
               sessionId: session.id,
+              timeoutMs: compactionReviewTimeoutMs(config.compactionReviewTimeoutMs),
+              maxOutputTokens: compactionReviewerMaxOutputTokens(config.compactionReviewerMaxOutputTokens),
               signal: event.signal,
             });
             additions = reviewed.supplements;

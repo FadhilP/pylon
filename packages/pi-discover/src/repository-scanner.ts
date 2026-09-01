@@ -81,10 +81,12 @@ export class RepositoryScanner {
   private resolvedRoot?: string;
   private readonly cwd: string;
   private readonly exec: IndexExecutor;
+  private readonly timeoutMs: number;
 
-  constructor(cwd: string, exec: IndexExecutor) {
+  constructor(cwd: string, exec: IndexExecutor, timeoutMs = SEARCH_TIMEOUT_MS) {
     this.cwd = cwd;
     this.exec = exec;
+    this.timeoutMs = timeoutMs;
   }
 
   /** Workspace root, available once `snapshot()` has run at least once. */
@@ -94,7 +96,7 @@ export class RepositoryScanner {
   }
 
   private async gitAt(cwd: string, args: string[]): Promise<ExecResult> {
-    const result = await this.exec("git", ["-C", cwd, ...args], { timeout: SEARCH_TIMEOUT_MS });
+    const result = await this.exec("git", ["-C", cwd, ...args], { timeout: this.timeoutMs });
     if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${boundedError(result.stderr || result.stdout)}`);
     return result;
   }

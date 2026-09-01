@@ -16,6 +16,7 @@ import {
   type PapercutStatus,
 } from "../src/papercuts.ts";
 import { loadProjectState, updateProjectState } from "../src/storage.ts";
+import { effectiveConfig, loadConfig } from "../src/config.ts";
 
 const STATUSES = ["open", "resolved", "dismissed", "all"] as const;
 const Status = StringEnum(STATUSES);
@@ -75,19 +76,20 @@ function assertOnlyAllowedFields(action: ToolAction, params: ToolParams) {
     throw new Error(`${extra.join(", ")} ${extra.length === 1 ? "is" : "are"} not valid when ${whileDoing}`);
 }
 
-function parseListRequest(request: any) {
+function parseListRequest(request: any, defaultLimit = 25) {
   const invalid = () => new Error("invalid papercut list request");
   const inRange = (value: unknown, min: number, max: number) =>
     Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max;
   if (!isListStatus(request.status)) throw invalid();
   if (typeof request.query !== "string" || request.query.length > MAX_QUERY_LENGTH) throw invalid();
   if (!inRange(request.offset, 0, 1_000)) throw invalid();
-  if (!inRange(request.limit, 1, 50)) throw invalid();
+  const limit = request.limit ?? defaultLimit;
+  if (!inRange(limit, 1, 100)) throw invalid();
   return {
     status: request.status,
     query: request.query as string,
     offset: request.offset as number,
-    limit: request.limit as number,
+    limit,
   };
 }
 
@@ -111,6 +113,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
   let boundCwd = "";
   let stateRevision = 0;
   let currentState: PapercutState | undefined;
+  const settings = effectiveConfig({ version: 1 });
 
   const counts = (state?: PapercutState) => ({
     open: state?.records.filter(record => record.status === "open").length ?? 0,
@@ -152,7 +155,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
     if (isBoundSession(ctx)) adoptState(saved.state, true, true);
     return saved.result;
   };
-  const list = async (ctx: { cwd: string }, status: ListStatus = "open", limit = 50) => {
+  const list = async (ctx: { cwd: string }, status: ListStatus = "open", limit = settings.listDefaultLimit) => {
     const { state } = await loadProjectState(agentDir, ctx.cwd);
     return listPapercuts(state, status, limit);
   };
@@ -166,7 +169,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
   };
 
   const runListRequest = async (request: any) => {
-    const { status, query, offset, limit } = parseListRequest(request);
+    const { status, query, offset, limit } = parseListRequest(request, settings.queryDefaultLimit);
     const { state } = await loadProjectState(agentDir, boundCwd);
     adoptState(state, state.updatedAt !== currentState?.updatedAt);
     const page = queryPapercuts(state, status, query, offset, limit);
@@ -219,6 +222,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
     const sessionId = ctx.sessionManager.getSessionId();
     const cwd = ctx.cwd;
     boundSessionId = sessionId;
+    Object.assign(settings, effectiveConfig(await loadConfig()));
     boundCwd = cwd;
     const stillBound = () => boundSessionId === sessionId && boundCwd === cwd;
     pi.events.emit("pylon:tool-policy", {
@@ -265,7 +269,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
 
   const listAction = async (ctx: ToolContext, params: ToolParams) => {
     const status = params.status ?? "open";
-    const records = await list(ctx, status, params.limit ?? 50);
+    const records = await list(ctx, status, params.limit ?? settings.listDefaultLimit);
     return { content: [{ type: "text" as const, text: formatList(records, status) }], details: { status, records } };
   };
 

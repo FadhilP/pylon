@@ -164,10 +164,14 @@ function currentTab(text: string | undefined): PageIdentity | undefined {
   return parseTabs(line)[0];
 }
 
-function resultTabs(tabs: PageIdentity[] | undefined, currentIndex: number | undefined): PageIdentity[] | undefined {
+function resultTabs(
+  tabs: PageIdentity[] | undefined,
+  currentIndex: number | undefined,
+  maximum: number,
+): PageIdentity[] | undefined {
   if (!tabs) return undefined;
-  if (tabs.length <= MAX_RESULT_TABS) return tabs.slice();
-  const selected = tabs.slice(0, MAX_RESULT_TABS);
+  if (tabs.length <= maximum) return tabs.slice();
+  const selected = tabs.slice(0, maximum);
   if (currentIndex !== undefined && !selected.some(tab => tab.index === currentIndex)) {
     const current = tabs.find(tab => tab.index === currentIndex);
     if (current) selected[selected.length - 1] = current;
@@ -191,16 +195,25 @@ export class BrowserSessionManager {
   private readonly sessions = new Map<string, Managed>();
   private readonly exec: Exec;
   private readonly createCli: CliFactory;
-  private readonly interactiveLeaseIdleMs: number;
+  private interactiveLeaseIdleMs: number;
+  private resultTabLimit: number;
 
   constructor(
     exec: Exec,
     createCli: CliFactory = value => PlaywrightCli.create(value, { persistentClient: true }),
     interactiveLeaseIdleMs = INTERACTIVE_LEASE_IDLE_MS,
+    resultTabLimit = MAX_RESULT_TABS,
   ) {
     this.exec = exec;
     this.createCli = createCli;
     this.interactiveLeaseIdleMs = interactiveLeaseIdleMs;
+    this.resultTabLimit = resultTabLimit;
+  }
+
+  /** Settings are applied before the next browser operation, never to protocol hard limits. */
+  configureSettings(settings: { browserLeaseIdleMs: number; browserResultTabs: number }): void {
+    this.interactiveLeaseIdleMs = settings.browserLeaseIdleMs;
+    this.resultTabLimit = settings.browserResultTabs;
   }
 
   get(piSessionId: string): BrowserSessionRecord | undefined {
@@ -690,7 +703,7 @@ export class BrowserSessionManager {
       if (metadataAvailable) metadataStale = false;
       else metadataStale = managed.page !== undefined;
     }
-    const returnedTabs = includeTabs ? resultTabs(managed.tabs, managed.page?.index) : undefined;
+    const returnedTabs = includeTabs ? resultTabs(managed.tabs, managed.page?.index, this.resultTabLimit) : undefined;
     const tabsOmitted =
       includeTabs && managed.tabs && returnedTabs && managed.tabs.length > returnedTabs.length
         ? managed.tabs.length - returnedTabs.length

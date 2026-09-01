@@ -4,7 +4,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createBackgroundRuns } from "../src/background.ts";
-import { configPath, loadConfig, thinkingLevels } from "../src/config.ts";
+import { configPath, effectiveConfig, loadConfig, thinkingLevels } from "../src/config.ts";
 import { MAX_DEPTH, SPAWN_TOOLS } from "../src/constants.ts";
 import { defaultName, failure, isFailure, missingThread, threadListResult, type ToolFailure } from "../src/results.ts";
 import { runSpawn } from "../src/runner.ts";
@@ -208,16 +208,19 @@ function projectCwd(currentCwd: string, project?: string): string {
   throw new ProjectDirectoryError(`Project directory does not exist or is not a directory: ${requested}`);
 }
 
-function recentTranscriptResult(match: { info: any; manager: any }, options: { limit?: number; maxChars?: number }) {
+function recentTranscriptResult(
+  match: { info: any; manager: any },
+  options: { limit?: number; maxChars?: number; totalChars?: number },
+) {
   const recent = recentThreadTranscript(match.manager, options);
   const summary = `Private subagent ${match.info.name ?? "Subagent"} (${match.info.id}) recent transcript: ${recent.returned} of ${recent.available} messages.`;
   const output = `${summary}${recent.text ? `\n\n${recent.text}` : "\n\nNo transcript messages."}${recent.truncated ? "\n\n[Transcript truncated.]" : ""}`;
-  const outputTruncated = output.length > RECENT_THREAD_MAX_TOTAL_CHARS;
+  const outputTruncated = output.length > (options.totalChars ?? RECENT_THREAD_MAX_TOTAL_CHARS);
   return {
     content: [
       {
         type: "text" as const,
-        text: outputTruncated ? `${output.slice(0, RECENT_THREAD_MAX_TOTAL_CHARS - 1)}…` : output,
+        text: outputTruncated ? `${output.slice(0, (options.totalChars ?? RECENT_THREAD_MAX_TOTAL_CHARS) - 1)}…` : output,
       },
     ],
     details: {
@@ -246,13 +249,13 @@ export default async function spawnExtension(
   runChild: RunChild = runSpawn,
   agentDir = getAgentDir(),
 ) {
-  const config = await loadConfig(configPath(agentDir));
+  const config = effectiveConfig(await loadConfig(configPath(agentDir)));
   const { agentAvailability, sessionAvailability } = config;
   const allowedModels = config.models;
-  const allowedThinking: readonly string[] = config.agentThinkingLevels ?? thinkingLevels;
+  const allowedThinking: readonly string[] = config.agentThinkingLevels;
   const AgentParameters = createAgentParameters(allowedThinking);
   const SessionParameters = createSessionParameters();
-  const executeTurn = createTurnRunner(pi, runChild);
+  const executeTurn = createTurnRunner(pi, runChild, { spawnTimeoutMs: config.spawnTimeoutMs });
   const background = createBackgroundRuns(pi, executeTurn);
 
   // Child-side hooks: replay the parent's spawn instructions inside a spawned standard session.
@@ -442,7 +445,11 @@ export default async function spawnExtension(
       const selected = matches.find(({ info }) => info.id === params.id);
       if (!selected) return missingThread("agent");
       if (params.action === "recent")
-        return recentTranscriptResult(selected, { limit: params.limit, maxChars: params.maxChars });
+        return recentTranscriptResult(selected, {
+          limit: params.limit ?? config.recentThreadLimit,
+          maxChars: params.maxChars ?? config.recentThreadMaxChars,
+          totalChars: config.recentThreadTotalChars,
+        });
 
       const policy = agentPolicy(selected.manager, parent);
       if (!policy)

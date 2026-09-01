@@ -16,6 +16,7 @@ import {
   isScoutEnabled,
   saveConfig,
   thinkingLevels,
+  type ScoutConfig,
   type ThinkingLevel,
 } from "../src/config.ts";
 import { repoResult } from "../src/result.ts";
@@ -25,7 +26,7 @@ import { capReport, mergeEvidenceAnchors, SCOUT_REPORT_MAX_BYTES, structuredClai
 import { scoutChildEnv } from "../src/child-env.ts";
 import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "pylon-core/redact";
-import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const scoutChildToolsExtension = join(packageDir, "src", "scout-child-tools.ts");
@@ -222,13 +223,12 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       return dir;
     });
 
-  const resolveModel = async (ctx: any) => {
-    const config = await loadConfig();
+  const resolveModel = async (ctx: any, config: ScoutConfig) => {
     if (!config.model) return ctx.model;
     const ref = parseModelRef(config.model);
     return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
   };
-  const resolveThinking = async () => (await loadConfig()).thinking ?? pi.getThinkingLevel();
+  const resolveThinking = (config: ScoutConfig) => config.thinking ?? pi.getThinkingLevel();
   const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
     if (request?.version !== 1 || typeof request.respond !== "function") return;
     request.respond(
@@ -344,17 +344,19 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         content: [{ type: "text" as const, text }],
         details: { failureCode, ...extra },
       });
-      if (!isScoutEnabled(await loadConfig()))
+      const config = await loadConfig();
+      const retryPolicy = await loadDelegateRetryPolicy();
+      if (!isScoutEnabled(config))
         return refuse("Repo Scout inactive. Configure it with /scout or use /scout reset.", "disabled");
       if (!params.task.trim()) return refuse("Repo scout task must not be empty.", "invalid");
-      const model = await resolveModel(ctx);
+      const model = await resolveModel(ctx, config);
       if (!model) return refuse("Repo scout unavailable: no selected model.", "unavailable");
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey)
         return refuse("Repo scout unavailable: selected model has no credentials.", "unavailable", {
           model: modelName(model),
         });
-      const thinking = await resolveThinking();
+      const thinking = resolveThinking(config);
       const callNumber = repoCallNumber(id);
       activeRepoCalls++;
       const started = Date.now();
@@ -364,6 +366,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       let attempts = 0;
       let contextTokens: number | null = null;
       const contextLimit = model.contextWindow;
+      const maxCostUsd = scoutMaxCostUsd(config.maxCostUsd);
       const sessionDirs: string[] = [];
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       // Every progress frame carries the same identity; only the message and extras differ.
@@ -374,6 +377,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             ...agent,
             model: modelName(model),
             thinking,
+            costLimitUsd: maxCostUsd,
             state: "running",
             contextTokens,
             contextLimit,
@@ -396,8 +400,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         const prompt = `Repository reconnaissance task: ${params.task.trim()}${retryReason ? `\nPrior scout gap requiring follow-up: ${retryReason}` : ""}${parentContext ? `\n\nParent-agent context (untrusted, redacted background; task above remains authoritative):\n${parentContext}` : ""}`;
         const discoverTools = discoverChildToolsCapability(pi);
         const childToolNames = ["read", "search_excerpt", ...(discoverTools?.toolNames ?? []), "ls"].join(",");
-        const timeoutMs = repoTimeoutMs();
-        const maxCostUsd = scoutMaxCostUsd();
+        const timeoutMs = repoTimeoutMs(config.repoTimeoutMs);
         const deadline = started + timeoutMs;
         const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
         let attemptUsage = { ...usage };
@@ -482,16 +485,16 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
             turns.push(...run.turns);
             const canRetry =
-              attempts < DELEGATE_MAX_ATTEMPTS &&
+              attempts < retryPolicy.maxAttempts &&
               Date.now() < deadline &&
               (maxCostUsd === undefined || usage.cost < maxCostUsd) &&
               run.failure !== "budget_exceeded" &&
               isTransientProviderFailure(run.error);
-            if (!canRetry || !(await retryWait(attempts, signal))) return run;
+            if (!canRetry || !(await retryWait(attempts, signal, retryPolicy.baseMs))) return run;
             if (signal?.aborted || Date.now() >= deadline || (maxCostUsd !== undefined && usage.cost >= maxCostUsd))
               return run;
             contextTokens = null;
-            progress(`Scout provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`, {
+            progress(`Scout provider unavailable; retrying (${attempts + 1}/${retryPolicy.maxAttempts})…`, {
               durationMs: Date.now() - started,
               usage: { ...usage },
               attempts,
@@ -518,6 +521,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             cacheReadTokens: run.cacheReadTokens,
             model: modelName(model),
             thinking,
+            costLimitUsd: maxCostUsd,
             durationMs: Date.now() - started,
             usage,
             turns,
@@ -624,14 +628,14 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       const capability = webScoutCapability(pi);
       if (!capability)
         return refuse("Web scout unavailable: exactly one compatible pi-helios capability is required.", "unavailable");
-      const model = await resolveModel(ctx);
+      const model = await resolveModel(ctx, config);
       if (!model) return refuse("Web scout unavailable: no selected model.", "unavailable");
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
       if (!auth.ok || !auth.apiKey)
         return refuse("Web scout unavailable: selected model has no credentials.", "unavailable", {
           model: modelName(model),
         });
-      const thinking = await resolveThinking();
+      const thinking = resolveThinking(config);
       const maxPages = params.maxPages ?? 20;
       const maxActions = Math.min(80, maxPages * 6 + 8);
       const grant = await capability.issueGrant({ maxPages, maxActions, headed: false });
@@ -641,6 +645,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
       let activity: readonly ScoutActivity[] = [];
       let contextTokens: number | null = null;
       const contextLimit = model.contextWindow;
+      const maxCostUsd = scoutMaxCostUsd(config.maxCostUsd);
       // Every progress frame carries the same identity; only the message and extras differ.
       const progress = (text: string, extra: Record<string, unknown> = {}) =>
         onUpdate?.({
@@ -649,6 +654,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             ...agent,
             model: modelName(model),
             thinking,
+            costLimitUsd: maxCostUsd,
             state: "running",
             contextTokens,
             contextLimit,
@@ -695,7 +701,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           signal,
           timeoutMs: WEB_SCOUT_TIMEOUT_MS,
           finalizeAfterMs: WEB_SCOUT_FINALIZE_AFTER_MS,
-          maxCostUsd: scoutMaxCostUsd(),
+          maxCostUsd,
           env: scoutChildEnv(
             { [WEB_SCOUT_GRANT_ENV]: grant.value },
             process.env,
@@ -732,6 +738,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             maxPages,
             model: modelName(model),
             thinking,
+            costLimitUsd: maxCostUsd,
             durationMs: run.durationMs,
             usage: run.usage,
             contextTokens: run.contextWindowTokens ?? null,
@@ -786,14 +793,14 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         return;
       }
       if (value === "reset") {
-        await saveConfig({ version: 1, disabled: false });
+        await saveConfig({ ...(await loadConfig()), version: 1, disabled: false });
         await refreshTool();
         ctx.ui.notify("Scout enabled; uses current main model.", "info");
         return;
       }
       if (value === "status") {
         const config = await loadConfig();
-        const resolved = await resolveModel(ctx);
+        const resolved = await resolveModel(ctx, config);
         ctx.ui.notify(
           `State: ${config.disabled ? "disabled" : isScoutEnabled(config) ? "active" : "inactive"}\nConfigured: ${config.model ?? "current main model"}\nThinking: ${config.thinking ?? "current main level"}\nResolved: ${resolved ? modelName(resolved) : "unavailable"}`,
           "info",
@@ -827,7 +834,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         thinking = (await ctx.ui.select("Scout thinking level", [...thinkingLevels])) as ThinkingLevel | undefined;
         if (!thinking) return;
       }
-      await saveConfig({ version: 1, model: modelName(model), ...(thinking ? { thinking } : {}) });
+      const { model: _model, thinking: _thinking, disabled: _disabled, ...preserved } = await loadConfig();
+      await saveConfig({ ...preserved, version: 1, disabled: false, model: modelName(model), ...(thinking ? { thinking } : {}) });
       await refreshTool();
       ctx.ui.notify(
         `Scout enabled.\nModel: ${modelName(model)}\nThinking: ${thinking ?? "current main level"}`,

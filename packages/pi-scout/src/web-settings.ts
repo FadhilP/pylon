@@ -1,9 +1,19 @@
-import { configPath, loadConfig, saveConfig, thinkingLevels } from "./config.ts";
+import { validPackageSettingValue } from "pylon-core/package-settings";
+import {
+  configPath,
+  loadConfig,
+  repoTimeoutMs,
+  saveConfig,
+  scoutMaxCostUsd,
+  scoutSettingFields,
+  thinkingLevels,
+  webSearchResults,
+} from "./config.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
-    kind: "scout",
+    kind: "scout" as const,
     mode:
       config.disabled === true
         ? "disabled"
@@ -15,6 +25,9 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     ...(config.model ? { model: config.model } : {}),
     ...(config.thinking ? { thinking: config.thinking } : {}),
     webSearch: config.webSearch === true,
+    repoTimeoutMs: repoTimeoutMs(config.repoTimeoutMs),
+    maxCostUsd: scoutMaxCostUsd(config.maxCostUsd) ?? 0,
+    webSearchResults: webSearchResults(config.webSearchResults),
   };
 }
 
@@ -24,15 +37,22 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
     !["disabled", "session", "model"].includes(value.mode) ||
     (value.thinking !== undefined && !thinkingLevels.includes(value.thinking)) ||
     (value.webSearch !== undefined && typeof value.webSearch !== "boolean") ||
+    !Object.entries(scoutSettingFields).every(([key, field]) => validPackageSettingValue(field, value[key])) ||
     (value.mode === "model" && (typeof value.model !== "string" || !value.model.trim()))
   ) {
     throw new Error("invalid Scout settings");
   }
+  const config = await loadConfig(configPath(agentDir));
+  const { model: _model, thinking: _thinking, disabled: _disabled, webSearch: _webSearch, ...preserved } = config;
   await saveConfig(
     {
+      ...preserved,
       version: 1,
       disabled: value.mode === "disabled",
       webSearch: value.webSearch === true,
+      repoTimeoutMs: value.repoTimeoutMs,
+      maxCostUsd: value.maxCostUsd,
+      webSearchResults: value.webSearchResults,
       ...(value.mode === "model" ? { model: value.model.trim() } : {}),
       ...(value.mode !== "disabled" && value.thinking ? { thinking: value.thinking } : {}),
     },

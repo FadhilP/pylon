@@ -72,7 +72,7 @@ async function fixture(
   const handlers = new Map<string, Function[]>();
   const emitted: Array<{ name: string; value: any }> = [];
   const busHandlers = new Map<string, Function[]>();
-  const calls: Array<{ args: string[]; cwd: string; prompt: string; env: NodeJS.ProcessEnv }> = [];
+  const calls: Array<{ args: string[]; cwd: string; prompt: string; env: NodeJS.ProcessEnv; timeoutMs?: number }> = [];
   const sentMessages: any[] = [];
   const pi: any = {
     events: {
@@ -94,7 +94,7 @@ async function fixture(
     registerTool: (tool: any) => tools.set(tool.name, tool),
   };
   const run: any = async (args: string[], options: any) => {
-    calls.push({ args, cwd: options.cwd, prompt: options.prompt, env: options.env });
+    calls.push({ args, cwd: options.cwd, prompt: options.prompt, env: options.env, timeoutMs: options.timeoutMs });
     if (runOverride) return runOverride(args, options);
     const result = completed(`reply:${options.prompt}`);
     options.onState?.({ model: result.model, thinking: result.thinking });
@@ -182,6 +182,32 @@ test("configured model and thinking allowlists constrain new children and defaul
     assert.equal(f.calls.length, 1);
   } finally {
     f.restore();
+  }
+});
+
+test("configured spawn timeout is passed to children while zero remains unlimited", async () => {
+  const limited = await fixture(undefined, {
+    agentAvailability: "deferred",
+    sessionAvailability: "deferred",
+    spawnTimeoutMs: 4_000,
+  });
+  const unlimited = await fixture(undefined, {
+    agentAvailability: "deferred",
+    sessionAvailability: "deferred",
+    spawnTimeoutMs: 0,
+  });
+  try {
+    await limited.tools
+      .get("spawn_agent")
+      .execute("limited", { action: "create", prompt: "limited" }, undefined, undefined, limited.ctx);
+    await unlimited.tools
+      .get("spawn_agent")
+      .execute("unlimited", { action: "create", prompt: "unlimited" }, undefined, undefined, unlimited.ctx);
+    assert.equal(limited.calls[0]?.timeoutMs, 4_000);
+    assert.equal(unlimited.calls[0]?.timeoutMs, undefined);
+  } finally {
+    limited.restore();
+    unlimited.restore();
   }
 });
 

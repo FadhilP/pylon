@@ -445,7 +445,7 @@ function recentMessage(entry: any): RecentMessage | undefined {
 
 export function recentThreadTranscript(
   manager: Pick<SessionManager, "getBranch">,
-  options: { limit?: number; maxChars?: number } = {},
+  options: { limit?: number; maxChars?: number; totalChars?: number } = {},
 ): RecentThreadTranscript {
   const limit = options.limit ?? RECENT_THREAD_DEFAULT_LIMIT;
   const maxChars = options.maxChars ?? RECENT_THREAD_DEFAULT_MAX_CHARS;
@@ -455,7 +455,7 @@ export function recentThreadTranscript(
   });
   const selected = available.slice(-limit);
   const blocks: string[] = [];
-  let remaining = RECENT_THREAD_MAX_TOTAL_CHARS;
+  let remaining = options.totalChars ?? RECENT_THREAD_MAX_TOTAL_CHARS;
   let truncated = selected.length < available.length;
   for (const message of selected) {
     if (remaining <= 0) {

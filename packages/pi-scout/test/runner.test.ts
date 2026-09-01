@@ -209,7 +209,7 @@ test("Web Scout child environment is allowlisted and can replace parent environm
   assert.equal(run.text, "undefined|grant");
 });
 
-test("runner exposes and bounds child tool activity", async () => {
+test("runner preserves complete child tool activity", async () => {
   const child = await fake(
     "scout-activity-",
     `if(command.type==='prompt'){emit({type:'tool_execution_start',toolCallId:'read-1',toolName:'read',args:{path:'a.ts'}});emit({type:'tool_execution_end',toolCallId:'read-1',toolName:'read',result:{content:[{type:'text',text:'source'}]}});for(let i=0;i<120;i++)emit({type:'tool_execution_start',toolCallId:'read-'+(i+2),toolName:'read',args:{path:String(i)}});emit(${assistant("done")});settled();setInterval(()=>{},1000);}`,
@@ -232,7 +232,7 @@ test("runner exposes and bounds child tool activity", async () => {
   assert.ok(!Number.isNaN(Date.parse(seen[0]?.startedAt ?? "")));
   assert.equal(seen[1]?.id, "read-1");
   assert.ok((seen[1]?.durationMs ?? -1) >= 0);
-  assert.equal(run.activity.length, 100);
+  assert.equal(run.activity.length, 122);
 });
 
 test("exact discovery ceiling sends one steer and accepts one final response", async () => {

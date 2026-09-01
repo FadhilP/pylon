@@ -1,4 +1,4 @@
-import { ADVISOR_MAX_OUTPUT_TOKENS } from "./advisor.ts";
+import { ADVISOR_INPUT_TOKEN_BUDGET, ADVISOR_MAX_OUTPUT_TOKENS } from "./config.ts";
 import type { EvidenceRef } from "./evidence.ts";
 import { redact } from "./redact.ts";
 
@@ -20,7 +20,7 @@ export type Snapshot = {
   duplicateTelemetry: DuplicateTelemetry;
 };
 const CHARS_PER_TOKEN = 4;
-const MAX_INPUT_TOKENS = 32_768;
+const MAX_INPUT_TOKENS = ADVISOR_INPUT_TOKEN_BUDGET;
 
 function contentText(content: any): string {
   if (typeof content === "string") return content;
@@ -131,21 +131,26 @@ function normalizedWindow(contextWindow: number): number {
   return Number.isFinite(contextWindow) ? Math.max(512, Math.floor(contextWindow)) : 8_192;
 }
 
-export function advisorMaxTokens(contextWindow: number): number {
+export function advisorMaxTokens(contextWindow: number, maxOutputTokens = ADVISOR_MAX_OUTPUT_TOKENS): number {
   const window = normalizedWindow(contextWindow);
-  return Math.max(128, Math.min(ADVISOR_MAX_OUTPUT_TOKENS, Math.floor(window * 0.25)));
+  return Math.max(128, Math.min(maxOutputTokens, Math.floor(window * 0.25)));
 }
 
 /** Input tokens the snapshot may occupy: the global cap, a share of the window, and room for output. */
-function snapshotTokenBudget(contextWindow: number, reservedInputTokens: number): number {
+function snapshotTokenBudget(
+  contextWindow: number,
+  reservedInputTokens: number,
+  inputTokenBudget = MAX_INPUT_TOKENS,
+  maxOutputTokens = ADVISOR_MAX_OUTPUT_TOKENS,
+): number {
   const window = normalizedWindow(contextWindow);
   const reserved = Math.max(0, reservedInputTokens);
   return Math.max(
     0,
     Math.min(
-      MAX_INPUT_TOKENS - reserved,
+      inputTokenBudget - reserved,
       Math.floor(window * 0.7) - reserved,
-      window - advisorMaxTokens(window) - 256 - reserved,
+      window - advisorMaxTokens(window, maxOutputTokens) - 256 - reserved,
     ),
   );
 }
@@ -208,8 +213,14 @@ function rankedEvidence(messages: any[], query: Set<string>, telemetry: Duplicat
     .sort((a, b) => relevance(b.message, query) - relevance(a.message, query) || b.index - a.index);
 }
 
-export function buildSnapshot(messages: any[], contextWindow: number, reservedInputTokens = 0): Snapshot {
-  const charBudget = snapshotTokenBudget(contextWindow, reservedInputTokens) * CHARS_PER_TOKEN;
+export function buildSnapshot(
+  messages: any[],
+  contextWindow: number,
+  reservedInputTokens = 0,
+  inputTokenBudget = MAX_INPUT_TOKENS,
+  maxOutputTokens = ADVISOR_MAX_OUTPUT_TOKENS,
+): Snapshot {
+  const charBudget = snapshotTokenBudget(contextWindow, reservedInputTokens, inputTokenBudget, maxOutputTokens) * CHARS_PER_TOKEN;
   const duplicateTelemetry: DuplicateTelemetry = { records: 0, chars: 0 };
   const localUnique = (records: string[]) => dedupeRecords(records, duplicateTelemetry);
 

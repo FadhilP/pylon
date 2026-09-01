@@ -3,13 +3,17 @@ import { join } from "node:path";
 import { DEFAULT_COMPACTION_SETTINGS } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_KEEP_RECENT_TOKENS,
+  compactionReviewerMaxOutputTokens,
+  compactionReviewTimeoutMs,
   configPath,
+  continuitySettingFields,
   loadConfig,
   updateConfig,
   thinkingLevels,
   validKeepRecentTokens,
   type ModelProfile,
 } from "./config.ts";
+import { validPackageSettingValue } from "pylon-core/package-settings";
 import { withFileLock, writeJsonAtomic } from "./storage.ts";
 
 const validReserveTokens = (value: unknown): value is number =>
@@ -84,6 +88,8 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     memoryEnabled: config.memoryEnabled !== false,
     reserveTokens: (await readReserveState(agentDir)).value,
     keepRecentTokens: config.keepRecentTokens ?? DEFAULT_KEEP_RECENT_TOKENS,
+    compactionReviewTimeoutMs: compactionReviewTimeoutMs(config.compactionReviewTimeoutMs),
+    compactionReviewerMaxOutputTokens: compactionReviewerMaxOutputTokens(config.compactionReviewerMaxOutputTokens),
     ...(config.planner ? { planner: config.planner } : {}),
     ...(config.executor ? { executor: config.executor } : {}),
     ...(config.memoryReviewer ? { memoryReviewer: config.memoryReviewer } : {}),
@@ -96,7 +102,8 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
     value?.kind !== "continuity" ||
     typeof value.memoryEnabled !== "boolean" ||
     !validReserveTokens(value.reserveTokens) ||
-    !validKeepRecentTokens(value.keepRecentTokens)
+    !validKeepRecentTokens(value.keepRecentTokens) ||
+    !Object.entries(continuitySettingFields).every(([key, field]) => validPackageSettingValue(field, value[key]))
   )
     throw new Error("invalid Continuity settings");
   const planner = profile(value.planner);
@@ -116,6 +123,8 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
         ...(executor ? { executor } : {}),
         ...(memoryReviewer ? { memoryReviewer } : {}),
         ...(compactionReviewer ? { compactionReviewer } : {}),
+        compactionReviewTimeoutMs: value.compactionReviewTimeoutMs,
+        compactionReviewerMaxOutputTokens: value.compactionReviewerMaxOutputTokens,
       }),
       configPath(agentDir),
     );

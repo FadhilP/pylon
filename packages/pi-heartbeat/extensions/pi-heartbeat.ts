@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { isActive, JobManager, pruneStaleSessionDirs, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
+import { effectiveConfig, loadConfig } from "../src/config.ts";
 
 const TOOL_USAGE: Record<string, string> = {
   heartbeat_start: "start a long shell command while independent work remains",
@@ -122,7 +123,8 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     const dir = join(root, ctx.sessionManager.getSessionId());
     await pruneStaleSessionDirs(root, dir);
     const shellPath = SettingsManager.create(ctx.cwd, getAgentDir()).getShellPath();
-    manager = new JobManager(dir, refresh, 5_000, shellPath);
+    const settings = effectiveConfig(await loadConfig());
+    manager = new JobManager(dir, refresh, 5_000, shellPath, settings.defaultJobTimeoutMs, settings.completedJobRetention);
     await manager.init();
     refresh();
   });

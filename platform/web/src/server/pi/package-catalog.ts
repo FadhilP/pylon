@@ -42,6 +42,10 @@ interface PackageSettingsAdapter {
   updateSettings(value: unknown, context: { agentDir: string }): Promise<void>;
 }
 
+
+function matchesGenericPackageId(settings: PackageSettingsReadModel, packageId: string): boolean {
+  return settings.kind !== "generic" || settings.packageId === packageId;
+}
 function inside(parent: string, child: string): boolean {
   const path = relative(parent, child);
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
@@ -151,20 +155,25 @@ export class PackageCatalog {
     const definition = (state ?? (await this.scan())).packages.find(item => item.id === packageId);
     if (!definition?.settingsPath) return undefined;
     const value = await (await this.adapter(definition.settingsPath)).readSettings({ agentDir: this.agentDir });
-    if (!validPackageSettings(value)) throw new Error(`${packageId} returned invalid settings`);
+    if (!validPackageSettings(value) || !matchesGenericPackageId(value, packageId)) {
+      throw new Error(`${packageId} returned invalid settings`);
+    }
     return value;
   }
 
   async updateSettings(packageId: string, value: PackageSettingsReadModel): Promise<PackageSettingsReadModel> {
     const definition = (await this.scan()).packages.find(item => item.id === packageId);
     if (!definition?.settingsPath) throw new Error("package has no configurable settings");
+    if (!matchesGenericPackageId(value, packageId)) throw new Error("generic settings packageId does not match package");
     const adapter = await this.adapter(definition.settingsPath);
     const context = { agentDir: this.agentDir };
     const previous = await adapter.readSettings(context);
-    if (!validPackageSettings(previous)) throw new Error(`${packageId} returned invalid settings`);
+    if (!validPackageSettings(previous) || !matchesGenericPackageId(previous, packageId)) {
+      throw new Error(`${packageId} returned invalid settings`);
+    }
     await adapter.updateSettings(value, context);
     const updated = await adapter.readSettings(context);
-    if (!validPackageSettings(updated)) {
+    if (!validPackageSettings(updated) || !matchesGenericPackageId(updated, packageId)) {
       await adapter.updateSettings(previous, context).catch(() => undefined);
       throw new Error(`${packageId} saved invalid settings`);
     }

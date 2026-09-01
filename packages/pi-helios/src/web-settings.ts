@@ -1,13 +1,11 @@
-import { configPath, loadConfig, saveConfig } from "./config.ts";
+import { extractPackageSettingsUpdate, effectivePackageSettingsReadModel } from "pylon-core/package-settings";
+import { configPath, heliosSettings, loadConfig, saveConfig } from "./config.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
-  const config = await loadConfig(configPath(agentDir));
-  return { kind: "helios", headed: config.headed ?? false };
+  return effectivePackageSettingsReadModel(heliosSettings, await loadConfig(configPath(agentDir)));
 }
 
-export async function updateSettings(value: any, { agentDir }: { agentDir: string }): Promise<void> {
-  if (value?.kind !== "helios" || typeof value.headed !== "boolean") {
-    throw new Error("invalid Helios settings");
-  }
-  await saveConfig({ version: 1, headed: value.headed }, configPath(agentDir));
+export async function updateSettings(value: unknown, { agentDir }: { agentDir: string }): Promise<void> {
+  const values = extractPackageSettingsUpdate(heliosSettings, value);
+  await saveConfig({ version: 1, ...values }, configPath(agentDir));
 }

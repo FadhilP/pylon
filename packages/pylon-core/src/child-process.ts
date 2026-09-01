@@ -94,12 +94,7 @@ export function contextWindowTokensFromUsage(usage: any): number {
   return parts.reduce((sum, value) => sum + value, 0);
 }
 
-export const MAX_ACTIVITY_ITEMS = 100;
-
-/**
- * Records tool-call/result pairs into a bounded ring, timing each call by its id.
- * `capResultText` is the caller's own truncation policy for a tool result.
- */
+/** Records tool-call/result pairs, timing each call by its id. */
 export function activityRecorder(
   capResultText: (text: string) => string,
   onActivity?: (activity: ChildActivity, all: readonly ChildActivity[]) => void,
@@ -108,7 +103,6 @@ export function activityRecorder(
   const startedById = new Map<string, number>();
   const push = (item: ChildActivity) => {
     items.push(item);
-    if (items.length > MAX_ACTIVITY_ITEMS) items.shift();
     onActivity?.(item, items);
   };
   const idOf = (event: any) => (typeof event.toolCallId === "string" ? event.toolCallId : undefined);

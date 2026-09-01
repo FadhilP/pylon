@@ -11,7 +11,7 @@ import { AndroidToolingManager } from "../src/android-tooling.ts";
 import { resolveAppium } from "../src/appium.ts";
 import { BrowserSessionManager, validateCdpEndpoint, type BrowserOperationResult } from "../src/browser-session.ts";
 import { captureWindow, findWindow, validatePngFile } from "../src/capture.ts";
-import { configPath, loadConfig, saveConfig } from "../src/config.ts";
+import { configPath, effectiveConfig, loadConfig, saveConfig } from "../src/config.ts";
 import { elementReferences, ELEMENT_REF_PATTERN } from "../src/element-ref.ts";
 import { diagnosePlaywrightCli, PlaywrightCli, type BrowserAction } from "../src/playwright-cli.ts";
 import { issueWebScoutGrant } from "../src/web-scout-grant.ts";
@@ -606,7 +606,12 @@ export default function heliosExtension(
       !request.claim()
     )
       return;
-    request.respond(embeddedBrowserRequest(manager, request as EmbeddedRequest));
+    request.respond(
+      (async () => {
+        manager.configureSettings(effectiveConfig(await loadConfig(settingsPath)));
+        return embeddedBrowserRequest(manager, request as EmbeddedRequest);
+      })(),
+    );
   });
   const disposeAndroidTooling = pi.events.on("pylon:helios-android-tooling-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<AndroidToolingRequest>) : undefined;
@@ -621,7 +626,10 @@ export default function heliosExtension(
     request.respond(
       (async () => {
         if (request.action === "status") return androidTooling.status();
-        if (request.action === "install") return androidTooling.install(androidManager.summary().total, request.signal);
+        if (request.action === "install") {
+          const config = effectiveConfig(await loadConfig(settingsPath));
+          return androidTooling.install(androidManager.summary().total, request.signal, config.androidInstallTimeoutMs);
+        }
         return androidTooling.remove(androidManager.summary().total, request.signal);
       })(),
     );
@@ -685,7 +693,7 @@ export default function heliosExtension(
   });
   let ownedHeaded = false;
   pi.on("session_start", async () => {
-    ownedHeaded = (await loadConfig(settingsPath)).headed ?? false;
+    ownedHeaded = effectiveConfig(await loadConfig(settingsPath)).headed;
     pi.events.emit("pylon:tool-policy", {
       version: 1,
       kind: "register",
@@ -775,7 +783,10 @@ export default function heliosExtension(
       if (action === "toggle") ownedHeaded = !ownedHeaded;
       if (action === "show") ownedHeaded = true;
       if (action === "hide") ownedHeaded = false;
-      if (action !== "status") await saveConfig({ version: 1, headed: ownedHeaded }, settingsPath);
+      if (action !== "status") {
+        const config = await loadConfig(settingsPath);
+        await saveConfig({ ...config, version: 1, headed: ownedHeaded }, settingsPath);
+      }
       const active = manager.get(sessionId(ctx));
       const unchanged = active?.ownership === "owned" ? " Active owned session unchanged." : "";
       ctx.ui.notify(
@@ -800,6 +811,8 @@ export default function heliosExtension(
     parameters: androidSchema,
     executionMode: "sequential",
     async execute(toolCallId, params: AndroidInput, signal, onUpdate, ctx) {
+      // Startup policy is sampled at the operation boundary; existing sessions retain their lifecycle.
+      const currentSettings = effectiveConfig(await loadConfig(settingsPath));
       const id = sessionId(ctx);
       if (params.action === "avds") {
         rejectAndroidExtra(params, []);
@@ -889,6 +902,7 @@ export default function heliosExtension(
               params.appActivity,
               params.headless ?? false,
               signal,
+              currentSettings.androidStartTimeoutMs,
             );
             return { content: [{ type: "text" as const, text: describeAndroid(result) }], details: result };
           } finally {
@@ -1033,6 +1047,9 @@ export default function heliosExtension(
     parameters: browserSchema,
     executionMode: "sequential",
     async execute(toolCallId, params: BrowserInput, signal, onUpdate, ctx) {
+      const currentSettings = effectiveConfig(await loadConfig(settingsPath));
+      manager.configureSettings(currentSettings);
+      ownedHeaded = currentSettings.headed;
       const executeAction = async (params: BrowserParams) => {
         const id = sessionId(ctx);
         if (params.action === "start") {

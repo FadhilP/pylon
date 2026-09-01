@@ -1,5 +1,5 @@
-import { realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { lstat, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { git } from "./git.ts";
 
 export type Repository = { root: string; prefix: string; commonDir: string };
@@ -22,6 +22,26 @@ async function childPaths(repository: Repository) {
     topLevels.set(key, pending);
     return pending;
   };
+  const markers = new Map<string, Promise<boolean>>();
+  const hasGitMarker = (path: string) => {
+    const key = canonical(path);
+    const existing = markers.get(key);
+    if (existing) return existing;
+    const present = async (name: string) => {
+      try {
+        await lstat(join(path, name));
+        return true;
+      } catch (error: any) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+        throw error;
+      }
+    };
+    const pending = present(".git").then(found =>
+      found ? true : Promise.all([present("HEAD"), present("objects")]).then(values => values.every(Boolean)),
+    );
+    markers.set(key, pending);
+    return pending;
+  };
   for (const entry of nul(await git(repository.root, ["ls-files", "--stage", "-z"]))) {
     const match = /^160000 [0-9a-f]+ \d\t(.+)$/.exec(entry);
     if (match) paths.add(match[1]);
@@ -35,15 +55,17 @@ async function childPaths(repository: Repository) {
       info = await stat(absolute).catch(() => undefined);
     let candidate = info?.isDirectory() ? absolute : dirname(absolute);
     while (candidate !== repository.root && !outside(repository.root, candidate)) {
-      const physical = await realpath(candidate),
-        root = await topLevel(physical);
-      if (canonical(physical) === canonical(root)) {
-        paths.add(relative(repository.root, physical).replaceAll("\\", "/"));
-        break;
+      const physical = await realpath(candidate);
+      if (await hasGitMarker(physical)) {
+        const root = await topLevel(physical);
+        if (canonical(physical) === canonical(root)) {
+          paths.add(relative(repository.root, physical).replaceAll("\\", "/"));
+          break;
+        }
       }
       candidate = dirname(candidate);
     }
-  }
+    }
   return paths;
 }
 

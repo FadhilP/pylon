@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { DISCOVER_CHILD_TOOL_NAMES } from "../src/discover-child-tools.ts";
+import { effectiveConfig, loadConfig } from "../src/config.ts";
 import { registerFd } from "../src/fd.ts";
 import { createIndexRegistry, registerIndexTools } from "../src/index.ts";
 import { createIndexLifecycle } from "../src/index-lifecycle.ts";
@@ -48,13 +49,16 @@ const DEFERRED_TOOLS = [
 ];
 
 export default function discoverExtension(pi: ExtensionAPI) {
-  registerRg(pi);
-  registerFd(pi);
-  registerRelationshipGraph(pi);
+  // Read once when the extension is initialized; changed settings require an extension reload.
+  const settings = effectiveConfig({ version: 1 });
+  const configuredSettings = loadConfig().then(effectiveConfig);
+  registerRg(pi, undefined, undefined, settings);
+  registerFd(pi, undefined, undefined, undefined, settings);
+  registerRelationshipGraph(pi, undefined, undefined, settings);
   registerSessionSearch(pi);
   registerSessionStats(pi);
-  const { indexFor, closeAll: closeIndexes } = createIndexRegistry(pi);
-  registerIndexTools(pi, indexFor);
+  const { indexFor, closeAll: closeIndexes } = createIndexRegistry(pi, settings);
+  registerIndexTools(pi, indexFor, undefined, settings);
   const index = createIndexLifecycle(pi, indexFor);
   const discovery = createToolDiscovery(pi);
 
@@ -99,7 +103,8 @@ export default function discoverExtension(pi: ExtensionAPI) {
   });
   const disposeIndexActions = pi.events.on("pi-discover:index-action", index.handleAction);
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    Object.assign(settings, await configuredSettings);
     discovery.clearSessionState();
     configureDeferredTools();
     index.scheduleRefresh(ctx);

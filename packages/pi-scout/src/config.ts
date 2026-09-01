@@ -1,37 +1,89 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  definePackageSettings,
+  effectivePackageSettingValue,
+  validPackageSettingValue,
+  type PackageSettingField,
+} from "pylon-core/package-settings";
 import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
+export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_SCOUT_MAX_COST_USD = 1.0;
+export const DEFAULT_WEB_SEARCH_RESULTS = 5;
+
+/** Shared inert definitions consumed by Scout's runtime and web settings adapter. */
+export const scoutSettingFields = {
+  repoTimeoutMs: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "repoTimeoutMs",
+    label: "Repository scout timeout",
+    type: "integer",
+    defaultValue: DEFAULT_REPO_TIMEOUT_MS,
+    min: 1,
+    max: 7_200_000,
+    env: "PI_SCOUT_TIMEOUT_MS",
+    apply: "next-operation",
+  },
+  maxCostUsd: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "maxCostUsd",
+    label: "Maximum scout cost",
+    type: "number",
+    defaultValue: DEFAULT_SCOUT_MAX_COST_USD,
+    min: 0,
+    max: 100,
+    step: 0.01,
+    env: "PI_SCOUT_MAX_COST_USD",
+    apply: "next-operation",
+  },
+  webSearchResults: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "webSearchResults",
+    label: "Web search results",
+    type: "integer",
+    defaultValue: DEFAULT_WEB_SEARCH_RESULTS,
+    min: 1,
+    max: 8,
+    apply: "next-operation",
+  },
+} satisfies Record<string, PackageSettingField>;
+export const scoutSettings = definePackageSettings({
+  version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  packageId: "pi-scout",
+  fields: Object.values(scoutSettingFields),
+});
+
 export type ScoutConfig = {
   version: 1;
   model?: string;
   thinking?: ThinkingLevel;
   disabled?: boolean;
   webSearch?: boolean;
+  repoTimeoutMs?: number;
+  maxCostUsd?: number;
+  webSearchResults?: number;
 };
 export const isScoutEnabled = (config: ScoutConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
 export const defaultConfig = (): ScoutConfig => ({ version: 1 });
-export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
-export const DEFAULT_SCOUT_MAX_COST_USD = 1.0;
-export function repoTimeoutMs(value = process.env.PI_SCOUT_TIMEOUT_MS): number {
-  if (value === undefined) return DEFAULT_REPO_TIMEOUT_MS;
-  const timeout = Number(value);
-  if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 7_200_000)
-    throw new Error("PI_SCOUT_TIMEOUT_MS must be an integer between 1 and 7200000");
-  return timeout;
-}
-
-export function scoutMaxCostUsd(value = process.env.PI_SCOUT_MAX_COST_USD): number | undefined {
-  if (value === undefined) return DEFAULT_SCOUT_MAX_COST_USD;
-  const cost = typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
-  if (!Number.isFinite(cost) || cost < 0)
+export const repoTimeoutMs = (value?: unknown): number =>
+  effectivePackageSettingValue(scoutSettingFields.repoTimeoutMs, value, process.env);
+/** Zero retains Scout's established unlimited-cost semantics. */
+export const scoutMaxCostUsd = (value?: unknown): number | undefined => {
+  try {
+    const cost = effectivePackageSettingValue(scoutSettingFields.maxCostUsd, value, process.env);
+    return cost || undefined;
+  } catch {
     throw new Error("PI_SCOUT_MAX_COST_USD must be a finite number greater than or equal to 0");
-  return cost || undefined;
-}
+  }
+};
+export const webSearchResults = (value?: unknown): number =>
+  effectivePackageSettingValue(scoutSettingFields.webSearchResults, value, process.env);
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-scout", "config.json");
 
 export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
@@ -43,7 +95,10 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
         (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
         (value.thinking !== undefined && !thinkingLevels.includes(value.thinking)) ||
         (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
-        (value.webSearch !== undefined && typeof value.webSearch !== "boolean")
+        (value.webSearch !== undefined && typeof value.webSearch !== "boolean") ||
+        !Object.entries(scoutSettingFields).every(
+          ([key, field]) => value[key] === undefined || validPackageSettingValue(field, value[key]),
+        )
       )
         return undefined;
       return {
@@ -52,6 +107,9 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
         ...(value.thinking ? { thinking: value.thinking } : {}),
         ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
         ...(value.webSearch !== undefined ? { webSearch: value.webSearch } : {}),
+        ...(value.repoTimeoutMs !== undefined ? { repoTimeoutMs: value.repoTimeoutMs } : {}),
+        ...(value.maxCostUsd !== undefined ? { maxCostUsd: value.maxCostUsd } : {}),
+        ...(value.webSearchResults !== undefined ? { webSearchResults: value.webSearchResults } : {}),
       } satisfies ScoutConfig;
     },
     defaultConfig,

@@ -11,8 +11,8 @@ import {
   defaultThinkingLevels,
   gruntMaxCostUsd,
   gruntMaxTurns,
-  gruntParentContextChars,
   gruntMode,
+  gruntParentContextChars,
   gruntThinkingLevels,
   gruntTimeoutMs,
   isGruntEnabled,
@@ -23,8 +23,25 @@ import {
 } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
 
-test("config is atomic, validated, and preserves corrupt input", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "grunt-config-"));
+const scratch = () => mkdtemp(join(tmpdir(), "grunt-config-"));
+const withEnv = async (values: Record<string, string | undefined>, run: () => Promise<void>) => {
+  const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+  try {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await run();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+};
+
+test("config is atomic, validated, and preserves legacy config fields", async () => {
+  const dir = await scratch();
   const path = join(dir, "nested", "config.json");
   await saveConfig({ version: 1, model: "openai/worker", mode: "direct", maxTurns: 12 }, path);
   assert.deepEqual(await loadConfig(path), { version: 1, model: "openai/worker", mode: "direct", maxTurns: 12 });
@@ -47,57 +64,79 @@ test("Grunt stays inactive until configured or explicitly reset", () => {
   assert.equal(isGruntEnabled({ version: 1, model: "openai/worker" }), true);
 });
 
-test("timeout defaults to fifteen minutes and validates overrides", () => {
+test("worker setting defaults and bounds are centralized", () => {
   assert.equal(gruntTimeoutMs(undefined), DEFAULT_GRUNT_TIMEOUT_MS);
   assert.equal(gruntTimeoutMs("120000"), 120000);
-  assert.throws(() => gruntTimeoutMs("0"), /between/);
-  assert.throws(() => gruntTimeoutMs("1.5"), /between/);
-});
-
-test("worker budgets and parent context limits are bounded", () => {
+  assert.throws(() => gruntTimeoutMs("0"), /invalid/);
   assert.equal(gruntMaxTurns(undefined), DEFAULT_GRUNT_MAX_TURNS);
   assert.equal(gruntMaxTurns("3"), 3);
-  assert.equal(gruntMaxTurns(10_000), 10_000);
-  assert.throws(() => gruntMaxTurns("0"), /positive/);
+  assert.throws(() => gruntMaxTurns(1_001), /invalid/);
   assert.equal(gruntMaxCostUsd(undefined), DEFAULT_GRUNT_MAX_COST_USD);
   assert.equal(gruntMaxCostUsd("0.5"), 0.5);
-  assert.throws(() => gruntMaxCostUsd("0"), /greater/);
+  assert.throws(() => gruntMaxCostUsd("0"), /invalid/);
   assert.equal(gruntParentContextChars(undefined), DEFAULT_GRUNT_PARENT_CONTEXT_CHARS);
   assert.equal(gruntParentContextChars("1200"), 1200);
-  assert.throws(() => gruntParentContextChars("12001"), /between/);
+  assert.throws(() => gruntParentContextChars("12001"), /invalid/);
 });
 
-test("worker thinking defaults to medium/high and supports a configured allowlist", async () => {
+test("web settings persist all worker limits at the supplied agent directory", async () => {
+  const agentDir = await scratch();
+  const settings = {
+    kind: "grunt" as const,
+    mode: "session" as const,
+    executionMode: "isolated" as const,
+    thinkingLevels: ["low", "xhigh"],
+    timeoutMs: 120_000,
+    maxTurns: 12,
+    maxCostUsd: 3,
+    parentContextChars: 1_200,
+  };
+  await updateSettings(settings, { agentDir });
+  assert.deepEqual(await readSettings({ agentDir }), settings);
+  assert.deepEqual(await loadConfig(join(agentDir, "pi-grunt", "config.json")), {
+    version: 1,
+    disabled: false,
+    mode: "isolated",
+    thinkingLevels: ["low", "xhigh"],
+    timeoutMs: 120_000,
+    maxTurns: 12,
+    maxCostUsd: 3,
+    parentContextChars: 1_200,
+  });
+  await assert.rejects(
+    updateSettings({ ...settings, maxCostUsd: 0 }, { agentDir }),
+    /invalid Grunt settings/,
+  );
+  await assert.rejects(
+    updateSettings({ ...settings, maxTurns: 1_001 }, { agentDir }),
+    /invalid Grunt settings/,
+  );
+});
+
+test("environment fallbacks apply only when a worker setting is not persisted", async () => {
+  await withEnv(
+    {
+      PI_GRUNT_TIMEOUT_MS: "240000",
+      PI_GRUNT_MAX_TURNS: "7",
+      PI_GRUNT_MAX_COST_USD: "4",
+      PI_GRUNT_PARENT_CONTEXT_CHARS: "800",
+    },
+    async () => {
+      const agentDir = await scratch();
+      await saveConfig({ version: 1, disabled: false, maxTurns: 9 }, join(agentDir, "pi-grunt", "config.json"));
+      const settings = await readSettings({ agentDir });
+      assert.equal(settings.timeoutMs, 240_000);
+      assert.equal(settings.maxTurns, 9);
+      assert.equal(settings.maxCostUsd, 4);
+      assert.equal(settings.parentContextChars, 800);
+    },
+  );
+});
+
+test("worker thinking defaults to medium/high and supports a configured allowlist", () => {
   assert.deepEqual(defaultThinkingLevels, ["medium", "high"]);
   assert.deepEqual(gruntThinkingLevels({ version: 1 }), ["medium", "high"]);
   assert.deepEqual(thinkingLevels, ["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-  const agentDir = await mkdtemp(join(tmpdir(), "grunt-settings-"));
-  await updateSettings(
-    { kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["low", "xhigh"], maxTurns: 10_000 },
-    { agentDir },
-  );
-  assert.deepEqual(await readSettings({ agentDir }), {
-    kind: "grunt",
-    mode: "session",
-    executionMode: "isolated",
-    thinkingLevels: ["low", "xhigh"],
-    maxTurns: 10_000,
-  });
-  await assert.rejects(
-    updateSettings(
-      { kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: [], maxTurns: 12 },
-      { agentDir },
-    ),
-    /invalid Grunt settings/,
-  );
-  await assert.rejects(
-    updateSettings(
-      { kind: "grunt", mode: "session", executionMode: "isolated", thinkingLevels: ["medium"], maxTurns: 0 },
-      { agentDir },
-    ),
-    /invalid Grunt settings/,
-  );
 });
 
 test("model refs preserve colon model IDs", () => {

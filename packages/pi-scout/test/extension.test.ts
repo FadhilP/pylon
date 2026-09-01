@@ -376,8 +376,10 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
 
 test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustion", async () => {
   let maxCostUsd: number | undefined;
+  let timeoutMs: number | undefined;
   const run = async (_args: string[], options: any): Promise<ScoutRun> => {
     maxCostUsd = options.maxCostUsd;
+    timeoutMs = options.timeoutMs;
     return {
       text: "partial",
       error: "Scout reached reported cost limit ($1.0).",
@@ -397,6 +399,7 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
     };
   };
   const runtime = await harness(run);
+  await saveConfig({ version: 1, disabled: false, repoTimeoutMs: 123_456, maxCostUsd: 2.5 });
   try {
     const result = await runtime.tools
       .get("repo_scout")
@@ -407,7 +410,8 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
         undefined,
         context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } }),
       );
-    assert.equal(maxCostUsd, 1.0);
+    assert.equal(maxCostUsd, 2.5);
+    assert.ok(timeoutMs !== undefined && timeoutMs > 0 && timeoutMs <= 123_456);
     assert.equal(result.details.failureCode, "budget_exceeded");
     assert.equal(result.details.budgetExceeded, true);
     assert.equal(result.details.finalizationAttempted, true);

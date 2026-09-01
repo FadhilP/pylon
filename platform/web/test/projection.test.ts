@@ -889,6 +889,26 @@ test("history projection retains complete delegated activity with bounded event 
   assert.doesNotMatch(projected.delegatedRuns[0]?.request ?? "", /hidden|apiToken/);
 });
 
+test("stale Grunt integration projects as attention instead of failure", () => {
+  const projected = projectConversation([
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "grunt-stale", name: "grunt", arguments: { task: "Apply edits" } }],
+    },
+    {
+      role: "toolResult",
+      toolCallId: "grunt-stale",
+      toolName: "grunt",
+      isError: false,
+      content: [{ type: "text", text: "Worker status: stale." }],
+      details: { status: "stale", failureCode: "stale_parent" },
+    },
+  ]);
+
+  assert.equal(projected.delegatedRuns[0]?.status, "attention");
+  assert.equal(projected.messages.find(message => message.tool?.id === "grunt-stale")?.tool?.status, "attention");
+});
+
 test("live delegated activity appends correlated deltas without replacing prior events", () => {
   const published: Array<{ type: string; payload: any }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
@@ -1541,6 +1561,7 @@ test("projection suppresses duration-only delegated heartbeats", () => {
           state: "running",
           model: "provider/grunt",
           thinking: "medium",
+          costLimitUsd: 2,
           usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.01 },
           activity: [{ kind: "call", tool: "read", text: '{"path":"a.ts","password":"hidden"}' }],
         },
@@ -1557,6 +1578,7 @@ test("projection suppresses duration-only delegated heartbeats", () => {
     }),
   );
   assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.durationMs, 1_000);
+  assert.equal(projection.snapshot().conversation.delegatedRuns[0]?.costLimitUsd, 2);
   assert.deepEqual(projection.snapshot().conversation.delegatedRuns[0]?.usage, {
     input: 2,
     output: 1,
@@ -1576,6 +1598,7 @@ test("projection suppresses duration-only delegated heartbeats", () => {
           status: "completed",
           model: "provider/grunt",
           thinking: "medium",
+          costLimitUsd: 2,
           durationMs: 500,
           usage: { input: 5, output: 7, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
           activity: [
@@ -1617,6 +1640,7 @@ test("projection suppresses duration-only delegated heartbeats", () => {
     status: "completed",
     modelName: "provider/grunt",
     thinkingLevel: "medium",
+    costLimitUsd: 2,
     durationMs: 500,
     usage: { input: 5, output: 7, cacheRead: 1, cacheWrite: 0, cost: 0.02 },
     activity: [

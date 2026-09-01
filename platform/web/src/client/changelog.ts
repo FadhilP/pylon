@@ -2,6 +2,25 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.3.0",
+    date: "Sep 1, 2026",
+    title: "Configurable agents, live work tracking, and safer repositories",
+    summary:
+      "Pylon opens runtime limits across bundled tools to Settings, turns active agents into a cost-aware live dock, and improves delegated reliability, repository safety, and startup diagnostics.",
+    notes: [
+      "Expanded package Settings with validated, typed controls and clear apply timing for Pylon Core, Discover, Heartbeat, Helios, Papercuts, Advisor, Scout, Grunt, Continuity, Spawn, and Timeline.",
+      "Made delegation limits configurable across Advisor, Scout, and Grunt, including consultation and worker counts, timeouts, cost ceilings, token and parent-context budgets, tool-call turns, web-search result counts, and shared transient-provider retry attempts and backoff.",
+      "Replaced the compact active-agent strip with a cost-sorted live dock showing up to five agents, total and per-agent spend, elapsed time, model or agent kind, tool-call counts, relative activity tracks, and visible cost-limit warnings.",
+      "Preserved complete delegated tool activity instead of dropping older calls, propagated cost limits into runtime projections, and classified stale Grunt integrations as attention states rather than ordinary completions or failures.",
+      "Added configurable search timeouts and default result limits across fd, rg, symbol and code search, relationship mapping, and repository scanning, while letting Web Scout use its configured candidate count when a call does not provide one.",
+      "Added operation-aware Helios controls for Android startup and tooling-install timeouts, browser lease idle time, returned-tab limits, and headed browsing without changing active session lifecycles.",
+      "Added runtime controls for Heartbeat job timeouts and retention, Papercut list and query limits, Spawn timeouts and recent-thread context, Continuity review time and output, and Timeline Git and checkpoint-title budgets.",
+      "Improved Timeline preflight discovery for nested worktrees that use separate Git directories and for bare repositories, and split startup diagnostics into runtime creation, bind setup, and session-start timing.",
+    ],
+  },
+
+
+  {
     version: "2.2.0",
     date: "Aug 31, 2026",
     title: "MongoDB workflows, queued agents, and deeper research",

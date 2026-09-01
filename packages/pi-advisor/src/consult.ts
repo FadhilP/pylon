@@ -1,9 +1,10 @@
 import type { complete } from "@earendil-works/pi-ai/compat";
 import { contextWindowTokensFromUsage } from "pylon-core/child-process";
+import { ADVISOR_TIMEOUT_MS } from "./config.ts";
 import { redact } from "./redact.ts";
-import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "./retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "./retry.ts";
 
-export const ADVISOR_TIMEOUT_MS = 15 * 60 * 1000;
+export { ADVISOR_TIMEOUT_MS };
 const FAILURE_MESSAGE_MAX_LENGTH = 500;
 
 export type FailureCode =
@@ -87,6 +88,7 @@ const responseText = (content: readonly any[]) =>
  */
 export async function runConsultation(options: ConsultOptions): Promise<ConsultResult> {
   const usage = emptyUsage();
+  const retryPolicy = await loadDelegateRetryPolicy();
   let attempts = 0;
   let contextTokens: number | null = null;
   // Progress observers must not control provider execution.
@@ -98,11 +100,11 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
     }
   };
   const retry = async (retryable: boolean) => {
-    if (attempts >= DELEGATE_MAX_ATTEMPTS || usage.cost !== 0 || !retryable) return false;
-    if (!(await options.retryWait(attempts, options.signal))) return false;
+    if (attempts >= retryPolicy.maxAttempts || usage.cost !== 0 || !retryable) return false;
+    if (!(await options.retryWait(attempts, options.signal, retryPolicy.baseMs))) return false;
     contextTokens = null;
     report({
-      note: `Advisor provider unavailable; retrying (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
+      note: `Advisor provider unavailable; retrying (${attempts + 1}/${retryPolicy.maxAttempts})…`,
       usage,
       attempts,
       contextTokens,

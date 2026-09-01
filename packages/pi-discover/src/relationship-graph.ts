@@ -147,6 +147,10 @@ export function registerRelationshipGraph(
   pi: ExtensionAPI,
   maxBytes = DEFAULT_MAX_BYTES,
   probe: ExecutableProbe = executableAvailable,
+  settings: { relationshipResults: number; searchTimeoutMs: number } = {
+    relationshipResults: DEFAULT_GRAPH_RESULTS,
+    searchTimeoutMs: 30_000,
+  },
 ) {
   pi.registerTool({
     name: "relationship_graph",
@@ -183,7 +187,7 @@ export function registerRelationshipGraph(
       const query = params.query.trim();
       if (!query) throw new Error("Relationship query must contain a non-whitespace token");
       const path = workspacePath(ctx.cwd, params.path);
-      const maxResults = params.max_results ?? DEFAULT_GRAPH_RESULTS;
+      const maxResults = params.max_results ?? settings.relationshipResults;
       const perFileLimit = Math.min(maxResults, MAX_MATCHES_PER_FILE);
       const common = [
         "--no-config",
@@ -205,7 +209,7 @@ export function registerRelationshipGraph(
         details: { unavailable: true },
       });
       // rg reporting no matches is trusted here; probing on every empty map is not worth the spawn.
-      const run: SearchRunOptions = { probe, signal, label: "ripgrep" };
+      const run: SearchRunOptions = { probe, signal, label: "ripgrep", timeoutMs: settings.searchTimeoutMs };
 
       const fileOutcome = await runSearch(
         pi,

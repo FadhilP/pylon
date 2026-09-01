@@ -1,8 +1,13 @@
+import { validPackageSettingValue } from "pylon-core/package-settings";
 import {
   configPath,
+  gruntMaxCostUsd,
   gruntMaxTurns,
   gruntModes,
+  gruntParentContextChars,
+  gruntSettingFields,
   gruntThinkingLevels,
+  gruntTimeoutMs,
   loadConfig,
   saveConfig,
   thinkingLevels,
@@ -24,7 +29,10 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
     ...(config.model ? { model: config.model } : {}),
     executionMode: config.mode ?? "isolated",
     thinkingLevels: gruntThinkingLevels(config),
+    timeoutMs: gruntTimeoutMs(config.timeoutMs),
     maxTurns: gruntMaxTurns(config.maxTurns),
+    maxCostUsd: gruntMaxCostUsd(config.maxCostUsd),
+    parentContextChars: gruntParentContextChars(config.parentContextChars),
   };
 }
 
@@ -33,8 +41,9 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
     value?.kind !== "grunt" ||
     !["disabled", "session", "model"].includes(value.mode) ||
     !gruntModes.includes(value.executionMode) ||
-    !Number.isSafeInteger(value.maxTurns) ||
-    value.maxTurns < 1 ||
+    !Object.entries(gruntSettingFields).every(
+      ([key, field]) => validPackageSettingValue(field, value[key]),
+    ) ||
     !Array.isArray(value.thinkingLevels) ||
     !value.thinkingLevels.length ||
     new Set(value.thinkingLevels).size !== value.thinkingLevels.length ||
@@ -49,7 +58,10 @@ export async function updateSettings(value: any, { agentDir }: { agentDir: strin
       disabled: value.mode === "disabled",
       mode: value.executionMode,
       thinkingLevels: value.thinkingLevels,
+      timeoutMs: value.timeoutMs,
       maxTurns: value.maxTurns,
+      maxCostUsd: value.maxCostUsd,
+      parentContextChars: value.parentContextChars,
       ...(value.mode === "model" ? { model: value.model.trim() } : {}),
     },
     configPath(agentDir),

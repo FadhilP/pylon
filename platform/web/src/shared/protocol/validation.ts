@@ -61,7 +61,7 @@ const workspaceModes = new Set(["checkout", "worktree", "local"]);
 const sessionWorkspaceModes = new Set(["worktree", "checkout", "local", "non-git"]);
 const inheritedWorkspaceModes = new Set(["inherit", "checkout", "worktree", "local"]);
 const toolStatuses = new Set(["running", "completed", "failed", "attention"]);
-const delegatedRunStatuses = new Set(["running", "completed", "failed"]);
+const delegatedRunStatuses = new Set(["running", "completed", "failed", "attention"]);
 const healthStatuses = new Set(["healthy", "degraded", "unavailable"]);
 const policyToggles = new Set(["inherit", "enabled", "disabled"]);
 const sieveModes = new Set(["enabled", "observe", "disabled"]);
@@ -244,9 +244,129 @@ export function validHookSettings(value: unknown): value is HookSettingsReadMode
   return hook(value.sessionStart) && hook(value.beforeAgentStart) && totalBytes <= 96 * 1024;
 }
 
+const genericApplyTimings = new Set(["immediate", "next-operation", "next-session", "reload"]);
+const MAX_GENERIC_PACKAGE_FIELDS = 50;
+const MAX_GENERIC_NUMBER = 1_000_000_000;
+
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every(key => allowed.includes(key));
+}
+
+function validGenericNumber(value: unknown, integer = false): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= MAX_GENERIC_NUMBER &&
+    (!integer || Number.isSafeInteger(value))
+  );
+}
+
+function validGenericChoices(value: unknown, required: boolean): value is string[] | undefined {
+  return (
+    (value === undefined && !required) ||
+    (Array.isArray(value) &&
+      value.length > 0 &&
+      value.length <= 100 &&
+      value.every(item => boundedString(item, 500)) &&
+      new Set(value).size === value.length)
+  );
+}
+
+function validGenericBounds(value: Record<string, unknown>, integer: boolean): boolean {
+  return (
+    (value.min === undefined || validGenericNumber(value.min, integer)) &&
+    (value.max === undefined || validGenericNumber(value.max, integer)) &&
+    (value.min === undefined || value.max === undefined || (value.min as number) <= (value.max as number)) &&
+    (value.step === undefined || (validGenericNumber(value.step, integer) && (value.step as number) > 0))
+  );
+}
+
+function validGenericStringList(value: unknown, choices: string[] | undefined, min: unknown, max: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= 100 &&
+    (min === undefined || value.length >= (min as number)) &&
+    (max === undefined || value.length <= (max as number)) &&
+    value.every(item => typeof item === "string" && item.length <= 500 && (!choices || choices.includes(item))) &&
+    new Set(value).size === value.length
+  );
+}
+
+function validGenericPackageField(value: unknown): boolean {
+  if (!record(value)) return false;
+  const base = ["version", "key", "label", "type", "defaultValue", "value", "description", "unit", "apply"];
+  if (
+    !exactKeys(value, [...base, "step", "min", "max", "choices"]) ||
+    value.version !== 1 ||
+    !boundedString(value.key, 128) ||
+    !boundedString(value.label, 200) ||
+    (value.description !== undefined && (typeof value.description !== "string" || value.description.length > 500)) ||
+    (value.unit !== undefined && !boundedString(value.unit, 64)) ||
+    !genericApplyTimings.has(String(value.apply))
+  )
+    return false;
+  if (value.type === "boolean") {
+    return (
+      value.step === undefined &&
+      value.min === undefined &&
+      value.max === undefined &&
+      value.choices === undefined &&
+      typeof value.defaultValue === "boolean" &&
+      typeof value.value === "boolean"
+    );
+  }
+  if (value.type === "integer" || value.type === "number") {
+    const integer = value.type === "integer";
+    return (
+      value.choices === undefined &&
+      validGenericBounds(value, integer) &&
+      validGenericNumber(value.defaultValue, integer) &&
+      validGenericNumber(value.value, integer) &&
+      (value.min === undefined || (value.defaultValue as number) >= (value.min as number)) &&
+      (value.max === undefined || (value.defaultValue as number) <= (value.max as number)) &&
+      (value.min === undefined || (value.value as number) >= (value.min as number)) &&
+      (value.max === undefined || (value.value as number) <= (value.max as number))
+    );
+  }
+  if (value.type === "enum") {
+    return (
+      value.step === undefined &&
+      value.min === undefined &&
+      value.max === undefined &&
+      validGenericChoices(value.choices, true) &&
+      typeof value.defaultValue === "string" &&
+      typeof value.value === "string" &&
+      (value.choices as string[]).includes(value.defaultValue) &&
+      (value.choices as string[]).includes(value.value)
+    );
+  }
+  if (value.type === "string-list") {
+    return (
+      value.step === undefined &&
+      validGenericBounds(value, true) &&
+      validGenericChoices(value.choices, false) &&
+      validGenericStringList(value.defaultValue, value.choices as string[] | undefined, value.min, value.max) &&
+      validGenericStringList(value.value, value.choices as string[] | undefined, value.min, value.max)
+    );
+  }
+  return false;
+}
+
+function validGenericPackageSettings(value: Record<string, unknown>): boolean {
+  return (
+    exactKeys(value, ["kind", "packageId", "fields"]) &&
+    identifier(value.packageId) &&
+    Array.isArray(value.fields) &&
+    value.fields.length <= MAX_GENERIC_PACKAGE_FIELDS &&
+    new Set(value.fields.map(field => (record(field) ? field.key : undefined))).size === value.fields.length &&
+    value.fields.every(validGenericPackageField)
+  );
+}
+
+
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
-  if (value.kind === "pylon-core") return typeof value.lineEditEnabled === "boolean";
+  if (value.kind === "generic") return validGenericPackageSettings(value);
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
   const model = value.model === undefined || boundedString(value.model, 400);
   const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));
@@ -256,6 +376,22 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       model &&
       thinking &&
       value.webSearch === undefined &&
+      Number.isSafeInteger(value.maxCalls) &&
+      (value.maxCalls as number) >= 1 &&
+      (value.maxCalls as number) <= 10 &&
+      Number.isSafeInteger(value.timeoutMs) &&
+      (value.timeoutMs as number) >= 1_000 &&
+      (value.timeoutMs as number) <= 7_200_000 &&
+      typeof value.maxCostUsd === "number" &&
+      Number.isFinite(value.maxCostUsd) &&
+      value.maxCostUsd >= 0.01 &&
+      value.maxCostUsd <= 100 &&
+      Number.isSafeInteger(value.maxOutputTokens) &&
+      (value.maxOutputTokens as number) >= 256 &&
+      (value.maxOutputTokens as number) <= 65_536 &&
+      Number.isSafeInteger(value.inputTokenBudget) &&
+      (value.inputTokenBudget as number) >= 1_000 &&
+      (value.inputTokenBudget as number) <= 1_000_000 &&
       (value.mode !== "model" || boundedString(value.model, 400))
     );
   }
@@ -265,7 +401,17 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       model &&
       thinking &&
       (value.mode !== "model" || boundedString(value.model, 400)) &&
-      (value.webSearch === undefined || typeof value.webSearch === "boolean")
+      (value.webSearch === undefined || typeof value.webSearch === "boolean") &&
+      Number.isSafeInteger(value.repoTimeoutMs) &&
+      (value.repoTimeoutMs as number) >= 1 &&
+      (value.repoTimeoutMs as number) <= 7_200_000 &&
+      typeof value.maxCostUsd === "number" &&
+      Number.isFinite(value.maxCostUsd) &&
+      value.maxCostUsd >= 0 &&
+      value.maxCostUsd <= 100 &&
+      Number.isSafeInteger(value.webSearchResults) &&
+      (value.webSearchResults as number) >= 1 &&
+      (value.webSearchResults as number) <= 8
     );
   }
   const validThinkingList = (levels: unknown) =>
@@ -280,8 +426,19 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       (value.mode !== "model" || boundedString(value.model, 400)) &&
       ["isolated", "direct", "dynamic"].includes(String(value.executionMode)) &&
       validThinkingList(value.thinkingLevels) &&
+      Number.isSafeInteger(value.timeoutMs) &&
+      (value.timeoutMs as number) >= 1 &&
+      (value.timeoutMs as number) <= 7_200_000 &&
       Number.isSafeInteger(value.maxTurns) &&
-      (value.maxTurns as number) >= 1
+      (value.maxTurns as number) >= 1 &&
+      (value.maxTurns as number) <= 1_000 &&
+      typeof value.maxCostUsd === "number" &&
+      Number.isFinite(value.maxCostUsd) &&
+      value.maxCostUsd >= 0.01 &&
+      value.maxCostUsd <= 100 &&
+      Number.isSafeInteger(value.parentContextChars) &&
+      (value.parentContextChars as number) >= 0 &&
+      (value.parentContextChars as number) <= 12_000
     );
   }
   if (value.kind === "continuity") {
@@ -293,6 +450,12 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       Number.isSafeInteger(value.keepRecentTokens) &&
       (value.keepRecentTokens as number) >= 1_000 &&
       (value.keepRecentTokens as number) <= 50_000 &&
+      Number.isSafeInteger(value.compactionReviewTimeoutMs) &&
+      (value.compactionReviewTimeoutMs as number) >= 1_000 &&
+      (value.compactionReviewTimeoutMs as number) <= 300_000 &&
+      Number.isSafeInteger(value.compactionReviewerMaxOutputTokens) &&
+      (value.compactionReviewerMaxOutputTokens as number) >= 256 &&
+      (value.compactionReviewerMaxOutputTokens as number) <= 8_192 &&
       ["planner", "executor", "memoryReviewer", "compactionReviewer"].every(key => {
         const profile = value[key];
         return (
@@ -320,7 +483,6 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
       (value.rolloverHighMultiplier as number) > (value.rolloverLowMultiplier as number)
     );
   }
-  if (value.kind === "helios") return typeof value.headed === "boolean";
   if (value.kind === "timeline") {
     return (
       typeof value.editRollbackDefault === "boolean" &&
@@ -328,7 +490,19 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
         value.checkpointTitleMode === "session" ||
         value.checkpointTitleMode === "model") &&
       (value.checkpointTitleModel === undefined || boundedString(value.checkpointTitleModel, 400)) &&
-      (value.checkpointTitleMode !== "model" || boundedString(value.checkpointTitleModel, 400))
+      (value.checkpointTitleMode !== "model" || boundedString(value.checkpointTitleModel, 400)) &&
+      Number.isSafeInteger(value.gitTimeoutMs) &&
+      (value.gitTimeoutMs as number) >= 1_000 &&
+      (value.gitTimeoutMs as number) <= 600_000 &&
+      Number.isSafeInteger(value.titleTimeoutMs) &&
+      (value.titleTimeoutMs as number) >= 1_000 &&
+      (value.titleTimeoutMs as number) <= 300_000 &&
+      Number.isSafeInteger(value.titleMaxTokens) &&
+      (value.titleMaxTokens as number) >= 8 &&
+      (value.titleMaxTokens as number) <= 256 &&
+      Number.isSafeInteger(value.titleChangedFiles) &&
+      (value.titleChangedFiles as number) >= 1 &&
+      (value.titleChangedFiles as number) <= 200
     );
   }
   return (
@@ -340,7 +514,19 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
         value.models.length > 0 &&
         new Set(value.models).size === value.models.length &&
         value.models.every(model => boundedString(model, 400)))) &&
-    validThinkingList(value.agentThinkingLevels)
+    validThinkingList(value.agentThinkingLevels) &&
+    Number.isSafeInteger(value.spawnTimeoutMs) &&
+    (value.spawnTimeoutMs as number) >= 0 &&
+    (value.spawnTimeoutMs as number) <= 7_200_000 &&
+    Number.isSafeInteger(value.recentThreadLimit) &&
+    (value.recentThreadLimit as number) >= 1 &&
+    (value.recentThreadLimit as number) <= 50 &&
+    Number.isSafeInteger(value.recentThreadMaxChars) &&
+    (value.recentThreadMaxChars as number) >= 100 &&
+    (value.recentThreadMaxChars as number) <= 10_000 &&
+    Number.isSafeInteger(value.recentThreadTotalChars) &&
+    (value.recentThreadTotalChars as number) >= 1_000 &&
+    (value.recentThreadTotalChars as number) <= 100_000
   );
 }
 
@@ -1241,6 +1427,11 @@ function validDelegatedRun(value: unknown): boolean {
   if (
     value.contextLimit !== undefined &&
     (!Number.isSafeInteger(value.contextLimit) || (value.contextLimit as number) <= 0)
+  )
+    return false;
+  if (
+    value.costLimitUsd !== undefined &&
+    (typeof value.costLimitUsd !== "number" || !Number.isFinite(value.costLimitUsd) || value.costLimitUsd <= 0)
   )
     return false;
   if (value.usage !== undefined) {

@@ -4,14 +4,14 @@ import {
   SettingsManager,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { defaultConfig, loadConfig } from "./config.ts";
+import { defaultConfig, effectiveConfig, loadConfig } from "./config.ts";
 import { registerLineEditTools } from "./line-edit.ts";
 
 /**
  * Numbered line edits pay for themselves only when output tokens are expensive relative to input.
  * Models with unknown or missing pricing are treated as expensive.
  */
-function modelUsesNumberedLineEdits(model: any): boolean {
+function modelUsesNumberedLineEdits(model: any, priceRatio: number): boolean {
   const rates = model?.cost ? [model.cost, ...(Array.isArray(model.cost.tiers) ? model.cost.tiers : [])] : [];
   if (!rates.length) return true;
   return rates.some(
@@ -20,7 +20,7 @@ function modelUsesNumberedLineEdits(model: any): boolean {
       rate.input <= 0 ||
       !Number.isFinite(rate?.output) ||
       rate.output <= 0 ||
-      rate.output / rate.input >= 3,
+      rate.output / rate.input >= priceRatio,
   );
 }
 
@@ -58,8 +58,14 @@ export function createLineEditMode(pi: ExtensionAPI) {
       return configError;
     },
     async update(model: any, cwd: string, sessionStart = false) {
-      const resolved = await config;
-      apply(resolved.lineEditEnabled && modelUsesNumberedLineEdits(model) ? "numbered" : "native", cwd, sessionStart);
+      const resolved = effectiveConfig(await config);
+      apply(
+        resolved.lineEditEnabled && modelUsesNumberedLineEdits(model, resolved.lineEditPriceRatio)
+          ? "numbered"
+          : "native",
+        cwd,
+        sessionStart,
+      );
     },
   };
 }

@@ -102,12 +102,23 @@ export class JobManager {
   readonly dir: string;
   readonly onChange: () => void;
   private readonly shutdownGraceMs: number;
+  private readonly defaultJobTimeoutMs: number;
+  private readonly completedJobRetention: number;
   private readonly shellPath?: string;
-  constructor(dir: string, onChange: () => void = () => {}, shutdownGraceMs = 5_000, shellPath?: string) {
+  constructor(
+    dir: string,
+    onChange: () => void = () => {},
+    shutdownGraceMs = 5_000,
+    shellPath?: string,
+    defaultJobTimeoutMs = 1_800_000,
+    completedJobRetention = 20,
+  ) {
     this.dir = dir;
     this.onChange = onChange;
     this.shutdownGraceMs = shutdownGraceMs;
     this.shellPath = shellPath;
+    this.defaultJobTimeoutMs = defaultJobTimeoutMs;
+    this.completedJobRetention = completedJobRetention;
   }
   async init() {
     await mkdir(this.dir, { recursive: true });
@@ -171,7 +182,7 @@ export class JobManager {
       this.onChange();
     });
   }
-  async start(command: string, cwd: string, label?: string, timeoutMs = 1800000, sessionId?: string) {
+  async start(command: string, cwd: string, label?: string, timeoutMs = this.defaultJobTimeoutMs, sessionId?: string) {
     if (!command.trim() || command.length > 8000) throw Error("Invalid command.");
     if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 7200000) throw Error("Invalid timeout.");
     if (this.running().length >= 4) throw Error("Maximum 4 simultaneous jobs.");
@@ -233,7 +244,7 @@ export class JobManager {
     const done = [...this.jobs.values()]
       .filter(j => !isActive(j))
       .sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
-    for (const j of done.slice(20)) this.jobs.delete(j.id);
+    for (const j of done.slice(this.completedJobRetention)) this.jobs.delete(j.id);
   }
   format(job: Job) {
     const elapsed = ((job.finishedAt || Date.now()) - job.startedAt) / 1000;

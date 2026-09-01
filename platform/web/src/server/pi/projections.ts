@@ -366,8 +366,9 @@ function settledToolStatus(
   raw: Record<string, unknown>,
 ): Exclude<ToolActivityReadModel["status"], "running"> {
   if (raw.isError === true || raw.failed === true || raw.error) return "failed";
-  if (name !== "verify") return "completed";
   const details = object(object(raw.result ?? raw).details);
+  if (name === "grunt" && details.failureCode === "stale_parent") return "attention";
+  if (name !== "verify") return "completed";
   const results = Array.isArray(details.results) ? details.results.map(object) : [];
   if (details.state === "stale") return results.some(result => result.code !== 0) ? "failed" : "attention";
   if (details.state === "error") return "failed";
@@ -468,10 +469,9 @@ function delegatedEndStatus(
   details: Record<string, unknown>,
 ): DelegatedAgentRunReadModel["status"] {
   const spawned = kind === "spawn_agent" || kind === "spawn_session";
+  if (raw.isError === true || raw.failed === true || raw.error) return "failed";
+  if (kind === "grunt" && details.failureCode === "stale_parent") return "attention";
   const failed =
-    raw.isError === true ||
-    raw.failed === true ||
-    Boolean(raw.error) ||
     Boolean(details.failureCode) ||
     (spawned && typeof details.status === "string" && !["completed", "running"].includes(details.status));
   if (failed) return "failed";
@@ -526,6 +526,8 @@ function updateDelegatedRun(
   const durationMs = boundedNumber(details.durationMs, 7 * 24 * 60 * 60 * 1_000);
   const usage = delegatedUsage(details.usage);
   const sessionUsage = delegatedUsage(details.sessionUsage);
+  const rawCostLimitUsd = boundedNumber(details.costLimitUsd);
+  const costLimitUsd = rawCostLimitUsd && rawCostLimitUsd > 0 ? rawCostLimitUsd : undefined;
   const contextTokens = details.contextTokens === null ? null : boundedNumber(details.contextTokens);
   const rawContextLimit = boundedNumber(details.contextLimit);
   const contextLimit = rawContextLimit && rawContextLimit > 0 ? rawContextLimit : undefined;
@@ -545,6 +547,7 @@ function updateDelegatedRun(
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(usage ? { usage } : {}),
     ...(sessionUsage ? { sessionUsage } : {}),
+    ...(costLimitUsd === undefined ? {} : { costLimitUsd }),
     ...(contextTokens === undefined ? {} : { contextTokens }),
     ...(contextLimit === undefined ? {} : { contextLimit }),
     activity,

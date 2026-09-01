@@ -13,11 +13,17 @@ import { pairedToolCallViews } from "../shared/tool-calls";
 
 type AgentRunStatus = DelegatedAgentRunReadModel["status"];
 
-const ORB_STATE: Record<AgentRunStatus, OverviewState> = { running: "running", completed: "done", failed: "failed" };
+const ORB_STATE: Record<AgentRunStatus, OverviewState> = {
+  running: "running",
+  completed: "done",
+  failed: "failed",
+  attention: "attention",
+};
 
 const FILTERS: { status: AgentRunStatus; label: string }[] = [
   { status: "running", label: "live" },
   { status: "completed", label: "done" },
+  { status: "attention", label: "attention" },
   { status: "failed", label: "failed" },
 ];
 
@@ -105,7 +111,7 @@ function AgentList({
       </div>
     );
 
-  const counts = { running: 0, completed: 0, failed: 0 };
+  const counts: Record<AgentRunStatus, number> = { running: 0, completed: 0, attention: 0, failed: 0 };
   let totalCost = 0;
   for (const run of runs) {
     counts[run.status] += 1;

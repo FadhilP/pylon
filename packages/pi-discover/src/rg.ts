@@ -119,6 +119,7 @@ export function registerRg(
   pi: ExtensionAPI,
   maxBytes = DEFAULT_MAX_BYTES,
   probe: ExecutableProbe = executableAvailable,
+  settings: { searchTimeoutMs: number } = { searchTimeoutMs: 30_000 },
 ) {
   pi.registerTool({
     name: "rg",
@@ -153,8 +154,8 @@ export function registerRg(
       };
       const base = ["--no-config", "--color=never", "--max-filesize", String(MAX_SEARCH_FILE_BYTES)];
       // ripgrep exits 1 with no output when absent from PATH too, so no-match needs confirming.
-      const run: SearchRunOptions = { probe, signal, label: "ripgrep", verifyNoMatch: true };
-      const fallback = () => grepFallback(pi, params, path, { probe, signal, verifyNoMatch: true }, maxBytes);
+      const run: SearchRunOptions = { probe, signal, label: "ripgrep", verifyNoMatch: true, timeoutMs: settings.searchTimeoutMs };
+      const fallback = () => grepFallback(pi, params, path, { probe, signal, verifyNoMatch: true, timeoutMs: settings.searchTimeoutMs }, maxBytes);
 
       if (params.mode === "files") {
         const outcome = await runSearch(pi, "rg", withQuery([...base, "--files-with-matches"]), run);

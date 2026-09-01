@@ -9,7 +9,7 @@ import { saveConfig } from "../src/config.ts";
 test("parallel Advisor calls serialize and report running duration", async () => {
   const previousDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-advisor-extension-"));
-  await saveConfig({ version: 1, advisorModel: "test/model" });
+  await saveConfig({ version: 1, advisorModel: "test/model", maxCalls: 2, maxOutputTokens: 4_000, timeoutMs: 5_000, maxCostUsd: 1, inputTokenBudget: 20_000 });
   let tool: any;
   let active = 0;
   let maxActive = 0;
@@ -100,7 +100,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.equal(maxActive, 1);
     assert.equal(calls, 2);
     assert.deepEqual(sessionIds, ["session:advisor", "session:advisor"]);
-    assert.deepEqual(maxTokens, [8_000, 8_000]);
+    assert.deepEqual(maxTokens, [4_000, 4_000]);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
     assert.equal(results[0].details.provider, "test");

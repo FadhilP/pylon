@@ -73,7 +73,7 @@ function spawnRuntimePolicy(pi: ExtensionAPI, cwd: string, sessionId: string): s
   return serialized !== undefined && Buffer.byteLength(serialized) <= 16 * 1024 ? serialized : invalid;
 }
 
-export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
+export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: { spawnTimeoutMs?: number } = {}) {
   return async function executeTurn(request: TurnRequest) {
     const { kind, id, path, cwd, prompt, policy, ctx, signal, onUpdate, beforeRun, background = false } = request;
     const runId = request.runId ?? randomUUID();
@@ -139,6 +139,7 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild) {
             cwd,
             prompt,
             signal,
+            ...(runtime.spawnTimeoutMs ? { timeoutMs: runtime.spawnTimeoutMs } : {}),
             env: {
               PI_SPAWN_CHILD: kind,
               PI_SPAWN_AUTONOMOUS: "1",

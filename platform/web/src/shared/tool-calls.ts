@@ -15,6 +15,33 @@ export type ToolCallView = {
   durationMs?: number;
 };
 
+export type ToolCallTrackTick = {
+  key: string;
+  status: ToolCallStatus;
+  height: number;
+};
+
+const TRACK_FLOOR = 3;
+const TRACK_FULL = 14;
+const TRACK_ERROR_FLOOR = 9;
+const TRACK_UNIT_MS = 200;
+
+/** Relative log-scaled activity ticks. A limit keeps only the newest calls. */
+export function toolCallTrackTicks(calls: ToolCallView[], limit?: number): ToolCallTrackTick[] {
+  const visible = limit === undefined ? calls : limit <= 0 ? [] : calls.slice(-Math.floor(limit));
+  const slowest = Math.max(TRACK_UNIT_MS, ...visible.map(call => Math.max(0, call.durationMs ?? 0)));
+  const ceiling = Math.log1p(slowest / TRACK_UNIT_MS);
+  return visible.map(call => {
+    const duration = Math.max(0, call.durationMs ?? 0);
+    const scaled = TRACK_FLOOR + (Math.log1p(duration / TRACK_UNIT_MS) / ceiling) * (TRACK_FULL - TRACK_FLOOR);
+    return {
+      key: call.key,
+      status: call.status,
+      height: call.status === "failed" ? Math.max(TRACK_ERROR_FLOOR, scaled) : scaled,
+    };
+  });
+}
+
 /** Transcript adapter: tool messages carry their activity inline. */
 export function messageToolCallViews(messages: MessageReadModel[], now = Date.now()): ToolCallView[] {
   return messages.map(message => ({

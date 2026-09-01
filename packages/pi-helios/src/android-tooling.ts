@@ -345,7 +345,7 @@ export class AndroidToolingManager {
     }
   }
 
-  async install(activeSessions = 0, signal?: AbortSignal): Promise<AndroidToolingStatus> {
+  async install(activeSessions = 0, signal?: AbortSignal, installTimeoutMs = INSTALL_TIMEOUT_MS): Promise<AndroidToolingStatus> {
     const release = await this.acquire();
     const { root, current, previous } = this.paths();
     const stage = join(root, `stage-${process.pid}-${randomUUID()}`);
@@ -390,7 +390,7 @@ export class AndroidToolingManager {
           "--globalconfig",
           npmGlobalConfig,
         ],
-        { cwd: stage, env, timeout: INSTALL_TIMEOUT_MS, signal },
+        { cwd: stage, env, timeout: installTimeoutMs, signal },
       );
       const invocation = await resolveManagedAppiumAt(stage, env);
       if (!invocation) throw new Error("Managed Android tooling verification failed");

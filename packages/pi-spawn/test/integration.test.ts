@@ -31,7 +31,7 @@ function persistParent(parent: SessionManager) {
 
 test("actual Pi RPC reopens and continues a materialized spawned session", { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-spawn-rpc-"));
-  const providerDir = await mkdtemp(join(import.meta.dirname, "provider-"));
+  const providerDir = await mkdtemp(join(tmpdir(), "pi-spawn-provider-"));
   const cwd = join(root, "repo");
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);

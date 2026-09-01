@@ -54,7 +54,7 @@ export interface AndroidShutdownResult {
 }
 
 interface SdkLike {
-  start(avd: string, headless: boolean, signal?: AbortSignal): Promise<OwnedEmulator>;
+  start(avd: string, headless: boolean, signal?: AbortSignal, timeoutMs?: number): Promise<OwnedEmulator>;
   verifyAttached(serial: string, signal?: AbortSignal): Promise<{ serial: string; avd: string }>;
 }
 interface ServerLike {
@@ -170,6 +170,7 @@ export class AndroidSessionManager {
     activity?: string,
     headless = false,
     signal?: AbortSignal,
+    startupTimeoutMs?: number,
   ): Promise<AndroidOperationResult> {
     packageName = validatePackage(packageName);
     activity = validateActivity(activity);
@@ -180,7 +181,7 @@ export class AndroidSessionManager {
         managed.releaseToolingLease = await this.dependencies.acquireToolingLease();
         await this.prepare(managed);
         this.assertStartupActive(managed);
-        managed.emulator = await managed.sdk!.start(avd, headless, signal);
+        managed.emulator = await managed.sdk!.start(avd, headless, signal, startupTimeoutMs);
         managed.record.serial = managed.emulator.serial;
         managed.record.avd = managed.emulator.avd;
         this.assertStartupActive(managed);

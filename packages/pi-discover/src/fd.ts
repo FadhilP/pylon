@@ -9,6 +9,7 @@ export function registerFd(
   maxBytes = DEFAULT_MAX_BYTES,
   probe: ExecutableProbe = executableAvailable,
   platform: NodeJS.Platform = process.platform,
+  settings: { searchTimeoutMs: number } = { searchTimeoutMs: 30_000 },
 ) {
   pi.registerTool({
     name: "fd",
@@ -33,7 +34,7 @@ export function registerFd(
       args.push("--", params.pattern || ".", path);
       let lastError = "";
       // fd has no "no matches" exit code: any non-zero status is a real failure.
-      const run = { probe, signal, noMatchCode: null };
+      const run = { probe, signal, noMatchCode: null, timeoutMs: settings.searchTimeoutMs };
       const unavailable = () => ({
         content: [
           {

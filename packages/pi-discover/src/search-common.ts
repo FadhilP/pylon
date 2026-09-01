@@ -65,6 +65,8 @@ export type SearchOutcome =
 export type SearchRunOptions = {
   probe: ExecutableProbe;
   signal?: AbortSignal;
+  /** Command timeout; defaults to the package's standard search timeout. */
+  timeoutMs?: number;
   /** Name used in thrown errors; defaults to the command. */
   label?: string;
   /** Exit code meaning "ran fine, matched nothing"; null when the command has no such code. */
@@ -83,10 +85,10 @@ export async function runSearch(
   args: string[],
   options: SearchRunOptions,
 ): Promise<SearchOutcome> {
-  const { probe, signal, label = command, noMatchCode = 1, verifyNoMatch = false } = options;
+  const { probe, signal, label = command, noMatchCode = 1, verifyNoMatch = false, timeoutMs = SEARCH_TIMEOUT_MS } = options;
   let result: SearchExecResult;
   try {
-    result = await pi.exec(command, args, { signal, timeout: SEARCH_TIMEOUT_MS });
+    result = await pi.exec(command, args, { signal, timeout: timeoutMs });
   } catch (error) {
     if (await probe(command, signal)) throw error;
     return { status: "missing", error: boundedError(error) };

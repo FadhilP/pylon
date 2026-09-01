@@ -7,6 +7,7 @@ import {
   aggregateToolCallTiming,
   toolCallGroupStatus,
   toolCallNames,
+  toolCallTrackTicks,
   type ToolCallStatus,
   type ToolCallView,
 } from "../shared/tool-calls";
@@ -70,6 +71,41 @@ export function ToolCallList({ calls }: { calls: ToolCallView[] }) {
   );
 }
 
+export function ToolCallTrack({
+  calls,
+  slots,
+  variant = "group",
+}: {
+  calls: ToolCallView[];
+  slots?: number;
+  variant?: "dock" | "group";
+}) {
+  const ticks = toolCallTrackTicks(calls, slots);
+  const emptySlots = slots === undefined ? 0 : Math.max(0, slots - ticks.length);
+  return (
+    <span className={variant === "dock" ? "agent-dock-track" : "tool-call-track"} aria-hidden="true">
+      {ticks.map(tick => (
+        <i
+          key={tick.key}
+          className={
+            tick.status === "running"
+              ? "is-live"
+              : tick.status === "failed"
+                ? "is-error"
+                : variant === "dock"
+                  ? "is-call"
+                  : undefined
+          }
+          style={{ height: `${tick.height}px` }}
+        />
+      ))}
+      {Array.from({ length: emptySlots }, (_, index) => (
+        <i key={`empty-${index}`} />
+      ))}
+    </span>
+  );
+}
+
 export function ToolCallGroup({
   calls,
   running = false,
@@ -97,6 +133,7 @@ export function ToolCallGroup({
             </strong>
             <small>{toolCallNames(calls).join(" · ")}</small>
           </span>
+          <ToolCallTrack calls={calls} />
           {timing && (
             <time
               className={`tool-call-group-time is-${timing.status}`}

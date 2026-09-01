@@ -95,7 +95,7 @@ test("package catalog confines and delegates package-owned settings", async () =
     await writeFile(
       join(packageRoot, "settings.mjs"),
       `
-      let current = { kind: "helios", headed: true };
+      let current = { kind: "generic", packageId: "pi-settings", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] };
       const expectedAgentDir = ${JSON.stringify(agentDir)};
       export async function readSettings(context) {
         if (context.agentDir !== expectedAgentDir) throw new Error("wrong agent directory");
@@ -118,10 +118,52 @@ test("package catalog confines and delegates package-owned settings", async () =
     const catalog = new PackageCatalog(root, agentDir);
     const state = await catalog.scan();
     assert.ok(state.packages[0]?.settingsPath?.endsWith("settings.mjs"));
-    assert.deepEqual(await catalog.readSettings("pi-settings", state), { kind: "helios", headed: true });
-    const previous = await catalog.updateSettings("pi-settings", { kind: "helios", headed: false });
-    assert.deepEqual(previous, { kind: "helios", headed: true });
-    assert.deepEqual(await catalog.readSettings("pi-settings"), { kind: "helios", headed: false });
+    assert.deepEqual(await catalog.readSettings("pi-settings", state), { kind: "generic", packageId: "pi-settings", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] });
+    const next = { kind: "generic" as const, packageId: "pi-settings", fields: [{ version: 1 as const, key: "enabled", label: "Enabled", type: "boolean" as const, defaultValue: true, value: false, apply: "immediate" as const }] };
+    const previous = await catalog.updateSettings("pi-settings", next);
+    assert.deepEqual(previous, { kind: "generic", packageId: "pi-settings", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] });
+    assert.deepEqual(await catalog.readSettings("pi-settings"), next);
+
+    await assert.rejects(
+      catalog.updateSettings("pi-settings", { kind: "generic", packageId: "pi-other", fields: [] }),
+      /packageId does not match/,
+    );
+
+    const invalidRoot = join(root, "packages", "pi-invalid-generic");
+    await mkdir(invalidRoot, { recursive: true });
+    await writeFile(join(invalidRoot, "extension.ts"), "export default () => {};\n");
+    await writeFile(
+      join(invalidRoot, "settings.mjs"),
+      `export async function readSettings() { return { kind: "generic", packageId: "pi-invalid-generic", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate", callback: "not data" }] }; }
+       export async function updateSettings() {}`,
+    );
+    await writeFile(
+      join(invalidRoot, "package.json"),
+      JSON.stringify({
+        name: "pi-invalid-generic",
+        pi: { extensions: ["./extension.ts"] },
+        pylon: { settings: "./settings.mjs" },
+      }),
+    );
+    await assert.rejects(catalog.readSettings("pi-invalid-generic"), /returned invalid settings/);
+
+    const mismatchRoot = join(root, "packages", "pi-mismatch-generic");
+    await mkdir(mismatchRoot, { recursive: true });
+    await writeFile(join(mismatchRoot, "extension.ts"), "export default () => {};\n");
+    await writeFile(
+      join(mismatchRoot, "settings.mjs"),
+      `export async function readSettings() { return { kind: "generic", packageId: "pi-other", fields: [{ version: 1, key: "enabled", label: "Enabled", type: "boolean", defaultValue: true, value: true, apply: "immediate" }] }; }
+       export async function updateSettings() {}`,
+    );
+    await writeFile(
+      join(mismatchRoot, "package.json"),
+      JSON.stringify({
+        name: "pi-mismatch-generic",
+        pi: { extensions: ["./extension.ts"] },
+        pylon: { settings: "./settings.mjs" },
+      }),
+    );
+    await assert.rejects(catalog.readSettings("pi-mismatch-generic"), /returned invalid settings/);
 
     await writeFile(
       join(packageRoot, "package.json"),
@@ -132,7 +174,7 @@ test("package catalog confines and delegates package-owned settings", async () =
       }),
     );
     await writeFile(join(root, "outside.mjs"), "export async function readSettings() {}\n");
-    assert.equal((await catalog.scan()).packages[0]?.settingsPath, undefined);
+    assert.equal((await catalog.scan()).packages.find(item => item.id === "pi-settings")?.settingsPath, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,5 +1,5 @@
 import { IconGitBranch, IconMoon, IconSun, IconX } from "@tabler/icons-react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { RuntimeStoreSnapshot } from "./runtime/event-store";
 import {
   AMBIENT,
@@ -178,6 +178,7 @@ export function ReferenceRail({
   context,
   runtime,
   disabled,
+  style,
   registerButton,
   onReference,
 }: {
@@ -185,11 +186,12 @@ export function ReferenceRail({
   context: NavContext;
   runtime: Runtime;
   disabled: boolean;
+  style?: CSSProperties;
   registerButton: (id: ReferenceId, node: HTMLButtonElement | null) => void;
   onReference: (reference: ReferenceId) => void;
 }) {
   return (
-    <nav className="reference-rail" aria-label="Session reference">
+    <nav className="reference-rail" aria-label="Session reference" style={style}>
       {referenceRailItems(context).map((item, index) =>
         item === null ? (
           <hr key={`divider-${index}`} />

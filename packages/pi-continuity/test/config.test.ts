@@ -95,6 +95,8 @@ test("web settings persist the global compaction reserve without changing unrela
     memoryEnabled: true,
     reserveTokens: 16_384,
     keepRecentTokens: DEFAULT_KEEP_RECENT_TOKENS,
+    compactionReviewTimeoutMs: 60_000,
+    compactionReviewerMaxOutputTokens: 1_200,
   });
   await updateSettings(
     {
@@ -102,6 +104,8 @@ test("web settings persist the global compaction reserve without changing unrela
       memoryEnabled: false,
       reserveTokens: 24_000,
       keepRecentTokens: 32_000,
+      compactionReviewTimeoutMs: 75_000,
+      compactionReviewerMaxOutputTokens: 1_500,
       planner: { model: "provider/planner" },
       compactionReviewer: { model: "provider/compaction", thinking: "low" },
     },
@@ -112,6 +116,8 @@ test("web settings persist the global compaction reserve without changing unrela
     memoryEnabled: false,
     reserveTokens: 24_000,
     keepRecentTokens: 32_000,
+    compactionReviewTimeoutMs: 75_000,
+    compactionReviewerMaxOutputTokens: 1_500,
     planner: { model: "provider/planner" },
     compactionReviewer: { model: "provider/compaction", thinking: "low" },
   });
@@ -121,21 +127,21 @@ test("web settings persist the global compaction reserve without changing unrela
   });
   await assert.rejects(
     updateSettings(
-      { kind: "continuity", memoryEnabled: "no", reserveTokens: 24_000, keepRecentTokens: 25_000 },
+      { kind: "continuity", memoryEnabled: "no", reserveTokens: 24_000, keepRecentTokens: 25_000, compactionReviewTimeoutMs: 60_000, compactionReviewerMaxOutputTokens: 1_200 },
       { agentDir },
     ),
     /invalid Continuity settings/,
   );
   await assert.rejects(
     updateSettings(
-      { kind: "continuity", memoryEnabled: true, reserveTokens: 999, keepRecentTokens: 25_000 },
+      { kind: "continuity", memoryEnabled: true, reserveTokens: 999, keepRecentTokens: 25_000, compactionReviewTimeoutMs: 60_000, compactionReviewerMaxOutputTokens: 1_200 },
       { agentDir },
     ),
     /invalid Continuity settings/,
   );
   await assert.rejects(
     updateSettings(
-      { kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 999 },
+      { kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 999, compactionReviewTimeoutMs: 60_000, compactionReviewerMaxOutputTokens: 1_200 },
       { agentDir },
     ),
     /invalid Continuity settings/,
@@ -148,7 +154,7 @@ test("failed Continuity persistence restores an absent global reserve exactly", 
   await writeFile(join(agentDir, "pi-continuity"), "blocks the config directory");
   await assert.rejects(
     updateSettings(
-      { kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 25_000 },
+      { kind: "continuity", memoryEnabled: true, reserveTokens: 24_000, keepRecentTokens: 25_000, compactionReviewTimeoutMs: 60_000, compactionReviewerMaxOutputTokens: 1_200 },
       { agentDir },
     ),
   );

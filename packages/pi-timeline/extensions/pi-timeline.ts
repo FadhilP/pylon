@@ -14,7 +14,7 @@ import {
   SESSION_TITLE_PROMPT,
   titleExcerpt,
 } from "../src/prompts.ts";
-import { git } from "../src/git.ts";
+import { git, setGitTimeoutMs } from "../src/git.ts";
 import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry } from "../src/run.ts";
 import {
@@ -23,7 +23,14 @@ import {
   type TimelineCheckpointFailureState,
 } from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
-import { defaultConfig, loadConfig, parseModelRef, type TimelineConfig } from "../src/config.ts";
+import {
+  defaultConfig,
+  effectiveTimelineSettings,
+  loadConfig,
+  parseModelRef,
+  type TimelineConfig,
+  type TimelineRuntimeSettings,
+} from "../src/config.ts";
 import {
   CHECKPOINT_VERSIONS,
   customEntryData,
@@ -101,6 +108,7 @@ export default function timelineExtension(
     currentGit: any,
     lastCtx: any,
     timelineConfig: TimelineConfig = defaultConfig(),
+    timelineRuntimeSettings: TimelineRuntimeSettings = effectiveTimelineSettings(defaultConfig()),
     enabled = true;
   pi.events.emit?.("pylon:worktree-observer-request", {
     version: 1,
@@ -499,7 +507,14 @@ export default function timelineExtension(
       const response = await completeTitle(
         model,
         { systemPrompt: SESSION_TITLE_PROMPT, messages: [message] },
-        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: 32, timeoutMs: 30_000, sessionId },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          env: auth.env,
+          maxTokens: timelineRuntimeSettings.titleMaxTokens,
+          timeoutMs: timelineRuntimeSettings.titleTimeoutMs,
+          sessionId,
+        },
       );
       const failed = response.stopReason === "error" || response.stopReason === "aborted";
       emitModelCall(call, failed ? "failed" : "completed", response.usage ?? {});
@@ -553,7 +568,7 @@ export default function timelineExtension(
     checkpointNaming.inFlight.add(recordKey);
     const request = titleExcerpt(user.message);
     const paths = changes.files
-      .slice(0, 20)
+      .slice(0, timelineRuntimeSettings.titleChangedFiles)
       .map(file => `${file.status}: ${file.path}`)
       .join("\n");
     const result = [finalAssistant ? titleExcerpt(finalAssistant.message) : "", paths ? `Changed files:\n${paths}` : ""]
@@ -580,7 +595,14 @@ export default function timelineExtension(
       const response = await completeTitle(
         model,
         { systemPrompt: CHECKPOINT_TITLE_PROMPT, messages: [message] },
-        { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: 32, timeoutMs: 30_000, sessionId },
+        {
+          apiKey: auth.apiKey,
+          headers: auth.headers,
+          env: auth.env,
+          maxTokens: timelineRuntimeSettings.titleMaxTokens,
+          timeoutMs: timelineRuntimeSettings.titleTimeoutMs,
+          sessionId,
+        },
       );
       const failed = response.stopReason === "error" || response.stopReason === "aborted";
       emitModelCall(call, failed ? "failed" : "completed", response.usage ?? {});
@@ -930,6 +952,8 @@ export default function timelineExtension(
     session.shuttingDown = false;
     mutations.checkpoint = undefined;
     timelineConfig = await loadConfig(options.configPath);
+    timelineRuntimeSettings = effectiveTimelineSettings(timelineConfig);
+    setGitTimeoutMs(timelineRuntimeSettings.gitTimeoutMs);
     const nextSessionId = ctx.sessionManager.getSessionId();
     const reuseSessionLease = !!session.releaseLease && session.id === nextSessionId;
     if (session.releaseLease && !reuseSessionLease) await session.releaseLease(session.ephemeral);

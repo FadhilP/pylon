@@ -21,6 +21,7 @@
     "./delegate-retry": "./src/delegate-retry.ts",
     "./executable": "./src/executable.ts",
     "./json-config": "./src/json-config.ts",
+    "./package-settings": "./src/package-settings.ts",
     "./redact": "./src/redact.ts",
     "./token-meter": "./src/token-meter.ts",
     "./session-inventory": "./src/session-inventory.ts",

@@ -3,25 +3,23 @@ import { sessionEntryToContextMessages, type ExtensionAPI } from "@earendil-work
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
-import { ADVISOR_MAX_COST_USD, advisorBudget } from "../src/budget.ts";
+import { advisorBudget } from "../src/budget.ts";
 import { ADVISOR_PROMPT } from "../src/prompts.ts";
 import {
+  advisorInputTokenBudget,
+  advisorMaxCalls,
+  advisorMaxCostUsd,
+  advisorMaxOutputTokens,
+  advisorTimeoutMs,
   configPath,
   loadConfig,
   parseModelRef,
-  resetConfig,
   saveConfig,
   thinkingLevels,
   type AdvisorConfig,
   type ThinkingLevel,
 } from "../src/config.ts";
-import {
-  ADVISOR_TIMEOUT_MS,
-  emptyUsage,
-  runConsultation,
-  type AdvisorUsage,
-  type FailureCode,
-} from "../src/consult.ts";
+import { emptyUsage, runConsultation, type AdvisorUsage, type FailureCode } from "../src/consult.ts";
 import {
   advisorMaxTokens,
   buildSnapshot,
@@ -40,10 +38,11 @@ type Details = {
   model?: string;
   durationMs: number;
   usage: AdvisorUsage;
+  costLimitUsd: number;
   thinking?: string;
   contextTokens?: number | null;
   contextLimit?: number;
-  callNumber: 1 | 2 | 3;
+  callNumber: number;
   snapshotEstimatedTokens: number;
   redactionCount: number;
   truncated: boolean;
@@ -90,6 +89,7 @@ type CallLifecycle = { signal: AbortSignal; isTimedOut: () => boolean };
 /** Owns the abort chain, the hard timeout, and the progress heartbeat for one consultation. */
 async function withCallLifecycle<T>(
   outerSignal: AbortSignal | undefined,
+  timeoutMs: number,
   onHeartbeat: () => void,
   run: (lifecycle: CallLifecycle) => Promise<T>,
 ): Promise<T> {
@@ -101,7 +101,7 @@ async function withCallLifecycle<T>(
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, ADVISOR_TIMEOUT_MS);
+  }, timeoutMs);
   const heartbeat = setInterval(onHeartbeat, HEARTBEAT_MS);
   heartbeat.unref();
   try {
@@ -202,6 +202,8 @@ export default function advisorExtension(
     auth: any;
     snapshot: Snapshot;
     budget: { maxTokens: number; estimatedInputCostUsd: number };
+    maxOutputTokens: number;
+    timeoutMs: number;
     thinking?: string;
     userMessage: Message;
     cacheRetention: "short" | "long";
@@ -211,13 +213,20 @@ export default function advisorExtension(
   /** Everything that must hold before a provider call: quota, model, credentials, snapshot, budget. */
   const prepareCall = async (id: string, params: any, ctx: any): Promise<PrepareResult> => {
     const cacheRetention: "short" | "long" = process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
-    if (calls >= ADVISOR_MAX_CALLS)
+    const config = await loadConfig();
+    const maxCalls = advisorMaxCalls(config.maxCalls);
+    const maxCostUsd = advisorMaxCostUsd(config.maxCostUsd);
+    const maxOutputTokens = advisorMaxOutputTokens(config.maxOutputTokens);
+    const timeoutMs = advisorTimeoutMs(config.timeoutMs);
+    const inputTokenBudget = advisorInputTokenBudget(config.inputTokenBudget);
+    if (calls >= maxCalls)
       return {
         ok: false,
         result: textResult("Advisor call limit reached for this request.", {
           durationMs: 0,
           usage: emptyUsage(),
-          callNumber: ADVISOR_MAX_CALLS,
+          costLimitUsd: maxCostUsd,
+          callNumber: maxCalls,
           snapshotEstimatedTokens: 0,
           redactionCount: 0,
           truncated: false,
@@ -229,7 +238,6 @@ export default function advisorExtension(
     const started = Date.now();
     const agentName = delegatedName(pi, id);
     const named = (value: string) => `[${agentName} · Advisor] ${value}`;
-    const config = await loadConfig();
     const model = configuredModel(ctx, config);
     const thinking = config.thinking ?? (config.useMainModel ? pi.getThinkingLevel() : undefined);
     const base: Details = {
@@ -241,7 +249,8 @@ export default function advisorExtension(
       thinking,
       durationMs: 0,
       usage: emptyUsage(),
-      callNumber: Math.min(calls + 1, ADVISOR_MAX_CALLS) as Details["callNumber"],
+      costLimitUsd: maxCostUsd,
+      callNumber: Math.min(calls + 1, maxCalls),
       snapshotEstimatedTokens: 0,
       redactionCount: 0,
       truncated: false,
@@ -271,7 +280,7 @@ export default function advisorExtension(
       ? `Continue as the same advisor. Prior guidance:\n\n${previousAdvice}\n\nCurrent executor snapshot:\n\n`
       : "";
     const reservedInputTokens = Math.ceil((ADVISOR_PROMPT.length + continuationPrefix.length) / 4) + 256;
-    const snapshot = buildSnapshot(messages, model.contextWindow, reservedInputTokens);
+    const snapshot = buildSnapshot(messages, model.contextWindow, reservedInputTokens, inputTokenBudget, maxOutputTokens);
     if (snapshot.requiredContextOmitted)
       return fail(
         named("Advisor failed nonfatally: required context exceeds the input budget."),
@@ -282,7 +291,8 @@ export default function advisorExtension(
     const budget = advisorBudget(
       model,
       snapshot.estimatedTokens + reservedInputTokens,
-      advisorMaxTokens(model.contextWindow),
+      advisorMaxTokens(model.contextWindow, maxOutputTokens),
+      maxCostUsd,
     );
     if ("error" in budget) {
       const reason =
@@ -292,7 +302,7 @@ export default function advisorExtension(
             ? "estimated input cost exceeds the limit"
             : "estimated output budget is exhausted";
       return fail(
-        named(`Advisor failed nonfatally: ${reason} ($${ADVISOR_MAX_COST_USD.toFixed(2)} limit).`),
+        named(`Advisor failed nonfatally: ${reason} ($${maxCostUsd.toFixed(2)} limit).`),
         budget.error === "pricing_unavailable" ? "pricing_unavailable" : "budget_exceeded",
         snapshotDetails(snapshot),
       );
@@ -305,7 +315,7 @@ export default function advisorExtension(
     };
     return {
       ok: true,
-      call: { started, named, base, model, auth, snapshot, budget, thinking, userMessage, cacheRetention },
+      call: { started, named, base, model, auth, snapshot, budget, maxOutputTokens, timeoutMs, thinking, userMessage, cacheRetention },
     };
   };
 
@@ -355,7 +365,7 @@ export default function advisorExtension(
         if (signal?.aborted) throw new DOMException("Advisor call was aborted.", "AbortError");
         const prepared = await prepareCall(id, params, ctx);
         if (!prepared.ok) return prepared.result;
-        const { started, named, base, model, auth, snapshot, budget, thinking, userMessage, cacheRetention } =
+        const { started, named, base, model, auth, snapshot, budget, timeoutMs, maxOutputTokens, thinking, userMessage, cacheRetention } =
           prepared.call;
         let contextTokens: number | null = null;
         const contextLimit = model.contextWindow;
@@ -372,6 +382,7 @@ export default function advisorExtension(
         try {
           const result = await withCallLifecycle(
             signal,
+            timeoutMs,
             () => running(`${((Date.now() - started) / 1000).toFixed(0)}s`, { durationMs: Date.now() - started }),
             lifecycle =>
               runConsultation({
@@ -384,7 +395,7 @@ export default function advisorExtension(
                   headers: auth.headers,
                   env: auth.env,
                   signal: lifecycle.signal,
-                  timeoutMs: ADVISOR_TIMEOUT_MS,
+                  timeoutMs,
                   maxTokens: budget.maxTokens,
                   cacheRetention,
                   sessionId: `${ctx.sessionManager.getSessionId()}:advisor`,
@@ -423,7 +434,7 @@ export default function advisorExtension(
               failureMessage: result.message,
             });
 
-          const advice = capAdvice(result.raw);
+          const advice = capAdvice(result.raw, maxOutputTokens);
           calls++;
           previousAdvice = advice.text;
           return textResult(`${named("Advice:")}\n\n${advice.text}`, {
@@ -473,7 +484,8 @@ export default function advisorExtension(
     ));
 
   const disableAdvisor = async (ctx: any) => {
-    await resetConfig();
+    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    await saveConfig({ ...preserved, version: 1 });
     await refreshTool(ctx);
     ctx.ui.notify("Advisor disabled.", "info");
   };
@@ -484,7 +496,8 @@ export default function advisorExtension(
       return;
     }
     if (!(await confirmContextSharing(ctx, model))) return;
-    await saveConfig({ version: 1, useMainModel: true });
+    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    await saveConfig({ ...preserved, version: 1, useMainModel: true });
     await refreshTool(ctx);
     ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
   };
@@ -492,7 +505,7 @@ export default function advisorExtension(
     const config = await loadConfig();
     const model = configuredModel(ctx, config);
     ctx.ui.notify(
-      `Selected: ${config.useMainModel ? "current main model" : (config.advisorModel ?? "none")}\nThinking: ${config.useMainModel ? "current main level" : (config.thinking ?? "provider default")}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${ADVISOR_MAX_CALLS} calls per original user prompt`,
+      `Selected: ${config.useMainModel ? "current main model" : (config.advisorModel ?? "none")}\nThinking: ${config.useMainModel ? "current main level" : (config.thinking ?? "provider default")}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${advisorMaxCalls(config.maxCalls)} calls per original user prompt`,
       "info",
     );
   };
@@ -525,7 +538,8 @@ export default function advisorExtension(
       if (!thinking) return;
     }
     if (!(await confirmContextSharing(ctx, model))) return;
-    await saveConfig({ version: 1, advisorModel: modelName(model), ...(thinking ? { thinking } : {}) });
+    const { advisorModel: _advisorModel, useMainModel: _useMainModel, thinking: _thinking, ...preserved } = await loadConfig();
+    await saveConfig({ ...preserved, version: 1, advisorModel: modelName(model), ...(thinking ? { thinking } : {}) });
     await refreshTool(ctx);
     ctx.ui.notify(`Advisor model: ${modelName(model)}\nThinking: ${thinking ?? "provider default"}`, "info");
   };

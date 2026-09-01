@@ -1610,7 +1610,7 @@ test(
       const settingsCommand = {
         type: "updatePackageSettings",
         packageId: "pi-advisor",
-        settings: { kind: "advisor", mode: "session", thinking: "high" },
+        settings: { kind: "advisor", mode: "session", thinking: "high", maxCalls: 3, timeoutMs: 900_000, maxCostUsd: 0.5, maxOutputTokens: 8_192, inputTokenBudget: 32_768 },
         commandId: "settings-once",
         expectedGeneration: 1,
       };

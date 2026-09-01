@@ -122,11 +122,29 @@ test("review completion reports bounded telemetry and propagates parent abort", 
     profile: { model: "test/reviewer", thinking: "low" },
     packet: packet(),
     sessionId: "session",
+    timeoutMs: 60_000,
+    maxOutputTokens: 1_200,
     completeReview: (async () => response(output([candidate()]))) as any,
   });
   assert.equal(reviewed.supplements.length, 1);
   assert.equal(reviewed.telemetry.candidateCount, 1);
   assert.equal(reviewed.telemetry.acceptedCount, 1);
+  let options: any;
+  await callCompactionReviewer({
+    model: { provider: "test", id: "reviewer" },
+    auth: { apiKey: "safe" },
+    profile: { model: "test/reviewer" },
+    packet: packet(),
+    sessionId: "session",
+    timeoutMs: 1_234,
+    maxOutputTokens: 567,
+    completeReview: (async (_model: any, _context: any, value: any) => {
+      options = value;
+      return response(output([candidate()]));
+    }) as any,
+  });
+  assert.equal(options.timeoutMs, 1_234);
+  assert.equal(options.maxTokens, 567);
 
   const abort = new AbortController();
   abort.abort();
@@ -139,6 +157,8 @@ test("review completion reports bounded telemetry and propagates parent abort", 
       packet: packet(),
       sessionId: "session",
       signal: abort.signal,
+      timeoutMs: 60_000,
+      maxOutputTokens: 1_200,
       completeReview: (async (_model: any, _context: any, options: any) => {
         receivedAbort = options.signal.aborted;
         return response("", "aborted");

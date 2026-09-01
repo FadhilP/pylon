@@ -4,6 +4,7 @@ import { BlockList, isIP } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { configPath, loadConfig, webSearchResults } from "./config.ts";
 
 const EXA_SEARCH_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa";
 const EXA_SEARCH_ORIGIN = new URL(EXA_SEARCH_URL).origin;
@@ -496,8 +497,7 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
           Type.Integer({
             minimum: 1,
             maximum: MAX_RESULTS,
-            default: 5,
-            description: "Maximum URL candidates to return",
+            description: "Maximum URL candidates to return; defaults to the Scout setting",
           }),
         ),
         provider: Type.Optional(
@@ -512,7 +512,14 @@ export default function scoutWebSearchExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     async execute(_id, params, signal, _onUpdate, ctx) {
       try {
-        const searched = await searchWeb(params.query, params.maxResults, params.provider, signal, ctx);
+        const config = await loadConfig(configPath());
+        const searched = await searchWeb(
+          params.query,
+          params.maxResults ?? webSearchResults(config.webSearchResults),
+          params.provider,
+          signal,
+          ctx,
+        );
         const formatted = formatResults(searched.provider, searched.results);
         return {
           content: [{ type: "text" as const, text: formatted.text }],

@@ -8,6 +8,7 @@ import {
   pairedToolCallViews,
   toolCallGroupStatus,
   toolCallNames,
+  toolCallTrackTicks,
   type ToolCallView,
 } from "../src/shared/tool-calls.ts";
 
@@ -117,4 +118,29 @@ test("pairedToolCallViews reports a failed call over a completed one", () => {
   );
   assert.equal(view?.status, "failed");
   assert.equal(view?.key, "c1");
+});
+
+
+test("toolCallTrackTicks keeps the newest window and scales failures visibly", () => {
+  const calls = Array.from({ length: 35 }, (_, index) =>
+    call({ key: String(index), durationMs: index === 34 ? 10_000 : 100 + index * 10 }),
+  );
+  calls[4] = call({ key: "4", status: "failed", durationMs: 10 });
+
+  const ticks = toolCallTrackTicks(calls, 32);
+
+  assert.equal(ticks.length, 32);
+  assert.equal(ticks[0]?.key, "3");
+  assert.equal(ticks.at(-1)?.key, "34");
+  assert.equal(ticks.at(-1)?.height, 14);
+  assert.ok((ticks.find(tick => tick.key === "4")?.height ?? 0) >= 9);
+  assert.ok((ticks.find(tick => tick.key === "3")?.height ?? 0) < 14);
+});
+
+test("toolCallTrackTicks gives unknown and instant durations the visible floor", () => {
+  const ticks = toolCallTrackTicks([call({ key: "unknown" }), call({ key: "instant", durationMs: 0 })]);
+  assert.deepEqual(
+    ticks.map(tick => tick.height),
+    [3, 3],
+  );
 });

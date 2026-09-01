@@ -114,6 +114,32 @@ test("settled unnamed session launches a background semantic title call", async 
   assert.equal(handlers.has("message_end"), false);
 });
 
+test("session-start title settings are used by title calls", async () => {
+  const path = join(isolatedAgentDir, `title-settings-${randomUUID()}.json`);
+  await writeFile(
+    path,
+    JSON.stringify({
+      version: 1,
+      editRollbackDefault: false,
+      titleTimeoutMs: 12_345,
+      titleMaxTokens: 77,
+      titleChangedFiles: 40,
+      gitTimeoutMs: 200_000,
+    }),
+  );
+  const entries = [{ type: "message", id: "user-1", message: { role: "user", content: "Name this session" } }];
+  let options: any;
+  const { handlers, ctx, names } = namingHarness(entries, async (_model: any, _prompt: any, value: any) => {
+    options = value;
+    return { content: [{ type: "text", text: "Configured Session Title" }] };
+  }, path);
+  await handlers.get("session_start")![0]({}, ctx);
+  await settleTurn(handlers, ctx);
+  assert.deepEqual(names, ["Configured Session Title"]);
+  assert.equal(options.timeoutMs, 12_345);
+  assert.equal(options.maxTokens, 77);
+});
+
 test("explicit checkpoint title model also names the session", async () => {
   const path = join(isolatedAgentDir, `title-model-${randomUUID()}.json`);
   await writeFile(

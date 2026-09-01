@@ -42,7 +42,7 @@ import type { ComposerDraft } from "../shared/composer-drafts";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
 import { AttachmentPanel } from "./attachment-panel";
-import { useAgentColors } from "./agent-color";
+import { agentColor, useAgentColors } from "./agent-color";
 import { copyText } from "./clipboard";
 import { ArchiveDialog } from "./archive-dialog";
 import { ChangelogDialog } from "./changelog-dialog";
@@ -1204,12 +1204,14 @@ export function App() {
         onError={reportError}
       />
     ) : null;
+  const selectedAgent = live.runtime?.conversation.delegatedRuns.find(run => run.id === selectedAgentId);
   const referenceRail = (
     <ReferenceRail
       reference={reference}
       context={navContext}
       runtime={pendingSession ? undefined : live.runtime}
       disabled={Boolean(pendingSession)}
+      style={selectedAgent ? agentColor(selectedAgent, agentColors) : undefined}
       registerButton={(id, node) => {
         if (node) panelToggles.current.set(id, node);
         else panelToggles.current.delete(id);

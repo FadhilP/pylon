@@ -375,7 +375,7 @@ export class AndroidSdk {
     throw new Error("No Android emulator console port is available");
   }
 
-  async start(avd: string, headless: boolean, signal?: AbortSignal): Promise<OwnedEmulator> {
+  async start(avd: string, headless: boolean, signal?: AbortSignal, timeoutMs = START_TIMEOUT_MS): Promise<OwnedEmulator> {
     const avds = await this.listAvds(signal);
     if (!avds.includes(avd)) throw new Error(`Unknown Android AVD: ${avd}`);
     const occupied = await this.occupiedAvds(signal);
@@ -401,7 +401,7 @@ export class AndroidSdk {
     });
     const owned = new OwnedEmulator(this, child, serial, avd);
     try {
-      await this.waitForBoot(owned, signal);
+      await this.waitForBoot(owned, signal, timeoutMs);
       return owned;
     } catch (error) {
       await owned.cleanupUncertainStart();
@@ -430,8 +430,8 @@ export class AndroidSdk {
     throw new Error(`Android emulator ${serial} remained connected after cleanup`);
   }
 
-  private async waitForBoot(owned: OwnedEmulator, signal?: AbortSignal): Promise<void> {
-    const deadline = Date.now() + START_TIMEOUT_MS;
+  private async waitForBoot(owned: OwnedEmulator, signal?: AbortSignal, timeoutMs = START_TIMEOUT_MS): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new Error("Android emulator startup cancelled");
       if (owned.startFailure()) throw new Error(`Android emulator could not start: ${owned.startFailure()}`);
@@ -448,7 +448,7 @@ export class AndroidSdk {
         throw new Error("Android emulator startup cancelled");
       });
     }
-    throw new Error(`Android emulator ${owned.avd} did not boot within ${START_TIMEOUT_MS / 1000} seconds`);
+    throw new Error(`Android emulator ${owned.avd} did not boot within ${timeoutMs / 1000} seconds`);
   }
 }
 

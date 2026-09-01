@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import extension from "../extensions/pi-papercut.ts";
+import { configPath, saveConfig } from "../src/config.ts";
 
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const root = await mkdtemp(join(tmpdir(), "papercut-extension-"));
@@ -51,6 +52,22 @@ function context(cwd: string, notifications: Array<{ text: string; level: string
     ui: { notify: (text: string, level: string) => notifications.push({ text, level }) },
   } as any;
 }
+
+test("session settings apply configured omitted list limits", async () => {
+  const cwd = join(root, "configured-repo");
+  await mkdir(join(cwd, ".git"), { recursive: true });
+  await saveConfig({ version: 1, listDefaultLimit: 1, queryDefaultLimit: 1 }, configPath(process.env.PI_CODING_AGENT_DIR));
+  const app = runtime();
+  const ctx = context(cwd);
+  const tool = app.tools.get("papercut");
+  await app.handlers.get("session_start")?.[0]({}, ctx);
+  await tool.execute("one", { message: "First configured papercut." }, undefined, undefined, ctx);
+  await tool.execute("two", { message: "Second configured papercut." }, undefined, undefined, ctx);
+  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, ctx);
+  assert.equal(listed.details.records.length, 1);
+  await saveConfig({ version: 1 }, configPath(process.env.PI_CODING_AGENT_DIR));
+  await app.handlers.get("session_shutdown")?.[0]();
+});
 
 test("capture, dedupe, list, resolve, and command flows persist project state", async () => {
   const cwd = join(root, "repo");

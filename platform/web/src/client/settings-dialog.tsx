@@ -1306,15 +1306,17 @@ function PackageNumber({
   max,
   step = 1,
   unit,
+  integer = true,
   disabled,
   onChange,
 }: {
   label: string;
   value: number;
-  min: number;
-  max: number;
+  min?: number;
+  max?: number;
   step?: number;
-  unit: string;
+  unit?: string;
+  integer?: boolean;
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
@@ -1331,14 +1333,19 @@ function PackageNumber({
         aria-label={label}
         onBlur={event => {
           const next = Number(event.target.value);
-          if (Number.isSafeInteger(next) && next >= min && next <= max) {
+          if (
+            Number.isFinite(next) &&
+            (!integer || Number.isSafeInteger(next)) &&
+            (min === undefined || next >= min) &&
+            (max === undefined || next <= max)
+          ) {
             if (next !== value) onChange(next);
             return;
           }
           event.currentTarget.value = String(value);
         }}
       />
-      <span className="unit">{unit}</span>
+      {unit && <span className="unit">{unit}</span>}
     </>
   );
 }
@@ -1385,6 +1392,95 @@ function hasPackageFields(settings: PackageSettingsReadModel | undefined): boole
   return Boolean(settings);
 }
 
+function GenericPackageFields({
+  settings,
+  disabled,
+  onUpdate,
+}: {
+  settings: Extract<PackageSettingsReadModel, { kind: "generic" }>;
+  disabled: boolean;
+  onUpdate: (settings: Extract<PackageSettingsReadModel, { kind: "generic" }>) => void;
+}) {
+  const updateField = (key: string, value: unknown) =>
+    onUpdate({
+      ...settings,
+      fields: settings.fields.map(field => (field.key === key ? { ...field, value } : field)) as typeof settings.fields,
+    });
+  return (
+    <div className="package-list">
+      {settings.fields.map(field => {
+        const description = [field.description, `Applies ${field.apply.replace("-", " ")}.`]
+          .filter(Boolean)
+          .join(" ");
+        if (field.type === "boolean") {
+          return (
+            <PackageRow key={field.key} label={field.label} description={description}>
+              <PackageSwitch
+                label={field.label}
+                checked={field.value}
+                disabled={disabled}
+                onChange={value => updateField(field.key, value)}
+              />
+            </PackageRow>
+          );
+        }
+        if (field.type === "integer" || field.type === "number") {
+          return (
+            <PackageRow key={field.key} label={field.label} description={description}>
+              <PackageNumber
+                label={field.label}
+                value={field.value}
+                min={field.min}
+                max={field.max}
+                step={field.step}
+                unit={field.unit}
+                integer={field.type === "integer"}
+                disabled={disabled}
+                onChange={value => updateField(field.key, value)}
+              />
+            </PackageRow>
+          );
+        }
+        if (field.type === "enum") {
+          return (
+            <PackageRow key={field.key} label={field.label} description={description}>
+              <select
+                aria-label={field.label}
+                value={field.value}
+                disabled={disabled}
+                onChange={event => updateField(field.key, event.target.value)}>
+                {field.choices.map(choice => (
+                  <option key={choice} value={choice}>
+                    {choice}
+                  </option>
+                ))}
+              </select>
+            </PackageRow>
+          );
+        }
+        if (field.type !== "string-list") return null;
+        return (
+          <PackageRow key={field.key} label={field.label} description={description} stacked>
+            <textarea
+              key={field.value.join("\u0000")}
+              aria-label={field.label}
+              defaultValue={field.value.join(", ")}
+              disabled={disabled}
+              rows={2}
+              onBlur={event => {
+                const value = event.currentTarget.value.trim();
+                updateField(field.key, value ? value.split(",").map(item => item.trim()) : []);
+              }}
+            />
+            {field.choices && <small>Separate values with commas. Allowed: {field.choices.join(", ")}</small>}
+          </PackageRow>
+        );
+      })}
+    </div>
+  );
+}
+
+
 function PackageFields({
   settings,
   models,
@@ -1398,22 +1494,10 @@ function PackageFields({
   disabled: boolean;
   onUpdate: (settings: PackageSettingsReadModel) => void;
 }) {
-  if (settings.kind === "pylon-core") {
-    return (
-      <div className="package-list">
-        <PackageRow
-          label="Revision-guarded numbered edits"
-          description="Uses revision-guarded numbered ranges when any advertised output price is at least 3× its input price. Lower-ratio models keep Pi's native read and edit for that session; missing pricing keeps numbered edits.">
-          <PackageSwitch
-            label="Toggle revision-guarded numbered edits"
-            checked={settings.lineEditEnabled}
-            disabled={disabled}
-            onChange={lineEditEnabled => onUpdate({ ...settings, lineEditEnabled })}
-          />
-        </PackageRow>
-      </div>
-    );
+  if (settings.kind === "generic") {
+    return <GenericPackageFields settings={settings} disabled={disabled} onUpdate={onUpdate} />;
   }
+
   if (settings.kind === "timeline") {
     return (
       <div className="package-list">
@@ -1434,6 +1518,52 @@ function PackageFields({
                 checkpointTitleModel: value === "disabled" || value === "session" ? undefined : value,
               })
             }
+          />
+        </PackageRow>
+        <PackageRow label="Git timeout" description="Maximum time for each Timeline git operation. Applies to the next session.">
+          <PackageNumber
+            label="Git timeout"
+            value={settings.gitTimeoutMs}
+            min={1_000}
+            max={600_000}
+            step={1_000}
+            unit="ms"
+            disabled={disabled}
+            onChange={gitTimeoutMs => onUpdate({ ...settings, gitTimeoutMs })}
+          />
+        </PackageRow>
+        <PackageRow label="Title generation timeout" description="Maximum time for each session or checkpoint title call. Applies to the next session.">
+          <PackageNumber
+            label="Title generation timeout"
+            value={settings.titleTimeoutMs}
+            min={1_000}
+            max={300_000}
+            step={1_000}
+            unit="ms"
+            disabled={disabled}
+            onChange={titleTimeoutMs => onUpdate({ ...settings, titleTimeoutMs })}
+          />
+        </PackageRow>
+        <PackageRow label="Title maximum output" description="Maximum tokens generated for a Timeline title. Applies to the next session.">
+          <PackageNumber
+            label="Title maximum output"
+            value={settings.titleMaxTokens}
+            min={8}
+            max={256}
+            unit="tokens"
+            disabled={disabled}
+            onChange={titleMaxTokens => onUpdate({ ...settings, titleMaxTokens })}
+          />
+        </PackageRow>
+        <PackageRow label="Changed files in title prompt" description="Maximum changed-file paths supplied to checkpoint title generation. Applies to the next session.">
+          <PackageNumber
+            label="Changed files in title prompt"
+            value={settings.titleChangedFiles}
+            min={1}
+            max={200}
+            unit="files"
+            disabled={disabled}
+            onChange={titleChangedFiles => onUpdate({ ...settings, titleChangedFiles })}
           />
         </PackageRow>
         <p className="settings-callout">
@@ -1484,6 +1614,38 @@ function PackageFields({
             onChange={thinking => onUpdate({ ...settings, thinking })}
           />
         </PackageRow>
+        {settings.kind === "advisor" && (
+          <>
+            <PackageRow label="Maximum consultations" description="Maximum Advisor calls for each original user prompt.">
+              <PackageNumber label="Maximum consultations" value={settings.maxCalls} min={1} max={10} disabled={disabled} onChange={maxCalls => onUpdate({ ...settings, maxCalls })} />
+            </PackageRow>
+            <PackageRow label="Consultation timeout" description="Stops an Advisor consultation after this duration.">
+              <PackageNumber label="Consultation timeout" value={settings.timeoutMs} min={1_000} max={7_200_000} step={1_000} unit="ms" disabled={disabled} onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })} />
+            </PackageRow>
+            <PackageRow label="Maximum consultation cost" description="Stops an Advisor consultation when this cost limit is reached.">
+              <PackageNumber label="Maximum consultation cost" value={settings.maxCostUsd} min={0.01} max={100} step={0.01} unit="USD" integer={false} disabled={disabled} onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })} />
+            </PackageRow>
+            <PackageRow label="Maximum output tokens" description="Caps each Advisor response.">
+              <PackageNumber label="Maximum output tokens" value={settings.maxOutputTokens} min={256} max={65_536} unit="tokens" disabled={disabled} onChange={maxOutputTokens => onUpdate({ ...settings, maxOutputTokens })} />
+            </PackageRow>
+            <PackageRow label="Input context budget" description="Caps the Advisor snapshot input token budget.">
+              <PackageNumber label="Input context budget" value={settings.inputTokenBudget} min={1_000} max={1_000_000} step={1_000} unit="tokens" disabled={disabled} onChange={inputTokenBudget => onUpdate({ ...settings, inputTokenBudget })} />
+            </PackageRow>
+          </>
+        )}
+        {settings.kind === "scout" && (
+          <>
+            <PackageRow label="Repository scout timeout" description="Stops a repository scout run after this duration.">
+              <PackageNumber label="Repository scout timeout" value={settings.repoTimeoutMs} min={1} max={7_200_000} step={1_000} unit="ms" disabled={disabled} onChange={repoTimeoutMs => onUpdate({ ...settings, repoTimeoutMs })} />
+            </PackageRow>
+            <PackageRow label="Maximum scout cost" description="Set to 0 for no cost limit.">
+              <PackageNumber label="Maximum scout cost" value={settings.maxCostUsd} min={0} max={100} step={0.01} unit="USD" integer={false} disabled={disabled} onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })} />
+            </PackageRow>
+            <PackageRow label="Web search results" description="Default URL candidates returned by each Web Scout search.">
+              <PackageNumber label="Web search results" value={settings.webSearchResults} min={1} max={8} unit="results" disabled={disabled} onChange={webSearchResults => onUpdate({ ...settings, webSearchResults })} />
+            </PackageRow>
+          </>
+        )}
         {settings.kind === "scout" && (
           <PackageRow
             label="OpenAI / Exa search for Web Scout"
@@ -1525,6 +1687,21 @@ function PackageFields({
           </select>
         </PackageRow>
         <PackageRow
+          label="Worker timeout"
+          description="Stops a worker run after this duration.">
+          <PackageNumber
+            label="Worker timeout"
+            value={settings.timeoutMs}
+            min={1}
+            max={7_200_000}
+            step={1_000}
+            unit="ms"
+            disabled={disabled}
+            onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })}
+          />
+        </PackageRow>
+
+        <PackageRow
           label="Maximum tool-call turns"
           description="The grunt stops after this many tool calls in one run.">
           <PackageNumber
@@ -1535,6 +1712,35 @@ function PackageFields({
             unit="turns"
             disabled={disabled}
             onChange={maxTurns => onUpdate({ ...settings, maxTurns })}
+          />
+        </PackageRow>
+        <PackageRow
+          label="Maximum worker cost"
+          description="Stops a worker run when this cost limit is reached.">
+          <PackageNumber
+            label="Maximum worker cost"
+            value={settings.maxCostUsd}
+            min={0.01}
+            max={100}
+            step={0.01}
+            unit="USD"
+            integer={false}
+            disabled={disabled}
+            onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
+          />
+        </PackageRow>
+        <PackageRow
+          label="Parent context"
+          description="Include up to this many characters of parent-session context in each worker handoff.">
+          <PackageNumber
+            label="Parent context"
+            value={settings.parentContextChars}
+            min={0}
+            max={12_000}
+            step={100}
+            unit="characters"
+            disabled={disabled}
+            onChange={parentContextChars => onUpdate({ ...settings, parentContextChars })}
           />
         </PackageRow>
         <PackageChips
@@ -1585,6 +1791,29 @@ function PackageFields({
             unit="tokens"
             disabled={disabled}
             onChange={keepRecentTokens => onUpdate({ ...settings, keepRecentTokens })}
+          />
+        </PackageRow>
+        <PackageRow label="Compaction review timeout" description="Maximum time for a compaction reviewer call. Applies to the next review.">
+          <PackageNumber
+            label="Compaction review timeout"
+            value={settings.compactionReviewTimeoutMs}
+            min={1_000}
+            max={300_000}
+            step={1_000}
+            unit="ms"
+            disabled={disabled}
+            onChange={compactionReviewTimeoutMs => onUpdate({ ...settings, compactionReviewTimeoutMs })}
+          />
+        </PackageRow>
+        <PackageRow label="Compaction reviewer maximum output" description="Maximum tokens generated by the compaction reviewer. Applies to the next review.">
+          <PackageNumber
+            label="Compaction reviewer maximum output"
+            value={settings.compactionReviewerMaxOutputTokens}
+            min={256}
+            max={8_192}
+            unit="tokens"
+            disabled={disabled}
+            onChange={compactionReviewerMaxOutputTokens => onUpdate({ ...settings, compactionReviewerMaxOutputTokens })}
           />
         </PackageRow>
         <PackageSubgroup
@@ -1736,24 +1965,60 @@ function PackageFields({
           disabled={disabled}
           onChange={levels => onUpdate({ ...settings, agentThinkingLevels: levels as ThinkingLevelReadModel[] })}
         />
+        <PackageRow label="Spawn timeout" description="Maximum child runtime. Set to 0 for unlimited.">
+          <PackageNumber
+            label="Spawn timeout"
+            value={settings.spawnTimeoutMs}
+            min={0}
+            max={7_200_000}
+            step={1_000}
+            unit="ms"
+            integer
+            disabled={disabled}
+            onChange={spawnTimeoutMs => onUpdate({ ...settings, spawnTimeoutMs })}
+          />
+        </PackageRow>
+        <PackageRow label="Recent thread message limit" description="Default number of transcript messages returned by recent.">
+          <PackageNumber
+            label="Recent thread message limit"
+            value={settings.recentThreadLimit}
+            min={1}
+            max={50}
+            integer
+            disabled={disabled}
+            onChange={recentThreadLimit => onUpdate({ ...settings, recentThreadLimit })}
+          />
+        </PackageRow>
+        <PackageRow label="Recent thread message characters" description="Default maximum characters per transcript message.">
+          <PackageNumber
+            label="Recent thread message characters"
+            value={settings.recentThreadMaxChars}
+            min={100}
+            max={10_000}
+            step={100}
+            unit="characters"
+            integer
+            disabled={disabled}
+            onChange={recentThreadMaxChars => onUpdate({ ...settings, recentThreadMaxChars })}
+          />
+        </PackageRow>
+        <PackageRow label="Recent thread total characters" description="Maximum total characters returned by recent.">
+          <PackageNumber
+            label="Recent thread total characters"
+            value={settings.recentThreadTotalChars}
+            min={1_000}
+            max={100_000}
+            step={1_000}
+            unit="characters"
+            integer
+            disabled={disabled}
+            onChange={recentThreadTotalChars => onUpdate({ ...settings, recentThreadTotalChars })}
+          />
+        </PackageRow>
       </div>
     );
   }
-  if (settings.kind !== "helios") return null;
-  return (
-    <div className="package-list">
-      <PackageRow label="Future owned browsers" description="Whether browsers Helios launches from now on are visible.">
-        <select
-          aria-label="Future owned browsers"
-          value={settings.headed ? "shown" : "headless"}
-          disabled={disabled}
-          onChange={event => onUpdate({ ...settings, headed: event.target.value === "shown" })}>
-          <option value="shown">Shown</option>
-          <option value="headless">Headless</option>
-        </select>
-      </PackageRow>
-    </div>
-  );
+  return null;
 }
 
 function thinkingChipOptions(): { value: string; label: string }[] {

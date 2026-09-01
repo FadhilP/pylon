@@ -52,3 +52,38 @@ test("preflight scans initialized gitlinks without .gitmodules", async () => {
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+
+test("preflight scans untracked worktrees that use a separate git directory", async () => {
+  const { root } = await repository();
+  const metadataRoot = await mkdtemp(join(tmpdir(), "pi-timeline-git-dir-"));
+  const child = join(root, "child");
+  const childGit = async (...args: string[]) =>
+    (await exec("git", args, { cwd: child, windowsHide: true })).stdout.trim();
+  try {
+    await exec("git", ["init", "-q", "--separate-git-dir", join(metadataRoot, "child.git"), child], {
+      cwd: root,
+      windowsHide: true,
+    });
+    await childGit("config", "user.email", "timeline@test.local");
+    await childGit("config", "user.name", "timeline-test");
+    await writeFile(join(child, "tracked.txt"), "child\n");
+    await childGit("add", "tracked.txt");
+    await childGit("commit", "-qm", "child");
+    await writeFile(join(child, ".npmrc"), "token=secret\n");
+    await assert.rejects(preflight(root), /Unsafe untracked path: child\/\.npmrc/);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(metadataRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("preflight still detects and rejects untracked bare repositories", async () => {
+  const { root, git } = await repository();
+  try {
+    await git("init", "--bare", "-q", "bare.git");
+    await assert.rejects(preflight(root), /must be run in a work tree|Bare repositories unsupported/);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

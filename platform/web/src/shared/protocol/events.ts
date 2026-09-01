@@ -119,7 +119,7 @@ export interface DelegatedAgentRunReadModel {
   turn: number;
   request?: string;
   response?: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "attention";
   modelName?: string;
   thinkingLevel?: ThinkingLevelReadModel;
   threadId?: string;
@@ -128,6 +128,7 @@ export interface DelegatedAgentRunReadModel {
   durationMs?: number;
   usage?: DelegatedAgentUsageReadModel;
   sessionUsage?: DelegatedAgentUsageReadModel;
+  costLimitUsd?: number;
   contextTokens?: number | null;
   contextLimit?: number;
   activity: DelegatedAgentActivityReadModel[];

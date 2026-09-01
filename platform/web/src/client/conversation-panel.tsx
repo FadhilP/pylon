@@ -43,8 +43,9 @@ import {
   reconcileToolActivity,
   turnIdsInViewport,
 } from "../shared/transcript";
-import { messageToolCallViews } from "../shared/tool-calls";
-import { formatCompactNumber, formatWorkDuration } from "../shared/format";
+import { pairAgentActivity } from "../shared/agent-activity";
+import { messageToolCallViews, pairedToolCallViews } from "../shared/tool-calls";
+import { formatCompactNumber, formatWorkDuration, modelLabel } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import {
@@ -74,7 +75,7 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor, type AgentColorMap } from "./agent-color";
 import { modelThinkingLevels, moveRailSelection, railThinkingAxis } from "../shared/model-rail";
 import { AnimatedDetails } from "./animated-details";
-import { ToolCallGroup, ToolCallList } from "./tool-calls";
+import { ToolCallGroup, ToolCallList, ToolCallTrack } from "./tool-calls";
 import { RunSeam, SeamDisclosure, SeamLink } from "./run-seam";
 import { UiDialog } from "./ui-dialog";
 import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-visibility";
@@ -192,7 +193,7 @@ export function ConversationPanel({
   onComposerFocusRestored?: () => void;
   onDraftChange?: (draft: string) => void;
   pendingSession?: PendingSessionView;
-  onSelectAgent?: (id: string) => void;
+  onSelectAgent?: (id?: string) => void;
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
   onOpenCompaction: (message: MessageReadModel) => void;
@@ -861,7 +862,14 @@ export function ConversationPanel({
       ) : (
         live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>
       )}
-      {!draftingOnly && <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />}
+      {!draftingOnly && (
+        <ActiveAgents
+          runs={activeAgents}
+          models={controls?.models ?? []}
+          colors={agentColors}
+          onSelect={onSelectAgent}
+        />
+      )}
       {runtime && (
         <div
           ref={streamRef}
@@ -2543,12 +2551,14 @@ export function WorkTimer({
 
 function ActiveAgents({
   runs,
+  models,
   colors,
   onSelect,
 }: {
   runs: DelegatedAgentRunReadModel[];
+  models: ModelOptionReadModel[];
   colors: AgentColorMap;
-  onSelect?: (id: string) => void;
+  onSelect?: (id?: string) => void;
 }) {
   const [now, setNow] = useState(Date.now());
   const [displayed, setDisplayed] = useState(runs);
@@ -2573,32 +2583,72 @@ function ActiveAgents({
     return () => window.clearTimeout(timer);
   }, [runs]);
   if (!displayed.length) return null;
+
+  const ordered = [...displayed].sort((a, b) => (agentCost(b) ?? -1) - (agentCost(a) ?? -1));
+  const knownCosts = ordered.flatMap(run => {
+    const cost = agentCost(run);
+    return cost === undefined ? [] : [cost];
+  });
+  const totalCost = knownCosts.length ? `$${knownCosts.reduce((sum, cost) => sum + cost, 0).toFixed(4)}` : "—";
+
   return (
-    <aside className={`active-agents${exiting ? " is-exiting" : ""}`} aria-label="Active delegated agents">
-      {displayed.slice(0, 3).map(run => {
+    <aside className={`agent-dock${exiting ? " is-exiting" : ""}`} aria-label="Active delegated agents">
+      <header className="agent-dock-head">
+        <span>
+          <b>{ordered.length}</b> {ordered.length === 1 ? "agent" : "agents"} working
+        </span>
+        <span className="mono">{totalCost}</span>
+      </header>
+      {ordered.slice(0, 5).map(run => {
         const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
         const elapsed = Number.isNaN(started) ? (run.durationMs ?? 0) : Math.max(0, now - started);
+        const calls = pairedToolCallViews(pairAgentActivity(run.activity), true, now);
+        const cost = agentCost(run);
+        const hot = cost !== undefined && run.costLimitUsd !== undefined && cost >= run.costLimitUsd;
         return (
-          <button type="button" key={run.id} style={agentColor(run, colors)} onClick={() => onSelect?.(run.id)}>
-            <OverviewOrb state="running" label="Working" />
-            <IconBotId size={14} />
-            <span>
-              <strong>
-                {run.agentName ? (
-                  <span className="agent-instance-name">{run.agentName}</span>
-                ) : (
-                  agentKindLabel(run.kind)
-                )}
-              </strong>
-              <small>{run.agentName ? agentKindLabel(run.kind) : "Agent"}</small>
+          <button
+            className="agent-dock-entry"
+            type="button"
+            key={run.id}
+            style={agentColor(run, colors)}
+            onClick={() => onSelect?.(run.id)}>
+            <OverviewOrb state={hot ? "attention" : "running"} label={hot ? "Cost limit reached" : "Working"} />
+            <span className="agent-dock-line">
+              <span className="agent-dock-name">
+                {run.agentName ? <span className="agent-instance-name">{run.agentName}</span> : agentKindLabel(run.kind)}
+              </span>
+              <time className="agent-dock-elapsed mono">{formatWorkDuration(elapsed)}</time>
             </span>
-            <time>{formatWorkDuration(elapsed)}</time>
+            <span className="agent-dock-line">
+              <span className="agent-dock-kind">
+                {run.agentName
+                  ? agentKindLabel(run.kind)
+                  : run.modelName
+                    ? modelLabel(run.modelName, models)
+                    : "Model pending"}
+              </span>
+              <span className="agent-dock-spend mono">
+                <span className="calls">{calls.length} {calls.length === 1 ? "call" : "calls"}</span>
+                <span className="sep">·</span>
+                <span className={`cost${hot ? " is-hot" : ""}`}>{cost === undefined ? "—" : `$${cost.toFixed(4)}`}</span>
+              </span>
+            </span>
+            <ToolCallTrack calls={calls} slots={32} variant="dock" />
           </button>
         );
       })}
-      {displayed.length > 3 && <span className="active-agent-overflow">+{displayed.length - 3} more</span>}
+      {ordered.length > 5 && (
+        <button className="agent-dock-more" type="button" onClick={() => onSelect?.()}>
+          +{ordered.length - 5} more in the agent drawer
+        </button>
+      )}
     </aside>
   );
+}
+
+function agentCost(run: DelegatedAgentRunReadModel): number | undefined {
+  const usage = (run.kind === "spawn_agent" || run.kind === "spawn_session" ? run.sessionUsage : undefined) ?? run.usage;
+  return usage?.cost;
 }
 
 function agentKindLabel(kind: DelegatedAgentKind): string {

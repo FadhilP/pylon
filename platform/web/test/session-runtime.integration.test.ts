@@ -1425,6 +1425,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       agentAvailability: "deferred",
       sessionAvailability: "deferred",
       agentThinkingLevels: allThinking,
+      spawnTimeoutMs: 0,
+      recentThreadLimit: 8,
+      recentThreadMaxChars: 800,
+      recentThreadTotalChars: 12_000,
     });
 
     const initialActiveTools = first.activeTools;
@@ -1473,6 +1477,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         agentAvailability: "active",
         sessionAvailability: "deferred",
         agentThinkingLevels: ["low", "high"],
+        spawnTimeoutMs: 4_000,
+        recentThreadLimit: 4,
+        recentThreadMaxChars: 400,
+        recentThreadTotalChars: 4_000,
       },
     });
     assert.deepEqual((await driver.listPackages()).packages.find(item => item.id === "pi-spawn")?.settings, {
@@ -1480,13 +1488,17 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       agentAvailability: "active",
       sessionAvailability: "deferred",
       agentThinkingLevels: ["low", "high"],
+      spawnTimeoutMs: 4_000,
+      recentThreadLimit: 4,
+      recentThreadMaxChars: 400,
+      recentThreadTotalChars: 4_000,
     });
 
     const generation = configured.sessionGeneration;
     assert.equal(spawnConfigured.sessionGeneration, generation);
     for (const [packageId, settings] of [
-      ["pi-advisor", { kind: "advisor", mode: "session" }],
-      ["pi-scout", { kind: "scout", mode: "session", webSearch: true }],
+      ["pi-advisor", { kind: "advisor", mode: "session", maxCalls: 3, timeoutMs: 900_000, maxCostUsd: 0.5, maxOutputTokens: 8_192, inputTokenBudget: 32_768 }],
+      ["pi-scout", { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 }],
       [
         "pi-grunt",
         {
@@ -1494,6 +1506,9 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
           mode: "session",
           executionMode: "dynamic",
           thinkingLevels: ["medium", "high"] as any,
+          timeoutMs: 3_600_000,
+          maxCostUsd: 2,
+          parentContextChars: 0,
           maxTurns: 40,
         },
       ],
@@ -1508,7 +1523,7 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     const scoutDisabled = await driver.updatePackageSettings({
       packageId: "pi-scout",
-      settings: { kind: "scout", mode: "disabled" },
+      settings: { kind: "scout", mode: "disabled", repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5 },
     });
     const gruntDisabled = await driver.updatePackageSettings({
       packageId: "pi-grunt",
@@ -1517,6 +1532,9 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         mode: "disabled",
         executionMode: "dynamic",
         thinkingLevels: ["medium", "high"],
+        timeoutMs: 3_600_000,
+        maxCostUsd: 2,
+        parentContextChars: 0,
         maxTurns: 40,
       },
     });
@@ -1531,6 +1549,9 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         mode: "session",
         executionMode: "direct",
         thinkingLevels: ["low", "high"],
+        timeoutMs: 120_000,
+        maxCostUsd: 3,
+        parentContextChars: 1_200,
         maxTurns: 12,
       },
     });
@@ -1539,13 +1560,25 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       mode: "session",
       executionMode: "direct",
       thinkingLevels: ["low", "high"],
+      timeoutMs: 120_000,
+      maxCostUsd: 3,
+      parentContextChars: 1_200,
       maxTurns: 12,
     });
 
     await assert.rejects(
       driver.updatePackageSettings({
         packageId: "pi-advisor",
-        settings: { kind: "advisor", mode: "model", model: "missing/model" },
+        settings: {
+          kind: "advisor",
+          mode: "model",
+          model: "missing/model",
+          maxCalls: 3,
+          timeoutMs: 900_000,
+          maxCostUsd: 0.5,
+          maxOutputTokens: 8_192,
+          inputTokenBudget: 32_768,
+        },
       }),
       /unavailable/,
     );
@@ -1563,6 +1596,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
         agentAvailability: "active",
         sessionAvailability: "deferred",
         agentThinkingLevels: ["low", "high"],
+        spawnTimeoutMs: 4_000,
+        recentThreadLimit: 4,
+        recentThreadMaxChars: 400,
+        recentThreadTotalChars: 4_000,
       });
       assert.deepEqual((next as any).hookInjection.settings, futureHooks);
     } finally {

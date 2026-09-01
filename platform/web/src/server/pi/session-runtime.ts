@@ -1098,6 +1098,7 @@ export class SessionRuntime implements PiDriver {
     if (this.runtime || this.disposed) throw new Error("driver cannot be started twice");
     const startupStartedAt = performance.now();
     let packageExtensionsMs = 0;
+    let runtimeCreateMs = 0;
     let sessionStartMs = 0;
     let bindMs = 0;
     this.target = target;
@@ -1141,7 +1142,7 @@ export class SessionRuntime implements PiDriver {
       modelRuntime,
       onStartupPhase: (phase, durationMs) => {
         if (phase === "extension-loading") packageExtensionsMs += durationMs;
-        else sessionStartMs += durationMs;
+        else runtimeCreateMs += durationMs;
       },
     });
     this.createRuntime = createRuntime;
@@ -1170,9 +1171,9 @@ export class SessionRuntime implements PiDriver {
       this.runtimeDisposable = true;
       this.installRuntimeHooks(runtime);
       this.loadRuntimePolicy(runtime.session.sessionId);
-      const bindStartedAt = performance.now();
-      await this.bindSession(runtime.session, generation);
-      bindMs = performance.now() - bindStartedAt;
+      const bindTiming = await this.bindSession(runtime.session, generation);
+      bindMs = bindTiming.bindMs;
+      sessionStartMs = bindTiming.sessionStartMs;
       this.refreshSnapshot();
       const totalMs = performance.now() - startupStartedAt;
       if (totalMs >= SLOW_SESSION_START_MS) {
@@ -1180,8 +1181,9 @@ export class SessionRuntime implements PiDriver {
           `[pylon] Slow session startup ${JSON.stringify({
             totalMs: Math.round(totalMs),
             packageExtensionsMs: Math.round(packageExtensionsMs),
+            runtimeCreateMs: Math.round(runtimeCreateMs),
             sessionStartMs: Math.round(sessionStartMs),
-            bindMs: Math.round(bindMs),
+            bindSetupMs: Math.round(Math.max(0, bindMs - sessionStartMs)),
           })}`,
         );
       }
@@ -3096,7 +3098,11 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
-  private async bindSession(session: AgentSession, generation: number): Promise<void> {
+  private async bindSession(
+    session: AgentSession,
+    generation: number,
+  ): Promise<{ bindMs: number; sessionStartMs: number }> {
+    const bindStartedAt = performance.now();
     if (this.timingSessionId !== session.sessionId) {
       this.liveDelegatedRuns.clear();
       this.timingSessionId = session.sessionId;
@@ -3129,6 +3135,7 @@ export class SessionRuntime implements PiDriver {
       this.pendingUserMessageIds.length = 0;
       this.gitBranch = this.readDisplayGitBranch(session.sessionManager.getCwd(), session.sessionId);
     }
+    const sessionStartStartedAt = performance.now();
     await session.bindExtensions({
       mode: "rpc",
       uiContext: this.ui.context(session.sessionId, generation),
@@ -3146,6 +3153,7 @@ export class SessionRuntime implements PiDriver {
       shutdownHandler: () => this.options.onShutdownRequested?.(),
       onError: error => this.recordExtensionError(error),
     });
+    const sessionStartMs = performance.now() - sessionStartStartedAt;
     this.publishRuntimePolicy();
     this.unsubscribeSession = session.subscribe(payload => {
       if (!this.gate.accepts(generation)) return;
@@ -3473,6 +3481,7 @@ export class SessionRuntime implements PiDriver {
         payload: forwarded,
       });
     });
+    return { bindMs: performance.now() - bindStartedAt, sessionStartMs };
   }
 
   private async replace(action: () => Promise<{ cancelled: boolean }>): Promise<ReplacementResult> {

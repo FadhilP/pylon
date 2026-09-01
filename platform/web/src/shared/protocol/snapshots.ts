@@ -550,15 +550,88 @@ export interface PackageSummary {
 
 export type PackageModelMode = "disabled" | "session" | "model";
 
+export type GenericPackageSettingApplyTiming = "immediate" | "next-operation" | "next-session" | "reload";
+
+export type GenericPackageSettingReadField =
+  | {
+      version: 1;
+      key: string;
+      label: string;
+      type: "boolean";
+      defaultValue: boolean;
+      value: boolean;
+      description?: string;
+      unit?: string;
+      apply: GenericPackageSettingApplyTiming;
+    }
+  | {
+      version: 1;
+      key: string;
+      label: string;
+      type: "integer" | "number";
+      defaultValue: number;
+      value: number;
+      description?: string;
+      unit?: string;
+      step?: number;
+      min?: number;
+      max?: number;
+      apply: GenericPackageSettingApplyTiming;
+    }
+  | {
+      version: 1;
+      key: string;
+      label: string;
+      type: "enum";
+      defaultValue: string;
+      value: string;
+      choices: string[];
+      description?: string;
+      unit?: string;
+      apply: GenericPackageSettingApplyTiming;
+    }
+  | {
+      version: 1;
+      key: string;
+      label: string;
+      type: "string-list";
+      defaultValue: string[];
+      value: string[];
+      choices?: string[];
+      description?: string;
+      unit?: string;
+      min?: number;
+      max?: number;
+      apply: GenericPackageSettingApplyTiming;
+    };
+
+export interface GenericPackageSettingsReadModel {
+  kind: "generic";
+  packageId: string;
+  fields: GenericPackageSettingReadField[];
+}
 export type PackageSettingsReadModel =
-  | { kind: "pylon-core"; lineEditEnabled: boolean }
-  | { kind: "advisor"; mode: PackageModelMode; model?: string; thinking?: import("./events.ts").ThinkingLevelReadModel }
+  | GenericPackageSettingsReadModel
+  | {
+      kind: "advisor";
+      mode: PackageModelMode;
+      model?: string;
+      thinking?: import("./events.ts").ThinkingLevelReadModel;
+      maxCalls: number;
+      timeoutMs: number;
+      maxCostUsd: number;
+      maxOutputTokens: number;
+      inputTokenBudget: number;
+    }
   | {
       kind: "scout";
       mode: PackageModelMode;
       model?: string;
       thinking?: import("./events.ts").ThinkingLevelReadModel;
       webSearch?: boolean;
+      repoTimeoutMs: number;
+      maxCostUsd: number;
+      webSearchResults: number;
     }
   | {
       kind: "grunt";
@@ -566,7 +639,10 @@ export type PackageSettingsReadModel =
       model?: string;
       executionMode: "isolated" | "direct" | "dynamic";
       thinkingLevels: import("./events.ts").ThinkingLevelReadModel[];
+      timeoutMs: number;
       maxTurns: number;
+      maxCostUsd: number;
+      parentContextChars: number;
     }
   | {
       kind: "continuity";
@@ -577,6 +653,8 @@ export type PackageSettingsReadModel =
       executor?: PackageModelProfileReadModel;
       memoryReviewer?: PackageModelProfileReadModel;
       compactionReviewer?: PackageModelProfileReadModel;
+      compactionReviewTimeoutMs: number;
+      compactionReviewerMaxOutputTokens: number;
     }
   | {
       kind: "sieve";
@@ -586,12 +664,15 @@ export type PackageSettingsReadModel =
       rolloverHighMultiplier: number;
       rolloverLowMultiplier: number;
     }
-  | { kind: "helios"; headed: boolean }
   | {
       kind: "timeline";
       editRollbackDefault: boolean;
       checkpointTitleMode: PackageModelMode;
       checkpointTitleModel?: string;
+      gitTimeoutMs: number;
+      titleTimeoutMs: number;
+      titleMaxTokens: number;
+      titleChangedFiles: number;
     }
   | {
       kind: "spawn";
@@ -599,6 +680,10 @@ export type PackageSettingsReadModel =
       sessionAvailability: "deferred" | "active";
       models?: string[];
       agentThinkingLevels: import("./events.ts").ThinkingLevelReadModel[];
+      spawnTimeoutMs: number;
+      recentThreadLimit: number;
+      recentThreadMaxChars: number;
+      recentThreadTotalChars: number;
     };
 
 export interface PackageModelProfileReadModel {

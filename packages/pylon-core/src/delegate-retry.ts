@@ -1,4 +1,13 @@
+import { effectiveConfig, loadConfig } from "./config.ts";
+
 export const DELEGATE_MAX_ATTEMPTS = 3;
+export type DelegateRetryPolicy = { maxAttempts: number; baseMs: number };
+
+/** Read once at each delegate operation; the low-level wait loop never reads disk. */
+export async function loadDelegateRetryPolicy(): Promise<DelegateRetryPolicy> {
+  const config = effectiveConfig(await loadConfig());
+  return { maxAttempts: config.delegateMaxAttempts, baseMs: config.delegateRetryBaseMs };
+}
 
 // Kept deliberately broad: all delegated callers share Advisor's provider wording.
 const TERMINAL_PROVIDER_FAILURE =
@@ -11,10 +20,10 @@ export function isTransientProviderFailure(value: unknown): boolean {
   return !TERMINAL_PROVIDER_FAILURE.test(message) && TRANSIENT_PROVIDER_FAILURE.test(message);
 }
 
-export async function waitForDelegateRetry(retryNumber: number, signal?: AbortSignal): Promise<boolean> {
+export async function waitForDelegateRetry(retryNumber: number, signal?: AbortSignal, baseMs = 1_000): Promise<boolean> {
   if (signal?.aborted) return false;
   return new Promise(resolve => {
-    const timeout = setTimeout(done, 1_000 * 2 ** (retryNumber - 1));
+    const timeout = setTimeout(done, baseMs * 2 ** (retryNumber - 1));
     const abort = () => done();
     function done() {
       clearTimeout(timeout);

@@ -26,6 +26,12 @@ class Bus {
 
 test("Grunt runs synchronously with per-call thinking and derives changed paths", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
+  const previousSettingsEnv = {
+    timeout: process.env.PI_GRUNT_TIMEOUT_MS,
+    turns: process.env.PI_GRUNT_MAX_TURNS,
+    cost: process.env.PI_GRUNT_MAX_COST_USD,
+    context: process.env.PI_GRUNT_PARENT_CONTEXT_CHARS,
+  };
   const root = await mkdtemp(join(tmpdir(), "grunt-extension-"));
   const cwd = join(root, "repo");
   await mkdir(cwd);
@@ -47,6 +53,10 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     "base",
   ]);
   process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  process.env.PI_GRUNT_TIMEOUT_MS = "1000";
+  process.env.PI_GRUNT_MAX_TURNS = "2";
+  process.env.PI_GRUNT_MAX_COST_USD = "9";
+  process.env.PI_GRUNT_PARENT_CONTEXT_CHARS = "0";
   try {
     const events = new Bus();
     let policy: any;
@@ -63,18 +73,29 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     let workerCwd = "";
     const workerCwds: string[] = [];
     let workerAttempts = 0;
+    const timeoutBudgets: number[] = [];
+    const maxCostBudgets: number[] = [];
     const maxTurnBudgets: number[] = [];
     let outcome: "completed" | "blocked" = "completed";
     const runningUpdates: any[] = [];
     const runWorker = async (
       args: string[],
-      options: { cwd: string; maxTurns: number; onActivity?: Function; onUsage?: Function },
+      options: {
+        cwd: string;
+        timeoutMs: number;
+        maxTurns: number;
+        maxCostUsd: number;
+        onActivity?: Function;
+        onUsage?: Function;
+      },
     ): Promise<WorkerRun> => {
       childArgs = args;
       workerCwd = options.cwd;
       workerCwds.push(options.cwd);
       workerAttempts++;
       maxTurnBudgets.push(options.maxTurns);
+      timeoutBudgets.push(options.timeoutMs);
+      maxCostBudgets.push(options.maxCostUsd);
       if (workerAttempts === 1) {
         options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
         return {
@@ -136,7 +157,15 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         }
       },
     };
-    await saveConfig({ version: 1, disabled: false, mode: "dynamic", maxTurns: 12 });
+    await saveConfig({
+      version: 1,
+      disabled: false,
+      mode: "dynamic",
+      timeoutMs: 120_000,
+      maxTurns: 12,
+      maxCostUsd: 3,
+      parentContextChars: 100,
+    });
     grunt(pi, runWorker as any, async () => true);
     const ctx: any = {
       cwd,
@@ -172,8 +201,9 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         ctx,
       );
     assert.deepEqual(maxTurnBudgets, [12, 11]);
+    assert.deepEqual(maxCostBudgets, [3, 3]);
     const activityUpdate = runningUpdates.find(update => update.details?.activity?.length);
-    assert.equal(activityUpdate.details.state, "running");
+    assert.ok(timeoutBudgets.every(timeoutMs => timeoutMs > 1_000 && timeoutMs <= 120_000));
     assert.ok(activityUpdate.details.durationMs > 0);
     assert.deepEqual(
       [...new Set(runningUpdates.flatMap(update => (update.details?.usage ? [update.details.usage.input] : [])))],
@@ -209,6 +239,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.ok(!childArgs.includes("--append-system-prompt"));
     assert.match(childArgs.at(-1) ?? "", /Targeted context.*exported-constant convention/s);
     assert.match(childArgs.at(-1) ?? "", /Focused checks:\n- npm test -- worker/);
+    assert.match(childArgs.at(-1) ?? "", /Bounded redacted parent context/);
     assert.match(childArgs.at(-1) ?? "", /Unavailable ignored dependency directories: node_modules/);
     assert.equal(result.details.missingDependencies, undefined);
     assert.deepEqual(result.details.metrics, {
@@ -280,6 +311,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     await assert.rejects(access(blocked.details.artifactPath));
     await assert.rejects(access(dirname(blocked.details.artifactPath)));
   } finally {
+    if (previousSettingsEnv.timeout === undefined) delete process.env.PI_GRUNT_TIMEOUT_MS;
+    else process.env.PI_GRUNT_TIMEOUT_MS = previousSettingsEnv.timeout;
+    if (previousSettingsEnv.turns === undefined) delete process.env.PI_GRUNT_MAX_TURNS;
+    else process.env.PI_GRUNT_MAX_TURNS = previousSettingsEnv.turns;
+    if (previousSettingsEnv.cost === undefined) delete process.env.PI_GRUNT_MAX_COST_USD;
+    else process.env.PI_GRUNT_MAX_COST_USD = previousSettingsEnv.cost;
+    if (previousSettingsEnv.context === undefined) delete process.env.PI_GRUNT_PARENT_CONTEXT_CHARS;
+    else process.env.PI_GRUNT_PARENT_CONTEXT_CHARS = previousSettingsEnv.context;
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previous;
   }

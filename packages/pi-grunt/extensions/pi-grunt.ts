@@ -33,7 +33,7 @@ import {
 } from "../src/isolation.ts";
 import { DIRECT_WORKER_PROMPT, WORKER_PROMPT } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
-import { DELEGATE_MAX_ATTEMPTS, isTransientProviderFailure, waitForDelegateRetry } from "../src/retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
 
 const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
 const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
@@ -352,6 +352,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     executionMode: "sequential",
     async execute(id, params, signal, onUpdate, ctx) {
       const config = await loadConfig();
+      const retryPolicy = await loadDelegateRetryPolicy();
       const refuse = (text: string, status: string, extra: Record<string, unknown> = {}) => ({
         content: [{ type: "text" as const, text }],
         details: { status, ...extra },
@@ -386,8 +387,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
       let heartbeat: NodeJS.Timeout | undefined;
       const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
       let attemptUsage = { ...usage };
+      let costLimitUsd: number | undefined;
       try {
-        const contextChars = gruntParentContextChars();
+        const maxCostUsd = gruntMaxCostUsd(config.maxCostUsd);
+        costLimitUsd = maxCostUsd;
+        const contextChars = gruntParentContextChars(config.parentContextChars);
         const entries = contextChars
           ? (ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [])
           : [];
@@ -415,6 +419,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               configuredMode,
               model: modelName(model),
               thinking: params.thinking,
+              costLimitUsd: maxCostUsd,
               durationMs: Date.now() - started,
               attempts,
               contextTokens,
@@ -432,6 +437,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             configuredMode,
             model: modelName(model),
             thinking: params.thinking,
+            costLimitUsd: maxCostUsd,
             contextTokens,
             contextLimit,
           },
@@ -442,8 +448,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           progress(`${((now - started) / 1000).toFixed(0)}s`, { activity });
         }, HEARTBEAT_MS);
         heartbeat.unref();
-        const timeoutMs = gruntTimeoutMs();
-        const maxCostUsd = gruntMaxCostUsd();
+        const timeoutMs = gruntTimeoutMs(config.timeoutMs);
         const maxTurns = gruntMaxTurns(config.maxTurns);
         const deadline = started + timeoutMs;
         let totalTurns = 0;
@@ -532,19 +537,19 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             const retryIsolation = isolated;
             const canRetry =
               retryIsolation !== undefined &&
-              attempts < DELEGATE_MAX_ATTEMPTS &&
+              attempts < retryPolicy.maxAttempts &&
               Date.now() < deadline &&
               usage.cost < maxCostUsd &&
               totalTurns < maxTurns &&
               run.failure === "child_error" &&
               isTransientProviderFailure(run.error);
-            if (!canRetry || !(await retryWait(attempts, signal))) return run;
+            if (!canRetry || !(await retryWait(attempts, signal, retryPolicy.baseMs))) return run;
             if (signal?.aborted || Date.now() >= deadline || usage.cost >= maxCostUsd || totalTurns >= maxTurns)
               return run;
             if ((await parentChangesSinceBaseline(exec, callIsolation ?? retryIsolation!)).length) return run;
             contextTokens = null;
             progress(
-              `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${DELEGATE_MAX_ATTEMPTS})…`,
+              `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${retryPolicy.maxAttempts})…`,
               { usage: { ...usage } },
             );
             const cleanupWarnings = await removeIsolatedWorktree(exec, retryIsolation!);
@@ -571,6 +576,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           ...(recovery ? { task, suggestedPaths: suggested, targetedContext, checkCommands } : {}),
           model: modelName(model),
           thinking: params.thinking,
+          costLimitUsd: maxCostUsd,
           durationMs: run.durationMs,
           attempts,
           usage: run.usage,
@@ -702,6 +708,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             failureMessage,
             model: modelName(model),
             thinking: params.thinking,
+            ...(costLimitUsd === undefined ? {} : { costLimitUsd }),
             usage: liveUsage,
           },
         };

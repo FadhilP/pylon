@@ -1,7 +1,7 @@
 import { truncateUtf8 } from "pylon-core/utf8";
+import { ADVISOR_MAX_CALLS, ADVISOR_MAX_OUTPUT_TOKENS } from "./config.ts";
 
-export const ADVISOR_MAX_CALLS = 3;
-export const ADVISOR_MAX_OUTPUT_TOKENS = 8_192;
+export { ADVISOR_MAX_CALLS, ADVISOR_MAX_OUTPUT_TOKENS };
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 
 export function capAdvice(text: string, maxTokens = ADVISOR_MAX_OUTPUT_TOKENS): { text: string; truncated: boolean } {

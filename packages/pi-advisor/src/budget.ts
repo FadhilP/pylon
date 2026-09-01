@@ -1,7 +1,7 @@
 import type { Model } from "@earendil-works/pi-ai/compat";
+import { ADVISOR_MAX_COST_USD } from "./config.ts";
 
-export const ADVISOR_MAX_COST_USD = 0.5;
-
+export { ADVISOR_MAX_COST_USD };
 type Rates = { input: number; output: number };
 export type AdvisorBudget =
   | { maxTokens: number; estimatedInputCostUsd: number }

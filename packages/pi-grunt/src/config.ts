@@ -1,6 +1,12 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  effectivePackageSettingValue,
+  validPackageSettingValue,
+  type PackageSettingField,
+} from "pylon-core/package-settings";
 import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -8,55 +14,86 @@ export type ThinkingLevel = (typeof thinkingLevels)[number];
 export const defaultThinkingLevels: ThinkingLevel[] = ["medium", "high"];
 export const gruntModes = ["isolated", "direct", "dynamic"] as const;
 export type GruntMode = (typeof gruntModes)[number];
+export const DEFAULT_GRUNT_TIMEOUT_MS = 60 * 60 * 1000;
+export const DEFAULT_GRUNT_MAX_TURNS = 40;
+export const DEFAULT_GRUNT_MAX_COST_USD = 2;
+export const DEFAULT_GRUNT_PARENT_CONTEXT_CHARS = 0;
+
+/** Shared inert definitions consumed by Grunt's runtime and web settings adapter. */
+export const gruntSettingFields = {
+  timeoutMs: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "timeoutMs",
+    label: "Worker timeout",
+    type: "integer",
+    defaultValue: DEFAULT_GRUNT_TIMEOUT_MS,
+    min: 1,
+    max: 7_200_000,
+    env: "PI_GRUNT_TIMEOUT_MS",
+    apply: "next-operation",
+  },
+  maxTurns: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "maxTurns",
+    label: "Maximum tool-call turns",
+    type: "integer",
+    defaultValue: DEFAULT_GRUNT_MAX_TURNS,
+    min: 1,
+    max: 1_000,
+    env: "PI_GRUNT_MAX_TURNS",
+    apply: "next-operation",
+  },
+  maxCostUsd: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "maxCostUsd",
+    label: "Maximum worker cost",
+    type: "number",
+    defaultValue: DEFAULT_GRUNT_MAX_COST_USD,
+    min: 0.01,
+    max: 100,
+    step: 0.01,
+    env: "PI_GRUNT_MAX_COST_USD",
+    apply: "next-operation",
+  },
+  parentContextChars: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "parentContextChars",
+    label: "Parent context",
+    type: "integer",
+    defaultValue: DEFAULT_GRUNT_PARENT_CONTEXT_CHARS,
+    min: 0,
+    max: 12_000,
+    env: "PI_GRUNT_PARENT_CONTEXT_CHARS",
+    apply: "next-operation",
+  },
+} satisfies Record<string, PackageSettingField>;
+
 export type GruntConfig = {
   version: 1;
   model?: string;
   disabled?: boolean;
   mode?: GruntMode;
   thinkingLevels?: ThinkingLevel[];
+  timeoutMs?: number;
   maxTurns?: number;
+  maxCostUsd?: number;
+  parentContextChars?: number;
 };
 export const gruntThinkingLevels = (config: GruntConfig): ThinkingLevel[] =>
   config.thinkingLevels ?? defaultThinkingLevels;
 export const gruntMode = (config: GruntConfig): GruntMode => config.mode ?? "isolated";
 export const isGruntEnabled = (config: GruntConfig): boolean =>
   config.disabled === false || (config.disabled !== true && Boolean(config.model));
-export const DEFAULT_GRUNT_TIMEOUT_MS = 60 * 60 * 1000;
-export const DEFAULT_GRUNT_MAX_TURNS = 40;
-export const DEFAULT_GRUNT_MAX_COST_USD = 2;
-export const DEFAULT_GRUNT_PARENT_CONTEXT_CHARS = 0;
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-grunt", "config.json");
 
-export function gruntTimeoutMs(value = process.env.PI_GRUNT_TIMEOUT_MS): number {
-  if (value === undefined) return DEFAULT_GRUNT_TIMEOUT_MS;
-  const timeout = Number(value);
-  if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 7_200_000)
-    throw new Error("PI_GRUNT_TIMEOUT_MS must be an integer between 1 and 7200000");
-  return timeout;
-}
-
-export function gruntMaxTurns(value: string | number | undefined = process.env.PI_GRUNT_MAX_TURNS): number {
-  if (value === undefined) return DEFAULT_GRUNT_MAX_TURNS;
-  const turns = Number(value);
-  if (!Number.isSafeInteger(turns) || turns < 1) throw new Error("PI_GRUNT_MAX_TURNS must be a positive safe integer");
-  return turns;
-}
-
-export function gruntMaxCostUsd(value = process.env.PI_GRUNT_MAX_COST_USD): number {
-  if (value === undefined) return DEFAULT_GRUNT_MAX_COST_USD;
-  const cost = Number(value);
-  if (!Number.isFinite(cost) || cost <= 0 || cost > 100)
-    throw new Error("PI_GRUNT_MAX_COST_USD must be a number greater than 0 and at most 100");
-  return cost;
-}
-
-export function gruntParentContextChars(value = process.env.PI_GRUNT_PARENT_CONTEXT_CHARS): number {
-  if (value === undefined) return DEFAULT_GRUNT_PARENT_CONTEXT_CHARS;
-  const chars = Number(value);
-  if (!Number.isInteger(chars) || chars < 0 || chars > 12_000)
-    throw new Error("PI_GRUNT_PARENT_CONTEXT_CHARS must be an integer between 0 and 12000");
-  return chars;
-}
+export const gruntTimeoutMs = (value?: unknown): number =>
+  effectivePackageSettingValue(gruntSettingFields.timeoutMs, value, process.env);
+export const gruntMaxTurns = (value?: unknown): number =>
+  effectivePackageSettingValue(gruntSettingFields.maxTurns, value, process.env);
+export const gruntMaxCostUsd = (value?: unknown): number =>
+  effectivePackageSettingValue(gruntSettingFields.maxCostUsd, value, process.env);
+export const gruntParentContextChars = (value?: unknown): number =>
+  effectivePackageSettingValue(gruntSettingFields.parentContextChars, value, process.env);
 
 export async function loadConfig(path = configPath()): Promise<GruntConfig> {
   return loadJsonConfig(
@@ -67,12 +104,14 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
         (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim())) ||
         (value.disabled !== undefined && typeof value.disabled !== "boolean") ||
         (value.mode !== undefined && !gruntModes.includes(value.mode)) ||
-        (value.maxTurns !== undefined && (!Number.isSafeInteger(value.maxTurns) || value.maxTurns < 1)) ||
         (value.thinkingLevels !== undefined &&
           (!Array.isArray(value.thinkingLevels) ||
             !value.thinkingLevels.length ||
             new Set(value.thinkingLevels).size !== value.thinkingLevels.length ||
-            !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel))))
+            !value.thinkingLevels.every((level: unknown) => thinkingLevels.includes(level as ThinkingLevel)))) ||
+        !Object.entries(gruntSettingFields).every(
+          ([key, field]) => value[key] === undefined || validPackageSettingValue(field, value[key]),
+        )
       )
         return undefined;
       return {
@@ -81,7 +120,10 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
         ...(value.disabled !== undefined ? { disabled: value.disabled } : {}),
         ...(value.mode !== undefined ? { mode: value.mode } : {}),
         ...(value.thinkingLevels !== undefined ? { thinkingLevels: value.thinkingLevels } : {}),
+        ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
         ...(value.maxTurns !== undefined ? { maxTurns: value.maxTurns } : {}),
+        ...(value.maxCostUsd !== undefined ? { maxCostUsd: value.maxCostUsd } : {}),
+        ...(value.parentContextChars !== undefined ? { parentContextChars: value.parentContextChars } : {}),
       } satisfies GruntConfig;
     },
     () => ({ version: 1 }),

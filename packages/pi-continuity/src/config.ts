@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { readVersionedJson, updateJson, writeJson } from "./storage.ts";
+import {
+  PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  definePackageSettings,
+  effectivePackageSettingValue,
+  validPackageSettingValue,
+  type PackageSettingField,
+} from "pylon-core/package-settings";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
@@ -12,6 +19,41 @@ export const validKeepRecentTokens = (value: unknown): value is number =>
   Number.isSafeInteger(value) &&
   (value as number) >= MIN_KEEP_RECENT_TOKENS &&
   (value as number) <= MAX_KEEP_RECENT_TOKENS;
+export const continuitySettingFields = {
+  compactionReviewTimeoutMs: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "compactionReviewTimeoutMs",
+    label: "Compaction review timeout",
+    type: "integer",
+    defaultValue: 60_000,
+    min: 1_000,
+    max: 300_000,
+    unit: "ms",
+    env: "PI_CONTINUITY_COMPACTION_REVIEW_TIMEOUT_MS",
+    apply: "next-operation",
+  },
+  compactionReviewerMaxOutputTokens: {
+    version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+    key: "compactionReviewerMaxOutputTokens",
+    label: "Compaction reviewer maximum output",
+    type: "integer",
+    defaultValue: 1_200,
+    min: 256,
+    max: 8_192,
+    unit: "tokens",
+    env: "PI_CONTINUITY_COMPACTION_REVIEWER_MAX_OUTPUT_TOKENS",
+    apply: "next-operation",
+  },
+} satisfies Record<string, PackageSettingField>;
+export const continuitySettings = definePackageSettings({
+  version: PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
+  packageId: "pi-continuity",
+  fields: Object.values(continuitySettingFields),
+});
+export const compactionReviewTimeoutMs = (value?: unknown): number =>
+  effectivePackageSettingValue(continuitySettingFields.compactionReviewTimeoutMs, value, process.env);
+export const compactionReviewerMaxOutputTokens = (value?: unknown): number =>
+  effectivePackageSettingValue(continuitySettingFields.compactionReviewerMaxOutputTokens, value, process.env);
 export type ContinuityConfig = {
   version: 2;
   memoryEnabled?: boolean;
@@ -20,6 +62,8 @@ export type ContinuityConfig = {
   executor?: ModelProfile;
   memoryReviewer?: ModelProfile;
   compactionReviewer?: ModelProfile;
+  compactionReviewTimeoutMs?: number;
+  compactionReviewerMaxOutputTokens?: number;
 };
 export const defaultConfig = (): ContinuityConfig => ({
   version: 2,
@@ -48,6 +92,8 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
           "executor",
           "memoryReviewer",
           "compactionReviewer",
+          "compactionReviewTimeoutMs",
+          "compactionReviewerMaxOutputTokens",
         ].includes(key),
     ) ||
     (value.memoryEnabled !== undefined && typeof value.memoryEnabled !== "boolean") ||
@@ -55,7 +101,10 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
     (value.planner !== undefined && !isProfile(value.planner)) ||
     (value.executor !== undefined && !isProfile(value.executor)) ||
     (value.memoryReviewer !== undefined && !isProfile(value.memoryReviewer)) ||
-    (value.compactionReviewer !== undefined && !isProfile(value.compactionReviewer))
+    (value.compactionReviewer !== undefined && !isProfile(value.compactionReviewer)) ||
+    !Object.entries(continuitySettingFields).every(
+      ([key, field]) => value[key] === undefined || validPackageSettingValue(field, value[key]),
+    )
   )
     return;
   return {
@@ -66,6 +115,12 @@ const normalizeConfig = (value: any): ContinuityConfig | undefined => {
     ...(value.executor ? { executor: value.executor } : {}),
     ...(value.memoryReviewer ? { memoryReviewer: value.memoryReviewer } : {}),
     ...(value.compactionReviewer ? { compactionReviewer: value.compactionReviewer } : {}),
+    ...(value.compactionReviewTimeoutMs !== undefined
+      ? { compactionReviewTimeoutMs: value.compactionReviewTimeoutMs }
+      : {}),
+    ...(value.compactionReviewerMaxOutputTokens !== undefined
+      ? { compactionReviewerMaxOutputTokens: value.compactionReviewerMaxOutputTokens }
+      : {}),
   };
 };
 export const isContinuityConfig = (value: any) => normalizeConfig(value) !== undefined;

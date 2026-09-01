@@ -27,6 +27,23 @@ test("shell invocation uses Pi-compatible Bash and honors configured paths", () 
   assert.equal(configured.args.at(-1), command);
 });
 
+test("manager uses configured timeout and completed-job retention", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-"));
+  const manager = new JobManager(dir, () => {}, 5_000, undefined, 1_234, 1);
+  await manager.init();
+  const job = await manager.start(`node -e "setTimeout(()=>{},1000)"`, process.cwd());
+  assert.equal(job.timeoutMs, 1_234);
+  manager.jobs.set("older", { ...job, id: "older", state: "completed", finishedAt: 1 } as Job);
+  manager.jobs.set("newer", { ...job, id: "newer", state: "completed", finishedAt: 2 } as Job);
+  manager.prune();
+  assert.equal(manager.jobs.has("newer"), true);
+  assert.equal(manager.jobs.has("older"), false);
+  manager.jobs.delete("newer");
+  await manager.stop(job);
+  await closed(job);
+  await manager.shutdown();
+});
+
 test("shutdown removes the current session directory", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);

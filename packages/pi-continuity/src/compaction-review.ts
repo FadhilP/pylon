@@ -10,8 +10,6 @@ import {
 } from "./compaction.ts";
 import { assertSafe, sanitizeAndClip, sanitizeAndClipWithPaths } from "./secrets.ts";
 
-const REVIEW_TIMEOUT_MS = 60_000;
-const REVIEW_MAX_TOKENS = 1_200;
 const REVIEW_PACKET_MAX_CHARS = 48_000;
 const REVIEW_MAX_CANDIDATES = 6;
 const REVIEW_MAX_QUOTE_CHARS = 800;
@@ -169,13 +167,15 @@ export async function callCompactionReviewer(input: {
   packet: CompactionReviewPacket;
   sessionId: string;
   signal?: AbortSignal;
+  timeoutMs: number;
+  maxOutputTokens: number;
   completeReview?: CompactionReviewCompletion;
 }): Promise<{ supplements: CompactionSupplement[]; telemetry: CompactionReviewTelemetry }> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   input.signal?.addEventListener("abort", abort, { once: true });
   if (input.signal?.aborted) controller.abort();
-  const timeout = setTimeout(() => controller.abort(), REVIEW_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   const started = Date.now();
   try {
     const message: Message = {
@@ -196,8 +196,8 @@ export async function callCompactionReviewer(input: {
         headers: input.auth.headers,
         env: input.auth.env,
         signal: controller.signal,
-        timeoutMs: REVIEW_TIMEOUT_MS,
-        maxTokens: REVIEW_MAX_TOKENS,
+        timeoutMs: input.timeoutMs,
+        maxTokens: input.maxOutputTokens,
         sessionId: `${input.sessionId}:compaction-review`,
         ...(input.profile.thinking && input.profile.thinking !== "off" ? { reasoning: input.profile.thinking } : {}),
       },
