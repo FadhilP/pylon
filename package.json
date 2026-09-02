@@ -1,6 +1,6 @@
 {
   "name": "@fadhilp/pylon",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "workspaces": [
     "packages/*",
     "platform/web"
@@ -24,6 +24,7 @@
   },
   "files": [
     "bin",
+    "CHANGELOG.json",
     "packages/*/bin/**",
     "packages/*/extensions/**",
     "packages/*/src/**",

@@ -124,6 +124,31 @@ test("manual CLI migration succeeds without loading the web server", async () =>
   assert.equal(await readFile(join(root, ".pylon", "agent", "settings.json"), "utf8"), "{}");
 });
 
+test("CLI changelog reads installed and historical releases without starting Pylon", async () => {
+  const root = await home();
+  const executable = fileURLToPath(new URL("../bin/pylon.mjs", import.meta.url));
+  const env = { ...process.env, HOME: root, USERPROFILE: root };
+  delete env.PI_CODING_AGENT_DIR;
+
+  const installed = spawnSync(process.execPath, [executable, "changelog"], { env, encoding: "utf8" });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.match(installed.stdout, /Pylon v2\.5\.2/);
+  assert.match(installed.stdout, /Changelogs from the command line/);
+
+  const historical = spawnSync(process.execPath, [executable, "changelog", "v2.0.1"], { env, encoding: "utf8" });
+  assert.equal(historical.status, 0, historical.stderr);
+  assert.match(historical.stdout, /Node\.js 22 compatibility/);
+
+  const list = spawnSync(process.execPath, [executable, "changelog", "--list"], { env, encoding: "utf8" });
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /v2\.1\.2/);
+
+  const missing = spawnSync(process.execPath, [executable, "changelog", "9.9.9"], { env, encoding: "utf8" });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /No changelog entry found/);
+  await assert.rejects(stat(join(root, ".pylon")), { code: "ENOENT" });
+});
+
 test("manual CLI migration fails without overwriting an invalid target", async () => {
   const root = await home();
   await legacy(root, { "auth.json": "legacy" });

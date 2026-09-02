@@ -311,10 +311,15 @@ test("running spawn updates expose the selected model", async () => {
 
 test("synchronous mode remains the default and waits for completion", async () => {
   let release!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => {
+    markStarted = resolve;
+  });
   const f = await fixture(
     () =>
       new Promise<SpawnRun>(resolve => {
         release = () => resolve(completed("waited"));
+        markStarted();
       }),
   );
   try {
@@ -326,7 +331,7 @@ test("synchronous mode remains the default and waits for completion", async () =
         settled = true;
         return result;
       });
-    for (let attempt = 0; attempt < 10 && !release; attempt++) await new Promise(resolve => setImmediate(resolve));
+    await started;
     assert.equal(settled, false);
     release();
     const result = await pending;

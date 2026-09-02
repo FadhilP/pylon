@@ -68,6 +68,14 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
     assert.ok(existsSync(join(packageRoot, "docs", "web", "README.md")));
     assert.ok(existsSync(join(packageRoot, "docs", "pylon-web.png")));
+    assert.ok(existsSync(join(packageRoot, "CHANGELOG.json")));
+
+    const changelog = spawnSync(process.execPath, [join(packageRoot, "bin", "pylon.mjs"), "changelog", "2.1.2"], {
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    assert.equal(changelog.status, 0, changelog.stderr);
+    assert.match(changelog.stdout, /Clearer setup and project documentation/);
 
     const adapterCheck = spawnSync(
       process.execPath,

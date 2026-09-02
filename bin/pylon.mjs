@@ -8,15 +8,29 @@ import { checkForUpdate } from "./update.mjs";
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
+function formatRelease(release) {
+  return [
+    `Pylon v${release.version} — ${release.title}`,
+    release.date,
+    "",
+    release.summary,
+    "",
+    "Updated:",
+    ...release.notes.map(note => `  - ${note}`),
+  ].join("\n");
+}
+
 const help = `Pylon — local web coding agent workspace built on Pi.
 
 Usage:
-  pylon                 Start Pylon for the current directory
-  pylon migrate         Retry migration from ~/.pi/agent
+  pylon                         Start Pylon for the current directory
+  pylon changelog [version]     Show the installed or selected release
+  pylon changelog --list        List available releases
+  pylon migrate                 Retry migration from ~/.pi/agent
 
 Options:
-  -h, --help            Show this help
-  --version             Print the installed version
+  -h, --help                    Show this help
+  --version                     Print the installed version
 
 Quick start:
   1. cd /path/to/your/project
@@ -34,6 +48,26 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(help);
 } else if (process.argv.includes("--version")) {
   console.log(version);
+} else if (process.argv[2] === "changelog") {
+  const releases = JSON.parse(readFileSync(new URL("../CHANGELOG.json", import.meta.url), "utf8"));
+  const requested = process.argv[3];
+  if (process.argv.length > 4) {
+    console.error("Usage: pylon changelog [version|--list]");
+    process.exitCode = 1;
+  } else if (requested === "--list") {
+    console.log(releases.map(release => `v${release.version} — ${release.date} — ${release.title}`).join("\n"));
+  } else {
+    const selectedVersion = (requested ?? version).replace(/^v/i, "");
+    const release = releases.find(item => item.version === selectedVersion);
+    if (!release) {
+      console.error(
+        `No changelog entry found for Pylon v${selectedVersion}. Run pylon changelog --list to see available releases.`,
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(formatRelease(release));
+    }
+  }
 } else if (process.argv[2] === "migrate") {
   try {
     const result = await migratePylonStorage();
