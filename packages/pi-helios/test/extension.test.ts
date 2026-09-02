@@ -330,6 +330,40 @@ test("agent browser resize changes the CSS viewport", async () => {
   await browser.execute("close", { action: "close" }, undefined, undefined, ctx);
 });
 
+test("agent browser start applies an initial CSS viewport", async () => {
+  const commands: Array<{ action: string; args: string[] }> = [];
+  const { tools } = runtime({
+    exec: async (_command: string, args: string[]) => {
+      const action = args.find(value => ["open", "resize", "tab-list", "close"].includes(value)) ?? "unknown";
+      commands.push({ action, args });
+      if (action === "tab-list")
+        return {
+          code: 0,
+          stdout: JSON.stringify({ result: "- 0: (current) [Example](https://example.com/)" }),
+          stderr: "",
+          killed: false,
+        };
+      return { code: 0, stdout: "{}", stderr: "", killed: false };
+    },
+  });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  const result = await browser.execute(
+    "start-sized",
+    { action: "start", url: "https://example.com", width: 1440, height: 900 },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.match(result.content[0].text, /Browser start completed/);
+  assert.deepEqual(
+    commands.slice(0, 3).map(command => command.action),
+    ["open", "resize", "tab-list"],
+  );
+  assert.deepEqual(commands[1].args.slice(-3), ["resize", "1440", "900"]);
+  await browser.execute("close", { action: "close" }, undefined, undefined, ctx);
+});
+
 test("embedded browser bridge launches headless, returns an ephemeral frame, and closes", async () => {
   const commands: string[] = [];
   const { eventHandlers } = runtime({

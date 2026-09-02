@@ -54,6 +54,68 @@ const INVALIDATES_CONTINUATIONS = new Set([
   "tab-close",
 ]);
 
+const BROWSER_NAMED_KEYS = [
+  "Alt",
+  "AltGraph",
+  "AltLeft",
+  "AltRight",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "AudioVolumeDown",
+  "AudioVolumeMute",
+  "AudioVolumeUp",
+  "Backquote",
+  "Backslash",
+  "Backspace",
+  "BracketLeft",
+  "BracketRight",
+  "CapsLock",
+  "Comma",
+  "ContextMenu",
+  "Control",
+  "ControlLeft",
+  "ControlOrMeta",
+  "ControlRight",
+  "Delete",
+  "End",
+  "Enter",
+  "Equal",
+  "Escape",
+  "Home",
+  "Insert",
+  "MediaPlayPause",
+  "MediaTrackNext",
+  "MediaTrackPrevious",
+  "Meta",
+  "MetaLeft",
+  "MetaRight",
+  "Minus",
+  "NumLock",
+  "NumpadAdd",
+  "NumpadDecimal",
+  "NumpadDivide",
+  "NumpadEnter",
+  "NumpadMultiply",
+  "NumpadSubtract",
+  "PageDown",
+  "PageUp",
+  "Pause",
+  "Period",
+  "PrintScreen",
+  "Quote",
+  "ScrollLock",
+  "Semicolon",
+  "Shift",
+  "ShiftLeft",
+  "ShiftRight",
+  "Slash",
+  "Space",
+  "Tab",
+] as const;
+const CANONICAL_BROWSER_NAMED_KEY = new Map(BROWSER_NAMED_KEYS.map(key => [key.toLowerCase(), key]));
+
 export type BrowserOwnership = "owned" | "cdp-attached" | "extension-attached";
 export type BrowserAction =
   | { kind: "open"; url?: string; profileDirectory: string; headed: boolean }
@@ -151,6 +213,31 @@ function target(value: string): string {
   if (!isElementReference(value))
     throw new Error("Browser element target must be a current snapshot reference such as e12 or f1e12");
   return value;
+}
+
+function canonicalBrowserKeyToken(key: string): string {
+  if (key.length <= 1) return key;
+  const lower = key.toLowerCase();
+  const named = CANONICAL_BROWSER_NAMED_KEY.get(lower);
+  if (named) return named;
+  if (/^f(?:[1-9]|1[0-2])$/u.test(lower)) return lower.toUpperCase();
+  const code = /^(digit|key|numpad)([a-z0-9])$/u.exec(lower);
+  if (!code) return key;
+  return `${code[1][0].toUpperCase()}${code[1].slice(1)}${code[2].toUpperCase()}`;
+}
+
+function canonicalBrowserKey(key: string): string {
+  let result = "";
+  let token = "";
+  for (const character of key) {
+    if (character === "+" && token) {
+      result += `${canonicalBrowserKeyToken(token)}+`;
+      token = "";
+    } else {
+      token += character;
+    }
+  }
+  return result + canonicalBrowserKeyToken(token);
 }
 
 const CREDENTIAL_PATTERNS: RegExp[] = [
@@ -621,7 +708,10 @@ export class PlaywrightCli {
           ],
           ...(webIsolation ? { proxy: webIsolation.proxy } : {}),
         },
-        ...(webIsolation ? { contextOptions: { acceptDownloads: false, serviceWorkers: "block" } } : {}),
+        contextOptions: {
+          viewport: { width: 1440, height: 900 },
+          ...(webIsolation ? { acceptDownloads: false, serviceWorkers: "block" as const } : {}),
+        },
       },
     });
   }
@@ -951,7 +1041,7 @@ export class PlaywrightCli {
       case "press":
         if (!action.key || action.key.length > 64 || !/^[\w +\-]+$/u.test(action.key))
           throw new Error("Unsupported browser key");
-        return { command: "press", args: [action.key], timeout: normal };
+        return { command: "press", args: [canonicalBrowserKey(action.key)], timeout: normal };
       case "select":
         if (!action.value || action.value.length > 1000)
           throw new Error("Select value must contain 1 to 1000 characters");
@@ -976,7 +1066,11 @@ export class PlaywrightCli {
       case "key-up":
         if (!action.key || action.key.length > 64 || /[\r\n\0]/u.test(action.key))
           throw new Error("Unsupported browser key");
-        return { command: action.kind === "key-down" ? "keydown" : "keyup", args: [action.key], timeout: normal };
+        return {
+          command: action.kind === "key-down" ? "keydown" : "keyup",
+          args: [canonicalBrowserKey(action.key)],
+          timeout: normal,
+        };
       case "resize":
         if (
           !Number.isInteger(action.width) ||

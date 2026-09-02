@@ -73,6 +73,29 @@ test("adapter invokes thin pinned CLI launcher with argument array and private c
   }
 });
 
+test("adapter canonicalizes named browser keys without changing printable key case", async () => {
+  const calls: string[][] = [];
+  const cli = await PlaywrightCli.create(async (_command, args) => {
+    calls.push(args);
+    return { code: 0, stdout: "{}", stderr: "", killed: false };
+  });
+  try {
+    await cli.run(SESSION, { kind: "press", key: "ENTER" });
+    await cli.run(SESSION, { kind: "press", key: "control+A" });
+    await cli.run(SESSION, { kind: "press", key: "+" });
+    assert.deepEqual(
+      calls.map(args => args.slice(3, 5)),
+      [
+        ["press", "Enter"],
+        ["press", "Control+A"],
+        ["press", "+"],
+      ],
+    );
+  } finally {
+    await cli.dispose();
+  }
+});
+
 test("persistent client handles hot actions while lifecycle stays on thin launcher", async () => {
   const thinCalls: string[][] = [];
   const helperCalls: string[] = [];
@@ -400,6 +423,7 @@ test("owned visibility controls config and headed CLI flag", async () => {
     assert.ok(configArg);
     const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.equal(config.browser.launchOptions.headless, true);
+    assert.deepEqual(config.browser.contextOptions.viewport, { width: 1440, height: 900 });
     assert.equal(config.allowUnrestrictedFileAccess, true);
   } finally {
     await cli.dispose();
@@ -420,7 +444,11 @@ test("web isolation config uses a capability endpoint without proxy credentials"
     assert.ok(configArg);
     const config = JSON.parse(await readFile(configArg.slice("--config=".length), "utf8"));
     assert.deepEqual(config.browser.launchOptions.proxy, { server });
-    assert.deepEqual(config.browser.contextOptions, { acceptDownloads: false, serviceWorkers: "block" });
+    assert.deepEqual(config.browser.contextOptions, {
+      viewport: { width: 1440, height: 900 },
+      acceptDownloads: false,
+      serviceWorkers: "block",
+    });
     assert.equal(config.allowUnrestrictedFileAccess, false);
   } finally {
     await cli.dispose();

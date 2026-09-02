@@ -261,10 +261,20 @@ const browserActionFields = {
   regex: Type.Optional(
     Type.String({ maxLength: 500, description: "Regular expression to find; keep specific to avoid large match sets" }),
   ),
-  key: Type.Optional(Type.String({ maxLength: 64 })),
+  key: Type.Optional(
+    Type.String({
+      maxLength: 64,
+      description:
+        "Keyboard key or chord, such as Enter, ArrowLeft, or Control+A; named keys are case-insensitive, while single-character case is preserved",
+    }),
+  ),
   value: Type.Optional(Type.String({ maxLength: 1000 })),
-  width: Type.Optional(Type.Integer({ minimum: 320, maximum: 1920, description: "Viewport width in CSS pixels" })),
-  height: Type.Optional(Type.Integer({ minimum: 240, maximum: 1080, description: "Viewport height in CSS pixels" })),
+  width: Type.Optional(
+    Type.Integer({ minimum: 320, maximum: 1920, description: "Viewport width for start or resize; requires height" }),
+  ),
+  height: Type.Optional(
+    Type.Integer({ minimum: 240, maximum: 1080, description: "Viewport height for start or resize; requires width" }),
+  ),
   depth: Type.Optional(
     Type.Integer({
       minimum: 1,
@@ -1108,7 +1118,7 @@ export default function heliosExtension(
       "Reuse returned snapshots; request another only when absent, truncated, or insufficient. Prefer targeted screenshots; use fullPage only for whole-page context.",
       "Use continuation cursors for remaining output; each chunk replaces prior refs. Refine truncated searches instead of broadening.",
       "Batch only known refs. Use plan only for deterministic, non-consequential steps; each match must resolve uniquely and execution stops on ambiguity or page change.",
-      "Use resize with CSS-pixel width and height for responsive layouts; swap dimensions for landscape. This is viewport manipulation, not full device emulation.",
+      "Supply both CSS-pixel width and height on start when the initial viewport size matters; use resize to change an active browser. Swap dimensions for landscape. This is viewport manipulation, not full device emulation.",
       "For local HTML prototypes, use an explicit file: URL ending in .html or .htm; raw filesystem paths are not accepted.",
     ],
     parameters: browserSchema,
@@ -1120,9 +1130,13 @@ export default function heliosExtension(
       const executeAction = async (params: BrowserParams) => {
         const id = sessionId(ctx);
         if (params.action === "start") {
-          rejectExtra(params, ["url", "browser"]);
+          rejectExtra(params, ["url", "browser", "width", "height"]);
+          const viewport =
+            params.width === undefined && params.height === undefined
+              ? undefined
+              : { width: requireField(params, "width"), height: requireField(params, "height") };
           const result = await withBrowserStatus(ctx, "start", () =>
-            manager.start(id, params.url, signal, ownedHeaded),
+            manager.start(id, params.url, signal, ownedHeaded, undefined, viewport),
           );
           return {
             content: [{ type: "text" as const, text: describe(result) }],

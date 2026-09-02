@@ -168,7 +168,7 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
       pi.events.emit("pylon:tool-policy", {
         version: 1,
         kind: "register",
-        owner: "pi-pylon-docs",
+        owner: "pylon-core",
         managedTools: ["pylon_docs"],
         enabledTools: ["pylon_docs"],
         deferredTools: ["pylon_docs"],
@@ -180,7 +180,7 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
     },
     shutdown() {
       disposeHostContext();
-      if (deferred) pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-pylon-docs" });
+      if (deferred) pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pylon-core" });
     },
   };
 }

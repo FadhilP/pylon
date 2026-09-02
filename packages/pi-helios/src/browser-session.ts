@@ -250,6 +250,7 @@ export class BrowserSessionManager {
     signal?: AbortSignal,
     headed = false,
     webIsolation?: { proxy: { server: string } },
+    viewport?: { width: number; height: number },
   ): Promise<BrowserOperationResult> {
     if (this.sessions.has(piSessionId)) throw new Error("Pi session already has an active Helios browser session");
     const cli = await this.createCli(this.exec);
@@ -278,9 +279,16 @@ export class BrowserSessionManager {
     try {
       await cli.configureOwned(record.profileDirectory!, headed, webIsolation);
       const action = { kind: "open", url, profileDirectory: record.profileDirectory!, headed } as const;
-      const result = await cli.run(record.cliSessionName, action, signal);
-      record.state = "ready";
+      let result = await cli.run(record.cliSessionName, action, signal);
       this.updateReferences(managed, action, result.snapshot);
+      if (viewport) {
+        const resize = { kind: "resize", ...viewport } as const;
+        const resized = await cli.run(record.cliSessionName, resize, signal);
+        this.updateReferences(managed, resize, resized.snapshot);
+        managed.viewportLocked = true;
+        if (resized.snapshot !== undefined) result = resized;
+      }
+      record.state = "ready";
       return await this.envelope(managed, "start", result, signal, false, startedAt);
     } catch (error) {
       const cleaned = await this.cleanupUncertainStart(managed, "close");

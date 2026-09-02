@@ -79,7 +79,7 @@ export function ToolCallTrack({
 }: {
   calls: ToolCallView[];
   slots?: number | "auto";
-  variant?: "dock" | "group";
+  variant?: "lane" | "group";
 }) {
   const trackRef = useRef<HTMLSpanElement>(null);
   const [measuredSlots, setMeasuredSlots] = useState(32);
@@ -102,7 +102,7 @@ export function ToolCallTrack({
   const ticks = toolCallTrackTicks(calls, resolvedSlots);
   const emptySlots = resolvedSlots === undefined ? 0 : Math.max(0, resolvedSlots - ticks.length);
   return (
-    <span ref={trackRef} className={variant === "dock" ? "agent-dock-track" : "tool-call-track"} aria-hidden="true">
+    <span ref={trackRef} className={variant === "lane" ? "agent-lane-track" : "tool-call-track"} aria-hidden="true">
       {ticks.map(tick => (
         <i
           key={tick.key}
@@ -111,7 +111,7 @@ export function ToolCallTrack({
               ? "is-live"
               : tick.status === "failed"
                 ? "is-error"
-                : variant === "dock"
+                : variant === "lane"
                   ? "is-call"
                   : undefined
           }

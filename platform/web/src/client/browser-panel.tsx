@@ -22,11 +22,6 @@ import { runtimeStore } from "./runtime/event-store";
 
 type Action = Omit<HeliosBrowserCommand, "expectedGeneration">;
 
-function viewportSize(element: HTMLElement | null) {
-  const width = Math.round(element?.clientWidth ?? 900);
-  const height = Math.round(element?.clientHeight ?? 650);
-  return { width: Math.max(320, Math.min(1920, width)), height: Math.max(240, Math.min(1080, height)) };
-}
 
 function navigableUrl(value: string): string {
   const trimmed = value.trim();
@@ -194,46 +189,6 @@ export function BrowserPanel({
     };
   }, [browser?.controlled]);
 
-  useEffect(() => {
-    if (!browser?.active || browser.ownership !== "owned" || browser.state !== "ready" || !viewportRef.current) return;
-    let timer: number | undefined;
-    let sending = false;
-    let pending: { width: number; height: number } | undefined;
-    let lastSent = "";
-    const flush = async () => {
-      timer = undefined;
-      if (sending || !pending || document.hidden) return;
-      const next = pending;
-      pending = undefined;
-      const key = `${next.width}x${next.height}`;
-      if (key === lastSent) return;
-      sending = true;
-      try {
-        await request({ action: "resize", ...next }, true);
-        lastSent = key;
-      } catch {
-        /* A later observation retries the latest size. */
-      } finally {
-        sending = false;
-        if (pending) timer = window.setTimeout(flush, 300);
-      }
-    };
-    const schedule = () => {
-      if (document.hidden) return;
-      pending = viewportSize(viewportRef.current);
-      if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(flush, 300);
-    };
-    const observer = new ResizeObserver(schedule);
-    observer.observe(viewportRef.current);
-    document.addEventListener("visibilitychange", schedule);
-    schedule();
-    return () => {
-      observer.disconnect();
-      document.removeEventListener("visibilitychange", schedule);
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [browser?.active, browser?.controlled, browser?.ownership, browser?.state]);
   const run = async (label: string, action: Action) => {
     if (busy) return;
     setBusy(label);
@@ -436,11 +391,7 @@ export function BrowserPanel({
             type="button"
             disabled={Boolean(busy)}
             onClick={() =>
-              void run("Launch browser", {
-                action: "start",
-                url: navigableUrl(address),
-                ...viewportSize(viewportRef.current),
-              })
+              void run("Launch browser", { action: "start", url: navigableUrl(address), width: 1440, height: 900 })
             }>
             {busy || "Launch"}
           </button>

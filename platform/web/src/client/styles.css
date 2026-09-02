@@ -6,12 +6,12 @@
   button { color: inherit; }
 }
 @layer base {
-  :root { color-scheme: light; --shell: #e9eaec; --sidebar: #e9eaec; --surface: #f7f7f8; --surface-raised: #ffffff; --surface-subtle: #f0f1f2; --surface-hover: #e8eaed; --surface-active: #dfe3e7; --code-bg: #f5f6f7; --line: #d9dce0; --line-strong: #c9cdd3; --text: #1b1e23; --text-soft: #555d68; --text-muted: #7b838e; --accent: #668fa3; --accent-soft: #e4edf1; --accent-text: #456879; --accent-contrast: #10242d; --green: #2e7b4f; --green-soft: #dceee3; --amber: #9a6720; --amber-soft: #f4e9d5; --red: #a64242; --red-soft: #f5dddd; --violet: #6955a6; --violet-soft: #e8e1f5; --teal: #1f7d72; --lime: #5f7d2e; --magenta: #94418a; --shadow: 0 18px 48px rgb(44 50 58 / 10%); --radius-panel: 10px; --radius-control: 6px; --rail-width: 48px; --sidebar-width: 248px; --header-height: 36px; --motion-fast: 120ms; --motion-standard: 160ms; --motion-ease-out: cubic-bezier(0.2, 0.75, 0.2, 1); --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="7" viewBox="0 0 10 7"><path d="M1 1.5 5 5.5 9 1.5" fill="none" stroke="%237b838e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'); interpolate-size: allow-keywords; font-family: "OpenAI Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
+  :root { color-scheme: light; --shell: #e9eaec; --sidebar: #e9eaec; --surface: #f7f7f8; --surface-raised: #ffffff; --surface-subtle: #f0f1f2; --surface-hover: #e8eaed; --surface-active: #dfe3e7; --code-bg: #f5f6f7; --line: #d9dce0; --line-strong: #c9cdd3; --text: #1b1e23; --text-soft: #555d68; --text-muted: #7b838e; --accent: #457488; --accent-soft: #e4edf1; --accent-text: #456879; --accent-contrast: #ffffff; --green: #2e7b4f; --green-soft: #dceee3; --amber: #9a6720; --amber-soft: #f4e9d5; --red: #a64242; --red-soft: #f5dddd; --violet: #6955a6; --violet-soft: #e8e1f5; --teal: #1f7d72; --lime: #5f7d2e; --magenta: #94418a; --shadow: 0 18px 48px rgb(44 50 58 / 10%); --radius-panel: 10px; --radius-control: 6px; --rail-width: 48px; --sidebar-width: 248px; --header-height: 36px; --motion-fast: 120ms; --motion-standard: 160ms; --motion-ease-out: cubic-bezier(0.2, 0.75, 0.2, 1); --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="7" viewBox="0 0 10 7"><path d="M1 1.5 5 5.5 9 1.5" fill="none" stroke="%237b838e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'); interpolate-size: allow-keywords; font-family: "OpenAI Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
   :root[data-theme="dark"] { color-scheme: dark; --shell: #111318; --sidebar: #111318; --surface: #181c22; --surface-raised: #1d2229; --surface-subtle: #20252d; --surface-hover: #252b34; --surface-active: #29313b; --code-bg: #12161c; --line: #2e353f; --line-strong: #3b4551; --text: #e7eaf0; --text-soft: #abb3bf; --text-muted: #7f8996; --accent: #8cb4c4; --accent-soft: #263940; --accent-text: #b8d5df; --accent-contrast: #10242d; --green: #86d39a; --green-soft: #1b3125; --amber: #e8c07d; --amber-soft: #392f20; --red: #f08b8b; --red-soft: #3a2428; --violet: #c4b5fd; --violet-soft: #302a48; --teal: #6fd2c4; --lime: #b9d37f; --magenta: #e39ad8; --shadow: -7px 0 24px rgb(0 0 0 / 26%); --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="7" viewBox="0 0 10 7"><path d="M1 1.5 5 5.5 9 1.5" fill="none" stroke="%237f8996" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
   :root { --blue: #3f6fa8; }
   :root[data-theme="dark"] { --blue: #8ab4e8; }
-  :root { --track-empty: var(--line); --track-filled: var(--line-strong); --track-open-opacity: 0.35; }
-  :root[data-theme="dark"] { --track-empty: var(--text-muted); }
+  :root { --track-empty: var(--line); --track-filled: var(--line-strong); --track-open-opacity: 0.45; }
+  :root[data-theme="dark"] { --track-empty: color-mix(in srgb, var(--line-strong) 72%, var(--text-muted)); --track-filled: color-mix(in srgb, var(--line-strong) 72%, var(--text-muted));}
   :root[data-theme="warm"] { color-scheme: light; --shell: #eee8dd; --sidebar: #eee8dd; --surface: #faf7f0; --surface-raised: #fffdf8; --surface-subtle: #f3ede2; --surface-hover: #ece3d5; --surface-active: #e3d6c5; --code-bg: #f6f0e6; --line: #ddd2c2; --line-strong: #cdbfa9; --text: #28231f; --text-soft: #655b52; --text-muted: #776b60; --accent: #b17a52; --accent-soft: #f2dfd0; --accent-text: #7b482c; --accent-contrast: #2d180d; --green: #44684d; --green-soft: #e0ebdf; --amber: #825218; --amber-soft: #f3e4c9; --red: #953e37; --red-soft: #f2ddd8; --violet: #674d83; --violet-soft: #e9e0ef; --teal: #47756d; --lime: #657239; --magenta: #92566f; --blue: #4b6e91; --shadow: 0 18px 48px rgb(87 61 37 / 13%); --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="7" viewBox="0 0 10 7"><path d="M1 1.5 5 5.5 9 1.5" fill="none" stroke="%23776b60" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
   :root { --syntax-bg: #282c34; --syntax-fg: #abb2bf; --syntax-muted: #7f848e; --syntax-border: #3e4452; }
   :root[data-syntax-theme="github-dark"] { --syntax-bg: #24292e; --syntax-fg: #e1e4e8; --syntax-muted: #6a737d; --syntax-border: #444d56; }
@@ -399,7 +399,7 @@
   .app-error-toast button:hover { background: var(--surface-hover); color: var(--text); }
   .app-recovery-toast button { width: auto; height: auto; flex-basis: auto; padding: 3px 5px; color: var(--accent-text); font-size: 12px; }
   .agents-panel.has-selection > header { box-shadow: inset 3px 0 var(--agent-color); }
-  /* Agents panel layout. Keep these values in sync with prototypes/agents.html. */
+  /* Agents panel layout. Keep these values in sync with prototypes/agent-panel-lane.html. */
   .agents-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
   .agents-filterbar { display: flex; min-height: 39px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
   .agents-filter-pills { display: flex; min-width: 0; gap: 2px; }
@@ -413,23 +413,33 @@
   .agent-turn-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 13px 14px 5px; }
   .agent-turn-group > header strong { font-size: 12px; font-weight: 620; }
   .agent-turn-group > header span { color: var(--text-muted); font-size: 12px; }
-  /* Status lives on the orb rail rather than a 64px column, so the task line keeps the width. */
-  .agent-run-row { display: grid; width: 100%; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent); background: transparent; text-align: left; }
-  .agent-turn-group > header + .agent-run-row { border-top: 0; }
+  /* A run is a lane: the agent's colour on the edge, cost on the identity line,
+     and the tool-call track along the bottom rule with its totals riding on it.
+     Shared with the active-agents dock — see .agent-dock-entry. */
+  .agent-lane { position: relative; }
+  .agent-lane::before { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--agent-color, var(--line-strong)); content: ""; opacity: 0.85; }
+  .agent-lane-base { position: absolute; right: 14px; bottom: 0; left: 16px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+  .agent-lane-base > .agent-lane-track { flex: 1; height: 14px; transform: translateY(1px); }
+  /* The label sits on the rule and cuts it, so the track reads as the row's floor. */
+  .agent-lane-base > small { position: relative; bottom: -1px; flex: 0 0 auto; padding-left: 8px; color: var(--text-muted); font-size: 12px; }
+  .agent-identity { display: flex; min-width: 0; align-items: center; gap: 7px; }
+  .agent-name { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-kind-chip { flex: 0 3 auto; overflow: hidden; padding: 1px 6px; border-radius: 4px; background: var(--agent-soft, var(--surface-active)); color: var(--agent-color, var(--text-soft)); font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-run-row { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 10px; padding: 11px 14px 18px 16px; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
   .agent-run-row:hover { background: var(--surface-subtle); }
   .agent-run-row:active { background: var(--surface-active); }
-  .agent-run-copy { display: grid; min-width: 0; gap: 3px; }
-  .agent-run-name { display: flex; min-width: 0; align-items: baseline; gap: 6px; overflow: hidden; color: var(--text-soft); font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-instance-name { color: var(--agent-color, var(--text)); }
-  .agent-run-task { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-run-meta { display: flex; min-width: 0; gap: 6px; overflow: hidden; color: var(--text-muted); font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; }
-  .agent-run-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-run-meta span + span::before { margin-right: 6px; color: var(--line-strong); content: "·"; }
-  .agent-run-values { display: grid; flex: 0 0 auto; gap: 3px; justify-items: end; font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
-  .agent-run-cost { color: var(--text-soft); font-weight: 500; }
-  .agent-run-duration { color: var(--text-muted); }
-  .agent-run-row.is-running .agent-run-duration { color: var(--accent-text); }
-  .agent-run-row.is-failed .agent-run-duration { color: var(--red); }
+  .agent-run-name { display: flex; min-width: 0; align-items: baseline; gap: 7px; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+  .agent-run-name > .overview-orb-cell { align-self: center; }
+  /* The model gives up width first, then the chip, then the name; in a narrow
+     panel it drops out entirely rather than truncating three things at once. */
+  .agent-run-name em { flex: 0 100 auto; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; font-style: normal; font-weight: 400; text-overflow: ellipsis; }
+  @container (max-width: 340px) { .agent-run-name em { display: none; } }
+  .agent-run-task { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-run-cost { flex: 0 0 auto; color: var(--text-soft); font-size: 12px; font-weight: 500; }
+  .agent-run-row .agent-lane-base > small { background: var(--surface); }
+  .agent-run-row:hover .agent-lane-base > small { background: var(--surface-subtle); }
+  .agent-run-row.is-running .agent-lane-base time { color: var(--accent-text); }
+  .agent-run-row.is-failed .agent-lane-base time { color: var(--red); }
   .agents-filter-empty { display: grid; min-height: 180px; place-items: center; padding: 24px; color: var(--text-muted); font-size: 12px; text-align: center; }
   .agents-empty { display: flex; min-height: 240px; align-items: center; justify-content: center; flex: 1; flex-direction: column; gap: 7px; padding: 24px; color: var(--text-muted); font-size: 12px; text-align: center; }
   .agents-empty strong { color: var(--text-soft); font-size: 13px; }
@@ -540,32 +550,32 @@
   @media (min-width: 901px) {
     .conversation-panel:has(> .history-rail) > .message-stream { padding-left: clamp(48px, 6cqw, 78px); }
   }
-  .agent-dock { position: absolute; z-index: 12; top: 12px; right: 12px; display: grid; width: min(256px, calc(100% - 24px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: color-mix(in srgb, var(--surface-raised) 94%, transparent); box-shadow: 0 5px 5px rgb(0 0 0 / 14%); backdrop-filter: blur(10px); animation: active-agent-in var(--motion-standard) var(--motion-ease-out); }
+  .agent-dock { position: absolute; z-index: 12; top: 12px; right: 12px; display: grid; width: min(320px, calc(100% - 24px)); overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; background: color-mix(in srgb, var(--surface-raised) 86%, transparent); box-shadow: 0 5px 5px rgb(0 0 0 / 14%); animation: active-agent-in var(--motion-standard) var(--motion-ease-out); }
   .agent-dock.is-exiting { pointer-events: none; animation: active-agent-out 140ms var(--motion-ease-out) forwards; }
   .agent-dock-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 11px 7px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: 12px; }
   .agent-dock-head b { color: var(--text-soft); font-weight: 550; }
-  .agent-dock-entry { display: grid; width: 100%; min-width: 0; grid-template-columns: 7px minmax(0, 1fr); align-items: center; gap: 5px 9px; padding: 9px 10px 10px; color: var(--text-soft); text-align: left; transition: background-color var(--motion-fast) ease; }
-  .agent-dock-entry + .agent-dock-entry { border-top: 1px solid var(--line); }
+  .agent-dock-entry { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 10px; padding: 9px 11px 18px 15px; border-bottom: 1px solid var(--line); color: var(--text-soft); text-align: left; transition: background-color var(--motion-fast) ease; }
+  /* The card's last entry has no rule to cut, so its track sits off the edge instead of flush. */
+  .agent-dock > .agent-dock-entry:last-child { border-bottom: 0; padding-bottom: 24px; }
+  .agent-dock > .agent-dock-entry:last-child .agent-lane-base { bottom: 6px; }
   .agent-dock-entry:hover, .agent-dock-more:hover { background: var(--surface-hover); }
-  .agent-dock-entry > .overview-orb { grid-column: 1; }
-  .agent-dock-line { display: flex; min-width: 0; grid-column: 2; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .agent-dock-name { overflow: hidden; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-dock-elapsed { flex: 0 0 auto; color: var(--text-soft); font-size: 12px; }
-  .agent-dock-kind { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .agent-dock-spend { display: flex; flex: 0 0 auto; align-items: baseline; gap: 7px; font-size: 12px; }
-  .agent-dock-spend .calls { color: var(--text-muted); }
-  .agent-dock-spend .sep { color: var(--line-strong); }
-  .agent-dock-spend .cost { color: var(--text-soft); }
-  .agent-dock-spend .cost.is-hot { color: var(--amber); font-weight: 550; }
-  .agent-dock-track { display: flex; overflow: hidden; grid-column: 2; align-items: flex-end; height: 18px; padding-top: 4px; gap: 3px; margin-top: 3px; }
-  .agent-dock-track i, .tool-call-track i { width: 3px; height: 3px; flex: 0 0 3px; border-radius: 1px; transition: height var(--motion-standard) linear; }
-  .agent-dock-track i { background: var(--track-empty); }
-  .agent-dock-track i.is-call, .tool-call-track i { background: var(--track-filled); }
-  .agent-dock-track i.is-error, .tool-call-track i.is-error { min-height: 9px; background: var(--red); }
-  .agent-dock-track i.is-live { background: var(--agent-color, var(--accent)); }
-  .agent-dock-track i.is-live, .tool-call-track i.is-live { transform-origin: bottom; animation: active-agent-rise 1.5s ease-in-out infinite; }
+  .agent-dock-name { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--text); font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+  .agent-dock-name > .agent-name { flex: 0 1 auto; }
+  .agent-dock-cost { flex: 0 0 auto; color: var(--text-soft); font-size: 12px; }
+  .agent-dock-cost.is-hot { color: var(--amber); font-weight: 550; }
+  .agent-dock-task { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-dock-entry .agent-lane-base { right: 11px; left: 15px; }
+  .agent-dock-entry .agent-lane-base > small { background: color-mix(in srgb, var(--surface-raised) 97%, transparent); }
+  .agent-dock-entry:hover .agent-lane-base > small { background: var(--surface-hover); }
+  .agent-lane-track { display: flex; overflow: hidden; align-items: flex-end; gap: 3px; }
+  .agent-lane-track i, .tool-call-track i { width: 3px; height: 3px; flex: 0 0 3px; border-radius: 1px; transition: height var(--motion-standard) linear; }
+  .agent-lane-track i { background: var(--track-empty); }
+  .agent-lane-track i.is-call, .tool-call-track i { background: var(--track-filled); }
+  .agent-lane-track i.is-error, .tool-call-track i.is-error { min-height: 9px; background: var(--red); }
+  .agent-lane-track i.is-live { background: var(--agent-color, var(--accent)); }
+  .agent-lane-track i.is-live, .tool-call-track i.is-live { transform-origin: bottom; animation: active-agent-rise 1.5s ease-in-out infinite; }
   .agent-dock .overview-orb.is-running, .agent-dock .overview-orb.is-attention { animation: active-agent-swell 1.5s ease-in-out infinite; }
-  .agent-dock-more { padding: 8px 11px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 12px; text-align: left; }
+  .agent-dock-more { padding: 8px 11px; color: var(--text-muted); font-size: 12px; text-align: left; }
   @keyframes active-agent-rise { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(1.28); } }
   @keyframes active-agent-swell { 0%, 100% { opacity: 0.7; transform: scale(1); } 50% { opacity: 1; transform: scale(1.16); } }
   .transcript-layout { display: block; width: min(820px, 100%); min-width: 0; align-self: center; }
@@ -906,7 +916,7 @@
   .queue-actions button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
   .queue-actions button:active:not(:disabled) { transform: translateY(1px); }
   .prompt-send, .prompt-abort { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; transition: background 150ms ease, color 150ms ease, transform 100ms ease; }
-  .prompt-send { background: var(--text); color: var(--surface-raised); }
+  .prompt-send { background: var(--accent); color: var(--accent-contrast); }
   .prompt-send-spinner { animation: spin 800ms linear infinite; }
   .prompt-send:hover:not(:disabled) { transform: translateY(-1px); }
   .prompt-send:active:not(:disabled), .prompt-abort:active:not(:disabled) { transform: translateY(1px); }
@@ -2118,10 +2128,10 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .browser-empty strong { color: var(--text); font-size: 14px; }
 .browser-empty span { max-width: 320px; font-size: 12px; line-height: 1.5; }
 .browser-empty button { margin-top: 5px; padding: 7px 11px; border-radius: 7px; background: var(--accent); color: white; font-size: 12px; font-weight: 620; }
-.browser-viewport { position: relative; display: grid; min-width: 0; min-height: 240px; flex: 1; place-items: center; overflow: hidden; outline: none; background: #16181d; cursor: default; touch-action: none; user-select: none; }
+.browser-viewport { position: relative; display: flex; min-width: 0; min-height: 240px; flex: 1; overflow: auto; outline: none; background: #16181d; cursor: default; touch-action: none; user-select: none; }
 .browser-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
-.browser-viewport img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-.browser-viewport > span { display: flex; align-items: center; gap: 8px; color: #9ca3af; font-size: 12px; }
+.browser-viewport img { width: auto; height: auto; max-width: 100%; max-height: 100%; flex: 0 0 auto; margin: auto; object-fit: contain; pointer-events: none; }
+.browser-viewport > span { display: flex; align-items: center; gap: 8px; margin: auto; color: #9ca3af; font-size: 12px; }
 .browser-viewport small { position: absolute; right: 8px; bottom: 7px; padding: 3px 6px; border-radius: 5px; background: rgb(0 0 0 / 64%); color: #d1d5db; font-size: 12px; pointer-events: none; }
 .app-shell.has-session-strip { grid-template-rows: 52px minmax(0, 1fr); padding-top: 0; }
 .app-shell.has-session-strip > .sidebar { grid-column: 1; }

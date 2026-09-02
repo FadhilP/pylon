@@ -3,10 +3,10 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration, modelLabel } from "../shared/format";
 import type { DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../shared/protocol/events";
 import { CopyMessageButton, MarkdownContent, WorkTimer } from "./conversation-panel";
-import { thinkingLabel } from "./format";
+import { agentRequestLabel, thinkingLabel } from "./format";
 import { agentColor, type AgentColorMap } from "./agent-color";
 import { referenceDefinition } from "./navigation";
-import { ToolCallGroup } from "./tool-calls";
+import { ToolCallGroup, ToolCallTrack } from "./tool-calls";
 import { LedBar, OverviewOrb, useResponsiveUsageLedCells, type OverviewState } from "./overview-primitives";
 import { pairAgentActivity } from "../shared/agent-activity";
 import { pairedToolCallViews } from "../shared/tool-calls";
@@ -160,6 +160,8 @@ function AgentList({
   );
 }
 
+/** One lane: colour on the edge, cost on the identity line, and the run's
+    track along the bottom rule with its call count and time riding on it. */
 function AgentRunRow({
   run,
   models,
@@ -171,35 +173,30 @@ function AgentRunRow({
   colors: AgentColorMap;
   onSelect: (id: string) => void;
 }) {
-  const toolCount = pairAgentActivity(run.activity).length;
-  const request = run.request || (run.action ? `${run.action} child` : "Delegated run");
+  const tools = pairAgentActivity(run.activity);
+  const calls = pairedToolCallViews(tools, run.status === "running");
+  const request = agentRequestLabel(run);
   const hasDuration = Boolean(run.startedAt) || run.durationMs !== undefined;
   return (
     <button
-      className={`agent-run-row is-${run.status}`}
+      className={`agent-run-row agent-lane is-${run.status}`}
       type="button"
       style={agentColor(run, colors)}
       onClick={() => onSelect(run.id)}>
-      <OverviewOrb state={ORB_STATE[run.status]} label={run.status} />
-      <div className="agent-run-copy">
-        <span className="agent-run-name">
-          <AgentIdentity run={run} />
-        </span>
-        <span className="agent-run-task" title={request}>
-          {request}
-        </span>
-        <span className="agent-run-meta">
-          <span>{run.modelName ? modelLabel(run.modelName, models) : "Model pending"}</span>
-          {toolCount > 0 && (
-            <span>
-              {toolCount} {toolCount === 1 ? "tool" : "tools"}
-            </span>
-          )}
-        </span>
-      </div>
-      <span className="agent-run-values">
-        <b className="agent-run-cost">{run.usage ? `$${run.usage.cost.toFixed(4)}` : "—"}</b>
-        <span className="agent-run-duration">{hasDuration ? <AgentDuration run={run} /> : <time>—</time>}</span>
+      <span className="agent-run-name">
+        <OverviewOrb state={ORB_STATE[run.status]} label={run.status} />
+        <AgentIdentity run={run} />
+        <em>{run.modelName ? modelLabel(run.modelName, models) : "Model pending"}</em>
+      </span>
+      <b className="agent-run-cost mono">{run.usage ? `$${run.usage.cost.toFixed(4)}` : "—"}</b>
+      <span className="agent-run-task" title={request}>
+        {request}
+      </span>
+      <span className="agent-lane-base">
+        <ToolCallTrack calls={calls} slots="auto" variant="lane" />
+        <small className="mono">
+          {calls.length} {calls.length === 1 ? "call" : "calls"} · {hasDuration ? <AgentDuration run={run} /> : "—"}
+        </small>
       </span>
     </button>
   );
@@ -493,15 +490,14 @@ function AgentDuration({ run }: { run: DelegatedAgentRunReadModel }) {
   return elapsed === undefined ? null : <time dateTime={`PT${elapsed / 1_000}S`}>{formatWorkDuration(elapsed)}</time>;
 }
 
+/** The name reads as a name; the kind is a chip in the agent's colour. A run
+    without a name has only its kind, so the kind takes the name's place. */
 function AgentIdentity({ run }: { run: DelegatedAgentRunReadModel }) {
+  if (!run.agentName) return <span className="agent-identity">{agentLabel(run.kind)}</span>;
   return (
     <span className="agent-identity">
-      {run.agentName && (
-        <>
-          <span className="agent-instance-name">{run.agentName}</span> ·{" "}
-        </>
-      )}
-      {agentLabel(run.kind)}
+      <span className="agent-name">{run.agentName}</span>
+      <span className="agent-kind-chip">{agentLabel(run.kind)}</span>
     </span>
   );
 }

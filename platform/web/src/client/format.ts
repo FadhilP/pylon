@@ -26,3 +26,8 @@ export function thinkingLabel(level: string): string {
   if (level === "xhigh") return "Extra high";
   return `${level.slice(0, 1).toUpperCase()}${level.slice(1)}`;
 }
+
+/** The line a delegated run shows as its task: its request, or what it is if none was recorded. */
+export function agentRequestLabel(run: { request?: string; action?: string }): string {
+  return run.request || (run.action ? `${run.action} child` : "Delegated run");
+}

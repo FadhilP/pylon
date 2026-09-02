@@ -46,7 +46,7 @@ import {
 } from "../shared/transcript";
 import { pairAgentActivity } from "../shared/agent-activity";
 import { messageToolCallViews, pairedToolCallViews } from "../shared/tool-calls";
-import { formatCompactNumber, formatWorkDuration, modelLabel } from "../shared/format";
+import { formatCompactNumber, formatWorkDuration } from "../shared/format";
 import { parseFileReference } from "../shared/file-reference";
 import { renderMarkdown } from "../shared/markdown";
 import {
@@ -72,7 +72,7 @@ import type {
   TimelineCheckpointReadModel,
 } from "../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../shared/protocol/snapshots";
-import { thinkingLabel } from "./format";
+import { agentRequestLabel, thinkingLabel } from "./format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { agentColor, type AgentColorMap } from "./agent-color";
 import { modelThinkingLevels, moveRailSelection, railThinkingAxis } from "../shared/model-rail";
@@ -877,12 +877,7 @@ export function ConversationPanel({
         live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>
       )}
       {!draftingOnly && (
-        <ActiveAgents
-          runs={activeAgents}
-          models={controls?.models ?? []}
-          colors={agentColors}
-          onSelect={onSelectAgent}
-        />
+        <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />
       )}
       {runtime && (
         <div
@@ -2567,12 +2562,10 @@ export function WorkTimer({
 
 function ActiveAgents({
   runs,
-  models,
   colors,
   onSelect,
 }: {
   runs: DelegatedAgentRunReadModel[];
-  models: ModelOptionReadModel[];
   colors: AgentColorMap;
   onSelect?: (id?: string) => void;
 }) {
@@ -2623,41 +2616,32 @@ function ActiveAgents({
         const hot = cost !== undefined && run.costLimitUsd !== undefined && cost >= run.costLimitUsd;
         return (
           <button
-            className="agent-dock-entry"
+            className="agent-dock-entry agent-lane"
             type="button"
             key={run.id}
             style={agentColor(run, colors)}
             onClick={() => onSelect?.(run.id)}>
-            <OverviewOrb state={hot ? "attention" : "running"} label={hot ? "Cost limit reached" : "Working"} />
-            <span className="agent-dock-line">
-              <span className="agent-dock-name">
-                {run.agentName ? (
-                  <span className="agent-instance-name">{run.agentName}</span>
-                ) : (
-                  agentKindLabel(run.kind)
-                )}
-              </span>
-              <time className="agent-dock-elapsed mono">{formatWorkDuration(elapsed)}</time>
+            <span className="agent-dock-name">
+              <OverviewOrb state={hot ? "attention" : "running"} label={hot ? "Cost limit reached" : "Working"} />
+              {run.agentName ? (
+                <>
+                  <span className="agent-name">{run.agentName}</span>
+                  <span className="agent-kind-chip">{agentKindLabel(run.kind)}</span>
+                </>
+              ) : (
+                agentKindLabel(run.kind)
+              )}
             </span>
-            <span className="agent-dock-line">
-              <span className="agent-dock-kind">
-                {run.agentName
-                  ? agentKindLabel(run.kind)
-                  : run.modelName
-                    ? modelLabel(run.modelName, models)
-                    : "Model pending"}
-              </span>
-              <span className="agent-dock-spend mono">
-                <span className="calls">
-                  {calls.length} {calls.length === 1 ? "call" : "calls"}
-                </span>
-                <span className="sep">·</span>
-                <span className={`cost${hot ? " is-hot" : ""}`}>
-                  {cost === undefined ? "—" : `$${cost.toFixed(4)}`}
-                </span>
-              </span>
+            <span className={`agent-dock-cost mono${hot ? " is-hot" : ""}`}>
+              {cost === undefined ? "—" : `$${cost.toFixed(4)}`}
             </span>
-            <ToolCallTrack calls={calls} slots="auto" variant="dock" />
+            <span className="agent-dock-task">{agentRequestLabel(run)}</span>
+            <span className="agent-lane-base">
+              <ToolCallTrack calls={calls} slots="auto" variant="lane" />
+              <small className="mono">
+                {calls.length} {calls.length === 1 ? "call" : "calls"} · {formatWorkDuration(elapsed)}
+              </small>
+            </span>
           </button>
         );
       })}

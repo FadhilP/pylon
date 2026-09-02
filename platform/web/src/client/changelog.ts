@@ -2,6 +2,21 @@ type Release = { version: string; date: string; title: string; summary: string; 
 
 export const RELEASES: Release[] = [
   {
+    version: "2.5.1",
+    date: "Sep 2, 2026",
+    title: "More predictable browser control and clearer agent activity",
+    summary:
+      "A maintenance release makes Helios viewport and keyboard control more predictable, refreshes delegated-agent activity, and corrects deferred documentation and Sieve status reporting.",
+    notes: [
+      "Gave owned Helios browsers a stable 1440 × 900 baseline, allowed start to set an explicit initial viewport, stopped the Web Browser panel from silently resizing active sessions, and preserved larger browser surfaces with scrollable presentation.",
+      "Made named browser keys, function keys, physical key codes, and key chords case-insensitive while preserving the case of single-character input.",
+      "Refined active and historical agent runs into consistent color-edged lanes with clearer task, model, cost, duration, and live tool-call activity, alongside stronger light-theme accent contrast.",
+      "Unified the deferred pylon_docs tool under the pylon-core policy owner in Web sessions so documentation, settings, and change-application tools share one coordinated policy surface.",
+      "Corrected Sieve health reporting for standard-v2 projections to use and label the standard prefix-change and budget-driven-change counters instead of legacy metrics.",
+    ],
+  },
+
+  {
     version: "2.5.0",
     date: "Sep 1, 2026",
     title: "Custom prompts, agent-managed settings, and complete documentation",

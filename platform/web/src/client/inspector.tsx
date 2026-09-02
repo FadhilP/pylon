@@ -2627,9 +2627,14 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
     .sort((left, right) => right[1].netCharsSaved - left[1].netCharsSaved)
     .slice(0, 3);
   const largestSaving = savings[0]?.[1].netCharsSaved ?? 1;
-  const prefixChurn = sieve.stability?.prefixChurnViolations ?? 0;
-  const softExceedances = sieve.stability?.softBudgetExceedances ?? 0;
-  const healthy = prefixChurn === 0 && softExceedances === 0;
+  const standardV2 = sieve.projectionMode === "standard-v2";
+  const prefixChurn = standardV2
+    ? (sieve.stability?.standardPrefixChurn ?? 0)
+    : (sieve.stability?.prefixChurnViolations ?? 0);
+  const budgetEvents = standardV2
+    ? (sieve.stability?.standardChangesByKind?.budget ?? 0)
+    : (sieve.stability?.softBudgetExceedances ?? 0);
+  const healthy = prefixChurn === 0 && budgetEvents === 0;
   const epochReason = sieve.epoch?.reason?.replaceAll("-", " ") ?? "not started";
   const contextPercent = sieve.contextUsagePercent;
 
@@ -2700,8 +2705,12 @@ function SieveStatus({ live }: { live: RuntimeStoreSnapshot }) {
         <div>
           <strong>
             {healthy
-              ? "No prefix churn or budget exceedances"
-              : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(softExceedances)} budget exceedances`}
+              ? standardV2
+                ? "No prefix changes or budget-driven changes"
+                : "No prefix churn or budget exceedances"
+              : standardV2
+                ? `${formatCompactNumber(prefixChurn)} prefix changes, ${formatCompactNumber(budgetEvents)} budget-driven changes`
+                : `${formatCompactNumber(prefixChurn)} prefix churn, ${formatCompactNumber(budgetEvents)} budget exceedances`}
           </strong>
           <small>{formatCompactNumber(sieve.stability?.projectionCacheHits ?? 0)} projection reuses</small>
         </div>
