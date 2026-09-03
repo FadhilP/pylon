@@ -27,7 +27,11 @@ import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts"
 import { listSessionInventory, resolveUniqueSession, type SessionInventoryEntry } from "pylon-core/session-inventory";
 import { truncateUtf8 } from "pylon-core/src/utf8.ts";
 import { NAME_PROMPT } from "pylon-core/src/delegate-names.ts";
-import { configPath as pylonCoreConfigPath, effectiveConfig as effectivePylonCoreConfig, loadConfig as loadPylonCoreConfig } from "pylon-core/src/config.ts";
+import {
+  configPath as pylonCoreConfigPath,
+  effectiveConfig as effectivePylonCoreConfig,
+  loadConfig as loadPylonCoreConfig,
+} from "pylon-core/src/config.ts";
 import {
   buildSessionContext,
   createAgentSessionRuntime,
@@ -208,6 +212,7 @@ import {
   projectDelegatedToolEvent,
 } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "./file-suggestions.ts";
+import { modelRateLookup, type UsageRateLookup } from "./usage-aggregation.ts";
 import { projectIdForCwd, SessionIndex } from "./session-index.ts";
 import { ProjectRegistry } from "./project-registry.ts";
 
@@ -1454,7 +1459,17 @@ export class SessionRuntime implements PiDriver {
       activeId: runtime.session.sessionId,
       generation: this.gate.generation,
       stateFor: sessionId => (sessionId === runtime.session.sessionId ? "idle" : "sleeping"),
+      rates: this.modelRates(),
     });
+  }
+
+  /**
+   * Catalogue rates for splitting a delegated total that was logged without a
+   * split. A sleeping slot has no catalogue to read, and no rates is a valid
+   * answer: a model with no advertised price keeps its total whole.
+   */
+  modelRates(): UsageRateLookup {
+    return modelRateLookup(this.runtime?.services.modelRuntime.getAvailableSnapshot() ?? []);
   }
 
   async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {

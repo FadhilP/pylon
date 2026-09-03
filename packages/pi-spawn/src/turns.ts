@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { emptyCostParts } from "pylon-core/child-process";
 import type { DelegateNameHandle } from "pylon-core/delegate-names";
 import { SPAWN_TOOLS, SPECIALIST_TOOLS } from "./constants.ts";
 import { failure, label, runText, scientistName } from "./results.ts";
@@ -220,7 +221,8 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
           cacheRead: run.usage.cacheRead,
           cacheWrite: run.usage.cacheWrite,
           totalTokens: run.usage.input + run.usage.output + run.usage.cacheRead + run.usage.cacheWrite,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: run.usage.cost },
+          // Always the four rates plus the total, even when a run carried none.
+          cost: { ...emptyCostParts(), ...run.usage.costParts, total: run.usage.cost },
         },
       };
     } catch (error) {

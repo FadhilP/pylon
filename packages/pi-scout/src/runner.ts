@@ -1,14 +1,17 @@
 import { spawn } from "node:child_process";
 import {
   activityRecorder,
+  addCostParts,
   cacheReadTokensFromUsage,
   contextTokensFromUsage,
   contextWindowTokensFromUsage,
+  emptyCostParts,
   emptyUsage,
   getPiInvocation,
   lineBuffer,
   stderrTail,
   terminate,
+  usageSnapshot,
   validCost,
   validTokens,
   type ChildActivity,
@@ -193,12 +196,15 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
       if (latestContextWindowTokens > 0) reportContext(latestContextWindowTokens);
       if (latestCacheReadTokens > 0) cacheReadTokens = latestCacheReadTokens;
     }
+    const turnCostParts = emptyCostParts();
+    addCostParts(turnCostParts, rawUsage.cost);
     const turn = {
       input: validTokens(rawUsage.input),
       output: validTokens(rawUsage.output),
       cacheRead: validTokens(rawUsage.cacheRead),
       cacheWrite: validTokens(rawUsage.cacheWrite),
       cost: validCost(rawUsage.cost?.total),
+      costParts: turnCostParts,
       model: message.model,
       stopReason: message.stopReason,
     };
@@ -209,8 +215,9 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
     usage.cacheRead += turn.cacheRead;
     usage.cacheWrite += turn.cacheWrite;
     usage.cost += turn.cost;
+    addCostParts(usage.costParts, turn.costParts);
     try {
-      options.onUsage?.({ ...usage });
+      options.onUsage?.(usageSnapshot(usage));
     } catch {
       /* Progress observers must not control the child. */
     }

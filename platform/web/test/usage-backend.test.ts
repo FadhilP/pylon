@@ -7,7 +7,12 @@ import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { SessionSummaryCache } from "../src/server/pi/session-summary-cache.ts";
 import type { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 import { SessionIndex } from "../src/server/pi/session-index.ts";
-import { aggregateUsage, usageWindow, type UsageIndexedSession } from "../src/server/pi/usage-aggregation.ts";
+import {
+  aggregateUsage,
+  modelRateLookup,
+  usageWindow,
+  type UsageIndexedSession,
+} from "../src/server/pi/usage-aggregation.ts";
 import { UsageHistoryAccumulator } from "../src/server/pi/usage-history.ts";
 import { isUsageSnapshot } from "../src/shared/protocol/validation.ts";
 
@@ -326,4 +331,143 @@ test("session cache extracts usage while isolating malformed session files", asy
     else process.env.PI_CODING_AGENT_DIR = previous;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("per-part cost is kept only when the halves reconcile with the total", () => {
+  const priced = (cost: unknown) => ({
+    type: "message",
+    id: "assistant-priced",
+    parentId: null,
+    timestamp: at,
+    message: {
+      role: "assistant",
+      provider: "anthropic",
+      model: "claude",
+      timestamp: Date.parse(at),
+      usage: { input: 100, output: 20, cacheRead: 30, cacheWrite: 4, cost },
+    },
+  });
+
+  // Cache work is prompt-side, so it joins the input half.
+  const reported = new UsageHistoryAccumulator("session-1");
+  reported.accept(priced({ input: 0.5, output: 0.4, cacheRead: 0.1, cacheWrite: 0, total: 1 }));
+  const atom = reported.result()[0]!;
+  assert.equal(atom.cost, 1);
+  assert.deepEqual([atom.costInput, atom.costOutput], [0.6, 0.4]);
+
+  // Halves that do not add up to the billed total are not a split worth showing.
+  const drifting = new UsageHistoryAccumulator("session-2");
+  drifting.accept(priced({ input: 0.2, output: 0.1, total: 1 }));
+  const drifted = drifting.result()[0]!;
+  assert.equal(drifted.cost, 1);
+  assert.deepEqual([drifted.costInput, drifted.costOutput], [0, 0]);
+
+  // A provider that reports only a total keeps reporting only a total.
+  const totalOnly = new UsageHistoryAccumulator("session-3");
+  totalOnly.accept(priced(0.75));
+  const whole = totalOnly.result()[0]!;
+  assert.deepEqual([whole.cost, whole.costInput, whole.costOutput], [0.75, 0, 0]);
+});
+
+test("a delegated turn splits its cost from the rates it reports beside the total", () => {
+  const delegated = (usage: Record<string, unknown>) => ({
+    type: "message",
+    id: "result-delegated",
+    parentId: null,
+    timestamp: at,
+    message: {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "advisor",
+      timestamp: Date.parse(at),
+      details: { model: "anthropic/claude", usage },
+    },
+  });
+
+  // Subagents keep cost a scalar for their budgets and carry the parts beside it.
+  const history = new UsageHistoryAccumulator("session-1");
+  history.accept(
+    delegated({
+      input: 8071,
+      output: 1154,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0.075,
+      costParts: { input: 0.04, output: 0.03, cacheRead: 0.005, cacheWrite: 0 },
+    }),
+  );
+  const atom = history.result()[0]!;
+  assert.equal(atom.cost, 0.075);
+  assert.deepEqual([atom.costInput, atom.costOutput], [0.045, 0.03]);
+
+  // A delegate that reports no parts still reports its total.
+  const bare = new UsageHistoryAccumulator("session-2");
+  bare.accept(delegated({ input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.01 }));
+  const whole = bare.result()[0]!;
+  assert.deepEqual([whole.cost, whole.costInput, whole.costOutput], [0.01, 0, 0]);
+});
+
+test("a total logged without a split is divided by catalogue rates, and says so", () => {
+  const delegated = new UsageHistoryAccumulator("session-1");
+  delegated.accept({
+    type: "message",
+    id: "result-1",
+    parentId: null,
+    timestamp: at,
+    message: {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "advisor",
+      timestamp: Date.parse(at),
+      // The shape every delegated turn had before it reported its parts.
+      details: { model: "anthropic/claude", usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0, cost: 1 } },
+    },
+  });
+  const indexed: UsageIndexedSession[] = [
+    { session: session("session-1", "/sessions/one.jsonl"), usage: delegated.result() },
+  ];
+  const project = (sessionId: string) => ({ id: `project-${sessionId}`, label: "Workspace" });
+  const aggregate = (rates?: Parameters<typeof aggregateUsage>[6]) =>
+    aggregateUsage(indexed, { days: 7 }, 1, project, new Date("2026-03-22T12:00:00.000Z"), 0, rates).records[0]!;
+
+  // 900 prompt tokens at $3/Mtok and 100 completion at $15/Mtok is a 9:5 ratio.
+  const split = aggregate(() => ({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }));
+  assert.ok(Math.abs(split.costInput - 9 / 14) < 1e-9);
+  assert.ok(Math.abs(split.costOutput - 5 / 14) < 1e-9);
+  assert.equal(split.costEstimated, 1);
+  // Whatever the rates, the parts add up to what was actually billed.
+  assert.ok(Math.abs(split.costInput + split.costOutput - split.cost) < 1e-9);
+
+  // Rates supply the ratio only: ten times the prices give the same split.
+  const dearer = aggregate(() => ({ input: 30, output: 150, cacheRead: 3, cacheWrite: 37.5 }));
+  assert.deepEqual([dearer.costInput, dearer.costOutput], [split.costInput, split.costOutput]);
+
+  // A model the catalogue does not price keeps its total whole.
+  const unpriced = aggregate(() => undefined);
+  assert.deepEqual([unpriced.costInput, unpriced.costOutput, unpriced.costEstimated], [0, 0, 0]);
+
+  // With no catalogue at all, nothing is derived.
+  assert.equal(aggregate(undefined).costEstimated, 0);
+});
+
+test("catalogue rates resolve by reference, and by model id only when it is unambiguous", () => {
+  const rates = modelRateLookup([
+    { provider: "openai-codex", id: "gpt-5.6-sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 } },
+    { provider: "anthropic", id: "shared", cost: { input: 3, output: 15 } },
+    { provider: "bedrock", id: "shared", cost: { input: 3, output: 15 } },
+    { provider: "anthropic", id: "unpriced", cost: { input: -1, output: 15 } },
+  ]);
+
+  assert.deepEqual(rates("openai-codex", "gpt-5.6-sol"), { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 });
+  // Cache rates fall back to the input rate rather than to nothing.
+  assert.deepEqual(rates("anthropic", "shared"), { input: 3, output: 15, cacheRead: 3, cacheWrite: 3 });
+
+  // A naming turn logs the model without its provider.
+  assert.equal(rates("unknown", "gpt-5.6-sol")?.output, 30);
+  // Two providers offer "shared", so the id alone identifies nothing.
+  assert.equal(rates("unknown", "shared"), undefined);
+  // A placeholder rate is not a price.
+  assert.equal(rates("anthropic", "unpriced"), undefined);
+  // A wrong provider is not repaired by the id.
+  assert.equal(rates("anthropic", "gpt-5.6-sol"), undefined);
 });

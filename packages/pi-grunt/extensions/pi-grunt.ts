@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { addCostParts, emptyUsage, sumCostParts, usageSnapshot } from "pylon-core/child-process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -81,6 +82,7 @@ const addUsage = (left: WorkerRun["usage"], right: WorkerRun["usage"]): WorkerRu
   cacheRead: left.cacheRead + right.cacheRead,
   cacheWrite: left.cacheWrite + right.cacheWrite,
   cost: left.cost + right.cost,
+  costParts: sumCostParts(left.costParts, right.costParts),
 });
 
 type SessionStats = { runs: number; integrated: number; requiresAttention: number; turns: number; cost: number };
@@ -392,8 +394,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
 
       const callIsolation = isolated;
       let heartbeat: NodeJS.Timeout | undefined;
-      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-      let attemptUsage = { ...usage };
+      const usage = emptyUsage();
+      let attemptUsage = usageSnapshot(usage);
       let costLimitUsd: number | undefined;
       try {
         const maxCostUsd = gruntMaxCostUsd(config.maxCostUsd);
@@ -471,7 +473,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           let run!: WorkerRun;
           for (;;) {
             attempts++;
-            attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+            attemptUsage = emptyUsage();
             workerCwd = isolated?.workerCwd ?? ctx.cwd;
             missingDependencies = isolated
               ? unavailableDependencies(
@@ -538,7 +540,8 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             usage.cacheRead += run.usage.cacheRead;
             usage.cacheWrite += run.usage.cacheWrite;
             usage.cost += run.usage.cost;
-            attemptUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+            addCostParts(usage.costParts, run.usage.costParts);
+            attemptUsage = emptyUsage();
             totalTurns += run.turns;
             if (run.cwd !== workerCwd) throw new Error(`Worker runner did not confirm the ${mode} working directory`);
             const retryIsolation = isolated;
@@ -557,7 +560,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             contextTokens = null;
             progress(
               `Grunt provider unavailable; retrying in fresh isolation (${attempts + 1}/${retryPolicy.maxAttempts})…`,
-              { usage: { ...usage } },
+              { usage: usageSnapshot(usage) },
             );
             const cleanupWarnings = await removeIsolatedWorktree(exec, retryIsolation!);
             if (cleanupWarnings.length)

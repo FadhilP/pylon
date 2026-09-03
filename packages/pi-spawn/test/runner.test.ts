@@ -38,6 +38,26 @@ async function fake(
   return { dir, invocation: { command: process.execPath, args: [script] } };
 }
 
+test("a child that settles before announcing its state still names its provider", async () => {
+  // No state to read, so the model is only ever seen on the message itself.
+  const named = await fake(
+    `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'named'}],provider:'openai-codex',model:'gpt-5.6-luna',stopReason:'stop',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,cost:{total:.01}}}});emit({type:'agent_settled'}); setInterval(()=>{},1000);}`,
+    defaultStats,
+    null,
+  );
+  const run = await runSpawn([], { cwd: named.dir, prompt: "name this", invocation: named.invocation });
+  assert.equal(run.model, "openai-codex/gpt-5.6-luna");
+
+  // A message with no provider beside it is reported as it came.
+  const bare = await fake(
+    `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'named'}],model:'solo',stopReason:'stop',usage:{input:1,output:1,cacheRead:0,cacheWrite:0,cost:{total:.01}}}});emit({type:'agent_settled'}); setInterval(()=>{},1000);}`,
+    defaultStats,
+    null,
+  );
+  const plain = await runSpawn([], { cwd: bare.dir, prompt: "name this", invocation: bare.invocation });
+  assert.equal(plain.model, "solo");
+});
+
 test("runner sends an RPC prompt and returns invocation and session usage", async () => {
   const child = await fake(
     `if(command.type==='prompt'){
@@ -45,7 +65,7 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
     emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'working'}],model:'fake',stopReason:'toolUse',usage:{input:1,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}});
     emit({type:'tool_execution_start',toolCallId:'call-read',toolName:'read',args:{path:'a.ts'}});
     emit({type:'tool_execution_end',toolCallId:'call-read',toolName:'read',result:{content:[{type:'text',text:'source'}]}});
-    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'reply:'+command.message}],model:'fake',stopReason:'stop',usage:{input:2,output:3,cacheRead:4,cacheWrite:5,cost:{total:.2}}}});
+    emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'reply:'+command.message}],model:'fake',stopReason:'stop',usage:{input:2,output:3,cacheRead:4,cacheWrite:5,cost:{input:.125,output:.075,cacheRead:0,cacheWrite:0,total:.2}}}});
     emit({type:'agent_settled'}); emit({type:'agent_settled'}); setInterval(()=>{},1000);
   }`,
     {
@@ -69,12 +89,28 @@ test("runner sends an RPC prompt and returns invocation and session usage", asyn
     onState: state => states.push(state),
   });
   assert.equal(run.text, "reply:hello");
+  const noParts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   assert.deepEqual(usage, [
-    { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1 },
-    { input: 3, output: 5, cacheRead: 7, cacheWrite: 9, cost: 0.30000000000000004 },
+    { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1, costParts: noParts },
+    {
+      input: 3,
+      output: 5,
+      cacheRead: 7,
+      cacheWrite: 9,
+      cost: 0.30000000000000004,
+      // A turn that reported its rates contributes them; one that did not adds nothing.
+      costParts: { input: 0.125, output: 0.075, cacheRead: 0, cacheWrite: 0 },
+    },
   ]);
   assert.deepEqual(run.usage, usage.at(-1));
-  assert.deepEqual(run.sessionUsage, { input: 30, output: 12, cacheRead: 20, cacheWrite: 1, cost: 0.9 });
+  assert.deepEqual(run.sessionUsage, {
+    input: 30,
+    output: 12,
+    cacheRead: 20,
+    cacheWrite: 1,
+    cost: 0.9,
+    costParts: noParts,
+  });
   assert.deepEqual(activity, ["call-read:call:read", "call-read:result:read"]);
   assert.ok(!Number.isNaN(Date.parse(run.activity[0]?.startedAt ?? "")));
   assert.equal(run.activity[1]?.durationMs !== undefined && run.activity[1].durationMs >= 0, true);

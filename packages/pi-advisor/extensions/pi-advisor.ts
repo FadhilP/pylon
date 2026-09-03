@@ -452,7 +452,7 @@ export default function advisorExtension(
                   contextTokens = latestContextTokens;
                   running(note ?? "Advisor usage updated", {
                     durationMs: Date.now() - started,
-                    usage: { ...usage },
+                    usage,
                     attempts,
                   });
                 },

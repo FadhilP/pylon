@@ -520,6 +520,8 @@ export class RuntimeCoordinator implements PiDriver {
         activeId: selected.id,
         generation,
         stateFor: sessionId => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
+        // Any live runtime carries the same catalogue, so the selected one answers for all.
+        rates: this.slots.get(selected.id)?.driver.modelRates(),
       });
       if (selected.id === this.selectedId && generation === this.generation) return result;
     }

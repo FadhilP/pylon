@@ -33,6 +33,9 @@ const record = (overrides: Partial<UsageRecord> = {}): UsageRecord => ({
   cacheWrite: 0,
   cost: 1,
   costKnown: true,
+  costInput: 0.6,
+  costOutput: 0.4,
+  costEstimated: 0,
   ...overrides,
 });
 
@@ -165,4 +168,78 @@ test("usage CSV exports filtered records with quoting and spreadsheet protection
   assert.match(csv, /Advisor/);
   assert.match(csv, /33\.33/);
   assert.equal(usageCsv([]).split("\n").length, 1);
+});
+
+test("cache reads, session counts and agent splits each measure in their own unit", () => {
+  const records = [
+    record({ agent: "main", cacheRead: 300 }),
+    record({ day: "2026-03-21", sessionId: "session-2", agent: "scout", cacheRead: 100, cost: 2 }),
+  ];
+  const days = usageDayKeys({ fromInclusive: "2026-03-20T00:00:00.000Z", toExclusive: "2026-03-22T00:00:00.000Z" });
+
+  const cached = buildUsageSeries(records, days, "cacheRead", "none");
+  assert.deepEqual(cached[0]?.values, [300, 100]);
+
+  // Sessions are counted, not summed: two records of one session are one session.
+  const sameSession = [record(), record({ model: "claude-small" })];
+  const counted = buildUsageSeries(sameSession, days, "sessions", "none");
+  assert.deepEqual(counted[0]?.values, [1, 0]);
+
+  // A break-down draws one line per bucket, including agents, which are not a facet.
+  const byAgent = buildUsageSeries(records, days, "cost", "agent");
+  assert.deepEqual(
+    byAgent.map(series => [series.label, series.kind, series.values]),
+    [
+      ["Scout", "agent", [0, 2]],
+      ["Main agent", "agent", [1, 0]],
+    ],
+  );
+
+  // Only combined input + output draws as an input/output pair.
+  assert.deepEqual(
+    buildUsageSeries(records, days, "total", "provider").map(series => series.label),
+    ["anthropic"],
+  );
+});
+
+test("combined cost draws its parts, and names what the provider never split", () => {
+  const days = usageDayKeys({ fromInclusive: "2026-03-20T00:00:00.000Z", toExclusive: "2026-03-21T00:00:00.000Z" });
+
+  const split = buildUsageSeries([record()], days, "cost", "none");
+  assert.deepEqual(
+    split.map(series => [series.label, series.part, series.amount]),
+    [
+      ["Input", "input", 0.6],
+      ["Output", "output", 0.4],
+    ],
+  );
+
+  // A delegated turn bills a total with no halves. The parts still add up to
+  // the total, because the remainder is a part of its own.
+  const mixed = buildUsageSeries(
+    [record(), record({ sessionId: "session-2", cost: 1, costInput: 0, costOutput: 0 })],
+    days,
+    "cost",
+    "none",
+  );
+  const close = (value: number | undefined, expected: number) => Math.abs((value ?? NaN) - expected) < 1e-9;
+  assert.deepEqual(
+    mixed.map(series => series.label),
+    ["Input", "Output", "Not split"],
+  );
+  assert.ok(close(mixed[2]?.amount, 1));
+  assert.ok(close(mixed[2]?.values[0], 1));
+  assert.ok(
+    close(
+      mixed.reduce((total, series) => total + series.amount, 0),
+      2,
+    ),
+  );
+
+  // Nothing reported a split, so cost stays one line.
+  const whole = buildUsageSeries([record({ costInput: 0, costOutput: 0 })], days, "cost", "none");
+  assert.deepEqual(
+    whole.map(series => series.label),
+    ["Total"],
+  );
 });

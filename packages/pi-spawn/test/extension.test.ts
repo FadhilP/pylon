@@ -16,8 +16,22 @@ const completed = (text: string): SpawnRun => ({
   stopReason: "stop",
   stderr: "",
   durationMs: 5,
-  usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1 },
-  sessionUsage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 1 },
+  usage: {
+    input: 1,
+    output: 2,
+    cacheRead: 3,
+    cacheWrite: 4,
+    cost: 0.1,
+    costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
+  },
+  sessionUsage: {
+    input: 10,
+    output: 20,
+    cacheRead: 30,
+    cacheWrite: 40,
+    cost: 1,
+    costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  },
   turns: 1,
   truncated: false,
   activity: [],
@@ -290,18 +304,26 @@ test("running spawn updates expose the selected model", async () => {
         cacheRead: 3,
         cacheWrite: 4,
         cost: 0.1,
+        costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
       });
       assert.equal(result.details.thinking, "high");
       assert.equal(result.details.provider, "fake");
       assert.equal(result.details.modelId, "model");
-      assert.deepEqual(result.details.sessionUsage, { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 1 });
+      assert.deepEqual(result.details.sessionUsage, {
+        input: 10,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 40,
+        cost: 1,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      });
       assert.deepEqual(result.usage, {
         input: 1,
         output: 2,
         cacheRead: 3,
         cacheWrite: 4,
         totalTokens: 10,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+        cost: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01, total: 0.1 },
       });
     }
   } finally {
@@ -370,7 +392,14 @@ test("background agent runs stream correlated progress, report status, and prese
     const activity = { id: "read-1", kind: "call", tool: "read", text: "{}" };
     childOptions.onActivity(activity, [activity]);
     childOptions.onText("Partial reply");
-    childOptions.onUsage({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.1 });
+    childOptions.onUsage({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      cost: 0.1,
+      costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
     const progress = f.emitted.filter(event => event.name === "pylon:spawn-progress").map(event => event.value);
     assert.ok(progress.length >= 4);
     assert.ok(

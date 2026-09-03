@@ -17,12 +17,20 @@ export interface PersistedUsageAtom {
   cacheWrite: number;
   cost: number;
   costKnown: boolean;
+  /**
+   * The prompt and completion halves of the same cost. Providers report them
+   * beside the total; when they are missing, or do not add up to it, both stay
+   * zero and the total stands alone — the halves are only ever read back when
+   * they still add up to the cost beside them.
+   */
+  costInput: number;
+  costOutput: number;
   source: "assistant" | "compaction" | "branch-summary" | "delegated" | "telemetry";
 }
 
 type NormalizedUsage = Pick<
   PersistedUsageAtom,
-  "calls" | "input" | "output" | "cacheRead" | "cacheWrite" | "cost" | "costKnown"
+  "calls" | "input" | "output" | "cacheRead" | "cacheWrite" | "cost" | "costKnown" | "costInput" | "costOutput"
 >;
 
 const MODEL_TOOLS: Record<string, UsageAgent> = {
@@ -83,18 +91,42 @@ const timestamp = (entry: any, message?: any): string | undefined => {
 
 const digest = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+const money = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1_000_000 ? value : undefined;
+
+/**
+ * Cache reads and writes are prompt-side work, so they join the input half:
+ * the split a reader is after is what the prompt cost against what the reply
+ * cost. Parts count only when they reconcile with the total the provider gave.
+ */
+function costParts(value: any, total: number): { costInput: number; costOutput: number } {
+  const parts = value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+  const input = money(parts?.input);
+  const output = money(parts?.output);
+  if (input === undefined || output === undefined) return { costInput: 0, costOutput: 0 };
+  const costInput = input + (money(parts?.cacheRead) ?? 0) + (money(parts?.cacheWrite) ?? 0);
+  const drift = Math.abs(costInput + output - total);
+  return drift <= Math.max(1e-9, total * 0.01) ? { costInput, costOutput: output } : { costInput: 0, costOutput: 0 };
+}
+
 function normalizeUsage(value: any, turnCount: unknown = 1): NormalizedUsage | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rawCost = value.cost?.total ?? value.cost;
   const costKnown = typeof rawCost === "number" && Number.isFinite(rawCost) && rawCost >= 0 && rawCost <= 1_000_000;
+  const cost = costKnown ? rawCost : 0;
   return {
     calls: calls(turnCount),
     input: finiteTokens(value.input),
     output: finiteTokens(value.output),
     cacheRead: finiteTokens(value.cacheRead),
     cacheWrite: finiteTokens(value.cacheWrite),
-    cost: costKnown ? rawCost : 0,
+    cost,
     costKnown,
+    // A model turn reports its parts inside `cost`; a delegate reports a scalar
+    // total and carries the same four rates alongside it.
+    ...(costKnown
+      ? costParts(typeof value.cost === "object" ? value.cost : value.costParts, cost)
+      : { costInput: 0, costOutput: 0 }),
   };
 }
 

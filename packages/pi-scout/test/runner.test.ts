@@ -238,7 +238,7 @@ test("runner preserves complete child tool activity", async () => {
 test("exact discovery ceiling sends one steer and accepts one final response", async () => {
   const child = await fake(
     "scout-cost-limit-",
-    `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});emit(${assistant("first", "toolUse", "{cost:{total:.5}}")});}else if(command.type==='steer'){emit({id:command.id,type:'response',command:'steer',success:true});emit(${assistant("final findings", "stop", "{cost:{total:.2}}")});settled();setInterval(()=>{},1000);}`,
+    `if(command.type==='prompt'){emit({id:command.id,type:'response',command:'prompt',success:true});emit(${assistant("first", "toolUse", "{cost:{input:.2,output:.15,cacheRead:.1,cacheWrite:.05,total:.5}}")});}else if(command.type==='steer'){emit({id:command.id,type:'response',command:'steer',success:true});emit(${assistant("final findings", "stop", "{cost:{input:.08,output:.06,cacheRead:.04,cacheWrite:.02,total:.2}}")});settled();setInterval(()=>{},1000);}`,
   );
   const usage: any[] = [];
   const run = await runPi([], {
@@ -254,6 +254,8 @@ test("exact discovery ceiling sends one steer and accepts one final response", a
     usage.map(item => item.cost),
     [0.5, 0.7],
   );
+  assert.deepEqual(usage[0].costParts, { input: 0.2, output: 0.15, cacheRead: 0.1, cacheWrite: 0.05 });
+  assert.deepEqual(run.usage.costParts, { input: 0.28, output: 0.21, cacheRead: 0.14, cacheWrite: 0.07 });
   assert.deepEqual(run.usage, usage.at(-1));
   assert.equal(run.budgetExceeded, true);
   assert.equal(run.finalizationAttempted, true);

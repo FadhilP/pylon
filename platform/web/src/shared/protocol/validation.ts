@@ -1100,7 +1100,10 @@ export function isUsageSnapshot(value: unknown): value is UsageSnapshot {
         metric(item.cacheRead) &&
         metric(item.cacheWrite) &&
         metric(item.cost) &&
-        typeof item.costKnown === "boolean",
+        typeof item.costKnown === "boolean" &&
+        metric(item.costInput) &&
+        metric(item.costOutput) &&
+        metric(item.costEstimated),
     )
   )
     return false;

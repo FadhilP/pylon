@@ -895,11 +895,13 @@ export default function continuityExtension(pi: ExtensionAPI) {
           ? (_tui: unknown, theme: any) =>
               new Text(
                 [
-                  "Tasks",
+                  theme.fg("muted", "Tasks"),
                   ...work!.todos.map(t =>
                     t.status === "done"
-                      ? `● ${theme.fg("muted", theme.strikethrough(t.text))}`
-                      : `${t.status === "in_progress" ? "●" : "○"} ${t.text}`,
+                      ? `${theme.fg("success", "●")} ${theme.fg("muted", theme.strikethrough(t.text))}`
+                      : t.status === "in_progress"
+                        ? `${theme.fg("accent", "●")} ${theme.fg("text", t.text)}`
+                        : `${theme.fg("dim", "○")} ${theme.fg("muted", t.text)}`,
                   ),
                 ].join("\n"),
                 0,

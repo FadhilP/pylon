@@ -20,6 +20,11 @@ import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry 
 import { TIMELINE_STATE_VERSION, timelineStateSnapshot, type TimelineCheckpointFailureState } from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
 import {
+  CheckpointBrowser,
+  type CheckpointBrowserItem,
+  type CheckpointBrowserResult,
+} from "../src/checkpoint-browser.ts";
+import {
   defaultConfig,
   effectiveTimelineSettings,
   loadConfig,
@@ -38,7 +43,7 @@ import {
   type TimelineBaselineV1,
   type TimelineBaselineRetiredV1,
 } from "../src/records.ts";
-import { checkpointRow, compatibilityDetail, inspectGitState, shortRef } from "../src/describe.ts";
+import { checkpointRow, compatibilityDetail, compatibilityLabel, inspectGitState, shortRef } from "../src/describe.ts";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -52,6 +57,15 @@ export default function timelineExtension(
       pi.events.emit?.("pylon:telemetry", value);
     } catch {
       /* Telemetry must never affect session naming. */
+    }
+  };
+  const withBlockingUi = async <T>(source: string, action: () => Promise<T>): Promise<T> => {
+    const id = `${source}:${randomUUID()}`;
+    pi.events.emit("pylon:ui-blocking", { version: 1, id, source, active: true });
+    try {
+      return await action();
+    } finally {
+      pi.events.emit("pylon:ui-blocking", { version: 1, id, source, active: false });
     }
   };
   /** Loaded checkpoints and everything derived from them. */
@@ -1125,9 +1139,11 @@ export default function timelineExtension(
   const clearCheckpoints = async (ctx: any) => {
     if (
       !ctx.hasUI ||
-      !(await ctx.ui.confirm(
-        "Clear timeline refs?",
-        "Delete refs owned by current session? Git objects are not garbage-collected.",
+      !(await withBlockingUi("pi-timeline-clear", () =>
+        ctx.ui.confirm(
+          "Clear timeline refs?",
+          "Delete refs owned by current session? Git objects are not garbage-collected.",
+        ),
       ))
     )
       return;
@@ -1163,20 +1179,52 @@ export default function timelineExtension(
   };
 
   /** Prompts for a checkpoint and what to do with it. */
-  const promptForCheckpoint = async (ctx: any) => {
+  const promptForCheckpoint = async (ctx: any): Promise<CheckpointBrowserResult | undefined> => {
     const current = await inspectGitState(ctx.cwd);
     const choices = [...checkpoints.records].map(([checkpointId, bound]) => ({
       id: checkpointId,
       label: checkpointRow(bound, current),
+      browser: {
+        id: checkpointId,
+        title: bound.preview,
+        createdAt: bound.record.createdAt,
+        status: compatibilityLabel(bound.record, current),
+        ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
+        ...(checkpoints.changeCache.get(checkpointId) ?? bound.record.changes
+          ? { changes: checkpoints.changeCache.get(checkpointId) ?? bound.record.changes }
+          : {}),
+      } satisfies CheckpointBrowserItem,
     }));
-    const selected = await ctx.ui.select(
-      "Checkpoint",
-      choices.map(choice => choice.label),
+    if (!choices.length) {
+      ctx.ui.notify("No checkpoints.", "info");
+      return undefined;
+    }
+    if (ctx.mode !== "tui" || typeof ctx.ui.custom !== "function") {
+      const selected = await ctx.ui.select(
+        "Checkpoint",
+        choices.map(choice => choice.label),
+      );
+      const id = choices.find(choice => choice.label === selected)?.id;
+      if (!id) return undefined;
+      const action = await ctx.ui.select("Action", ["View", "Fork & continue"]);
+      return action ? { id, mode: action === "View" ? "jump" : "fork" } : undefined;
+    }
+
+    return withBlockingUi<CheckpointBrowserResult | undefined>("pi-timeline", () =>
+      ctx.ui.custom(
+        (tui: any, theme: any, _keybindings: any, done: any) =>
+          new CheckpointBrowser(
+            choices.map(choice => choice.browser),
+            theme,
+            () => tui.requestRender(),
+            done,
+          ),
+        {
+          overlay: true,
+          overlayOptions: { anchor: "center", width: 72, minWidth: 40, maxHeight: 14, margin: 1 },
+        },
+      ) as Promise<CheckpointBrowserResult | undefined>,
     );
-    const id = choices.find(choice => choice.label === selected)?.id;
-    if (!id) return undefined;
-    const action = await ctx.ui.select("Action", ["View", "Fork & continue"]);
-    return { id, mode: action === "View" ? "jump" : "fork" };
   };
 
   type RestorePlan = { operation: string; content: string; failure: string; navigateTo?: string; notify?: string };
@@ -1246,9 +1294,11 @@ export default function timelineExtension(
     }
     const ok =
       preconfirmed ||
-      (await ctx.ui.confirm(
-        mode === "fork" ? "Fork and restore?" : "View and restore?",
-        `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
+      (await withBlockingUi("pi-timeline-restore", () =>
+        ctx.ui.confirm(
+          mode === "fork" ? "Fork and restore?" : "View and restore?",
+          `${target.preview}\n${compatibilityDetail(target.record, current, compatibility)}\nCurrent dirty state is checkpointed. Ignored files stay untouched.`,
+        ),
       ));
     if (!ok) return;
 

@@ -2,6 +2,7 @@ import { IconPlus, IconRefresh, IconTrash } from "@tabler/icons-react";
 import { useState, type FormEvent } from "react";
 import type { ExtensionListSnapshot, NativeExtensionReadModel } from "../shared/protocol/snapshots";
 import { OverviewOrb } from "./overview-primitives";
+import { settingSearchTarget } from "../shared/settings-search";
 
 export function ExtensionSettingsFields({
   snapshot,
@@ -72,7 +73,7 @@ export function ExtensionSettingsFields({
       </p>
 
       {snapshot.projectTrustRequired && (
-        <section className="workbench-section">
+        <section className="workbench-section" data-settings-search-target="project-extensions">
           <header>
             <div>
               <h4>Project extensions</h4>
@@ -89,7 +90,7 @@ export function ExtensionSettingsFields({
         </section>
       )}
 
-      <section className="workbench-section">
+      <section className="workbench-section" data-settings-search-target="install-pi-package">
         <header>
           <div>
             <h4>Install Pi package</h4>
@@ -123,7 +124,9 @@ export function ExtensionSettingsFields({
         {snapshot.packages.length > 0 && (
           <div className="settings-option-list">
             {snapshot.packages.map(item => (
-              <div key={`${item.scope}:${item.source}`}>
+              <div
+                data-settings-search-target={`extension-package-${settingSearchTarget(`${item.scope}-${item.source}`)}`}
+                key={`${item.scope}:${item.source}`}>
                 <span>
                   <strong>{item.source}</strong>
                   <small>{item.scope === "user" ? "Global to Pylon" : "Project package"}</small>
@@ -161,7 +164,9 @@ export function ExtensionSettingsFields({
           ) : (
             <div className="settings-option-list">
               {group.extensions.map(extension => (
-                <div key={extension.id}>
+                <div
+                  data-settings-search-target={`extension-${settingSearchTarget(extension.id)}`}
+                  key={extension.id}>
                   <span>
                     <strong>{extension.path}</strong>
                     <small>
@@ -197,7 +202,7 @@ export function ExtensionSettingsFields({
         </section>
       ))}
 
-      <div className="extension-reload">
+      <div className="extension-reload" data-settings-search-target="reload-extensions">
         <button type="button" disabled={disabled} onClick={() => void run(onReload)}>
           <IconRefresh size={14} /> Reload extensions
         </button>

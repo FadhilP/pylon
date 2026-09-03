@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
 import { UsageHistoryAccumulator, type PersistedUsageAtom } from "./usage-history.ts";
 
-const VERSION = 4;
+const VERSION = 5;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
 const CONCURRENCY = 16;
 const CACHE_FILE = "session-summaries-v4.json";
@@ -123,10 +123,17 @@ function parseUsageAtom(value: unknown): PersistedUsageAtom | undefined {
     !tokens(item.cacheWrite) ||
     !cost(item.cost) ||
     typeof item.costKnown !== "boolean" ||
+    (item.costInput !== undefined && !cost(item.costInput)) ||
+    (item.costOutput !== undefined && !cost(item.costOutput)) ||
     !["assistant", "compaction", "branch-summary", "delegated", "telemetry"].includes(String(item.source))
   )
     return;
-  return item as unknown as PersistedUsageAtom;
+  // An atom written before per-part cost existed simply has no parts.
+  return {
+    ...(item as unknown as PersistedUsageAtom),
+    costInput: cost(item.costInput) ? Number(item.costInput) : 0,
+    costOutput: cost(item.costOutput) ? Number(item.costOutput) : 0,
+  };
 }
 
 function parseRecord(value: unknown): CacheRecord | undefined {

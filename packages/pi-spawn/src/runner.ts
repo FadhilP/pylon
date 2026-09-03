@@ -2,11 +2,24 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { getPackageDir, truncateHead } from "@earendil-works/pi-coding-agent";
-import { contextWindowTokensFromUsage } from "pylon-core/child-process";
+import {
+  addCostParts,
+  contextWindowTokensFromUsage,
+  emptyCostParts,
+  usageSnapshot,
+  type CostParts,
+} from "pylon-core/child-process";
 import { createSettlement } from "./settlement.ts";
 import { boundedString, deniedUiResponse, dialogMethods, parseUiRequest, validUiResponse } from "./ui-request.ts";
 
-export type SpawnUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+export type SpawnUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  costParts: CostParts;
+};
 
 export type SpawnActivity = {
   id?: string;
@@ -60,7 +73,14 @@ export type RunSpawnOptions = {
   onUiRequest?: (request: SpawnUiRequest, signal: AbortSignal) => Promise<SpawnUiResponse>;
 };
 
-const emptyUsage = (): SpawnUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+const emptyUsage = (): SpawnUsage => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  costParts: emptyCostParts(),
+});
 const TEXT_LIMITS = { maxBytes: 50 * 1024, maxLines: 2000 };
 const ACTIVITY_LIMITS = { maxBytes: 2000, maxLines: 40 };
 const activityInput = (value: unknown): string => {
@@ -86,8 +106,24 @@ const sessionUsage = (value: unknown): SpawnUsage | undefined => {
     cacheRead: tokens.cacheRead as number,
     cacheWrite: tokens.cacheWrite as number,
     cost: stats.cost as number,
+    // A resumed child reports a session total and no per-part rates.
+    costParts: emptyCostParts(),
   };
 };
+/**
+ * An assistant message names its model without its provider, and the pair is
+ * what identifies a model: "gpt-5.6-luna" alone matches nothing in a catalogue
+ * that prices "openai-codex/gpt-5.6-luna". Used when the child settles before
+ * it announces its state, which is the common case for short runs.
+ */
+const modelRef = (message: unknown): string | undefined => {
+  const item = message && typeof message === "object" ? (message as Record<string, unknown>) : {};
+  const model = typeof item.model === "string" && item.model ? item.model : undefined;
+  if (!model) return;
+  const provider = typeof item.provider === "string" && item.provider ? item.provider : undefined;
+  return provider ? `${provider}/${model}` : model;
+};
+
 const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const sessionState = (value: unknown): { model?: string; thinking?: string; contextLimit?: number } | undefined => {
   const state = value && typeof value === "object" ? (value as Record<string, any>) : {};
@@ -218,7 +254,7 @@ function buildRun(state: RunState): SpawnRun {
         (!rawText ? "Spawned thread returned no assistant text." : "");
   return {
     text: capped.content,
-    model: state.effectiveState?.model ?? final?.model,
+    model: state.effectiveState?.model ?? modelRef(final),
     ...(state.effectiveState?.thinking ? { thinking: state.effectiveState.thinking } : {}),
     stopReason: final?.stopReason,
     ...(error ? { error } : {}),
@@ -442,6 +478,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
       usage.cacheRead += validNumber(item.cacheRead);
       usage.cacheWrite += validNumber(item.cacheWrite);
       usage.cost += validNumber(item.cost?.total);
+      addCostParts(usage.costParts, item.cost);
       if (message.stopReason !== "aborted" && message.stopReason !== "error") {
         const latestContextTokens = contextWindowTokensFromUsage(item);
         if (latestContextTokens > 0) {
@@ -449,7 +486,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
           emitContext(contextTokens);
         }
       }
-      emitUsage({ ...usage });
+      emitUsage(usageSnapshot(usage));
     },
   };
 

@@ -2,6 +2,7 @@ import { IconArrowDown, IconArrowUp, IconFileText, IconPencil, IconPlus, IconTra
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import type { HookReadModel, HookSettingsReadModel, HookSourceReadModel } from "../shared/protocol/snapshots";
 import { OverviewOrb } from "./overview-primitives";
+import { settingSearchTarget } from "../shared/settings-search";
 
 const MAX_SOURCES = 20;
 const MAX_SOURCE_BYTES = 64 * 1024;
@@ -28,11 +29,13 @@ export function HookSettingsFields({
   loading,
   disabled,
   onUpdate,
+  searchSelection,
 }: {
   settings?: HookSettingsReadModel;
   loading: boolean;
   disabled: boolean;
   onUpdate: (settings: HookSettingsReadModel) => Promise<void>;
+  searchSelection?: { hookKey: HookKey; sourceId?: string };
 }) {
   const [draft, setDraft] = useState(settings);
   const [hookKey, setHookKey] = useState<HookKey>("sessionStart");
@@ -43,6 +46,11 @@ export function HookSettingsFields({
   useEffect(() => {
     setDraft(settings);
   }, [settings]);
+  useEffect(() => {
+    if (!searchSelection) return;
+    setHookKey(searchSelection.hookKey);
+    setSourceId(searchSelection.sourceId);
+  }, [searchSelection]);
   useEffect(() => {
     const sources = draft?.[hookKey].sources ?? [];
     if (!sources.some(source => source.id === sourceId)) setSourceId(sources[0]?.id);
@@ -163,6 +171,7 @@ export function HookSettingsFields({
               type="button"
               aria-selected={hookKey === item.key}
               className={`hook-choice${hookKey === item.key ? " is-selected" : ""}`}
+              data-settings-search-target={settingSearchTarget(item.name)}
               onClick={() => setHookKey(item.key)}>
               <OverviewOrb state={enabled ? "done" : "neutral"} label={enabled ? "enabled" : "disabled"} />
               <span>
@@ -228,6 +237,7 @@ export function HookSettingsFields({
             <div
               key={item.id}
               className={`hook-source-row${item.id === sourceId ? " is-selected" : ""}`}
+              data-settings-search-target={`hook-source-${settingSearchTarget(item.id)}`}
               onClick={() => setSourceId(item.id)}>
               {item.kind === "file" ? <IconFileText size={15} /> : <IconPencil size={15} />}
               <button type="button" onClick={() => setSourceId(item.id)}>

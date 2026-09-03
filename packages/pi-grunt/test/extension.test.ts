@@ -97,7 +97,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       timeoutBudgets.push(options.timeoutMs);
       maxCostBudgets.push(options.maxCostUsd);
       if (workerAttempts === 1) {
-        options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+        options.onUsage?.({
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0.1,
+          costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
+        });
         return {
           text: "",
           cwd: options.cwd,
@@ -107,7 +114,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
           failure: "child_error",
           stderr: "",
           durationMs: 2,
-          usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+          usage: {
+            input: 1,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: 0.1,
+            costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
+          },
           turns: 1,
           truncated: false,
           exitCode: 1,
@@ -115,7 +129,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         };
       }
       await new Promise(resolve => setTimeout(resolve, 5));
-      options.onUsage?.({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 });
+      options.onUsage?.({
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.2,
+        costParts: { input: 0.08, output: 0.06, cacheRead: 0.04, cacheWrite: 0.02 },
+      });
       options.onActivity?.({ kind: "call", tool: "read", text: "README.md" }, [
         { kind: "call", tool: "read", text: "README.md" },
       ]);
@@ -129,7 +150,14 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         stopReason: "stop",
         stderr: "",
         durationMs: 2,
-        usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0.2,
+          costParts: { input: 0.08, output: 0.06, cacheRead: 0.04, cacheWrite: 0.02 },
+        },
         turns: 1,
         truncated: false,
         exitCode: 0,
@@ -212,7 +240,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         ctx,
       );
     assert.deepEqual(maxTurnBudgets, [12, 11]);
-    assert.deepEqual(maxCostBudgets, [3, 3]);
+    assert.deepEqual(maxCostBudgets, [3, 2.9]);
     const activityUpdate = runningUpdates.find(update => update.details?.activity?.length);
     assert.ok(timeoutBudgets.every(timeoutMs => timeoutMs > 1_000 && timeoutMs <= 120_000));
     assert.ok(activityUpdate.details.durationMs > 0);
@@ -221,6 +249,21 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
       [1, 2],
     );
     assert.equal(result.details.usage.input, 2);
+    assert.ok(Math.abs(result.details.usage.cost - 0.3) < Number.EPSILON);
+    assert.deepEqual(result.details.usage.costParts, {
+      input: 0.12,
+      output: 0.09,
+      cacheRead: 0.06,
+      cacheWrite: 0.03,
+    });
+    const usageUpdates = runningUpdates.flatMap(update => (update.details?.usage ? [update.details.usage] : []));
+    assert.deepEqual(usageUpdates[0].costParts, {
+      input: 0.04,
+      output: 0.03,
+      cacheRead: 0.02,
+      cacheWrite: 0.01,
+    });
+    assert.deepEqual(usageUpdates.at(-1).costParts, result.details.usage.costParts);
     assert.equal(result.details.status, "completed");
     assert.equal(result.details.agentName, "worker-module");
     assert.equal(result.details.applied, true);
@@ -261,7 +304,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.deepEqual(result.details.metrics, {
       workerStatus: "completed",
       integrationStatus: "completed",
-      workerCostUsd: 0,
+      workerCostUsd: 0.1 + 0.2,
       turns: 2,
       inputTokens: 2,
       outputTokens: 2,
@@ -366,7 +409,14 @@ test("dynamic mode falls back to direct when isolation setup fails", async () =>
       stopReason: "stop",
       stderr: "",
       durationMs: 1,
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: 1,
       truncated: false,
       exitCode: 0,
@@ -423,7 +473,14 @@ test("Grunt publishes sanitized bounded worker and outer failure details", async
           stopReason: "stop",
           stderr: "",
           durationMs: 1,
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            cost: 0,
+            costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
           turns: 1,
           truncated: false,
           exitCode: outcome === "success" ? 0 : 1,
@@ -552,7 +609,14 @@ test("isolated mode throws outside Git while direct mode runs there", async () =
         stopReason: "stop",
         stderr: "",
         durationMs: 1,
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
         turns: 1,
         truncated: false,
         exitCode: 0,

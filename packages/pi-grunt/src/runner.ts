@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { truncateUtf8 } from "pylon-core/utf8";
 import {
   activityRecorder,
+  addCostParts,
   contextTokensFromUsage,
   contextWindowTokensFromUsage,
   emptyUsage,
@@ -9,6 +10,7 @@ import {
   lineBuffer,
   stderrTail,
   terminate,
+  usageSnapshot,
   validTokens,
   type ChildActivity,
   type ChildUsage,
@@ -95,8 +97,9 @@ export async function runPi(args: string[], options: RunOptions): Promise<Worker
     usage.cacheRead += validTokens(turnUsage.cacheRead);
     usage.cacheWrite += validTokens(turnUsage.cacheWrite);
     usage.cost += validTokens(turnUsage.cost?.total);
+    addCostParts(usage.costParts, turnUsage.cost);
     try {
-      options.onUsage?.({ ...usage });
+      options.onUsage?.(usageSnapshot(usage));
     } catch {
       /* Progress observers must not control the child. */
     }

@@ -481,6 +481,11 @@ export interface UsageRecord {
   cacheWrite: number;
   cost: number;
   costKnown: boolean;
+  /** The prompt and completion halves of `cost`, zero when the provider reported no split. */
+  costInput: number;
+  costOutput: number;
+  /** How much of `cost` was split by model rates rather than reported per part. */
+  costEstimated: number;
 }
 
 export interface UsageSessionSummary {
@@ -614,7 +619,6 @@ export type GenericPackageSettingReadField =
       max?: number;
       apply: GenericPackageSettingApplyTiming;
     }
-
   | {
       version: 1;
       key: string;

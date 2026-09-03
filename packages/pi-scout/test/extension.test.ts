@@ -91,7 +91,14 @@ test("Repo Scout publishes sanitized bounded child failure details", async () =>
       error: `bad\napi_key=${secret}\u2028${"z".repeat(600)}`,
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 1,
@@ -137,13 +144,27 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
     calls++;
     sessionDirs.push(args[args.indexOf("--session-dir") + 1]);
     if (calls === 1) {
-      options.onUsage?.({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+      options.onUsage?.({
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.1,
+        costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
+      });
       return {
         text: "",
         error: "503 model at capacity",
         stderr: "",
         durationMs: 1,
-        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+        usage: {
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0.1,
+          costParts: { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 },
+        },
         turns: [],
         truncated: false,
         exitCode: 1,
@@ -155,12 +176,26 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
         cacheReadTokens: 0,
       };
     }
-    options.onUsage?.({ input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 });
+    options.onUsage?.({
+      input: 2,
+      output: 3,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0.2,
+      costParts: { input: 0.08, output: 0.06, cacheRead: 0.04, cacheWrite: 0.02 },
+    });
     return {
       text: "## Findings\n\n- Recovered. `src/a.ts:1-2`",
       stderr: "",
       durationMs: 1,
-      usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 2,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.2,
+        costParts: { input: 0.08, output: 0.06, cacheRead: 0.04, cacheWrite: 0.02 },
+      },
       turns: [],
       truncated: false,
       exitCode: 0,
@@ -191,6 +226,21 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
       [...new Set(updates.flatMap(update => (update.details?.usage ? [update.details.usage.input] : [])))],
       [1, 3],
     );
+    const usageUpdates = updates.flatMap(update => (update.details?.usage ? [update.details.usage] : []));
+    assert.deepEqual(usageUpdates[0].costParts, {
+      input: 0.04,
+      output: 0.03,
+      cacheRead: 0.02,
+      cacheWrite: 0.01,
+    });
+    assert.ok(Math.abs(result.details.usage.cost - 0.3) < Number.EPSILON);
+    assert.deepEqual(result.details.usage.costParts, {
+      input: 0.12,
+      output: 0.09,
+      cacheRead: 0.06,
+      cacheWrite: 0.03,
+    });
+    assert.deepEqual(usageUpdates.at(-1).costParts, result.details.usage.costParts);
     assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally {
     runtime.restore();
@@ -233,7 +283,14 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
       text: `result ${call}`,
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 0,
@@ -274,7 +331,7 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
     assert.ok(childArgs.every(args => args.includes("--system-prompt")));
     assert.ok(childArgs.every(args => args[args.indexOf("--system-prompt") + 1] === REPO_SCOUT_PROMPT));
     assert.ok(childArgs.every(args => !args.includes("--append-system-prompt")));
-    assert.ok(childArgs.every(args => args.includes("read,search_excerpt,ls")));
+    assert.ok(childArgs.every(args => args.includes("read,search_excerpt,git_evidence,ls")));
     assert.ok(childOptions.every(options => options.resultMaxBytes === false));
     assert.ok(childOptions.every(options => options.env.PI_SCOUT_CHILD === "1"));
     assert.ok(childOptions.every(options => options.concurrent === true));
@@ -294,7 +351,14 @@ test("Repo Scout reports merged citations, structured claims, and repeated searc
     text: "## Findings\n\n- Shared guard. `src/auth.ts:10-20`",
     stderr: "",
     durationMs: 1,
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
     turns: [],
     truncated: false,
     exitCode: 0,
@@ -347,7 +411,14 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
       text: "result",
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 0,
@@ -373,14 +444,14 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
     await runtime.tools.get("repo_scout").execute("one", { task: "map symbol" }, undefined, undefined, context());
     assert.ok(childArgs[0].includes(childExtensionPath));
     assert.ok(
-      childArgs[0].includes("read,search_excerpt,rg,fd,relationship_graph,symbol_search,code_search,index_status,ls"),
+      childArgs[0].includes("read,search_excerpt,git_evidence,rg,fd,relationship_graph,symbol_search,code_search,index_status,ls"),
     );
     assert.equal(childArgs[0].filter(arg => arg === "-e").length, 2);
 
     runtime.events.on("pi-discover:child-tools-capability", request => respond(request));
     await runtime.tools.get("repo_scout").execute("two", { task: "map symbol again" }, undefined, undefined, context());
     assert.ok(!childArgs[1].includes(childExtensionPath));
-    assert.ok(childArgs[1].includes("read,search_excerpt,ls"));
+    assert.ok(childArgs[1].includes("read,search_excerpt,git_evidence,ls"));
     assert.equal(childArgs[1].filter(arg => arg === "-e").length, 1);
   } finally {
     runtime.restore();
@@ -399,7 +470,14 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
       failure: "budget_exceeded",
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 1.0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 1.0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 1,
@@ -512,7 +590,14 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
       text: "cited report",
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 0,
@@ -620,7 +705,14 @@ test("Web Scout optionally loads only the restricted OpenAI/Exa search tool", as
       text: "searched report",
       stderr: "",
       durationMs: 1,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
       turns: [],
       truncated: false,
       exitCode: 0,

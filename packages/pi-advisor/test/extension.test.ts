@@ -127,10 +127,12 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     assert.deepEqual(sessionIds, ["session:advisor", "session:advisor"]);
     assert.deepEqual(maxTokens, [4_000, 4_000]);
     // The effective append prompt reaches the provider, while the Advisor contract remains last.
-    assert.ok(systemPrompts[0].startsWith(`${ADVISOR_PROMPT}
+    assert.ok(
+      systemPrompts[0].startsWith(`${ADVISOR_PROMPT}
 
 ## Operator customization
-Use terse operator notes.`));
+Use terse operator notes.`),
+    );
     assert.ok(systemPrompts[0].endsWith(ADVISOR_IMMUTABLE_FOOTER));
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
@@ -244,7 +246,14 @@ test("advisor records bounded redacted failure diagnostics", async () => {
       },
     );
     assert.equal(observerSafe.details.failureCode, undefined);
-    assert.deepEqual(observerSafe.details.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+    assert.deepEqual(observerSafe.details.usage, {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    });
   } finally {
     if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousDir;
@@ -398,7 +407,14 @@ test("advisor call renders the executor request instead of the user prompt", () 
         details: {
           advisorModel: "test/model",
           durationMs: 1_250,
-          usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
+          usage: {
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+            cost: 0.5,
+            costParts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
           callNumber: 1,
           snapshotEstimatedTokens: 10,
           redactionCount: 0,

@@ -712,6 +712,7 @@ export function App() {
 
   const newSession = async (project: SessionProject, retry = false) => {
     if (pendingSessionInFlight.current || sessionBusy || sessionDeleting || projectBusy) return;
+    setWorkspaceView(null);
     let recoveredDraft: ComposerDraft | undefined;
     if (!retry) {
       const draft = composerDrafts.latestForProject(project.id);
@@ -1269,6 +1270,7 @@ export function App() {
       }
       live={live}
       projectAvailable={live.runtime?.projectAvailable !== false}
+      showActiveAgents={reference !== "agents"}
       pendingSession={
         pendingSession
           ? {

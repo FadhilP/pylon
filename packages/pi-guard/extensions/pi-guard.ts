@@ -1,5 +1,5 @@
 import { getAgentDir, isToolCallEventType, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, join, parse } from "node:path";
 import {
@@ -228,7 +228,9 @@ export default function guardExtension(pi: ExtensionAPI) {
     await requestCheckpoint(ctx, reason);
 
     let selected: string | undefined;
+    const blockingId = `pi-guard:${randomUUID()}`;
     try {
+      pi.events.emit("pylon:ui-blocking", { version: 1, id: blockingId, source: "pi-guard", active: true });
       const scopeNote = scope.directory ? `\n\nSession/project approval remembers directory:\n${scope.directory}` : "";
       selected = await ctx.ui.select(
         `Pi-guard ${reason}\n\`${detail.slice(0, 2000)}\`${scopeNote}`,
@@ -237,6 +239,8 @@ export default function guardExtension(pi: ExtensionAPI) {
       );
     } catch {
       return false;
+    } finally {
+      pi.events.emit("pylon:ui-blocking", { version: 1, id: blockingId, source: "pi-guard", active: false });
     }
     if (selected === "Allow once") return true;
     const key = identityKey(scope.remembered);

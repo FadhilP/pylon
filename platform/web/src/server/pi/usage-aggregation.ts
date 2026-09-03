@@ -37,6 +37,67 @@ export function usageWindow(input: UsageQuery, now = new Date()): { fromInclusiv
     throw new Error(`calendar range cannot exceed ${MAX_USAGE_DAYS} days`);
   return { fromInclusive: from, toExclusive: through + DAY_MS };
 }
+/** USD per million tokens, as the model catalogue advertises them. */
+export interface UsageRates {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+export type UsageRateLookup = (provider: string, model: string) => UsageRates | undefined;
+
+/**
+ * Rates from a model catalogue. A catalogue entry can carry a placeholder, so
+ * each rate is checked rather than trusted, and cache rates fall back to the
+ * input rate. Title and naming turns log a model with no provider beside it, so
+ * a model id that names exactly one entry also resolves — an id two providers
+ * share does not, and is dropped rather than guessed.
+ */
+export function modelRateLookup(models: Iterable<{ provider: string; id: string; cost?: unknown }>): UsageRateLookup {
+  const rate = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const byRef = new Map<string, UsageRates>();
+  const byModelId = new Map<string, UsageRates | undefined>();
+  for (const model of models) {
+    const cost = (model.cost ?? {}) as Partial<UsageRates>;
+    const input = rate(cost.input);
+    const output = rate(cost.output);
+    if (input === undefined || output === undefined) continue;
+    const rates = {
+      input,
+      output,
+      cacheRead: rate(cost.cacheRead) ?? input,
+      cacheWrite: rate(cost.cacheWrite) ?? input,
+    };
+    byRef.set(`${model.provider}/${model.id}`, rates);
+    byModelId.set(model.id, byModelId.has(model.id) ? undefined : rates);
+  }
+  return (provider, model) =>
+    byRef.get(`${provider}/${model}`) ?? (provider === "unknown" ? byModelId.get(model) : undefined);
+}
+
+/**
+ * Sessions logged before delegates reported their per-part cost carry a total
+ * and nothing else. The catalogue's rates can still say how that total divides:
+ * the rates supply the ratio between prompt and completion, and the bill itself
+ * supplies the magnitude, so a rate that has since changed — or a volume tier —
+ * moves the split only as far as it moved the ratio, and the parts still add up
+ * to what was charged. It is a derived number, and the snapshot says so.
+ */
+function estimateCostParts(record: UsageRecord, rates: UsageRateLookup): void {
+  const unattributed = record.cost - record.costInput - record.costOutput;
+  if (unattributed <= 0) return;
+  const rate = rates(record.provider, record.model);
+  if (!rate) return;
+  const prompt = record.input * rate.input + record.cacheRead * rate.cacheRead + record.cacheWrite * rate.cacheWrite;
+  const completion = record.output * rate.output;
+  if (prompt + completion <= 0) return;
+  const promptShare = prompt / (prompt + completion);
+  record.costInput += unattributed * promptShare;
+  record.costOutput += unattributed * (1 - promptShare);
+  record.costEstimated += unattributed;
+}
+
 export interface UsageProject {
   id: string;
   label: string;
@@ -54,6 +115,7 @@ export function aggregateUsage(
   projectFor: (sessionId: string, cwd: string) => UsageProject,
   now = new Date(),
   unreadableFiles = 0,
+  rates?: UsageRateLookup,
 ): UsageSnapshot {
   const { fromInclusive, toExclusive } = usageWindow(input, now);
   const sessions = [...indexed].sort(
@@ -99,6 +161,9 @@ export function aggregateUsage(
         cacheWrite: 0,
         cost: 0,
         costKnown: true,
+        costInput: 0,
+        costOutput: 0,
+        costEstimated: 0,
       };
       current.calls = safeAdd(current.calls, atom.calls);
       current.input = safeAdd(current.input, atom.input);
@@ -107,10 +172,13 @@ export function aggregateUsage(
       current.cacheWrite = safeAdd(current.cacheWrite, atom.cacheWrite);
       current.cost = safeAdd(current.cost, atom.cost);
       current.costKnown = current.costKnown && atom.costKnown;
+      current.costInput = safeAdd(current.costInput, atom.costInput);
+      current.costOutput = safeAdd(current.costOutput, atom.costOutput);
       records.set(key, current);
     }
   }
 
+  if (rates) for (const record of records.values()) estimateCostParts(record, rates);
   const allRecords = [...records.values()].sort(
     (left, right) =>
       left.day.localeCompare(right.day) ||

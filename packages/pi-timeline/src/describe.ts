@@ -52,5 +52,9 @@ export const compatibilityLabel = (target: Snapshot, current: GitState, result?:
   describeCompatibility(target, current, result).label;
 export const compatibilityDetail = (target: Snapshot, current: GitState, result?: Compatibility) =>
   describeCompatibility(target, current, result).detail;
-export const checkpointRow = (bound: Bound, current: GitState) =>
-  `${compatibilityLabel(bound.record, current)} ${bound.record.createdAt.replace(/\.\d{3}Z$/, "Z")} ${bound.preview}`;
+export const checkpointRow = (bound: Bound, current: GitState) => {
+  const status = compatibilityLabel(bound.record, current);
+  const date = new Date(bound.record.createdAt);
+  const time = Number.isNaN(date.valueOf()) ? "--:--:--" : date.toISOString().slice(11, 19);
+  return `${status.padEnd(20)}  ${time}  ${bound.preview}`;
+};

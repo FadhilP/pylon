@@ -17,7 +17,7 @@ import type {
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "./project-registry.ts";
 import { SessionSummaryCache, type SessionFileMetadata } from "./session-summary-cache.ts";
-import { aggregateUsage } from "./usage-aggregation.ts";
+import { aggregateUsage, type UsageRateLookup } from "./usage-aggregation.ts";
 import type { PersistedUsageAtom } from "./usage-history.ts";
 
 const REFRESH_MS = 60_000;
@@ -86,6 +86,8 @@ export interface SessionIndexOptions {
   activeFallback?: SessionInfo;
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
+  /** Model pricing, used to split a delegated total that was logged without one. */
+  rates?: UsageRateLookup;
   workStartedAtFor?: (sessionId: string) => string | undefined;
   runningUnderParentSessionIdFor?: (sessionId: string) => string | undefined;
 }
@@ -146,6 +148,7 @@ export class SessionIndex {
       },
       new Date(),
       this.cache?.unreadableFileCount() ?? 0,
+      options.rates,
     );
   }
 

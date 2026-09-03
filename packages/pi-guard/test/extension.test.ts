@@ -10,6 +10,7 @@ function harness() {
   const handlers = new Map<string, Function[]>();
   const eventHandlers = new Map<string, Set<(value: any) => void>>();
   const decisions: any[] = [];
+  const blocking: any[] = [];
   const events = {
     on(name: string, handler: (value: any) => void) {
       const values = eventHandlers.get(name) ?? new Set();
@@ -19,6 +20,7 @@ function harness() {
     },
     emit(name: string, value: any) {
       if (name === "pi-guard:decision") decisions.push(value);
+      if (name === "pylon:ui-blocking") blocking.push(value);
       for (const handler of eventHandlers.get(name) ?? []) handler(value);
     },
   };
@@ -36,6 +38,7 @@ function harness() {
     start: handlers.get("session_start")?.[0] ?? (() => {}),
     shutdown: handlers.get("session_shutdown")?.[0] ?? (() => {}),
     decisions,
+    blocking,
     events,
   };
 }
@@ -88,6 +91,10 @@ test(
     const prompts: any[] = [];
     const ctx = context(root, ["Allow once", "Deny"], prompts);
     assert.equal(await guard1.tool(event("write", outside), ctx), undefined);
+    assert.equal(guard1.blocking.length, 2);
+    assert.equal(guard1.blocking[0].active, true);
+    assert.equal(guard1.blocking[1].active, false);
+    assert.equal(guard1.blocking[0].id, guard1.blocking[1].id);
     assert.equal((await guard1.tool(event("write", outside), ctx)).block, true);
     assert.deepEqual(prompts[0].options, [
       "Allow once",

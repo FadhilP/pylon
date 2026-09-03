@@ -6,6 +6,7 @@ export function RuntimePolicyTimeoutControl({
   label,
   description,
   value,
+  searchTarget,
   inherited = false,
   inheritedFrom,
   disabled,
@@ -15,6 +16,7 @@ export function RuntimePolicyTimeoutControl({
   label: string;
   description?: string;
   value: DialogTimeoutSeconds;
+  searchTarget?: string;
   inherited?: boolean;
   inheritedFrom?: string;
   disabled: boolean;
@@ -60,7 +62,7 @@ export function RuntimePolicyTimeoutControl({
   };
 
   return (
-    <div className="policy-timeout" data-override={!inherited}>
+    <div className="policy-timeout" data-override={!inherited} data-settings-search-target={searchTarget}>
       <div className="policy-label-row">
         <span className="policy-timeout-copy">
           <span>{label}</span>

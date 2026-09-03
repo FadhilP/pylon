@@ -15,7 +15,7 @@ Configuration is stored at `<agent-dir>/pi-timeline/config.json`; Pylon Web uses
 
 | Command | Use |
 | --- | --- |
-| `/timeline`, `/timeline list`, `/timeline select` | View checkpoints |
+| `/timeline`, `/timeline list`, `/timeline select` | List checkpoints or open the filtered TUI checkpoint browser |
 | `/timeline restore ID` | Restore after confirmation |
 | `/timeline fork ID` | Fork from a checkpoint |
 | `/timeline clear` | Retire this session's records and refs |
@@ -23,6 +23,7 @@ Configuration is stored at `<agent-dir>/pi-timeline/config.json`; Pylon Web uses
 | `pi-timeline resume` | Resume launcher |
 
 Every restore requires confirmation. Native `/tree` remains conversation-only.
+In TUI mode, `/timeline select` opens a centered checkpoint browser with aligned timestamps, filtering, change statistics, and direct view/fork keys. RPC retains the plain selector flow.
 
 ## Checkpoints and titles
 

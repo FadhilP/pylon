@@ -1,5 +1,20 @@
 [
   {
+    "version": "2.6.0",
+    "date": "Sep 3, 2026",
+    "title": "Searchable settings, richer usage insights, and a focused terminal",
+    "summary": "Pylon makes configuration easier to find, expands cost and activity analysis, and upgrades terminal workflows with clearer state, safer repository evidence, and faster checkpoint navigation.",
+    "notes": [
+      "Added global Settings search across providers, models, themes, tools, policies, workspaces, packages, extensions, and hooks, with ranked results, direct navigation and focus, inline controls where practical, and exclusion of private values from the index.",
+      "Redesigned Usage around cost-first summaries, provider composition, selectable measures and agent/project/provider/model splits, LED-style daily charts, cache and session metrics, ranked activity, responsive layouts, and richer CSV exports.",
+      "Tracked input, output, cache, and previously unsplit cost across Advisor, Scout, Grunt, Spawn, persisted history, and live aggregation, while using model pricing ratios to label estimated splits for compatible historical delegated usage without changing billed totals.",
+      "Added a bounded, read-only Git evidence tool for Repo Scout covering status, diffs, history, commits, and blame, with strict repository, path, revision, environment, timeout, and output safeguards plus provenance-aware reporting guidance.",
+      "Reworked the Focus terminal UI with explicit ready, working, blocked, and compacting states; elapsed delegated-agent activity; a context meter; session-aware titles; model and thinking indicators; a streamlined editor and footer; coordinated approval blocking; and a refreshed dark theme.",
+      "Added a searchable Timeline checkpoint browser with keyboard navigation, change summaries, and direct view or fork actions, while preserving selector behavior for RPC and non-TUI sessions.",
+      "Polished supporting workflows with themed Continuity and Heartbeat status, paired turn-diff actions in conversations, clearer new-session workspace behavior, and better placement of tool override controls in the Inspector."
+    ]
+  },
+  {
     "version": "2.5.2",
     "date": "Sep 2, 2026",
     "title": "Changelogs from the command line",

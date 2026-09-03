@@ -2483,42 +2483,42 @@ function Tools({ live }: { live: RuntimeStoreSnapshot }) {
   const setHere = Object.keys(directOverrides ?? {}).length;
   return (
     <div className="tools-page">
-      <div className="tool-scope-bar">
-        <div className="policy-scope" role="tablist" aria-label="Tool override scope">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={scope === "project"}
-            className={scope === "project" ? "is-active" : ""}
-            onClick={() => setScope("project")}>
-            Project
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={scope === "session"}
-            className={scope === "session" ? "is-active" : ""}
-            onClick={() => setScope("session")}>
-            This session
-          </button>
-        </div>
-      </div>
-      <div className="tool-ledger-head">
-        <label className="memory-ledger-search">
-          <IconSearch size={13} />
-          <span className="sr-only">Filter tools</span>
-          <input
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder={`Filter ${runtime?.availableTools.length ?? 0} tools`}
-          />
-          <span className="mono">{visibleCount}</span>
-        </label>
-        <p className="tool-override-note">
-          Inherited tools follow global Settings. Package capability and safety gates remain authoritative.
-        </p>
-      </div>
       <InspectorSection title="Tool overrides" meta={`${setHere} set here`} className="tool-overrides-panel">
+        <div className="tool-scope-bar">
+          <div className="policy-scope" role="tablist" aria-label="Tool override scope">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "project"}
+              className={scope === "project" ? "is-active" : ""}
+              onClick={() => setScope("project")}>
+              Project
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={scope === "session"}
+              className={scope === "session" ? "is-active" : ""}
+              onClick={() => setScope("session")}>
+              This session
+            </button>
+          </div>
+        </div>
+        <div className="tool-ledger-head">
+          <label className="memory-ledger-search">
+            <IconSearch size={13} />
+            <span className="sr-only">Filter tools</span>
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder={`Filter ${runtime?.availableTools.length ?? 0} tools`}
+            />
+            <span className="mono">{visibleCount}</span>
+          </label>
+          <p className="tool-override-note">
+            Inherited tools follow global Settings. Package capability and safety gates remain authoritative.
+          </p>
+        </div>
         <div className="tool-override-groups">
           {groups.map(group => (
             <section className="tool-override-group" key={group.owner}>

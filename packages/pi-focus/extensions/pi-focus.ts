@@ -1,7 +1,11 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { CustomEditor, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { composeStatuses, footerRows, plainText, shortWorkspace, type Density } from "../src/layout.ts";
+import { footerRows, shortWorkspace, type Density } from "../src/layout.ts";
+
+type FocusState = "READY" | "WORKING" | "BLOCKED" | "COMPACTING";
+type ChildLabel = "SCOUT" | "WEB" | "ADVISOR" | "GRUNT";
+type ActiveChild = { label: ChildLabel; startedAt: number };
 
 export function ringCompletionBell(
   mode: string,
@@ -10,21 +14,71 @@ export function ringCompletionBell(
   if (mode === "tui") write("\x07");
 }
 
+function thinkingText(theme: Theme, level: string, text: string): string {
+  switch (level) {
+    case "minimal":
+      return theme.fg("thinkingMinimal", text);
+    case "low":
+      return theme.fg("thinkingLow", text);
+    case "medium":
+      return theme.fg("thinkingMedium", text);
+    case "high":
+      return theme.fg("thinkingHigh", text);
+    case "xhigh":
+      return theme.fg("thinkingXhigh", text);
+    case "max":
+      return theme.fg("thinkingMax", text);
+    default:
+      return theme.fg("thinkingOff", text);
+  }
+}
+
+function stateText(theme: Theme, state: FocusState): string {
+  switch (state) {
+    case "READY":
+      return theme.fg("success", "● READY");
+    case "WORKING":
+      return theme.fg("borderAccent", "● WORKING");
+    case "BLOCKED":
+      return theme.fg("warning", "◆ BLOCKED");
+    case "COMPACTING":
+      return theme.fg("customMessageLabel", "◆ COMPACTING");
+  }
+}
+
+function childText(theme: Theme, label: ChildLabel, text: string): string {
+  switch (label) {
+    case "SCOUT":
+      return theme.fg("borderAccent", text);
+    case "WEB":
+      return theme.fg("toolTitle", text);
+    case "ADVISOR":
+      return theme.fg("customMessageLabel", text);
+    case "GRUNT":
+      return theme.fg("warning", text);
+  }
+}
+
 class FocusEditor extends CustomEditor {
   private readonly label: () => string;
+  private readonly placeholder: () => string;
 
-  constructor(tui: any, editorTheme: any, keybindings: any, label: () => string) {
+  constructor(tui: any, editorTheme: any, keybindings: any, label: () => string, placeholder: () => string) {
     super(tui, editorTheme, keybindings);
     this.label = label;
+    this.placeholder = placeholder;
   }
 
   render(width: number): string[] {
     const lines = super.render(width);
     if (!lines.length) return lines;
     const label = truncateToWidth(` ${this.label()} `, width, ""),
-      last = lines.length - 1,
-      base = truncateToWidth(lines[last]!, Math.max(0, width - visibleWidth(label)), "");
-    lines[last] = truncateToWidth(base + label, width, "");
+      base = truncateToWidth(lines[0]!, Math.max(0, width - visibleWidth(label)), "");
+    lines[0] = truncateToWidth(base + label, width, "");
+    if (!this.getText() && lines[1]) {
+      const cursor = lines[1].replace(/ +$/, "");
+      lines[1] = truncateToWidth(`${cursor}${this.placeholder()}`, width, "");
+    }
     return lines;
   }
 }
@@ -34,9 +88,9 @@ const childTools = new Set(["repo_scout", "web_scout", "grunt", "advisor"]);
 type UsageTotals = { input: number; output: number; cost: number };
 
 function usageTotals(ctx: any): UsageTotals {
-  let input = 0,
-    output = 0,
-    cost = 0;
+  let input = 0;
+  let output = 0;
+  let cost = 0;
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type !== "message") continue;
     if (entry.message.role === "assistant") {
@@ -52,101 +106,135 @@ function usageTotals(ctx: any): UsageTotals {
   return { input, output, cost };
 }
 
-function formatUsage(ctx: any, { input, output, cost }: UsageTotals): string {
-  const compact = (value: number) => (value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`);
-  const context = ctx.getContextUsage();
-  const pressure = context ? ` · ctx ${Math.round(context.percent)}%` : "";
-  return `in ${compact(input)} · out ${compact(output)} · $${cost.toFixed(3)}${pressure}`;
+function formatUsage({ input, output, cost }: UsageTotals): string {
+  const compact = (value: number) => (value < 1_000 ? String(value) : `${(value / 1_000).toFixed(1)}k`);
+  return `in ${compact(input)} out ${compact(output)} $${cost.toFixed(3)}`;
 }
 
-export function usage(ctx: any): string {
-  return formatUsage(ctx, usageTotals(ctx));
+function contextMeter(theme: Theme, percent: number | null, width: number): string {
+  const cells = width >= 80 ? 12 : 8;
+  const bounded = percent === null || !Number.isFinite(percent) ? null : Math.max(0, Math.min(100, percent));
+  const filled = bounded === null ? 0 : Math.round((bounded / 100) * cells);
+  const color = bounded !== null && bounded >= 90 ? "error" : bounded !== null && bounded >= 70 ? "warning" : "accent";
+  const label = bounded === null ? " --%" : `${String(Math.round(bounded)).padStart(3)}%`;
+  return (
+    theme.fg("borderMuted", "▕") +
+    theme.fg(color, "█".repeat(filled)) +
+    theme.fg("borderMuted", `${"░".repeat(cells - filled)}▏`) +
+    theme.fg(color, label)
+  );
 }
 
 export default function focusExtension(pi: ExtensionAPI) {
   let enabled = true;
   let density: Density = "compact";
   let completionBell = false;
-  let state = "READY";
-  type ChildLabel = "SCOUT" | "WEB" | "ADVISOR" | "GRUNT";
-  const activeChildren = new Map<string, ChildLabel>();
-  const activeChildLabel = () => {
-    if (!activeChildren.size) return undefined;
-    const labels = [...new Set(activeChildren.values())];
-    return labels.length === 1
-      ? `${labels[0]}${activeChildren.size > 1 ? ` ×${activeChildren.size}` : ""}`
-      : `${activeChildren.size} CHILDREN`;
-  };
+  let baseState: FocusState = "READY";
+  let stateBeforeCompaction: FocusState = "READY";
+  let requestRender = () => {};
+  const activeChildren = new Map<string, ActiveChild>();
+  const blockingUi = new Set<string>();
+  const currentState = (): FocusState =>
+    baseState === "COMPACTING" ? "COMPACTING" : blockingUi.size ? "BLOCKED" : baseState;
+
   const showChildren = (ctx: any) => {
-    const label = activeChildLabel();
-    if (!label) {
+    if (!activeChildren.size) {
       ctx.ui.setWidget("focus-child", undefined);
       return;
     }
-    ctx.ui.setWidget(
-      "focus-child",
-      (_tui: any, theme: Theme) =>
-        new Text(
-          theme.fg("customMessageLabel", theme.bold(label)) +
-            theme.fg("muted", " · child model active · expand tool row for activity"),
-          0,
-          0,
-        ),
-    );
+    ctx.ui.setWidget("focus-child", (tui: any, theme: Theme) => {
+      const timer = setInterval(() => tui.requestRender(), 1_000);
+      return {
+        invalidate() {},
+        dispose: () => clearInterval(timer),
+        render(width: number) {
+          const now = Date.now();
+          const line = [...activeChildren.values()]
+            .map(child => {
+              const seconds = Math.max(0, Math.floor((now - child.startedAt) / 1_000));
+              return `${childText(theme, child.label, child.label.toLowerCase())} ${theme.fg("dim", `${seconds}s`)}`;
+            })
+            .join("   ");
+          return [truncateToWidth(line, width, "")];
+        },
+      };
+    });
   };
   const clearChildren = (ctx: any) => {
     activeChildren.clear();
     showChildren(ctx);
   };
+  const setTitle = (ctx: any) => {
+    const session = pi.getSessionName() ?? "unnamed session";
+    ctx.ui.setTitle(`π · ${session} · ${shortWorkspace(ctx.cwd)}`);
+  };
+  const setWorkingIndicator = (ctx: any) => {
+    const theme = ctx.ui.theme as Theme;
+    const level = pi.getThinkingLevel();
+    ctx.ui.setWorkingIndicator({
+      frames: ["·", "•", "●", "•"].map(frame => thinkingText(theme, level, frame)),
+      intervalMs: 140,
+    });
+  };
 
   const apply = (ctx: any) => {
     if (!enabled || ctx.mode !== "tui") return;
+    if ((ctx.ui.theme as Theme).name !== "focus-dark") ctx.ui.setTheme("focus-dark");
 
+    setTitle(ctx);
     ctx.ui.setHeader((_tui: any, theme: Theme) => ({
       invalidate() {},
       render(width: number) {
-        const title = theme.fg("accent", theme.bold("PI"));
-        const location = theme.fg("muted", shortWorkspace(ctx.cwd));
-        const session = pi.getSessionName() ?? "unnamed session";
-        const first = truncateToWidth(`${title}  ${location}  ${theme.fg("dim", session)}`, width);
-        if (density === "compact") return [first];
-        return [first, truncateToWidth(theme.fg("dim", "focused coding · /ui status"), width)];
+        const first = truncateToWidth(
+          `${theme.fg("borderAccent", "π")}  ${theme.fg("muted", shortWorkspace(ctx.cwd))}`,
+          width,
+          "",
+        );
+        return density === "compact"
+          ? [first]
+          : [first, truncateToWidth(theme.fg("dim", "focused coding · /ui status"), width, "")];
       },
     }));
 
     ctx.ui.setFooter((tui: any, theme: Theme, footerData: any) => {
-      let totals = usageTotals(ctx);
-      const unsubscribe = footerData.onBranchChange(() => {
-        totals = usageTotals(ctx);
-        tui.requestRender();
-      });
+      requestRender = () => tui.requestRender();
+      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
       return {
-        dispose: unsubscribe,
+        dispose() {
+          unsubscribe();
+          requestRender = () => {};
+        },
         invalidate() {},
         render(width: number) {
-          const statuses = [...footerData.getExtensionStatuses().values()].filter(Boolean).map(plainText);
-          const currentState = activeChildLabel() ?? composeStatuses(statuses, state);
+          const branch = footerData.getGitBranch();
+          const context = ctx.getContextUsage();
           return footerRows(
             width,
-            density,
-            shortWorkspace(ctx.cwd),
-            footerData.getGitBranch(),
-            pi.getSessionName() ?? "unnamed session",
-            currentState,
-            formatUsage(ctx, totals),
-          ).map(line => theme.fg("dim", line));
+            stateText(theme, currentState()),
+            theme.fg("muted", pi.getSessionName() ?? "unnamed session"),
+            branch ? theme.fg("dim", branch) : null,
+            theme.fg("dim", formatUsage(usageTotals(ctx))),
+            contextMeter(theme, typeof context?.percent === "number" ? context.percent : null, width),
+          );
         },
       };
     });
 
     ctx.ui.setEditorComponent(
       (tui: any, theme: Theme, keybindings: any) =>
-        new FocusEditor(tui, theme, keybindings, () => `${ctx.model?.id ?? "no model"} · ${pi.getThinkingLevel()}`),
+        new FocusEditor(
+          tui,
+          theme,
+          keybindings,
+          () => {
+            const activeTheme = ctx.ui.theme as Theme;
+            const level = pi.getThinkingLevel();
+            return `${activeTheme.fg("text", ctx.model?.id ?? "no model")} ${thinkingText(activeTheme, level, level)}`;
+          },
+          () => (ctx.ui.theme as Theme).fg("dim", "Ask pi to change the project"),
+        ),
     );
-    ctx.ui.setWorkingIndicator({
-      frames: ["·", "•", "●", "•"].map(frame => ctx.ui.theme.fg("accent", frame)),
-      intervalMs: 140,
-    });
+    setWorkingIndicator(ctx);
   };
 
   const restore = (ctx: any) => {
@@ -156,19 +244,54 @@ export default function focusExtension(pi: ExtensionAPI) {
     ctx.ui.setWorkingIndicator();
     ctx.ui.setWidget("focus-child", undefined);
     ctx.ui.setStatus("focus-state", undefined);
+    ctx.ui.setTitle(`Pi - ${pi.getSessionName() ?? shortWorkspace(ctx.cwd)} - ${shortWorkspace(ctx.cwd)}`);
   };
 
-  pi.on("session_start", (_event, ctx) => apply(ctx));
-  pi.on("agent_start", (_event, ctx) => {
-    state = "WORKING";
-    if (enabled) ctx.ui.setStatus("focus-state", undefined);
+  const disposeBlockingUi = pi.events.on("pylon:ui-blocking", (event: any) => {
+    if (event?.version !== 1 || typeof event.id !== "string" || typeof event.active !== "boolean") return;
+    if (event.active) blockingUi.add(event.id);
+    else blockingUi.delete(event.id);
+    requestRender();
+  });
+
+  pi.on("session_start", (_event, ctx) => {
+    baseState = "READY";
+    blockingUi.clear();
+    apply(ctx);
+  });
+  pi.on("session_info_changed", (_event, ctx) => {
+    if (enabled && ctx.mode === "tui") setTitle(ctx);
+    requestRender();
+  });
+  pi.on("model_select", (_event, ctx) => {
+    if (enabled && ctx.mode === "tui") setWorkingIndicator(ctx);
+    requestRender();
+  });
+  pi.on("thinking_level_select", (_event, ctx) => {
+    if (enabled && ctx.mode === "tui") setWorkingIndicator(ctx);
+    requestRender();
+  });
+  pi.on("agent_start", () => {
+    baseState = "WORKING";
+    requestRender();
   });
   pi.on("agent_settled", (_event, ctx) => {
-    state = "READY";
+    baseState = "READY";
     clearChildren(ctx);
-    if (enabled) ctx.ui.setStatus("focus-state", undefined);
+    requestRender();
     if (enabled && completionBell) ringCompletionBell(ctx.mode);
   });
+  pi.on("session_before_compact", () => {
+    stateBeforeCompaction = baseState;
+    baseState = "COMPACTING";
+    requestRender();
+  });
+  const finishCompaction = (willRetry: boolean) => {
+    baseState = willRetry || stateBeforeCompaction === "WORKING" ? "WORKING" : "READY";
+    requestRender();
+  };
+  pi.on("session_compact", event => finishCompaction(event.willRetry));
+  pi.on("session_compact_failed", event => finishCompaction(event.willRetry));
   pi.on("tool_execution_start", (event, ctx) => {
     if (!enabled || !childTools.has(event.toolName)) return;
     const label: ChildLabel =
@@ -179,15 +302,18 @@ export default function focusExtension(pi: ExtensionAPI) {
           : event.toolName === "advisor"
             ? "ADVISOR"
             : "GRUNT";
-    activeChildren.set(event.toolCallId, label);
+    activeChildren.set(event.toolCallId, { label, startedAt: Date.now() });
     showChildren(ctx);
   });
   pi.on("tool_execution_end", (event, ctx) => {
     if (!childTools.has(event.toolName)) return;
     activeChildren.delete(event.toolCallId);
-    showChildren(ctx);
+    if (enabled) showChildren(ctx);
   });
-
+  pi.on("session_shutdown", (_event, ctx) => {
+    clearChildren(ctx);
+    disposeBlockingUi();
+  });
   pi.registerCommand("ui", {
     description: "Configure focused TUI density, completion bell, theme, and status",
     handler: async (args, ctx) => {
@@ -237,6 +363,7 @@ export default function focusExtension(pi: ExtensionAPI) {
       }
       if (action === "theme") {
         const result = ctx.ui.setTheme("focus-dark");
+        if (result.success) apply(ctx);
         ctx.ui.notify(
           result.success ? "Theme: focus-dark" : (result.error ?? "Unable to apply focus-dark"),
           result.success ? "info" : "error",

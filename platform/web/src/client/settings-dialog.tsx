@@ -9,13 +9,16 @@ import {
   IconPlugConnected,
   IconPuzzle,
   IconSettings,
+  IconSearch,
   IconShield,
   IconStack2,
   IconWebhook,
   IconX,
 } from "@tabler/icons-react";
 import {
+  createContext,
   useEffect,
+  useContext,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -52,6 +55,12 @@ import { thinkingLabel } from "./format";
 import { ExtensionSettingsFields } from "./extension-settings-fields";
 import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
+import {
+  buildSettingsSearchIndex,
+  searchSettings,
+  settingSearchTarget,
+  type SettingsSearchEntry,
+} from "../shared/settings-search";
 import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 import { modelKey, selectableModels, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
@@ -98,6 +107,7 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
 ];
 const SETTINGS_TABS: SettingsTab[] = SETTINGS_NAV.flatMap(group => group.tabs.map(entry => entry.tab));
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const PackageSearchTargetContext = createContext<string | undefined>(undefined);
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
   initialProviderQuery?: string;
@@ -198,6 +208,12 @@ export function SettingsDialog({
   const [modelQuery, setModelQuery] = useState("");
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
   const [toolPolicyBusy, setToolPolicyBusy] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pendingSearchTarget, setPendingSearchTarget] = useState<SettingsSearchEntry>();
+  const [hookSearchSelection, setHookSearchSelection] = useState<{
+    hookKey: keyof HookSettingsReadModel;
+    sourceId?: string;
+  }>();
   const filteredPackages = packages.filter(item =>
     `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()),
   );
@@ -219,6 +235,10 @@ export function SettingsDialog({
     if (last && last.provider === item.provider) last.items.push(item);
     else modelGroups.push({ provider: item.provider, items: [item] });
   }
+  const searchResults = searchSettings(
+    buildSettingsSearchIndex({ providers, models, packages, extensions, hookSettings, toolPolicies }),
+    searchQuery,
+  );
   const agentModelPackages = packages.filter(item => hasAgentModelFields(item.settings));
   const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
     for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
@@ -246,13 +266,59 @@ export function SettingsDialog({
     };
   }, []);
 
+  useEffect(() => {
+    if (!pendingSearchTarget) return;
+    const frame = window.requestAnimationFrame(() => {
+      const panel = dialogRef.current?.querySelector<HTMLElement>(`#settings-panel-${pendingSearchTarget.tab}`);
+      if (!panel) return;
+      const packageScope = pendingSearchTarget.packageId
+        ? [...panel.querySelectorAll<HTMLElement>("[data-settings-search-package]")].find(
+            element => element.dataset.settingsSearchPackage === pendingSearchTarget.packageId,
+          )
+        : undefined;
+      const scope = packageScope ?? panel;
+      const target = [...scope.querySelectorAll<HTMLElement>("[data-settings-search-target]")].find(
+        element => element.dataset.settingsSearchTarget === pendingSearchTarget.target,
+      ) ?? scope;
+      target.scrollIntoView({ block: "center" });
+      const control = target.matches("button, input, select, textarea")
+        ? target
+        : target.querySelector<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])");
+      if (control) control.focus({ preventScroll: true });
+      else {
+        target.tabIndex = -1;
+        target.focus({ preventScroll: true });
+      }
+      setPendingSearchTarget(undefined);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, hookSearchSelection, pendingSearchTarget, selectedPackageId]);
+
   const playSound = (kind: "turn-complete" | "attention") => {
     unlockWebAudio();
     enqueueWebAudioCues([kind]);
   };
 
+
+  const openSearchResult = (result: SettingsSearchEntry) => {
+    setPendingSearchTarget(result);
+    setSearchQuery("");
+    setActiveTab(result.tab);
+    if (result.tab === "providers") setProviderQuery("");
+    if (result.tab === "models") setModelQuery("");
+    if (result.packageId) {
+      setPackageQuery("");
+      setSelectedPackageId(result.packageId);
+    }
+    if (result.hookKey) setHookSearchSelection({ hookKey: result.hookKey, sourceId: result.hookSourceId });
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
+      if (searchQuery.trim()) {
+        event.preventDefault();
+        setSearchQuery("");
+        return;
+      }
       event.preventDefault();
       onClose();
       return;
@@ -284,6 +350,7 @@ export function SettingsDialog({
     else if (event.key === "End") next = SETTINGS_TABS.length - 1;
     else return;
     event.preventDefault();
+    setSearchQuery("");
     setActiveTab(SETTINGS_TABS[next]!);
     dialogRef.current?.querySelectorAll<HTMLButtonElement>("[role='tab']")[next]?.focus();
   };
@@ -307,6 +374,62 @@ export function SettingsDialog({
     : undefined;
   const selectedTools = selectedToolPolicy?.managedTools ?? [];
 
+  const renderSearchControl = (result: SettingsSearchEntry): ReactNode => {
+    const control = result.control;
+    if (!control) return null;
+    if (control.kind === "sound") {
+      return <button type="button" onClick={() => playSound(control.cue)}>Play preview</button>;
+    }
+    if (control.kind === "theme") {
+      return <ColorThemeOptions theme={theme} onChange={onThemeChange} />;
+    }
+    if (control.kind === "syntax-theme") {
+      return <SyntaxThemeSelect value={syntaxTheme} onChange={onSyntaxThemeChange} />;
+    }
+    if (control.kind === "model") {
+      const model = models.find(item => modelKey(item) === control.modelKey);
+      return model ? <ModelVisibilityControl model={model} hidden={hiddenModelKeys.has(control.modelKey)} /> : null;
+    }
+    const item = packages.find(candidate => candidate.id === control.packageId);
+    if (!item) return null;
+    if (control.kind === "package") {
+      return (
+        <PackageRow label="Package enabled" description="Enable or disable this package globally.">
+          <PackageSwitch
+            label={`Toggle ${item.name}`}
+            checked={item.enabled}
+            disabled={Boolean(busy)}
+            onChange={enabled => onSetEnabled(item, enabled)}
+          />
+        </PackageRow>
+      );
+    }
+    if (control.kind === "package-field") {
+      return item.settings ? (
+        <PackageFields
+          settings={item.settings}
+          models={models}
+          sessionThinkingLevels={sessionThinkingLevels}
+          disabled={Boolean(busy)}
+          searchTarget={result.target}
+          onUpdate={settings => onUpdate(item, settings)}
+        />
+      ) : null;
+    }
+    const policy = toolPolicies.find(candidate => candidate.owner === control.packageId);
+    return (
+      <ToolExposureRow
+        tool={control.tool}
+        policy={policy}
+        runtimePolicy={runtimePolicy}
+        policyDisabled={policyDisabled}
+        busy={toolPolicyBusy === control.tool}
+        onBusyChange={working => setToolPolicyBusy(working ? control.tool : "")}
+        onUpdate={onUpdateGlobalToolPolicy}
+      />
+    );
+  };
+
   return (
     <div
       className="settings-backdrop"
@@ -326,7 +449,19 @@ export function SettingsDialog({
             <strong id="settings-dialog-title">Settings</strong>
             <span>Manage Pylon defaults and integrations</span>
           </div>
-          <button data-autofocus className="icon-button" type="button" onClick={onClose} aria-label="Close settings">
+          <label className="settings-global-search">
+            <IconSearch size={15} aria-hidden="true" />
+            <input
+              data-autofocus
+              type="search"
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              placeholder="Search settings"
+              aria-label="Search settings"
+              aria-controls="settings-search-results"
+            />
+          </label>
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close settings">
             <IconX size={17} />
           </button>
         </header>
@@ -348,7 +483,10 @@ export function SettingsDialog({
                       aria-selected={activeTab === entry.tab}
                       aria-controls={`settings-panel-${entry.tab}`}
                       tabIndex={activeTab === entry.tab ? 0 : -1}
-                      onClick={() => setActiveTab(entry.tab)}
+                      onClick={() => {
+                        setSearchQuery("");
+                        setActiveTab(entry.tab);
+                      }}
                       onKeyDown={event => onTabKeyDown(event, SETTINGS_TABS.indexOf(entry.tab))}>
                       {entry.icon}
                       {entry.label}
@@ -364,13 +502,49 @@ export function SettingsDialog({
             </p>
           </nav>
 
-          <div className={`settings-content${isWorkbenchTab ? " is-workbench" : ""}`}>
+          <div className={`settings-content${isWorkbenchTab && !searchQuery.trim() ? " is-workbench" : ""}`}>
+            {searchQuery.trim() && (
+              <section id="settings-search-results" className="settings-pane settings-search-results" aria-label="Settings search results">
+                <div className="settings-pane-header">
+                  <div>
+                    <h2>Search results</h2>
+                    <p aria-live="polite">
+                      {searchResults.length} result{searchResults.length === 1 ? "" : "s"} for “{searchQuery.trim()}”
+                    </p>
+                  </div>
+                </div>
+                {searchResults.length ? (
+                  <div className="settings-search-result-list">
+                    {searchResults.map(result => (
+                      <article className={result.control ? "is-editable" : undefined} key={result.id}>
+                        <header>
+                          <span>
+                            <strong>{result.label}</strong>
+                            {result.description && <small>{result.description}</small>}
+                          </span>
+                          <span>
+                            <b>{result.section}</b>
+                            <button type="button" onClick={() => openSearchResult(result)}>Open setting</button>
+                          </span>
+                        </header>
+                        {result.control && <div className="settings-search-inline-control">{renderSearchControl(result)}</div>}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="settings-empty">
+                    <strong>No matching settings</strong>
+                    <span>Try a setting name, description, package, model, or provider.</span>
+                  </div>
+                )}
+              </section>
+            )}
             <section
               id="settings-panel-providers"
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-providers"
-              hidden={activeTab !== "providers"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "providers"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Providers</h2>
@@ -472,7 +646,10 @@ export function SettingsDialog({
                           </header>
                           <div className="settings-provider-list">
                             {group.providers.map(provider => (
-                              <section className="settings-provider" key={provider.id}>
+                              <section
+                                className="settings-provider"
+                                data-settings-search-target={`provider-${settingSearchTarget(provider.id)}`}
+                                key={provider.id}>
                                 <div className="settings-provider-copy">
                                   <span>
                                     <strong>{provider.name}</strong>
@@ -529,7 +706,7 @@ export function SettingsDialog({
               className="settings-pane packages-workbench-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-packages"
-              hidden={activeTab !== "packages"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "packages"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Packages</h2>
@@ -595,7 +772,9 @@ export function SettingsDialog({
                       );
                     })}
                   </aside>
-                  <article className="package-workbench-detail">
+                  <article
+                    className="package-workbench-detail"
+                    data-settings-search-package={selectedPackage.id}>
                     <header>
                       <div>
                         <h3>{selectedPackage.name}</h3>
@@ -620,7 +799,7 @@ export function SettingsDialog({
                       )}
                     </header>
                     {selectedPackage.error && <p className="package-error">{selectedPackage.error}</p>}
-                    <section className="workbench-section">
+                    <section className="workbench-section" data-settings-search-target="package-defaults">
                       <header>
                         <div>
                           <h4>Package defaults</h4>
@@ -657,54 +836,18 @@ export function SettingsDialog({
                       </header>
                       {selectedTools.length ? (
                         <div className="workbench-tool-list">
-                          {selectedTools.map(tool => {
-                            const capable = selectedToolPolicy?.enabledTools.includes(tool) === true;
-                            const packageDefault = selectedToolPolicy?.deferredTools.includes(tool)
-                              ? "deferred"
-                              : capable
-                                ? "active"
-                                : "disabled";
-                            const override = runtimePolicy?.global.toolOverrides?.[tool];
-                            const effective = capable ? (override ?? packageDefault) : "disabled";
-                            const locked = tool === "search_tools";
-                            const rowClasses = ["workbench-tool-row", override && "is-override", locked && "is-locked"];
-                            return (
-                              <label
-                                className={rowClasses.filter(Boolean).join(" ")}
-                                data-effective={effective}
-                                key={tool}>
-                                <OverviewOrb state={toolOrbState(effective)} label={`Current setting: ${effective}`} />
-                                <span>
-                                  <strong>{tool}</strong>
-                                  <small>{locked ? "always on" : effective}</small>
-                                </span>
-                                <select
-                                  value={override ?? "inherit"}
-                                  disabled={
-                                    locked || policyDisabled || toolPolicyBusy === tool || (!capable && !override)
-                                  }
-                                  onChange={event => {
-                                    if (!runtimePolicy) return;
-                                    const mode = event.target.value as ToolExposureMode | "inherit";
-                                    setToolPolicyBusy(tool);
-                                    void onUpdateGlobalToolPolicy(tool, mode, runtimePolicy.revision).finally(() =>
-                                      setToolPolicyBusy(""),
-                                    );
-                                  }}>
-                                  <option value="inherit">Default</option>
-                                  <option value="active" disabled={!capable}>
-                                    Active
-                                  </option>
-                                  <option value="deferred" disabled={!capable}>
-                                    Deferred
-                                  </option>
-                                  <option value="disabled" disabled={!capable}>
-                                    Disabled
-                                  </option>
-                                </select>
-                              </label>
-                            );
-                          })}
+                          {selectedTools.map(tool => (
+                            <ToolExposureRow
+                              key={tool}
+                              tool={tool}
+                              policy={selectedToolPolicy}
+                              runtimePolicy={runtimePolicy}
+                              policyDisabled={policyDisabled}
+                              busy={toolPolicyBusy === tool}
+                              onBusyChange={working => setToolPolicyBusy(working ? tool : "")}
+                              onUpdate={onUpdateGlobalToolPolicy}
+                            />
+                          ))}
                         </div>
                       ) : (
                         <p className="workbench-empty">This package does not publish tool policy.</p>
@@ -720,7 +863,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-extensions"
-              hidden={activeTab !== "extensions"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "extensions"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Extensions</h2>
@@ -745,7 +888,7 @@ export function SettingsDialog({
               className="settings-pane hooks-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-hooks"
-              hidden={activeTab !== "hooks"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "hooks"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Hooks</h2>
@@ -759,6 +902,7 @@ export function SettingsDialog({
                 settings={hookSettings}
                 loading={hookLoading}
                 disabled={hookBusy}
+                searchSelection={hookSearchSelection}
                 onUpdate={onUpdateHooks}
               />
             </section>
@@ -768,7 +912,7 @@ export function SettingsDialog({
               className="settings-pane global-policy-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-policy"
-              hidden={activeTab !== "policy"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "policy"}>
               <GlobalPolicySettings policy={runtimePolicy} disabled={policyDisabled} onUpdate={onUpdateGlobalPolicy} />
             </section>
 
@@ -777,7 +921,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-notifications"
-              hidden={activeTab !== "notifications"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "notifications"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Notifications</h2>
@@ -786,7 +930,7 @@ export function SettingsDialog({
               </div>
               <span className="settings-kicker">Sound cues</span>
               <div className="settings-option-list">
-                <div>
+                <div data-settings-search-target="turn-complete">
                   <span>
                     <strong>Turn complete</strong>
                     <small>Played after the assistant finishes a turn.</small>
@@ -795,7 +939,7 @@ export function SettingsDialog({
                     Play preview
                   </button>
                 </div>
-                <div>
+                <div data-settings-search-target="attention-required">
                   <span>
                     <strong>Attention required</strong>
                     <small>Played when Pylon needs approval or clarification.</small>
@@ -812,7 +956,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-models"
-              hidden={activeTab !== "models"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "models"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Models</h2>
@@ -861,22 +1005,13 @@ export function SettingsDialog({
                           </label>
                         </header>
                         <div className="settings-provider-list">
-                          {group.items.map(item => {
-                            const key = `${item.provider}/${item.id}`;
-                            return (
-                              <label className="settings-model-row" key={key}>
-                                <span>
-                                  <strong>{item.name}</strong>
-                                  <small>{item.id}</small>
-                                </span>
-                                <input
-                                  type="checkbox"
-                                  checked={!hiddenModelKeys.has(key)}
-                                  onChange={event => setHiddenModelVisible(key, event.target.checked)}
-                                />
-                              </label>
-                            );
-                          })}
+                          {group.items.map(item => (
+                            <ModelVisibilityControl
+                              key={modelKey(item)}
+                              model={item}
+                              hidden={hiddenModelKeys.has(modelKey(item))}
+                            />
+                          ))}
                         </div>
                       </section>
                     );
@@ -890,7 +1025,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-agent-models"
-              hidden={activeTab !== "agent-models"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "agent-models"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Agent models</h2>
@@ -912,7 +1047,7 @@ export function SettingsDialog({
               className="settings-pane"
               role="tabpanel"
               aria-labelledby="settings-tab-appearance"
-              hidden={activeTab !== "appearance"}>
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "appearance"}>
               <div className="settings-pane-header">
                 <div>
                   <h2>Appearance</h2>
@@ -920,37 +1055,9 @@ export function SettingsDialog({
                 </div>
               </div>
               <span className="settings-kicker">Color theme</span>
-              <div className="settings-theme-options">
-                {(["dark", "light", "warm"] as const).map(option => (
-                  <label key={option}>
-                    <input
-                      type="radio"
-                      name="settings-theme"
-                      value={option}
-                      checked={theme === option}
-                      onChange={() => onThemeChange(option)}
-                    />
-                    <span className={`theme-preview is-${option}`} aria-hidden="true">
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <strong>{option}</strong>
-                  </label>
-                ))}
-              </div>
+              <ColorThemeOptions theme={theme} onChange={onThemeChange} />
               <span className="settings-kicker settings-syntax-kicker">Syntax theme</span>
-              <label className="settings-syntax-theme">
-                <span>Code highlighting</span>
-                <select value={syntaxTheme} onChange={event => onSyntaxThemeChange(event.target.value as SyntaxTheme)}>
-                  {SYNTAX_THEMES.map(option => (
-                    <option value={option.id} key={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <small>Syntax themes and languages load in the background after startup.</small>
-              </label>
+              <SyntaxThemeSelect value={syntaxTheme} onChange={onSyntaxThemeChange} />
             </section>
           </div>
         </div>
@@ -967,6 +1074,116 @@ function packageOrbState(state: string): OverviewState {
 function toolOrbState(effective: string): OverviewState {
   if (effective === "active") return "done";
   return effective === "deferred" ? "attention" : "neutral";
+}
+
+function ModelVisibilityControl({ model, hidden }: { model: ModelOptionReadModel; hidden: boolean }) {
+  const key = modelKey(model);
+  return (
+    <label
+      className="settings-model-row"
+      data-settings-search-target={`model-${settingSearchTarget(`${model.provider}-${model.id}`)}`}>
+      <span>
+        <strong>{model.name}</strong>
+        <small>{model.id}</small>
+      </span>
+      <input
+        type="checkbox"
+        checked={!hidden}
+        onChange={event => setHiddenModelVisible(key, event.target.checked)}
+      />
+    </label>
+  );
+}
+
+function ColorThemeOptions({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
+  return (
+    <div className="settings-theme-options" data-settings-search-target="color-theme">
+      {(["dark", "light", "warm"] as const).map(option => (
+        <label key={option}>
+          <input
+            type="radio"
+            name="settings-theme"
+            value={option}
+            checked={theme === option}
+            onChange={() => onChange(option)}
+          />
+          <span className={`theme-preview is-${option}`} aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <strong>{option}</strong>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function SyntaxThemeSelect({ value, onChange }: { value: SyntaxTheme; onChange: (theme: SyntaxTheme) => void }) {
+  return (
+    <label className="settings-syntax-theme" data-settings-search-target="code-highlighting">
+      <span>Code highlighting</span>
+      <select value={value} onChange={event => onChange(event.target.value as SyntaxTheme)}>
+        {SYNTAX_THEMES.map(option => (
+          <option value={option.id} key={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <small>Syntax themes and languages load in the background after startup.</small>
+    </label>
+  );
+}
+
+function ToolExposureRow({
+  tool,
+  policy,
+  runtimePolicy,
+  policyDisabled,
+  busy,
+  onBusyChange,
+  onUpdate,
+}: {
+  tool: string;
+  policy?: ToolPolicyReadModel;
+  runtimePolicy?: RuntimePolicyReadModel;
+  policyDisabled: boolean;
+  busy: boolean;
+  onBusyChange: (busy: boolean) => void;
+  onUpdate: (tool: string, mode: ToolExposureMode | "inherit", expectedRevision: number) => Promise<void>;
+}) {
+  const capable = policy?.enabledTools.includes(tool) === true;
+  const packageDefault = policy?.deferredTools.includes(tool) ? "deferred" : capable ? "active" : "disabled";
+  const override = runtimePolicy?.global.toolOverrides?.[tool];
+  const effective = capable ? (override ?? packageDefault) : "disabled";
+  const locked = tool === "search_tools";
+  const rowClasses = ["workbench-tool-row", override && "is-override", locked && "is-locked"];
+  return (
+    <label
+      className={rowClasses.filter(Boolean).join(" ")}
+      data-effective={effective}
+      data-settings-search-target={`tool-${settingSearchTarget(tool)}`}>
+      <OverviewOrb state={toolOrbState(effective)} label={`Current setting: ${effective}`} />
+      <span>
+        <strong>{tool}</strong>
+        <small>{locked ? "always on" : effective}</small>
+      </span>
+      <select
+        value={override ?? "inherit"}
+        disabled={locked || !runtimePolicy || policyDisabled || busy || (!capable && !override)}
+        onChange={event => {
+          if (!runtimePolicy) return;
+          const mode = event.target.value as ToolExposureMode | "inherit";
+          onBusyChange(true);
+          void onUpdate(tool, mode, runtimePolicy.revision).finally(() => onBusyChange(false));
+        }}>
+        <option value="inherit">Default</option>
+        <option value="active" disabled={!capable}>Active</option>
+        <option value="deferred" disabled={!capable}>Deferred</option>
+        <option value="disabled" disabled={!capable}>Disabled</option>
+      </select>
+    </label>
+  );
 }
 
 function AndroidToolingSettings({
@@ -994,7 +1211,10 @@ function AndroidToolingSettings({
   const versionLabel = (value: string | undefined, fallback: string) =>
     status?.state === "ready" ? (value ?? fallback) : `target ${value ?? fallback}`;
   return (
-    <section className="workbench-section android-tooling-settings" aria-labelledby="android-tooling-title">
+    <section
+      className="workbench-section android-tooling-settings"
+      data-settings-search-target="android-tooling"
+      aria-labelledby="android-tooling-title">
       <header>
         <div>
           <h4 id="android-tooling-title">Android tooling</h4>
@@ -1151,7 +1371,7 @@ function GlobalPolicySettings({
           <p>Defaults for checkpoints, approvals, and response windows.</p>
         </header>
         <div className="settings-policy-list">
-          <div className="settings-policy-row">
+          <div className="settings-policy-row" data-settings-search-target="timeline">
             <span>
               <strong>Timeline</strong>
               <small>Keep recoverable checkpoints for session activity.</small>
@@ -1168,7 +1388,7 @@ function GlobalPolicySettings({
               <small>{draft.timelineEnabled ? "Enabled" : "Disabled"}</small>
             </label>
           </div>
-          <div className="settings-policy-row">
+          <div className="settings-policy-row" data-settings-search-target="guard">
             <span>
               <strong>Guard</strong>
               <small>Ask before guarded commands and paths run.</small>
@@ -1186,7 +1406,10 @@ function GlobalPolicySettings({
             </label>
           </div>
           {GUARD_RISK_CATEGORIES.map(category => (
-            <label className="settings-policy-row" key={category}>
+            <label
+              className="settings-policy-row"
+              data-settings-search-target={settingSearchTarget(GUARD_RULE_LABELS[category])}
+              key={category}>
               <span>
                 <strong>{GUARD_RULE_LABELS[category]}</strong>
                 <small>{GUARD_RULE_DESCRIPTIONS[category]}</small>
@@ -1213,6 +1436,7 @@ function GlobalPolicySettings({
           ))}
           <RuntimePolicyTimeoutControl
             label="Guard timeout"
+            searchTarget="guard-timeout"
             description="How long a confirmation request stays open."
             value={draft.guardTimeoutSeconds}
             disabled={controlsDisabled}
@@ -1220,6 +1444,7 @@ function GlobalPolicySettings({
           />
           <RuntimePolicyTimeoutControl
             label="Clarify timeout"
+            searchTarget="clarify-timeout"
             description="How long Pylon waits for a clarification answer."
             value={draft.clarifyTimeoutSeconds}
             disabled={controlsDisabled}
@@ -1234,7 +1459,7 @@ function GlobalPolicySettings({
           <p>Choose where sessions begin work when no closer override exists.</p>
         </header>
         <div className="settings-policy-list">
-          <label className="settings-policy-row">
+          <label className="settings-policy-row" data-settings-search-target="workspace">
             <span>
               <strong>Workspace</strong>
               <small>Local does not create a branch or worktree.</small>
@@ -1285,8 +1510,13 @@ function PackageRow({
   stacked?: boolean;
   children: ReactNode;
 }) {
+  const searchTarget = useContext(PackageSearchTargetContext);
+  const target = settingSearchTarget(label);
+  if (searchTarget && searchTarget !== target) return null;
   return (
-    <div className={`package-row${stacked ? " is-stacked" : ""}`}>
+    <div
+      className={`package-row${stacked ? " is-stacked" : ""}`}
+      data-settings-search-target={settingSearchTarget(label)}>
       <span>
         <strong>{label}</strong>
         {description && <small>{description}</small>}
@@ -1297,6 +1527,8 @@ function PackageRow({
 }
 
 function PackageSubgroup({ label, description }: { label: string; description: string }) {
+  const searchTarget = useContext(PackageSearchTargetContext);
+  if (searchTarget) return null;
   return (
     <div className="package-subgroup">
       <strong>{label}</strong>
@@ -1927,19 +2159,31 @@ function PackageModelFields({
   return null;
 }
 
-function PackageFields({
-  settings,
-  models,
-  sessionThinkingLevels,
-  disabled,
-  onUpdate,
-}: {
+interface PackageFieldsProps {
   settings: PackageSettingsReadModel;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
   disabled: boolean;
   onUpdate: (settings: PackageSettingsReadModel) => void;
-}) {
+  searchTarget?: string;
+}
+
+function PackageFields({ searchTarget, ...props }: PackageFieldsProps) {
+  return (
+    <PackageSearchTargetContext.Provider value={searchTarget}>
+      <PackageFieldsContent {...props} />
+    </PackageSearchTargetContext.Provider>
+  );
+}
+
+function PackageFieldsContent({
+  settings,
+  models,
+  sessionThinkingLevels,
+  disabled,
+  onUpdate,
+}: Omit<PackageFieldsProps, "searchTarget">) {
+  const searchTarget = useContext(PackageSearchTargetContext);
   if (settings.kind === "generic") {
     return <GenericPackageFields settings={settings} models={models} disabled={disabled} onUpdate={onUpdate} />;
   }
@@ -2017,13 +2261,15 @@ function PackageFields({
             onChange={titleChangedFiles => onUpdate({ ...settings, titleChangedFiles })}
           />
         </PackageRow>
-        <p className="settings-callout">
-          <IconAlertTriangle size={18} aria-hidden="true" />
-          <span>
-            <strong>Checkpoint naming creates an extra model call for each changed turn.</strong>
-            Use a cheap model to keep Timeline costs low.
-          </span>
-        </p>
+        {!searchTarget && (
+          <p className="settings-callout">
+            <IconAlertTriangle size={18} aria-hidden="true" />
+            <span>
+              <strong>Checkpoint naming creates an extra model call for each changed turn.</strong>
+              Use a cheap model to keep Timeline costs low.
+            </span>
+          </p>
+        )}
         <PackageRow
           label="Rollback files when editing prompts"
           description="Restore the matching Timeline checkpoint by default when an earlier prompt is edited.">

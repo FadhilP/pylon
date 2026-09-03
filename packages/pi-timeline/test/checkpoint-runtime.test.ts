@@ -236,7 +236,7 @@ test("timeline rejects incompatible targets before rollback capture", async () =
   try {
     const head = await git("rev-parse", "HEAD"),
       checkpointTime = "2026-02-18T12:34:56.789Z",
-      displayedTime = "2026-02-18T12:34:56Z",
+      displayedTime = "12:34:56",
       entries = [
         { type: "message", id: "user-1", message: { role: "user", content: "Old prompt" } },
         {
@@ -325,11 +325,11 @@ test("timeline rejects incompatible targets before rollback capture", async () =
     assert.equal(selections.length, 0, "invalid action does not prompt for confirmation");
     assert.equal(appended, 0, "invalid action does not checkpoint");
     await commands.get("timeline").handler("list", ctx);
-    assert.match(notices.at(-1)!, new RegExp(`\\[blocked:HEAD\\] ${displayedTime} Old prompt`));
+    assert.match(notices.at(-1)!, new RegExp(`\\[blocked:HEAD\\]\\s+${displayedTime}\\s+Old prompt`));
     assert.doesNotMatch(notices.at(-1)!, /branch:unknown|unsupported-without-head-ref|test-session:checkpoint/);
     await commands.get("timeline").handler("select", ctx);
     assert.equal(selections.length, 1);
-    assert.ok(selections[0]!.every(row => row.includes(` ${displayedTime} Old prompt`)));
+    assert.ok(selections[0]!.every(row => new RegExp(`${displayedTime}\\s+Old prompt`).test(row)));
     assert.ok(selections[0]!.every(row => !row.includes("test-session:checkpoint")));
     await commands.get("timeline").handler("restore test-session:checkpoint-1", ctx);
     assert.equal(appended, 0);

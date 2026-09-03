@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import { isActive, JobManager, pruneStaleSessionDirs, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
 import { checkWaitMs } from "../src/polling.ts";
@@ -62,7 +63,17 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     if (lastCtx.mode === "tui")
       lastCtx.ui.setWidget(
         "pi-heartbeat",
-        running.length ? ["Background jobs", ...running.slice(0, 3).map(j => `${j.id} ${j.label}`)] : undefined,
+        running.length
+          ? (_tui: unknown, theme: any) =>
+              new Text(
+                [
+                  theme.fg("muted", "Background jobs"),
+                  ...running.slice(0, 3).map(job => `${theme.fg("dim", job.id)} ${theme.fg("text", job.label)}`),
+                ].join("\n"),
+                0,
+                0,
+              )
+          : undefined,
       );
   };
   /** Shared by heartbeat_status and /heartbeat status: enforces the polling gate, then formats. */

@@ -173,6 +173,7 @@ function scrollTranscriptToBottom(stream: HTMLElement): void {
 export function ConversationPanel({
   live,
   projectAvailable = true,
+  showActiveAgents = true,
   initialDraft = "",
   restoreComposerFocus = false,
   restoreComposerSelection,
@@ -189,6 +190,7 @@ export function ConversationPanel({
   openTurnDiffEntryId,
 }: {
   live: RuntimeStoreSnapshot;
+  showActiveAgents?: boolean;
   projectAvailable?: boolean;
   initialDraft?: string;
   restoreComposerFocus?: boolean;
@@ -876,7 +878,7 @@ export function ConversationPanel({
       ) : (
         live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>
       )}
-      {!draftingOnly && (
+      {!draftingOnly && showActiveAgents && (
         <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />
       )}
       {runtime && (
@@ -2473,7 +2475,23 @@ function ChangedFiles({
           <del>-{deletions}</del>
         </>
       }
-      action="Files">
+      trailing={
+        entryId && (
+          <button
+            className="seam-open"
+            type="button"
+            aria-expanded={open}
+            aria-controls={open ? "turn-diff-panel" : undefined}
+            // The opener sits inside the summary, so it must not also toggle the file list.
+            onClick={event => {
+              event.preventDefault();
+              onOpen(entryId, files, event.currentTarget);
+            }}>
+            Diff
+            <IconChevronRight size={13} />
+          </button>
+        )
+      }>
       <div className="file-list" aria-label="Files changed in this turn">
         {files.map(file => (
           <button
@@ -2497,17 +2515,6 @@ function ChangedFiles({
           </button>
         ))}
       </div>
-      {entryId && (
-        <button
-          className="seam-toggle"
-          type="button"
-          aria-expanded={open}
-          aria-controls={open ? "turn-diff-panel" : undefined}
-          onClick={event => onOpen(entryId, files, event.currentTarget)}>
-          {open ? "Hide turn diff" : "Show turn diff"}
-          <IconChevronRight size={13} />
-        </button>
-      )}
     </SeamDisclosure>
   );
 }

@@ -1,5 +1,11 @@
 import type { complete } from "@earendil-works/pi-ai/compat";
-import { contextWindowTokensFromUsage } from "pylon-core/child-process";
+import {
+  addCostParts,
+  contextWindowTokensFromUsage,
+  emptyCostParts,
+  usageSnapshot,
+  type CostParts,
+} from "pylon-core/child-process";
 import { ADVISOR_TIMEOUT_MS } from "./config.ts";
 import { redact } from "./redact.ts";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "./retry.ts";
@@ -18,8 +24,22 @@ export type FailureCode =
   | "pricing_unavailable"
   | "context_overflow";
 
-export type AdvisorUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
-export const emptyUsage = (): AdvisorUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+export type AdvisorUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  costParts: CostParts;
+};
+export const emptyUsage = (): AdvisorUsage => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  costParts: emptyCostParts(),
+});
 const validUsageNumber = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 function accumulateUsage(total: AdvisorUsage, usage: any): void {
@@ -29,6 +49,7 @@ function accumulateUsage(total: AdvisorUsage, usage: any): void {
   total.cacheRead += validUsageNumber(usage.cacheRead);
   total.cacheWrite += validUsageNumber(usage.cacheWrite);
   total.cost += validUsageNumber(usage.cost?.total);
+  addCostParts(total.costParts, usage.cost);
 }
 
 export function failureMessage(value: unknown, fallback: string): string {
@@ -94,7 +115,7 @@ export async function runConsultation(options: ConsultOptions): Promise<ConsultR
   // Progress observers must not control provider execution.
   const report = (progress: ConsultProgress) => {
     try {
-      options.onProgress(progress);
+      options.onProgress({ ...progress, usage: usageSnapshot(progress.usage) });
     } catch {
       /* ignore */
     }

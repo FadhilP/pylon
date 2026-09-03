@@ -54,30 +54,41 @@ export function SeamLink({
 
 /** An event whose detail belongs in the thread, so it opens in place.
     Actions sit under the panel rather than inside it, the way a message's
-    own actions sit under the message. */
+    own actions sit under the message. A seam whose detail also lives
+    elsewhere carries that second opener on the rule, after its own: the
+    chevrons say which way each one goes. */
 export function SeamDisclosure({
   state,
   label,
   value,
   action,
   actions,
+  trailing,
   children,
 }: {
   state: OverviewState;
   label: string;
   value?: ReactNode;
-  action: string;
+  /** Omit when the seam's own label already names what opens. */
+  action?: string;
   actions?: ReactNode;
+  trailing?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <details className="seam-block">
-      <summary className={`seam is-${state}`}>
+      <summary className={`seam is-${state}${trailing ? " has-pair" : ""}`}>
         <SeamContent state={state} label={label} value={value} />
         <span className="seam-open">
           {action}
           <IconChevronDown size={13} className="seam-chevron" aria-hidden="true" />
         </span>
+        {trailing && (
+          <>
+            <span className="seam-sep" aria-hidden="true" />
+            {trailing}
+          </>
+        )}
       </summary>
       <div className="seam-body">{children}</div>
       {actions && <div className="seam-actions">{actions}</div>}

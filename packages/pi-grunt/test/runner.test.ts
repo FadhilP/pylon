@@ -41,7 +41,7 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
   const script = join(dir, "fake.mjs");
   await writeFile(
     script,
-    `console.log(JSON.stringify({type:'tool_execution_start',toolCallId:'edit-1',toolName:'edit',args:{path:'a.ts'}})); console.log(JSON.stringify({type:'tool_execution_end',toolCallId:'edit-1',toolName:'edit',result:{content:[{type:'text',text:'updated'}]}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{total:.1}}}}));`,
+    `console.log(JSON.stringify({type:'tool_execution_start',toolCallId:'edit-1',toolName:'edit',args:{path:'a.ts'}})); console.log(JSON.stringify({type:'tool_execution_end',toolCallId:'edit-1',toolName:'edit',result:{content:[{type:'text',text:'updated'}]}})); for(let i=1;i<=2;i++) console.log(JSON.stringify({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'turn '+i}],model:'worker',stopReason:'stop',usage:{input:i,output:2,cacheRead:3,cacheWrite:4,cost:{input:.04,output:.03,cacheRead:.02,cacheWrite:.01,total:.1}}}}));`,
   );
   const usage: any[] = [];
   const contexts: Array<number | null> = [];
@@ -58,6 +58,8 @@ test("runner selects final assistant, sums usage, and exposes activity", async (
     usage.map(item => item.input),
     [1, 3],
   );
+  assert.deepEqual(usage[0].costParts, { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 });
+  assert.deepEqual(usage[1].costParts, { input: 0.08, output: 0.06, cacheRead: 0.04, cacheWrite: 0.02 });
   assert.deepEqual(run.usage, usage.at(-1));
   assert.deepEqual(contexts, [10, 11]);
   assert.equal(run.contextTokens, 11);

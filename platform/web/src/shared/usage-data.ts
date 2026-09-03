@@ -1,8 +1,15 @@
 import type { UsageAgent, UsageRecord, UsageSessionSummary, UsageSnapshot } from "./protocol/snapshots.ts";
 
 export type UsageFacet = "project" | "provider" | "model";
-export type UsageMetric = "total" | "input" | "output" | "cost";
-export type UsageSplit = "none" | "provider" | "model";
+/**
+ * "costInput", "costOutput" and "costUnsplit" are the parts of "cost". They are
+ * not offered as measures of their own — they exist so combined cost can draw
+ * the same input/output reading as combined tokens, with whatever the provider
+ * billed without a split named as its own part rather than folded into either.
+ */
+export type UsageMetric =
+  "total" | "input" | "output" | "cost" | "cacheRead" | "sessions" | "costInput" | "costOutput" | "costUnsplit";
+export type UsageSplit = "none" | UsageFacet | "agent";
 export type UsageFilters = Record<UsageFacet, Set<string>>;
 
 export interface UsageGroup {
@@ -15,6 +22,9 @@ export interface UsageGroup {
   cacheWrite: number;
   cost: number;
   costKnown: boolean;
+  costInput: number;
+  costOutput: number;
+  costEstimated: number;
   cache: number;
 }
 
@@ -27,7 +37,10 @@ export interface UsageFacetOption {
 export interface UsageSeriesData {
   label: string;
   value: string;
-  kind?: "provider" | "model";
+  /** Set when the series is one part of a measure rather than a whole line. */
+  part?: "input" | "output" | "unsplit";
+  kind?: UsageFacet | "agent";
+  cacheRead: number;
   amount: number;
   dash: boolean;
   values: number[];
@@ -45,6 +58,8 @@ export interface UsageSessionRow {
   elapsedMs: number;
   input: number;
   output: number;
+  cacheRead: number;
+  cache: number;
   cost: number;
   costKnown: boolean;
 }
@@ -67,18 +82,49 @@ const facetValue = (record: UsageRecord, facet: UsageFacet): string =>
   facet === "project" ? record.projectId : record[facet];
 const facetLabel = (record: UsageRecord, facet: UsageFacet): string =>
   facet === "project" ? record.projectLabel : record[facet];
+const splitValue = (record: UsageRecord, split: UsageFacet | "agent"): string =>
+  split === "agent" ? record.agent : facetValue(record, split);
+const splitLabel = (record: UsageRecord, split: UsageFacet | "agent"): string =>
+  split === "agent" ? usageAgentLabel(record.agent) : facetLabel(record, split);
+
+/**
+ * Delegated turns bill a total with no halves, so a range almost always holds
+ * some cost that cannot be attributed. That is not a reason to refuse the
+ * split — it is a third part, named as what it is, so the parts always add up
+ * to the total beside them and nothing is invented to make them.
+ */
+export const costPartsReported = (value: Pick<UsageGroup, "costInput" | "costOutput">): boolean =>
+  value.costInput + value.costOutput > 0;
 
 export const cachePercent = (input: number, cacheRead: number): number =>
   input + cacheRead > 0 ? (cacheRead / (input + cacheRead)) * 100 : 0;
 
-export function measureUsage(metric: UsageMetric, value: Pick<UsageRecord, "input" | "output" | "cost">): number {
+export type UsageMeasurable = Pick<UsageRecord, "input" | "output" | "cost"> &
+  Partial<Pick<UsageRecord, "cacheRead" | "costInput" | "costOutput">> & { sessions?: number };
+
+/**
+ * Sessions are the one measure that is not a sum: a record belongs to a session
+ * it shares with other records, so the count only exists once rows are grouped.
+ * Callers that measure records by day count distinct sessions themselves.
+ */
+export function measureUsage(metric: UsageMetric, value: UsageMeasurable): number {
   return metric === "input"
     ? value.input
     : metric === "output"
       ? value.output
-      : metric === "cost"
-        ? value.cost
-        : value.input + value.output;
+      : metric === "costInput"
+        ? (value.costInput ?? 0)
+        : metric === "costOutput"
+          ? (value.costOutput ?? 0)
+          : metric === "cacheRead"
+            ? (value.cacheRead ?? 0)
+            : metric === "sessions"
+              ? (value.sessions ?? 0)
+              : metric === "costUnsplit"
+                ? Math.max(0, value.cost - (value.costInput ?? 0) - (value.costOutput ?? 0))
+                : metric === "cost"
+                  ? value.cost
+                  : value.input + value.output;
 }
 
 export function filterUsageRecords(records: readonly UsageRecord[], filters: UsageFilters): UsageRecord[] {
@@ -134,6 +180,9 @@ export function groupUsage(records: readonly UsageRecord[], facet?: UsageFacet |
       cacheWrite: 0,
       cost: 0,
       costKnown: true,
+      costInput: 0,
+      costOutput: 0,
+      costEstimated: 0,
     };
     group.sessionIds.add(record.sessionId);
     group.input += record.input;
@@ -142,6 +191,9 @@ export function groupUsage(records: readonly UsageRecord[], facet?: UsageFacet |
     group.cacheWrite += record.cacheWrite;
     group.cost += record.cost;
     group.costKnown = group.costKnown && record.costKnown;
+    group.costInput += record.costInput;
+    group.costOutput += record.costOutput;
+    group.costEstimated += record.costEstimated;
     groups.set(value, group);
   }
   return [...groups.values()].map(group => ({
@@ -154,6 +206,9 @@ export function groupUsage(records: readonly UsageRecord[], facet?: UsageFacet |
     cacheWrite: group.cacheWrite,
     cost: group.cost,
     costKnown: group.costKnown,
+    costInput: group.costInput,
+    costOutput: group.costOutput,
+    costEstimated: group.costEstimated,
     cache: cachePercent(group.input, group.cacheRead),
   }));
 }
@@ -170,10 +225,34 @@ export function usageDayKeys(snapshot: Pick<UsageSnapshot, "fromInclusive" | "to
 }
 
 function dailyValues(records: readonly UsageRecord[], days: readonly string[], metric: UsageMetric): number[] {
+  if (metric === "sessions") {
+    const perDay = new Map<string, Set<string>>();
+    for (const record of records) {
+      const seen = perDay.get(record.day) ?? new Set<string>();
+      seen.add(record.sessionId);
+      perDay.set(record.day, seen);
+    }
+    return days.map(day => perDay.get(day)?.size ?? 0);
+  }
   const values = new Map<string, number>();
   for (const record of records) values.set(record.day, (values.get(record.day) ?? 0) + measureUsage(metric, record));
   return days.map(day => values.get(day) ?? 0);
 }
+
+const PART_LABEL: Partial<Record<UsageMetric, string>> = {
+  input: "Input",
+  output: "Output",
+  costInput: "Input",
+  costOutput: "Output",
+  costUnsplit: "Not split",
+};
+const PART_OF: Partial<Record<UsageMetric, "input" | "output" | "unsplit">> = {
+  input: "input",
+  output: "output",
+  costInput: "input",
+  costOutput: "output",
+  costUnsplit: "unsplit",
+};
 
 export function buildUsageSeries(
   records: readonly UsageRecord[],
@@ -184,7 +263,7 @@ export function buildUsageSeries(
   const splitFacet = split === "none" ? undefined : split;
   const buckets = new Map<string, UsageRecord[]>();
   for (const record of records) {
-    const value = splitFacet ? facetValue(record, splitFacet) : "total";
+    const value = splitFacet ? splitValue(record, splitFacet) : "total";
     const bucket = buckets.get(value) ?? [];
     bucket.push(record);
     buckets.set(value, bucket);
@@ -199,20 +278,36 @@ export function buildUsageSeries(
     dash: boolean,
   ): UsageSeriesData => {
     const group = groupUsage(rows)[0]!;
-    const name = splitFacet ? facetLabel(rows[0]!, splitFacet) : "Total";
+    const name = splitFacet ? splitLabel(rows[0]!, splitFacet) : "Total";
     return {
-      label: metric === "total" ? (splitFacet ? `${name} · ${part}` : part === "input" ? "Input" : "Output") : name,
+      label: splitFacet ? name : (PART_LABEL[part] ?? name),
+      ...(PART_OF[part] ? { part: PART_OF[part] } : {}),
       value,
       ...(splitFacet ? { kind: splitFacet } : {}),
       amount: measureUsage(part, group),
+      cacheRead: group.cacheRead,
       dash,
       values: dailyValues(rows, days, part),
       sessions: group.sessions,
       cache: group.cache,
     };
   };
-  if (metric === "total")
-    return ordered.flatMap(([value, rows]) => [make(value, rows, "input", false), make(value, rows, "output", true)]);
+  // Input and output are the two halves of one measured quantity, so a combined
+  // total draws as its parts rather than as one line — for cost too, wherever
+  // the provider reported them.
+  const totals = groupUsage(records)[0];
+  const parts: UsageMetric[] =
+    splitFacet || !totals
+      ? []
+      : metric === "total"
+        ? ["input", "output"]
+        : metric === "cost" && costPartsReported(totals)
+          ? measureUsage("costUnsplit", totals) > 0
+            ? ["costInput", "costOutput", "costUnsplit"]
+            : ["costInput", "costOutput"]
+          : [];
+  if (parts.length)
+    return ordered.flatMap(([value, rows]) => parts.map((part, index) => make(value, rows, part, index > 0)));
   return ordered.map(([value, rows]) => make(value, rows, metric, false));
 }
 
@@ -236,6 +331,7 @@ export function topUsageSessions(
   metric: UsageMetric,
   limit = 6,
 ): UsageSessionRow[] {
+  const ranked: UsageMetric = metric === "sessions" ? "cost" : metric;
   const summaries = new Map(sessions.map(session => [session.id, session]));
   const bySession = new Map<string, UsageRecord[]>();
   for (const record of records) {
@@ -252,16 +348,18 @@ export function topUsageSessions(
         title: summary?.title ?? id,
         project: summary?.projectLabel ?? rows[0]!.projectLabel,
         projectId: summary?.projectId ?? rows[0]!.projectId,
-        model: dominant(rows, metric, row => row.model),
-        agent: dominant(rows, metric, row => usageAgentLabel(row.agent)),
+        model: dominant(rows, ranked, row => row.model),
+        agent: dominant(rows, ranked, row => usageAgentLabel(row.agent)),
         elapsedMs: summary?.elapsedMs ?? 0,
         input: group.input,
         output: group.output,
+        cacheRead: group.cacheRead,
+        cache: group.cache,
         cost: group.cost,
         costKnown: group.costKnown,
       };
     })
-    .sort((left, right) => measureUsage(metric, right) - measureUsage(metric, left) || left.id.localeCompare(right.id))
+    .sort((left, right) => measureUsage(ranked, right) - measureUsage(ranked, left) || left.id.localeCompare(right.id))
     .slice(0, limit);
 }
 
@@ -288,6 +386,9 @@ export function usageCsv(records: readonly UsageRecord[]): string {
       "cache_write",
       "cache_hit_pct",
       "cost",
+      "cost_input",
+      "cost_output",
+      "cost_estimated",
       "cost_known",
     ],
     ...records.map(record => [
@@ -305,6 +406,9 @@ export function usageCsv(records: readonly UsageRecord[]): string {
       record.cacheWrite,
       cachePercent(record.input, record.cacheRead).toFixed(2),
       record.cost,
+      record.costInput,
+      record.costOutput,
+      record.costEstimated,
       record.costKnown,
     ]),
   ];

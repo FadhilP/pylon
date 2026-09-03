@@ -11,7 +11,15 @@ import { basename, join, resolve } from "node:path";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
 export type Invocation = { command: string; args: string[] };
-export type ChildUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+export type CostParts = { input: number; output: number; cacheRead: number; cacheWrite: number };
+export type ChildUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
+  costParts: CostParts;
+};
 export type ChildActivity = {
   id?: string;
   kind: "call" | "result";
@@ -62,7 +70,46 @@ export function terminate(child: ChildProcess): void {
   }
 }
 
-export const emptyUsage = (): ChildUsage => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+export const emptyUsage = (): ChildUsage => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  costParts: emptyCostParts(),
+});
+
+/**
+ * A provider bills a turn in four parts and reports them beside the total. A
+ * delegate that keeps only the total leaves whoever reads its usage later
+ * unable to say what the prompt cost against what the reply cost, so the parts
+ * ride along with it — the total stays the number every budget is measured in.
+ */
+export const emptyCostParts = (): CostParts => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+
+/** Two tallies added: the parts add like the totals beside them. */
+export const sumCostParts = (left: CostParts, right: CostParts): CostParts => ({
+  input: left.input + right.input,
+  output: left.output + right.output,
+  cacheRead: left.cacheRead + right.cacheRead,
+  cacheWrite: left.cacheWrite + right.cacheWrite,
+});
+
+/** A snapshot for an observer: the parts are copied, not shared with the tally. */
+export const usageSnapshot = <T extends { costParts: CostParts }>(usage: T): T => ({
+  ...usage,
+  costParts: { ...usage.costParts },
+});
+
+export function addCostParts(total: CostParts, cost: unknown): void {
+  const parts =
+    cost && typeof cost === "object" && !Array.isArray(cost) ? (cost as Record<string, unknown>) : undefined;
+  if (!parts) return;
+  total.input += validCost(parts.input);
+  total.output += validCost(parts.output);
+  total.cacheRead += validCost(parts.cacheRead);
+  total.cacheWrite += validCost(parts.cacheWrite);
+}
 
 /** Coerces a reported token count, treating anything non-finite or negative as zero. */
 export const validTokens = (value: unknown): number => {
