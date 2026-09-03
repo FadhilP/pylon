@@ -34,10 +34,6 @@ after(async () => {
   await rm(isolatedAgentDir, { recursive: true, force: true });
 });
 
-async function waitFor(predicate: () => boolean) {
-  for (let attempt = 0; attempt < 100 && !predicate(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
-}
 
 const generatedWriteDraft = (): ActivationDraft => ({
   classification: "grounded",

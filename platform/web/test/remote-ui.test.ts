@@ -506,7 +506,8 @@ test("remote UI fails closed on abort, timeout, and generation cancellation", as
   assert.equal(await editor, undefined);
 });
 
-test("remote UI renews owned deadlines and supports Never", async () => {
+test("remote UI renews owned deadlines and supports Never", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"] });
   const requests: UiRequest[] = [];
   const bridge = new RemoteUiBridge(request => requests.push(request), 100);
   const ui = bridge.context("session-1", 7);
@@ -515,11 +516,11 @@ test("remote UI renews owned deadlines and supports Never", async () => {
   const renewedRequest = requests.at(-1)!;
   assert.equal(renewedRequest.timeoutSeconds, 1);
   const firstExpiry = renewedRequest.expiresAt;
-  await new Promise(resolve => setTimeout(resolve, 30));
+  t.mock.timers.tick(30);
   const renewedExpiry = bridge.keepAlive(renewedRequest.requestId, 7);
   assert.equal(renewedExpiry, renewedRequest.expiresAt);
   assert.notEqual(renewedExpiry, firstExpiry);
-  await new Promise(resolve => setTimeout(resolve, 30));
+  t.mock.timers.tick(30);
   bridge.answer({ requestId: renewedRequest.requestId, sessionGeneration: 7, method: "select", value: "A" });
   assert.equal(await renewed, "A");
   assert.throws(() => bridge.keepAlive(renewedRequest.requestId, 7), /unknown or expired/);
@@ -527,7 +528,7 @@ test("remote UI renews owned deadlines and supports Never", async () => {
   const never = ui.confirm("Confirm", "Proceed?", { timeout: 0 });
   const neverRequest = requests.at(-1)!;
   assert.equal(neverRequest.timeoutSeconds, undefined);
-  await new Promise(resolve => setTimeout(resolve, 120));
+  t.mock.timers.tick(120);
   bridge.keepAlive(neverRequest.requestId, 7);
   bridge.answer({ requestId: neverRequest.requestId, sessionGeneration: 7, method: "confirm", confirmed: true });
   assert.equal(await never, true);

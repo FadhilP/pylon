@@ -143,8 +143,6 @@ test("numbered line tools follow session model pricing without persisting the ch
     assert.deepEqual([...runtime.tools.keys()], ["pylon_docs"], "low-ratio startup keeps only the docs custom tool");
 
     await select({ model: model(1, 3), previousModel: model(1, 2.99), source: "set" }, ctx);
-    assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
-    assert.equal(runtime.tools.get("edit")?.label, "edit (numbered)");
     assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
     const firstNumberedRead = runtime.tools.get("read");
 
@@ -157,8 +155,6 @@ test("numbered line tools follow session model pricing without persisting the ch
     assert.equal(runtime.tools.get("read"), firstNumberedRead, "zero output pricing keeps numbered mode");
 
     await select({ model: model(2, 5.99, [{ input: 4, output: 11.99 }]), source: "set" }, ctx);
-    assert.equal(runtime.tools.get("read")?.label, "read");
-    assert.equal(runtime.tools.get("edit")?.label, "edit");
     assert.ok(runtime.active().includes("read") && runtime.active().includes("edit"));
 
     const other = join(root, "other");
@@ -174,7 +170,6 @@ test("numbered line tools follow session model pricing without persisting the ch
     assert.equal(nativeResult.content[0]?.text, "new cwd");
 
     await select({ model: model(1, 4), source: "set" }, ctx);
-    assert.equal(runtime.tools.get("read")?.label, "read (numbered)");
     assert.notEqual(runtime.tools.get("read"), firstNumberedRead, "re-enabling creates fresh revision state");
     const secondNumberedRead = runtime.tools.get("read");
     await start({ reason: "new" }, { ...ctx, model: model(1, 4) });

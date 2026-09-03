@@ -2282,18 +2282,18 @@ test("projection retains bounded extension UI state and publishes mutation event
   assert.deepEqual(state.widgets, []);
 });
 
-test("projection coalesces cumulative stream updates on a readable cadence", async () => {
+test("projection coalesces cumulative stream updates on a readable cadence", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const published: Array<{ type: string; payload: any }> = [];
   const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
   projection.apply(session({ type: "message_start", message: { role: "assistant", content: [] } }));
   projection.apply(session({ type: "message_update", delta: "one" }));
   projection.apply(session({ type: "message_update", delta: " two" }));
-  await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(
     published.map(item => item.type),
     ["message.start"],
   );
-  await new Promise(resolve => setTimeout(resolve, 60));
+  t.mock.timers.tick(80);
   assert.deepEqual(
     published.map(item => item.type),
     ["message.start", "message.update"],
@@ -2302,7 +2302,8 @@ test("projection coalesces cumulative stream updates on a readable cadence", asy
   projection.dispose();
 });
 
-test("projection disposal cancels delayed stream publication", async () => {
+test("projection disposal cancels delayed stream publication", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   const published: string[] = [];
   const projection = new RuntimeProjection(runtime(), type => published.push(type));
   projection.apply(session({ type: "message_start", message: { role: "assistant", content: [] } }));
@@ -2310,7 +2311,7 @@ test("projection disposal cancels delayed stream publication", async () => {
     session({ type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "partial" }] } }),
   );
   projection.dispose();
-  await new Promise(resolve => setTimeout(resolve, 25));
+  t.mock.timers.tick(25);
   assert.deepEqual(published, ["message.start"]);
 });
 

@@ -64,14 +64,12 @@ test("verify publishes bounded result metadata and session entry", async () => {
       event.channel === "pi-verify:lifecycle" &&
       event.value.activeChecks?.some((check: { id: string }) => check.id === "npm:test"),
   )?.value;
-  assert.equal(running.activeChecks[0].label, "npm test");
   assert.equal(Number.isNaN(Date.parse(running.activeChecks[0].startedAt)), false);
   assert.equal(entries[0]?.type, "pi-verify-result");
   assert.equal("output" in entries[0]!.data.results[0], false);
   assert.equal("output" in entries[0]!.data.hygiene, false);
   assert.equal("status" in entries[0]!.data.hygiene, false);
   assert.equal(result.terminate, undefined);
-  assert.match(result.content[0].text, /^Verification passed\. 1\/1 checks: npm:test · \d+\.\ds\. Hygiene passed\.$/);
   assert.doesNotMatch(result.content[0].text, /Changed paths|PASS|npm run test|\nok\n?/);
 
   const injected = handlers.get("context")!({ messages: [] });

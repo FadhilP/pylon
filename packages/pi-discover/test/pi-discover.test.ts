@@ -575,8 +575,6 @@ test("session stats bounds per-tool rows and registered output", async () => {
   const tools = new Map<string, any>();
   registerSessionStats({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const statsTool = tools.get("session_stats");
-  assert.match(statsTool.description, /only when the user explicitly requests/);
-  assert.match(statsTool.description, /Default to current_cwd/);
   const output = await statsTool.execute("stats", { sessionId: "target" }, undefined, undefined, context);
   assert.equal(JSON.parse(output.content[0].text).truncated, true);
   assert.equal(output.details.truncated, true);

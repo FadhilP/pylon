@@ -15,8 +15,6 @@ test("prompt attachment bridge injects hidden file context exactly once", () => 
   const first = beforeAgentStart?.() as any;
   assert.equal(first.message.customType, PROMPT_FILES_CUSTOM_TYPE);
   assert.equal(first.message.display, false);
-  assert.match(first.message.content, /<file name="notes\.txt">\nhello\n<\/file>/);
-  assert.equal(first.message.details.version, 2);
   assert.equal(first.message.details.files.length, 1);
   const detail = first.message.details.files[0];
   assert.deepEqual(

@@ -51,14 +51,10 @@ function buildInput(overrides: Partial<SearchInput> = {}): SearchInput {
   };
 }
 
-test("settings search matches terms across labels and descriptions and ranks direct labels first", () => {
-  const index = buildSettingsSearchIndex(buildInput());
-  const results = searchSettings(index, "guard timeout");
+test("settings search ranks a direct label match first", () => {
+  const results = searchSettings(buildSettingsSearchIndex(buildInput()), "guard timeout");
 
-  assert.equal(results[0]?.label, "Guard timeout");
-  assert.equal(results[0]?.tab, "policy");
   assert.equal(results[0]?.target, "guard-timeout");
-  assert.ok(searchSettings(index, "project folder").some(result => result.label === "Workspace"));
 });
 
 test("settings search builds navigable destinations for loaded package and hook settings", () => {

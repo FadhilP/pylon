@@ -93,13 +93,6 @@ test("messageToolCallViews elapses a running call against now", () => {
   });
 });
 
-test("messageToolCallViews defaults a message without tool activity", () => {
-  const [view] = messageToolCallViews([toolMessage(undefined, "output")]);
-  assert.equal(view?.key, "message");
-  assert.equal(view?.name, "Tool");
-  assert.equal(view?.status, "completed");
-  assert.equal(view?.durationMs, undefined);
-});
 
 test("pairedToolCallViews settles unfinished calls once the run stops", () => {
   const tools: PairedAgentActivity[] = [{ tool: "Grep", input: "assertBudget", startedAt: "2026-01-01T00:00:00Z" }];

@@ -31,7 +31,7 @@ after(async () => {
 async function waitFor(check: () => boolean, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check() && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 20));
+    await new Promise(resolve => setImmediate(resolve));
   }
   assert.ok(check());
 }

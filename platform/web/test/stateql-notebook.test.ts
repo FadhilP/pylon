@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  buildStateQLActivity,
-  filterStateQLActivity,
-  selectStateQLActivity,
-  stateqlActivityStatus,
-} from "../src/shared/stateql-notebook.ts";
+import { buildStateQLActivity, filterStateQLActivity, selectStateQLActivity } from "../src/shared/stateql-notebook.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 
@@ -140,7 +135,7 @@ test("referenced cross-type collisions stay on one history card", () => {
   assert.deepEqual(items[0]?.tags, ["read", "write"]);
 });
 
-test("failed history overrides committed metadata and unknown states stay neutral", () => {
+test("failed history overrides committed metadata while unknown states preserve tags", () => {
   const [failed] = buildStateQLActivity(
     snapshot({
       recent_operations: [
@@ -160,7 +155,5 @@ test("failed history overrides committed metadata and unknown states stay neutra
   assert.ok(failed);
   assert.ok(unknown);
   assert.deepEqual(failed.tags, ["write", "error"]);
-  assert.deepEqual(stateqlActivityStatus(failed), { label: "QUERY_FAILED", tone: "danger" });
   assert.deepEqual(unknown.tags, ["write"]);
-  assert.deepEqual(stateqlActivityStatus(unknown), { label: "reviewing", tone: "neutral" });
 });

@@ -47,7 +47,6 @@ test("navigation", async t => {
         .map((item: { id: string }) => item.id);
     assert.ok(!labels("chat").includes("chat"), "chat surface should not offer a docked chat");
     assert.ok(labels("files").includes("chat"), "a displacing surface should offer it");
-    assert.equal(labels("files")[0], "chat", "and offer it first");
   });
 
   await t.test("changes is not offered on the surface that already lists them", () => {

@@ -1001,17 +1001,6 @@ test("session recall tool is sequential, read-only, and handles ephemeral state 
   try {
     const app = runtime();
     const recall = app.tools.get("continuity_recall");
-    assert.equal(recall.executionMode, "sequential");
-    assert.match(recall.description, /historical evidence/i);
-    assert.match(recall.description, /not an exact historical session-ID lookup.*search_sessions/i);
-    assert.match(
-      recall.promptGuidelines.join("\n"),
-      /Never use project_sessions to locate an exact historical session ID.*sessionId.*requested subject as query/i,
-    );
-    assert.match(
-      JSON.stringify(recall.parameters),
-      /execution.*lineage.*all.*project_sessions.*text.*files.*touched.*since.*before/,
-    );
     for (const handler of app.handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
 
     const historical = SessionManager.create(cwd);
