@@ -144,7 +144,7 @@ test("runner permits explicit concurrent Scout child processes", async () => {
   await writeFile(
     script,
     rpc(
-      `if(command.type==='prompt'){const {mkdir,rm}=await import('node:fs/promises'); const lock=process.argv[2]; let held=false,text='ok'; try{await mkdir(lock);held=true;await new Promise(r=>setTimeout(r,100));}catch{text='overlap';}finally{if(held)await rm(lock,{recursive:true});} emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],model:'fake',stopReason:'stop',usage:{}}}); settled(); setInterval(()=>{},1000);}`,
+      `if(command.type==='prompt'){const {access,mkdir,rm,writeFile}=await import('node:fs/promises'); const lock=process.argv[2],id=command.message,peer=id==='one'?'two':'one'; const waitFor=async path=>{for(;;){try{await access(path);return;}catch{await new Promise(r=>setTimeout(r,5));}}}; await writeFile(lock+'.ready-'+id,''); await waitFor(lock+'.ready-'+peer); let held=false,text='ok'; try{await mkdir(lock);held=true;}catch{text='overlap';} await writeFile(lock+'.attempted-'+id,''); await waitFor(lock+'.attempted-'+peer); if(held)await rm(lock,{recursive:true}); emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text}],model:'fake',stopReason:'stop',usage:{}}}); settled(); setInterval(()=>{},1000);}`,
     ),
   );
   const invocation = { command: process.execPath, args: [script, join(dir, "active")] };
