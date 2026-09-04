@@ -164,9 +164,7 @@ export function ExtensionSettingsFields({
           ) : (
             <div className="settings-option-list">
               {group.extensions.map(extension => (
-                <div
-                  data-settings-search-target={`extension-${settingSearchTarget(extension.id)}`}
-                  key={extension.id}>
+                <div data-settings-search-target={`extension-${settingSearchTarget(extension.id)}`} key={extension.id}>
                   <span>
                     <strong>{extension.path}</strong>
                     <small>

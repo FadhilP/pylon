@@ -149,8 +149,7 @@ export class ServerTransport {
         return await this.packageList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/extensions")
         return await this.extensionList(request, response);
-      if (request.method === "GET" && url.pathname === "/api/v1/skills")
-        return await this.skillList(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/skills") return await this.skillList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/hooks")
         return await this.hookSettings(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/stateql")

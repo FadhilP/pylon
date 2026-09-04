@@ -12,21 +12,20 @@ pi install git:github.com/FadhilP/pylon
 
 Reload Pi afterward. Grunt settings, including allowed requested thinking levels, are available through Pylon Web.
 
-| Command | Use |
-| --- | --- |
-| `/grunt` or `/grunt status` | Show configuration and run summary |
-| `/grunt set provider/model-id` / `/grunt select` | Choose worker model |
-| `/grunt mode isolated|direct|dynamic` | Select execution mode |
-| `/grunt enable|disable|reset` | Enable, disable, or use current main model in isolated mode |
+| Command                                          | Use                                |
+| ------------------------------------------------ | ---------------------------------- |
+| `/grunt` or `/grunt status`                      | Show configuration and run summary |
+| `/grunt set provider/model-id` / `/grunt select` | Choose worker model                |
+| `/grunt mode isolated                            | direct                             | dynamic` | Select execution mode                                       |
+| `/grunt enable                                   | disable                            | reset`   | Enable, disable, or use current main model in isolated mode |
 
-Grunt is inactive until configured or reset. Dynamic mode chooses isolated only in a Git worktree with `HEAD`; otherwise it chooses direct. Default allowed requested thinking levels are `medium` and `high` (provider capabilities still apply).
-Configuration is stored at `<agent-dir>/pi-grunt/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
+Grunt is inactive until configured or reset. Dynamic mode chooses isolated only in a Git worktree with `HEAD`; otherwise it chooses direct. Default allowed requested thinking levels are `medium` and `high` (provider capabilities still apply). Configuration is stored at `<agent-dir>/pi-grunt/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-| Environment variable | Default and limit |
-| --- | --- |
-| `PI_GRUNT_TIMEOUT_MS` | 15 minutes; at most 2 hours |
-| `PI_GRUNT_MAX_TURNS` | 40 turns |
-| `PI_GRUNT_MAX_COST_USD` | $2 reported child cost |
+| Environment variable            | Default and limit                           |
+| ------------------------------- | ------------------------------------------- |
+| `PI_GRUNT_TIMEOUT_MS`           | 15 minutes; at most 2 hours                 |
+| `PI_GRUNT_MAX_TURNS`            | 40 turns                                    |
+| `PI_GRUNT_MAX_COST_USD`         | $2 reported child cost                      |
 | `PI_GRUNT_PARENT_CONTEXT_CHARS` | 0 (off); at most 12,000 redacted characters |
 
 Workers also have a fixed 262,144-token reported-context limit. Limits stop future turns after a paid response; they cannot undo incurred cost.

@@ -14,8 +14,7 @@ export type CheckpointBrowserItem = {
 
 export type CheckpointBrowserResult = { id: string; mode: "jump" | "fork" };
 
-const pad = (value: string, width: number) =>
-  value + " ".repeat(Math.max(0, width - visibleWidth(value)));
+const pad = (value: string, width: number) => value + " ".repeat(Math.max(0, width - visibleWidth(value)));
 
 const fitPair = (left: string, right: string, width: number) => {
   if (!right) return truncateToWidth(left, width, "…");
@@ -55,9 +54,7 @@ export class CheckpointBrowser {
   private filteredItems() {
     const query = this.query.trim().toLowerCase();
     if (!query) return this.items;
-    return this.items.filter(item =>
-      `${item.title} ${item.status} ${item.branch ?? ""}`.toLowerCase().includes(query),
-    );
+    return this.items.filter(item => `${item.title} ${item.status} ${item.branch ?? ""}`.toLowerCase().includes(query));
   }
 
   private move(delta: number) {
@@ -130,7 +127,11 @@ export class CheckpointBrowser {
     rows.push(border(`├${"─".repeat(inner)}┤`));
     if (selected?.changes) {
       const changes = selected.changes;
-      const files = changes.files?.slice(0, 3).map(file => file.path).join(", ") ?? "";
+      const files =
+        changes.files
+          ?.slice(0, 3)
+          .map(file => file.path)
+          .join(", ") ?? "";
       const summary = `${changes.fileCount} files · +${changes.additions} −${changes.deletions}${files ? ` · ${files}` : ""}`;
       rows.push(line(` ${this.theme.fg("dim", summary)}`));
     } else {

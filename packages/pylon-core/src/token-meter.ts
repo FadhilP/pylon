@@ -383,8 +383,9 @@ export function formatTokenMeter(meter: TokenMeter, toolLimit = Number.POSITIVE_
     totalErrors += usage.errors;
   }
   const rows = allRows.slice(0, toolLimit);
-  const lines = rows.map(([name, usage]) =>
-    `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.resultChars)}; output ~${estimatedTokens(usage.argumentChars)}; total ~${estimatedTokens(usage.argumentChars + usage.resultChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`,
+  const lines = rows.map(
+    ([name, usage]) =>
+      `${name}: ${usage.calls} call${usage.calls === 1 ? "" : "s"}; input ~${estimatedTokens(usage.resultChars)}; output ~${estimatedTokens(usage.argumentChars)}; total ~${estimatedTokens(usage.argumentChars + usage.resultChars)} tokens${usage.images ? `; images ${usage.images}` : ""}${usage.errors ? `; errors ${usage.errors}` : ""}`,
   );
   if (rows.length < allRows.length) lines.push(`… ${allRows.length - rows.length} more tools; use /tokens all`);
   const packageLines = [...meter.byPackage.entries()]

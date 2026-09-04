@@ -75,7 +75,8 @@ export const spawnSettings = definePackageSettings({
       allowedModes: ["default", "append", "replace"],
       maxBytes: 32_768,
       defaultText: SPAWN_DEFAULT_PROMPT_POLICY,
-      description: "Used only when creating a private agent without systemPrompt. Default means absent; append and replace both use text because Spawn has no package base prompt.",
+      description:
+        "Used only when creating a private agent without systemPrompt. Default means absent; append and replace both use text because Spawn has no package base prompt.",
       apply: "next-operation",
     },
   ],

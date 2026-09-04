@@ -453,10 +453,7 @@ export class SessionIndex {
     return `${id}\0${canonicalPath(path)}`;
   }
 
-  private parentSession(
-    owner: SpawnOwner,
-    sessions: Map<string, SessionInfo | undefined>,
-  ): SessionInfo | undefined {
+  private parentSession(owner: SpawnOwner, sessions: Map<string, SessionInfo | undefined>): SessionInfo | undefined {
     const exact = sessions.get(this.sessionKey(owner.id, owner.file));
     if (exact) return exact;
     const migratedPath = this.migratedOwnerPath(owner.file);

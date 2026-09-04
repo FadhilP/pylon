@@ -1173,11 +1173,7 @@ test("unchanged Continuity context keeps a stable prefix across tool turns", asy
 
     const firstToolTurn = [
       userMessage,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
-        timestamp: 2,
-      },
+      { role: "assistant", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }], timestamp: 2 },
       {
         role: "toolResult",
         toolCallId: "read-1",
@@ -1191,24 +1187,14 @@ test("unchanged Continuity context keeps a stable prefix across tool turns", asy
     assert.deepEqual(second.messages.slice(0, first.messages.length), first.messages);
     assert.equal(second.messages.filter((message: any) => message.customType === "pi-continuity").length, 1);
 
-    await tool.execute(
-      "state",
-      { action: "state", nextAction: "Review the result" },
-      undefined,
-      undefined,
-      ctx,
-    );
+    await tool.execute("state", { action: "state", nextAction: "Review the result" }, undefined, undefined, ctx);
     const changed = contextHook({ messages: firstToolTurn }, ctx);
     assert.equal(changed.messages.at(-1).customType, "pi-continuity");
     assert.notEqual(changed.messages.at(-1).content, first.messages[1].content);
 
     const secondToolTurn = [
       ...firstToolTurn,
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "read-2", name: "read", arguments: {} }],
-        timestamp: 4,
-      },
+      { role: "assistant", content: [{ type: "toolCall", id: "read-2", name: "read", arguments: {} }], timestamp: 4 },
       {
         role: "toolResult",
         toolCallId: "read-2",

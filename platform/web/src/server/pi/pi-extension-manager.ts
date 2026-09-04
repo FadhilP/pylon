@@ -166,11 +166,7 @@ export class PiExtensionManager {
       skills,
       diagnostics: runtime.diagnostics.slice(0, 200).map(diagnostic => {
         let message = diagnostic.message;
-        for (const path of [
-          diagnostic.path,
-          diagnostic.collision?.winnerPath,
-          diagnostic.collision?.loserPath,
-        ]) {
+        for (const path of [diagnostic.path, diagnostic.collision?.winnerPath, diagnostic.collision?.loserPath]) {
           if (path) message = message.replaceAll(path, basename(path));
         }
         return {

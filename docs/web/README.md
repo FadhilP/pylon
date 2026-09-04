@@ -21,5 +21,4 @@ Pylon Web is the local, browser-based Pylon workspace. It is for people who want
 
 Pylon Web listens only on loopback. Use the URL printed by `pylon` (normally `http://127.0.0.1:3141`) from the same machine. Local hosting does not mean that prompt text, attachments, or tool output cannot be sent to the provider selected for a session; review [Safety and storage](./safety-and-storage.md) before entering sensitive material.
 
-For package-specific behavior, see the linked package READMEs throughout these guides.
-Agents can use the deferred `pylon_docs` tool to list and read these shipped guides on demand. Their content is not injected into ordinary prompts.
+For package-specific behavior, see the linked package READMEs throughout these guides. Agents can use the deferred `pylon_docs` tool to list and read these shipped guides on demand. Their content is not injected into ordinary prompts.

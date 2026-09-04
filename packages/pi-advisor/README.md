@@ -10,13 +10,13 @@ Requires Pi and Node 22.19.0 or later. Install the Pylon bundle, then reload Pi:
 pi install git:github.com/FadhilP/pylon
 ```
 
-| Command | Use |
-| --- | --- |
-| `/advisor` or `/advisor status` | Show configuration |
-| `/advisor select` | Choose a model in the TUI |
-| `/advisor set provider/model-id[:thinking]` | Set a model, for example `anthropic/claude-sonnet-4-5:high` |
-| `/advisor disable` / `/advisor reset` | Disable, or enable with the current main model and thinking level |
-| `/advisor help` | Show usage |
+| Command                                     | Use                                                               |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| `/advisor` or `/advisor status`             | Show configuration                                                |
+| `/advisor select`                           | Choose a model in the TUI                                         |
+| `/advisor set provider/model-id[:thinking]` | Set a model, for example `anthropic/claude-sonnet-4-5:high`       |
+| `/advisor disable` / `/advisor reset`       | Disable, or enable with the current main model and thinking level |
+| `/advisor help`                             | Show usage                                                        |
 
 Thinking may be `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; no suffix uses the provider default. Advisor is inactive until selected or reset. `pi config` disables the extension persistently; `pi --no-extensions` disables it for one run. Its package settings are also available through Pylon Web.
 

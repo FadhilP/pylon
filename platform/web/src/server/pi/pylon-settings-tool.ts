@@ -7,9 +7,29 @@ const MAX_RESULT_BYTES = 32 * 1024;
 const MAX_UPDATE_BYTES = 64 * 1024;
 const PACKAGE_ID = /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/;
 const CUSTOM_SETTING_KEYS: Record<string, readonly string[]> = {
-  advisor: ["mode", "model", "thinking", "maxCalls", "timeoutMs", "maxCostUsd", "maxOutputTokens", "inputTokenBudget", "prompt"],
+  advisor: [
+    "mode",
+    "model",
+    "thinking",
+    "maxCalls",
+    "timeoutMs",
+    "maxCostUsd",
+    "maxOutputTokens",
+    "inputTokenBudget",
+    "prompt",
+  ],
   scout: ["mode", "model", "thinking", "webSearch", "repoTimeoutMs", "maxCostUsd", "webSearchResults", "prompt"],
-  grunt: ["mode", "model", "executionMode", "thinkingLevels", "timeoutMs", "maxTurns", "maxCostUsd", "parentContextChars", "prompt"],
+  grunt: [
+    "mode",
+    "model",
+    "executionMode",
+    "thinkingLevels",
+    "timeoutMs",
+    "maxTurns",
+    "maxCostUsd",
+    "parentContextChars",
+    "prompt",
+  ],
   continuity: [
     "memoryEnabled",
     "reserveTokens",
@@ -78,9 +98,7 @@ export type PylonSettingsToolRequest =
   | { type: "preview" | "update"; packageId: string; revision: string; changes: Record<string, unknown> };
 
 export type PylonSettingsToolResponse =
-  | { packages: PylonSettingsPackageSummary[] }
-  | PylonSettingsReadResult
-  | PylonSettingsPreview;
+  { packages: PylonSettingsPackageSummary[] } | PylonSettingsReadResult | PylonSettingsPreview;
 
 type Handler = (request: PylonSettingsToolRequest) => Promise<PylonSettingsToolResponse>;
 
@@ -115,7 +133,8 @@ export function patchPackageSettings(
   if (!plainRecord(changes)) throw new Error("changes must be an object");
   const entries = Object.entries(changes);
   if (entries.length === 0 || entries.length > 20) throw new Error("changes must contain between 1 and 20 fields");
-  if (Buffer.byteLength(JSON.stringify(changes), "utf8") > MAX_UPDATE_BYTES) throw new Error("settings update is too large");
+  if (Buffer.byteLength(JSON.stringify(changes), "utf8") > MAX_UPDATE_BYTES)
+    throw new Error("settings update is too large");
 
   let next: PackageSettingsReadModel;
   const applied: PylonSettingsChange[] = [];
@@ -247,18 +266,17 @@ export class PylonSettingsTool {
             if (!bridge.handler) throw new Error("the Pylon settings host is unavailable");
             const parsed = parseParams(params);
             if (parsed.action === "list") return result(await bridge.handler({ type: "list" }));
-            if (parsed.action === "get") return result(await bridge.handler({ type: "get", packageId: parsed.packageId! }));
+            if (parsed.action === "get")
+              return result(await bridge.handler({ type: "get", packageId: parsed.packageId! }));
 
-            const request = {
-              packageId: parsed.packageId!,
-              revision: parsed.revision!,
-              changes: parsed.changes!,
-            };
+            const request = { packageId: parsed.packageId!, revision: parsed.revision!, changes: parsed.changes! };
             const preview = (await bridge.handler({ type: "preview", ...request })) as PylonSettingsPreview;
             if (preview.changes.length === 0) return result("No Pylon package settings would change.");
             if (!ctx.hasUI) return result("Pylon settings were not changed because confirmation UI is unavailable.");
             const approved = await ctx.ui.confirm(
-              preview.changes.some(change => change.highImpact) ? "Change Pylon prompt settings?" : "Change Pylon settings?",
+              preview.changes.some(change => change.highImpact)
+                ? "Change Pylon prompt settings?"
+                : "Change Pylon settings?",
               confirmation(preview),
             );
             if (!approved) return result("The user declined the Pylon settings change.");

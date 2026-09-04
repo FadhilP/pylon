@@ -10,20 +10,18 @@ Requires Pi, Node 22.19.0 or later, a non-bare Git repository with an existing `
 pi install git:github.com/FadhilP/pylon
 ```
 
-Reload Pi afterward. Package settings are available through Pylon Web.
-Configuration is stored at `<agent-dir>/pi-timeline/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
+Reload Pi afterward. Package settings are available through Pylon Web. Configuration is stored at `<agent-dir>/pi-timeline/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
-| Command | Use |
-| --- | --- |
+| Command                                           | Use                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------ |
 | `/timeline`, `/timeline list`, `/timeline select` | List checkpoints or open the filtered TUI checkpoint browser |
-| `/timeline restore ID` | Restore after confirmation |
-| `/timeline fork ID` | Fork from a checkpoint |
-| `/timeline clear` | Retire this session's records and refs |
-| `/timeline help` | Show usage |
-| `pi-timeline resume` | Resume launcher |
+| `/timeline restore ID`                            | Restore after confirmation                                   |
+| `/timeline fork ID`                               | Fork from a checkpoint                                       |
+| `/timeline clear`                                 | Retire this session's records and refs                       |
+| `/timeline help`                                  | Show usage                                                   |
+| `pi-timeline resume`                              | Resume launcher                                              |
 
-Every restore requires confirmation. Native `/tree` remains conversation-only.
-In TUI mode, `/timeline select` opens a centered checkpoint browser with aligned timestamps, filtering, change statistics, and direct view/fork keys. RPC retains the plain selector flow.
+Every restore requires confirmation. Native `/tree` remains conversation-only. In TUI mode, `/timeline select` opens a centered checkpoint browser with aligned timestamps, filtering, change statistics, and direct view/fork keys. RPC retains the plain selector flow.
 
 ## Checkpoints and titles
 

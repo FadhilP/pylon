@@ -2244,7 +2244,11 @@ test("runtime modes, persisted settings, active recall, thresholds, and telemetr
   assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2");
   assert.match(notification, /projection mode set to standard v2/);
   await command.handler("projection legacy", ctx);
-  assert.equal((await loadConfig(settingsPath)).projectionMode, "standard-v2", "legacy alias is rejected without mutation");
+  assert.equal(
+    (await loadConfig(settingsPath)).projectionMode,
+    "standard-v2",
+    "legacy alias is rejected without mutation",
+  );
   await command.handler("projection stable", ctx);
   assert.equal((await loadConfig(settingsPath)).projectionMode, "stable");
   assert.match(notification, /projection mode set to stable \(experimental\)/);

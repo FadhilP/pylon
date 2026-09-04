@@ -842,18 +842,12 @@ export default function heliosExtension(
             );
           }
         } catch (error) {
-          ctx.ui.notify(
-            error instanceof Error ? error.message : `Helios ${parts[1]} diagnostic failed`,
-            "error",
-          );
+          ctx.ui.notify(error instanceof Error ? error.message : `Helios ${parts[1]} diagnostic failed`, "error");
         }
         return;
       }
       if (parts.length === 1) {
-        ctx.ui.notify(
-          `Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.`,
-          "info",
-        );
+        ctx.ui.notify(`Future Helios-owned browsers: ${ownedHeaded ? "shown" : "hidden (headless)"}.`, "info");
         return;
       }
 

@@ -34,7 +34,6 @@ after(async () => {
   await rm(isolatedAgentDir, { recursive: true, force: true });
 });
 
-
 const generatedWriteDraft = (): ActivationDraft => ({
   classification: "grounded",
   subscriptions: ["before_tool_call"],

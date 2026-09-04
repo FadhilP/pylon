@@ -275,65 +275,59 @@ export function SettingsDialog({
      your place in the list and it is obvious which account is connecting.
      A prompt that names no provider still falls back to the top. */
   const authTask = (authFlow || providerPrompt) && (
-            <section
-              className={`provider-auth-task is-${authFlow?.status ?? "running"}`}
-              aria-labelledby="provider-auth-title">
-              <header>
-                <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
-                <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>
-                  {authFlow?.message ?? "Authentication requires a response."}
-                </p>
-                {authFlow?.instructions && authFlow.instructions !== authFlow.message && (
-                  <p className="provider-auth-instructions">{authFlow.instructions}</p>
-                )}
-              </header>
-              <div className="provider-auth-actions">
-                {primaryAuthLink && (
-                  <a
-                    className="provider-auth-primary"
-                    href={primaryAuthLink.url}
-                    target="_blank"
-                    rel="noopener noreferrer">
-                    {primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} />
-                    <span className="sr-only"> (opens in a new tab)</span>
-                  </a>
-                )}
-                {authRetryable && authFlow && (
-                  <button
-                    type="button"
-                    className="provider-auth-retry"
-                    onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>
-                    Try again
-                  </button>
-                )}
-                {authRunning && (
-                  <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>
-                    Cancel
-                  </button>
-                )}
-              </div>
-              {authFlow?.deviceCode && (
-                <div className="provider-device-code">
-                  <span>One-time code</span>
-                  <code>{authFlow.deviceCode.userCode}</code>
-                </div>
-              )}
-              {secondaryAuthLinks.length > 0 && (
-                <div className="provider-auth-links">
-                  {secondaryAuthLinks.map(link => (
-                    <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">
-                      {link.label ?? "Open provider page"} <IconExternalLink size={14} />
-                      <span className="sr-only"> (opens in a new tab)</span>
-                    </a>
-                  ))}
-                </div>
-              )}
-              {providerPrompt && (
-                <div className="provider-auth-manual">
-                  <UiDialog request={providerPrompt} />
-                </div>
-              )}
-            </section>
+    <section className={`provider-auth-task is-${authFlow?.status ?? "running"}`} aria-labelledby="provider-auth-title">
+      <header>
+        <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
+        <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>
+          {authFlow?.message ?? "Authentication requires a response."}
+        </p>
+        {authFlow?.instructions && authFlow.instructions !== authFlow.message && (
+          <p className="provider-auth-instructions">{authFlow.instructions}</p>
+        )}
+      </header>
+      <div className="provider-auth-actions">
+        {primaryAuthLink && (
+          <a className="provider-auth-primary" href={primaryAuthLink.url} target="_blank" rel="noopener noreferrer">
+            {primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} />
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        )}
+        {authRetryable && authFlow && (
+          <button
+            type="button"
+            className="provider-auth-retry"
+            onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>
+            Try again
+          </button>
+        )}
+        {authRunning && (
+          <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
+      {authFlow?.deviceCode && (
+        <div className="provider-device-code">
+          <span>One-time code</span>
+          <code>{authFlow.deviceCode.userCode}</code>
+        </div>
+      )}
+      {secondaryAuthLinks.length > 0 && (
+        <div className="provider-auth-links">
+          {secondaryAuthLinks.map(link => (
+            <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">
+              {link.label ?? "Open provider page"} <IconExternalLink size={14} />
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {providerPrompt && (
+        <div className="provider-auth-manual">
+          <UiDialog request={providerPrompt} />
+        </div>
+      )}
+    </section>
   );
 
   useEffect(() => {
@@ -355,13 +349,16 @@ export function SettingsDialog({
           )
         : undefined;
       const scope = packageScope ?? panel;
-      const target = [...scope.querySelectorAll<HTMLElement>("[data-settings-search-target]")].find(
-        element => element.dataset.settingsSearchTarget === pendingSearchTarget.target,
-      ) ?? scope;
+      const target =
+        [...scope.querySelectorAll<HTMLElement>("[data-settings-search-target]")].find(
+          element => element.dataset.settingsSearchTarget === pendingSearchTarget.target,
+        ) ?? scope;
       target.scrollIntoView({ block: "center" });
       const control = target.matches("button, input, select, textarea")
         ? target
-        : target.querySelector<HTMLElement>("button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])");
+        : target.querySelector<HTMLElement>(
+            "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
+          );
       if (control) control.focus({ preventScroll: true });
       else {
         target.tabIndex = -1;
@@ -376,7 +373,6 @@ export function SettingsDialog({
     unlockWebAudio();
     enqueueWebAudioCues([kind]);
   };
-
 
   const openSearchResult = (result: SettingsSearchEntry) => {
     setPendingSearchTarget(result);
@@ -457,7 +453,11 @@ export function SettingsDialog({
     const control = result.control;
     if (!control) return null;
     if (control.kind === "sound") {
-      return <button type="button" onClick={() => playSound(control.cue)}>Play preview</button>;
+      return (
+        <button type="button" onClick={() => playSound(control.cue)}>
+          Play preview
+        </button>
+      );
     }
     if (control.kind === "theme") {
       return <ColorThemeOptions theme={theme} onChange={onThemeChange} />;
@@ -583,7 +583,10 @@ export function SettingsDialog({
 
           <div className={`settings-content${isWorkbenchTab && !searchQuery.trim() ? " is-workbench" : ""}`}>
             {searchQuery.trim() && (
-              <section id="settings-search-results" className="settings-pane settings-search-results" aria-label="Settings search results">
+              <section
+                id="settings-search-results"
+                className="settings-pane settings-search-results"
+                aria-label="Settings search results">
                 <div className="settings-pane-header">
                   <div>
                     <h2>Search results</h2>
@@ -603,10 +606,14 @@ export function SettingsDialog({
                           </span>
                           <span>
                             <b>{result.section}</b>
-                            <button type="button" onClick={() => openSearchResult(result)}>Open setting</button>
+                            <button type="button" onClick={() => openSearchResult(result)}>
+                              Open setting
+                            </button>
                           </span>
                         </header>
-                        {result.control && <div className="settings-search-inline-control">{renderSearchControl(result)}</div>}
+                        {result.control && (
+                          <div className="settings-search-inline-control">{renderSearchControl(result)}</div>
+                        )}
                       </article>
                     ))}
                   </div>
@@ -826,9 +833,7 @@ export function SettingsDialog({
                       );
                     })}
                   </aside>
-                  <article
-                    className="package-workbench-detail"
-                    data-settings-search-package={selectedPackage.id}>
+                  <article className="package-workbench-detail" data-settings-search-package={selectedPackage.id}>
                     <header>
                       <div>
                         <h3>{selectedPackage.name}</h3>
@@ -950,7 +955,9 @@ export function SettingsDialog({
               <div className="settings-pane-header">
                 <div>
                   <h2>Skills</h2>
-                  <p>Inspect the skills loaded for the selected Pi session from global, project, and package sources.</p>
+                  <p>
+                    Inspect the skills loaded for the selected Pi session from global, project, and package sources.
+                  </p>
                 </div>
               </div>
               {skillLoading && (
@@ -969,7 +976,8 @@ export function SettingsDialog({
                   <IconShield size={16} aria-hidden="true" />
                   <span>
                     <strong>Project resources are not trusted</strong>
-                    Project skills remain unloaded until this project is trusted. Project trust can be managed in Extensions.
+                    Project skills remain unloaded until this project is trusted. Project trust can be managed in
+                    Extensions.
                   </span>
                 </div>
               )}
@@ -979,8 +987,11 @@ export function SettingsDialog({
                     <div className="settings-callout" key={`${diagnostic.type}-${diagnostic.path ?? index}`}>
                       <IconAlertTriangle size={16} aria-hidden="true" />
                       <span>
-                        <strong>{diagnostic.type === "collision" ? "Skill name collision" : `Skill ${diagnostic.type}`}</strong>
-                        {diagnostic.message}{diagnostic.path ? ` · ${diagnostic.path}` : ""}
+                        <strong>
+                          {diagnostic.type === "collision" ? "Skill name collision" : `Skill ${diagnostic.type}`}
+                        </strong>
+                        {diagnostic.message}
+                        {diagnostic.path ? ` · ${diagnostic.path}` : ""}
                       </span>
                     </div>
                   ))}
@@ -1006,13 +1017,13 @@ export function SettingsDialog({
                         </header>
                         <div className="settings-option-list">
                           {items.map(skill => (
-                            <div
-                              key={skill.id}
-                              data-settings-search-target={`skill-${settingSearchTarget(skill.id)}`}>
+                            <div key={skill.id} data-settings-search-target={`skill-${settingSearchTarget(skill.id)}`}>
                               <span>
                                 <strong>{skill.name}</strong>
                                 <small>{skill.description}</small>
-                                <small className="skill-meta">{skill.path} · {skill.source}</small>
+                                <small className="skill-meta">
+                                  {skill.path} · {skill.source}
+                                </small>
                               </span>
                               <span className="provider-state">{skill.manualOnly ? "Manual only" : "Automatic"}</span>
                             </div>
@@ -1404,9 +1415,15 @@ function ToolExposureRow({
           void onUpdate(tool, mode, runtimePolicy.revision).finally(() => onBusyChange(false));
         }}>
         <option value="inherit">Default</option>
-        <option value="active" disabled={!capable}>Active</option>
-        <option value="deferred" disabled={!capable}>Deferred</option>
-        <option value="disabled" disabled={!capable}>Disabled</option>
+        <option value="active" disabled={!capable}>
+          Active
+        </option>
+        <option value="deferred" disabled={!capable}>
+          Deferred
+        </option>
+        <option value="disabled" disabled={!capable}>
+          Disabled
+        </option>
       </select>
     </label>
   );
@@ -1897,10 +1914,18 @@ function PackageNumber({
       {/* The native spinner crowds the digits and renders differently in
           every browser, so the field draws its own. */}
       <span className="number-step" aria-hidden="true">
-        <button type="button" tabIndex={-1} disabled={disabled || (max !== undefined && value >= max)} onClick={() => nudge(1)}>
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={disabled || (max !== undefined && value >= max)}
+          onClick={() => nudge(1)}>
           <IconChevronUp size={11} />
         </button>
-        <button type="button" tabIndex={-1} disabled={disabled || (min !== undefined && value <= min)} onClick={() => nudge(-1)}>
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={disabled || (min !== undefined && value <= min)}
+          onClick={() => nudge(-1)}>
           <IconChevronDown size={11} />
         </button>
       </span>
@@ -2097,7 +2122,9 @@ function PromptEditor({
           />
           <footer>
             <span>UTF-8 text</span>
-            <span>{byteLength.toLocaleString()} / {maxBytes.toLocaleString()} bytes</span>
+            <span>
+              {byteLength.toLocaleString()} / {maxBytes.toLocaleString()} bytes
+            </span>
           </footer>
         </section>
       )}
@@ -2136,7 +2163,6 @@ function PromptSettingField({
   );
 }
 
-
 function GenericPackageFields({
   settings,
   models,
@@ -2169,7 +2195,12 @@ function GenericPackageFields({
           if (selected && !options.some(model => modelKey(model) === field.value)) options.push(selected);
           const missing = field.value && !options.some(model => modelKey(model) === field.value);
           return (
-            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
+            <PackageRow
+              key={field.key}
+              label={field.label}
+              description={description}
+              changed={changed}
+              onReset={resetField}>
               <select
                 aria-label={field.label}
                 value={field.value}
@@ -2189,7 +2220,12 @@ function GenericPackageFields({
 
         if (field.type === "boolean") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
+            <PackageRow
+              key={field.key}
+              label={field.label}
+              description={description}
+              changed={changed}
+              onReset={resetField}>
               <PackageSwitch
                 label={field.label}
                 checked={field.value}
@@ -2201,7 +2237,12 @@ function GenericPackageFields({
         }
         if (field.type === "integer" || field.type === "number") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
+            <PackageRow
+              key={field.key}
+              label={field.label}
+              description={description}
+              changed={changed}
+              onReset={resetField}>
               <PackageNumber
                 label={field.label}
                 value={field.value}
@@ -2218,7 +2259,12 @@ function GenericPackageFields({
         }
         if (field.type === "enum") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
+            <PackageRow
+              key={field.key}
+              label={field.label}
+              description={description}
+              changed={changed}
+              onReset={resetField}>
               <select
                 aria-label={field.label}
                 value={field.value}
@@ -2386,7 +2432,10 @@ function PackageModelFields({
     );
     return (
       <>
-        <PackageRow live={settings.mode !== "disabled"} label="Model" description={`Disabled turns ${noun} off for every session.`}>
+        <PackageRow
+          live={settings.mode !== "disabled"}
+          label="Model"
+          description={`Disabled turns ${noun} off for every session.`}>
           <ModelModeSelect
             label={`${settings.kind} model`}
             value={settings.mode === "model" ? settings.model! : settings.mode}
@@ -2395,7 +2444,10 @@ function PackageModelFields({
             onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
           />
         </PackageRow>
-        <PackageRow live={settings.thinking !== undefined} label="Thinking" description="Inherits the session level unless set here.">
+        <PackageRow
+          live={settings.thinking !== undefined}
+          label="Thinking"
+          description="Inherits the session level unless set here.">
           <ThinkingSelect
             label={`${settings.kind} thinking`}
             value={settings.thinking}
@@ -2412,7 +2464,10 @@ function PackageModelFields({
     const thinkingOptions = thinkingChipOptions();
     return (
       <>
-        <PackageRow live={settings.mode !== "disabled"} label="Model" description="Disabled turns the grunt off for every session.">
+        <PackageRow
+          live={settings.mode !== "disabled"}
+          label="Model"
+          description="Disabled turns the grunt off for every session.">
           <ModelModeSelect
             label="Grunt model"
             value={settings.mode === "model" ? settings.model! : settings.mode}
@@ -2592,7 +2647,8 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={prompt => onUpdate({ ...settings, prompt })}
         />
-        <PackageRow {...provenance("gitTimeoutMs")}
+        <PackageRow
+          {...provenance("gitTimeoutMs")}
           label="Git timeout"
           description="Maximum time for each Timeline git operation. Applies to the next session.">
           <PackageNumber
@@ -2606,7 +2662,8 @@ function PackageFieldsContent({
             onChange={gitTimeoutMs => onUpdate({ ...settings, gitTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow {...provenance("titleTimeoutMs")}
+        <PackageRow
+          {...provenance("titleTimeoutMs")}
           label="Title generation timeout"
           description="Maximum time for each session or checkpoint title call. Applies to the next session.">
           <PackageNumber
@@ -2620,7 +2677,8 @@ function PackageFieldsContent({
             onChange={titleTimeoutMs => onUpdate({ ...settings, titleTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow {...provenance("titleMaxTokens")}
+        <PackageRow
+          {...provenance("titleMaxTokens")}
           label="Title maximum output"
           description="Maximum tokens generated for a Timeline title. Applies to the next session.">
           <PackageNumber
@@ -2633,7 +2691,8 @@ function PackageFieldsContent({
             onChange={titleMaxTokens => onUpdate({ ...settings, titleMaxTokens })}
           />
         </PackageRow>
-        <PackageRow {...provenance("titleChangedFiles")}
+        <PackageRow
+          {...provenance("titleChangedFiles")}
           label="Changed files in title prompt"
           description="Maximum changed-file paths supplied to checkpoint title generation. Applies to the next session.">
           <PackageNumber
@@ -2690,7 +2749,8 @@ function PackageFieldsContent({
         />
         {settings.kind === "advisor" && (
           <>
-            <PackageRow {...provenance("maxCalls")}
+            <PackageRow
+              {...provenance("maxCalls")}
               label="Maximum consultations"
               description="Maximum Advisor calls for each original user prompt.">
               <PackageNumber
@@ -2702,7 +2762,10 @@ function PackageFieldsContent({
                 onChange={maxCalls => onUpdate({ ...settings, maxCalls })}
               />
             </PackageRow>
-            <PackageRow {...provenance("timeoutMs")} label="Consultation timeout" description="Stops an Advisor consultation after this duration.">
+            <PackageRow
+              {...provenance("timeoutMs")}
+              label="Consultation timeout"
+              description="Stops an Advisor consultation after this duration.">
               <PackageNumber
                 label="Consultation timeout"
                 value={settings.timeoutMs}
@@ -2714,7 +2777,8 @@ function PackageFieldsContent({
                 onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })}
               />
             </PackageRow>
-            <PackageRow {...provenance("maxCostUsd")}
+            <PackageRow
+              {...provenance("maxCostUsd")}
               label="Maximum consultation cost"
               description="Stops an Advisor consultation when this cost limit is reached.">
               <PackageNumber
@@ -2729,7 +2793,10 @@ function PackageFieldsContent({
                 onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
               />
             </PackageRow>
-            <PackageRow {...provenance("maxOutputTokens")} label="Maximum output tokens" description="Caps each Advisor response.">
+            <PackageRow
+              {...provenance("maxOutputTokens")}
+              label="Maximum output tokens"
+              description="Caps each Advisor response.">
               <PackageNumber
                 label="Maximum output tokens"
                 value={settings.maxOutputTokens}
@@ -2740,7 +2807,10 @@ function PackageFieldsContent({
                 onChange={maxOutputTokens => onUpdate({ ...settings, maxOutputTokens })}
               />
             </PackageRow>
-            <PackageRow {...provenance("inputTokenBudget")} label="Input context budget" description="Caps the Advisor snapshot input token budget.">
+            <PackageRow
+              {...provenance("inputTokenBudget")}
+              label="Input context budget"
+              description="Caps the Advisor snapshot input token budget.">
               <PackageNumber
                 label="Input context budget"
                 value={settings.inputTokenBudget}
@@ -2756,7 +2826,8 @@ function PackageFieldsContent({
         )}
         {settings.kind === "scout" && (
           <>
-            <PackageRow {...provenance("repoTimeoutMs")}
+            <PackageRow
+              {...provenance("repoTimeoutMs")}
               label="Repository scout timeout"
               description="Stops a repository scout run after this duration.">
               <PackageNumber
@@ -2770,7 +2841,10 @@ function PackageFieldsContent({
                 onChange={repoTimeoutMs => onUpdate({ ...settings, repoTimeoutMs })}
               />
             </PackageRow>
-            <PackageRow {...provenance("maxCostUsd")} label="Maximum scout cost" description="Set to 0 for no cost limit.">
+            <PackageRow
+              {...provenance("maxCostUsd")}
+              label="Maximum scout cost"
+              description="Set to 0 for no cost limit.">
               <PackageNumber
                 label="Maximum scout cost"
                 value={settings.maxCostUsd}
@@ -2783,7 +2857,8 @@ function PackageFieldsContent({
                 onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
               />
             </PackageRow>
-            <PackageRow {...provenance("webSearchResults")}
+            <PackageRow
+              {...provenance("webSearchResults")}
               label="Web search results"
               description="Default URL candidates returned by each Web Scout search.">
               <PackageNumber
@@ -2832,7 +2907,10 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={prompt => onUpdate({ ...settings, prompt })}
         />
-        <PackageRow {...provenance("executionMode")} label="Execution mode" description="Isolated runs in a scratch workspace; direct runs in place.">
+        <PackageRow
+          {...provenance("executionMode")}
+          label="Execution mode"
+          description="Isolated runs in a scratch workspace; direct runs in place.">
           <select
             aria-label="Execution mode"
             value={settings.executionMode}
@@ -2845,7 +2923,10 @@ function PackageFieldsContent({
             <option value="dynamic">Dynamic</option>
           </select>
         </PackageRow>
-        <PackageRow {...provenance("timeoutMs")} label="Worker timeout" description="Stops a worker run after this duration.">
+        <PackageRow
+          {...provenance("timeoutMs")}
+          label="Worker timeout"
+          description="Stops a worker run after this duration.">
           <PackageNumber
             label="Worker timeout"
             value={settings.timeoutMs}
@@ -2858,7 +2939,8 @@ function PackageFieldsContent({
           />
         </PackageRow>
 
-        <PackageRow {...provenance("maxTurns")}
+        <PackageRow
+          {...provenance("maxTurns")}
           label="Maximum tool-call turns"
           description="The grunt stops after this many tool calls in one run.">
           <PackageNumber
@@ -2871,7 +2953,10 @@ function PackageFieldsContent({
             onChange={maxTurns => onUpdate({ ...settings, maxTurns })}
           />
         </PackageRow>
-        <PackageRow {...provenance("maxCostUsd")} label="Maximum worker cost" description="Stops a worker run when this cost limit is reached.">
+        <PackageRow
+          {...provenance("maxCostUsd")}
+          label="Maximum worker cost"
+          description="Stops a worker run when this cost limit is reached.">
           <PackageNumber
             label="Maximum worker cost"
             value={settings.maxCostUsd}
@@ -2884,7 +2969,8 @@ function PackageFieldsContent({
             onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
           />
         </PackageRow>
-        <PackageRow {...provenance("parentContextChars")}
+        <PackageRow
+          {...provenance("parentContextChars")}
           label="Parent context"
           description="Include up to this many characters of parent-session context in each worker handoff.">
           <PackageNumber
@@ -2912,7 +2998,8 @@ function PackageFieldsContent({
             onChange={memoryEnabled => onUpdate({ ...settings, memoryEnabled })}
           />
         </PackageRow>
-        <PackageRow {...provenance("reserveTokens")}
+        <PackageRow
+          {...provenance("reserveTokens")}
           label="Automatic compaction reserve"
           description="Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi settings can override it.">
           <PackageNumber
@@ -2926,7 +3013,8 @@ function PackageFieldsContent({
             onChange={reserveTokens => onUpdate({ ...settings, reserveTokens })}
           />
         </PackageRow>
-        <PackageRow {...provenance("keepRecentTokens")}
+        <PackageRow
+          {...provenance("keepRecentTokens")}
           label="Continuity retained tokens"
           description="Recent raw history kept by Continuity compaction. Overrides Pi's retained-token value only for Continuity-owned compactions.">
           <PackageNumber
@@ -2940,7 +3028,8 @@ function PackageFieldsContent({
             onChange={keepRecentTokens => onUpdate({ ...settings, keepRecentTokens })}
           />
         </PackageRow>
-        <PackageRow {...provenance("compactionReviewTimeoutMs")}
+        <PackageRow
+          {...provenance("compactionReviewTimeoutMs")}
           label="Compaction review timeout"
           description="Maximum time for a compaction reviewer call. Applies to the next review.">
           <PackageNumber
@@ -2954,7 +3043,8 @@ function PackageFieldsContent({
             onChange={compactionReviewTimeoutMs => onUpdate({ ...settings, compactionReviewTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow {...provenance("compactionReviewerMaxOutputTokens")}
+        <PackageRow
+          {...provenance("compactionReviewerMaxOutputTokens")}
           label="Compaction reviewer maximum output"
           description="Maximum tokens generated by the compaction reviewer. Applies to the next review.">
           <PackageNumber
@@ -3001,7 +3091,8 @@ function PackageFieldsContent({
             onChange={activePruning => onUpdate({ ...settings, activePruning })}
           />
         </PackageRow>
-        <PackageRow {...provenance("projectionMode")}
+        <PackageRow
+          {...provenance("projectionMode")}
           label="Projection mode"
           description="Stable is experimental and enables the rollover multipliers below.">
           <select
@@ -3016,7 +3107,10 @@ function PackageFieldsContent({
             <option value="stable">Stable (experimental)</option>
           </select>
         </PackageRow>
-        <PackageRow {...provenance("threshold")} label="Pruning threshold" description="Results larger than this are eligible for pruning.">
+        <PackageRow
+          {...provenance("threshold")}
+          label="Pruning threshold"
+          description="Results larger than this are eligible for pruning.">
           <PackageNumber
             label="Pruning threshold"
             value={settings.threshold}
@@ -3034,7 +3128,8 @@ function PackageFieldsContent({
               label="Rollover"
               description="Stable projection only. The high multiplier must stay above the target."
             />
-            <PackageRow {...provenance("rolloverHighMultiplier")}
+            <PackageRow
+              {...provenance("rolloverHighMultiplier")}
               label="High multiplier"
               description="Rollover begins once retained content passes this multiple of the threshold.">
               <PackageNumber
@@ -3047,7 +3142,8 @@ function PackageFieldsContent({
                 onChange={rolloverHighMultiplier => onUpdate({ ...settings, rolloverHighMultiplier })}
               />
             </PackageRow>
-            <PackageRow {...provenance("rolloverLowMultiplier")}
+            <PackageRow
+              {...provenance("rolloverLowMultiplier")}
               label="Target multiplier"
               description="Rollover stops once retained content falls to this multiple.">
               <PackageNumber
@@ -3084,7 +3180,10 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={privateAgentSystemPrompt => onUpdate({ ...settings, privateAgentSystemPrompt })}
         />
-        <PackageRow {...provenance("spawnTimeoutMs")} label="Spawn timeout" description="Maximum child runtime. Set to 0 for unlimited.">
+        <PackageRow
+          {...provenance("spawnTimeoutMs")}
+          label="Spawn timeout"
+          description="Maximum child runtime. Set to 0 for unlimited.">
           <PackageNumber
             label="Spawn timeout"
             value={settings.spawnTimeoutMs}
@@ -3097,7 +3196,8 @@ function PackageFieldsContent({
             onChange={spawnTimeoutMs => onUpdate({ ...settings, spawnTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow {...provenance("recentThreadLimit")}
+        <PackageRow
+          {...provenance("recentThreadLimit")}
           label="Recent thread message limit"
           description="Default number of transcript messages returned by recent.">
           <PackageNumber
@@ -3110,7 +3210,8 @@ function PackageFieldsContent({
             onChange={recentThreadLimit => onUpdate({ ...settings, recentThreadLimit })}
           />
         </PackageRow>
-        <PackageRow {...provenance("recentThreadMaxChars")}
+        <PackageRow
+          {...provenance("recentThreadMaxChars")}
           label="Recent thread message characters"
           description="Default maximum characters per transcript message.">
           <PackageNumber
@@ -3125,7 +3226,10 @@ function PackageFieldsContent({
             onChange={recentThreadMaxChars => onUpdate({ ...settings, recentThreadMaxChars })}
           />
         </PackageRow>
-        <PackageRow {...provenance("recentThreadTotalChars")} label="Recent thread total characters" description="Maximum total characters returned by recent.">
+        <PackageRow
+          {...provenance("recentThreadTotalChars")}
+          label="Recent thread total characters"
+          description="Maximum total characters returned by recent.">
           <PackageNumber
             label="Recent thread total characters"
             value={settings.recentThreadTotalChars}

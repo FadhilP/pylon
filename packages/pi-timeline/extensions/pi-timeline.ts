@@ -1190,7 +1190,7 @@ export default function timelineExtension(
         createdAt: bound.record.createdAt,
         status: compatibilityLabel(bound.record, current),
         ...(bound.record.headRef ? { branch: shortRef(bound.record.headRef) } : {}),
-        ...(checkpoints.changeCache.get(checkpointId) ?? bound.record.changes
+        ...((checkpoints.changeCache.get(checkpointId) ?? bound.record.changes)
           ? { changes: checkpoints.changeCache.get(checkpointId) ?? bound.record.changes }
           : {}),
       } satisfies CheckpointBrowserItem,
@@ -1210,20 +1210,19 @@ export default function timelineExtension(
       return action ? { id, mode: action === "View" ? "jump" : "fork" } : undefined;
     }
 
-    return withBlockingUi<CheckpointBrowserResult | undefined>("pi-timeline", () =>
-      ctx.ui.custom(
-        (tui: any, theme: any, _keybindings: any, done: any) =>
-          new CheckpointBrowser(
-            choices.map(choice => choice.browser),
-            theme,
-            () => tui.requestRender(),
-            done,
-          ),
-        {
-          overlay: true,
-          overlayOptions: { anchor: "center", width: 72, minWidth: 40, maxHeight: 14, margin: 1 },
-        },
-      ) as Promise<CheckpointBrowserResult | undefined>,
+    return withBlockingUi<CheckpointBrowserResult | undefined>(
+      "pi-timeline",
+      () =>
+        ctx.ui.custom(
+          (tui: any, theme: any, _keybindings: any, done: any) =>
+            new CheckpointBrowser(
+              choices.map(choice => choice.browser),
+              theme,
+              () => tui.requestRender(),
+              done,
+            ),
+          { overlay: true, overlayOptions: { anchor: "center", width: 72, minWidth: 40, maxHeight: 14, margin: 1 } },
+        ) as Promise<CheckpointBrowserResult | undefined>,
     );
   };
 

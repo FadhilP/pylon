@@ -22,7 +22,6 @@ import { runtimeStore } from "./runtime/event-store";
 
 type Action = Omit<HeliosBrowserCommand, "expectedGeneration">;
 
-
 function navigableUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === "about:blank" || /^[a-z][a-z\d+.-]*:/i.test(trimmed)) return trimmed || "about:blank";

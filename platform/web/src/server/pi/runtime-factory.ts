@@ -56,9 +56,7 @@ export async function createPylonRuntimeFactory(options: {
         additionalExtensionPaths: options.additionalExtensionPaths ?? [],
         eventBus,
         extensionFactories: options.extensionFactories,
-        ...(options.mainPrompt?.mode === "replace"
-          ? { systemPromptOverride: () => options.mainPrompt!.text }
-          : {}),
+        ...(options.mainPrompt?.mode === "replace" ? { systemPromptOverride: () => options.mainPrompt!.text } : {}),
         ...(options.mainPrompt?.mode === "append" && options.mainPrompt.text
           ? { appendSystemPromptOverride: (base: string[]) => [...base, options.mainPrompt!.text] }
           : {}),

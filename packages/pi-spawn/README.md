@@ -12,7 +12,6 @@ pi install git:github.com/FadhilP/pylon
 
 Reload Pi afterward. Pylon Web exposes package settings for new child availability, model eligibility, thinking levels, timeouts, and prompt defaults.
 
-
 ## Private agents: `spawn_agent`
 
 Use private agents for specialized, resumable work that should remain accessible only to the creating parent branch. Threads live outside Pi's normal session index.
@@ -33,12 +32,12 @@ Calls are synchronous by default. `background: true` returns `id`/`runId` immedi
 
 Use ordinary sessions when the conversation should be inspectable/openable in Pi or Pylon.
 
-| Action | Use |
-| --- | --- |
-| `create` | Start with `prompt`; optional purpose name, model, and existing `project` |
-| `adopt` | Claim one exact existing session ID and immediately continue it |
-| `continue` | Reopen recorded-project session with `id` and `prompt` |
-| `status` / `cancel` / `list` | Manage background runs or visible sessions |
+| Action                       | Use                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `create`                     | Start with `prompt`; optional purpose name, model, and existing `project` |
+| `adopt`                      | Claim one exact existing session ID and immediately continue it           |
+| `continue`                   | Reopen recorded-project session with `id` and `prompt`                    |
+| `status` / `cancel` / `list` | Manage background runs or visible sessions                                |
 
 Create/adopt/continue have the same synchronous/background/queue behavior as private agents. Omitted model inherits the parent's current model. Set `project` only on explicit user request; relative paths resolve from the current project. Adopt only an explicitly requested trusted project session. It rejects filesystem paths, the active parent, and sessions owned by another pi-spawn parent; it preserves adopted model/name/native parent metadata. `spawn_session` intentionally has no system-prompt, tool, extension, or thinking override.
 
@@ -46,8 +45,7 @@ Spawned/adopted sessions use Pi's normal session storage and project-trust polic
 
 ## Pylon settings, lifecycle, and limits
 
-Pylon Web package settings control each tool independently: **Deferred** (recommended) or **Always active**. They also restrict authenticated session-scoped models for new children; without an allowlist all are eligible, and an omitted excluded parent model uses the first eligible model. At session start, each spawn tool's model parameter lists eligible models with reported input/output prices, context capacity, and reasoning support so the parent can choose the least expensive suitable model. Private-agent thinking has a separate nonempty allowlist. These settings apply to new runtimes/children; existing threads continue.
-Configuration is stored at `<agent-dir>/pi-spawn/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
+Pylon Web package settings control each tool independently: **Deferred** (recommended) or **Always active**. They also restrict authenticated session-scoped models for new children; without an allowlist all are eligible, and an omitted excluded parent model uses the first eligible model. At session start, each spawn tool's model parameter lists eligible models with reported input/output prices, context capacity, and reasoning support so the parent can choose the least expensive suitable model. Private-agent thinking has a separate nonempty allowlist. These settings apply to new runtimes/children; existing threads continue. Configuration is stored at `<agent-dir>/pi-spawn/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
 Each foreground prompt starts a fresh Pi RPC subprocess and returns response/usage on settlement; background does the same later. `status`/`cancel` collect a terminal response once. Foreground dialogs proxy through parent UI; unavailable, malformed, unsupported, and background dialogs cancel rather than hang. Different threads can run concurrently, but do not concurrently write shared paths; separate Pi processes do not share locks/queues.
 

@@ -450,11 +450,7 @@ export default function advisorExtension(
                 isTimedOut: lifecycle.isTimedOut,
                 onProgress: ({ note, usage, contextTokens: latestContextTokens, attempts }) => {
                   contextTokens = latestContextTokens;
-                  running(note ?? "Advisor usage updated", {
-                    durationMs: Date.now() - started,
-                    usage,
-                    attempts,
-                  });
+                  running(note ?? "Advisor usage updated", { durationMs: Date.now() - started, usage, attempts });
                 },
               }),
           );

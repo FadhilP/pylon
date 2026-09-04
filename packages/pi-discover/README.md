@@ -22,7 +22,7 @@ Reload Pi afterward. Package settings are available through Pylon Web.
 | `rg`, `fd` | Bounded live text/file search |
 | `relationship_graph(...)` | Heuristic definitions/calls grouped by file/location |
 | `symbol_search`, `code_search`, `index_status` | Local SQLite symbol, lexical-code, and index status queries |
-| `/discover-index refresh|rebuild|prune|status` | Maintain the current local index |
+| `/discover-index refresh | rebuild | prune | status` | Maintain the current local index |
 
 `search_tools` ranks inactive eligible tools deterministically, preferring exact names and advertised usage phrases. Pylon selects up to six and unblocked definitions become callable on the next turn. Repeated misses are cached for the turn; reset with `search_tools({ action: "reset" })`. Without Pylon coordination it reports unavailable and changes no tools. Pylon health metrics never contain raw queries.
 
@@ -41,6 +41,7 @@ The code index is a machine-local SQLite database shared once per canonical phys
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-discover/index.sqlite
 ```
+
 Pylon Web uses `~/.pylon/agent` as `<agent-dir>` by default. Standalone Pi uses its host agent directory, normally `~/.pi/agent`; `PI_CODING_AGENT_DIR` overrides the host that sets it.
 
 Set `PI_DISCOVER_INDEX_PATH` to override it. `refresh` reconciles changes, `rebuild` fully indexes the current workspace, and `prune` removes records whose roots no longer exist.

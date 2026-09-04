@@ -33,7 +33,6 @@ async function repository() {
   return root;
 }
 
-
 test("search paths cannot escape workspace", () => {
   assert.equal(workspacePath("/workspace", "src"), "src");
   assert.throws(() => workspacePath("/workspace", "../secret"), /within workspace/);
@@ -166,71 +165,79 @@ test("search_excerpt output is capped and reports omitted results", async () => 
   assert.match(result.content[0].text, /matching excerpts omitted/i);
 });
 
+test(
+  "git_evidence distinguishes repository state and returns bounded history and blame",
+  { skip: !hasGit },
+  async () => {
+    const root = await repository();
+    const tools = new Map<string, any>();
+    registerScoutChildTools({
+      registerTool(tool: any) {
+        tools.set(tool.name, tool);
+      },
+    } as any);
+    const evidence = tools.get("git_evidence");
+    const execute = (params: Record<string, unknown>) =>
+      evidence.execute("id", params, undefined, undefined, { cwd: root });
+    try {
+      await writeFile(join(root, "staged.txt"), "staged evidence\n");
+      await gitAt(root, "add", "staged.txt");
+      await writeFile(join(root, "tracked.txt"), "first\nsecond revision\nthird\nworking evidence\n");
+      await writeFile(join(root, "untracked.txt"), "untracked evidence\n");
 
-test("git_evidence distinguishes repository state and returns bounded history and blame", { skip: !hasGit }, async () => {
-  const root = await repository();
-  const tools = new Map<string, any>();
-  registerScoutChildTools({
-    registerTool(tool: any) {
-      tools.set(tool.name, tool);
-    },
-  } as any);
-  const evidence = tools.get("git_evidence");
-  const execute = (params: Record<string, unknown>) =>
-    evidence.execute("id", params, undefined, undefined, { cwd: root });
-  try {
-    await writeFile(join(root, "staged.txt"), "staged evidence\n");
-    await gitAt(root, "add", "staged.txt");
-    await writeFile(join(root, "tracked.txt"), "first\nsecond revision\nthird\nworking evidence\n");
-    await writeFile(join(root, "untracked.txt"), "untracked evidence\n");
+      const status = await execute({ action: "status" });
+      assert.match(status.content[0].text, /staged\.txt/);
+      assert.match(status.content[0].text, /tracked\.txt/);
+      assert.match(status.content[0].text, /untracked\.txt/);
 
-    const status = await execute({ action: "status" });
-    assert.match(status.content[0].text, /staged\.txt/);
-    assert.match(status.content[0].text, /tracked\.txt/);
-    assert.match(status.content[0].text, /untracked\.txt/);
+      const unstaged = await execute({ action: "diff", path: "tracked.txt" });
+      assert.match(unstaged.content[0].text, /working evidence/);
+      assert.doesNotMatch(unstaged.content[0].text, /staged evidence/);
+      assert.equal(unstaged.details.mode, "unstaged tracked changes");
 
-    const unstaged = await execute({ action: "diff", path: "tracked.txt" });
-    assert.match(unstaged.content[0].text, /working evidence/);
-    assert.doesNotMatch(unstaged.content[0].text, /staged evidence/);
-    assert.equal(unstaged.details.mode, "unstaged tracked changes");
+      const staged = await execute({ action: "diff", staged: true });
+      assert.match(staged.content[0].text, /staged evidence/);
+      assert.doesNotMatch(staged.content[0].text, /working evidence/);
 
-    const staged = await execute({ action: "diff", staged: true });
-    assert.match(staged.content[0].text, /staged evidence/);
-    assert.doesNotMatch(staged.content[0].text, /working evidence/);
+      const log = await execute({ action: "log", path: "tracked.txt", limit: 2 });
+      assert.match(log.content[0].text, /revise second line/);
+      assert.match(log.content[0].text, /initial evidence/);
 
-    const log = await execute({ action: "log", path: "tracked.txt", limit: 2 });
-    assert.match(log.content[0].text, /revise second line/);
-    assert.match(log.content[0].text, /initial evidence/);
+      const shown = await execute({ action: "show", ref: "HEAD", path: "tracked.txt" });
+      assert.match(shown.content[0].text, /second revision/);
+      assert.match(shown.details.ref, /^[0-9a-f]{40,64}$/);
 
-    const shown = await execute({ action: "show", ref: "HEAD", path: "tracked.txt" });
-    assert.match(shown.content[0].text, /second revision/);
-    assert.match(shown.details.ref, /^[0-9a-f]{40,64}$/);
+      const blame = await execute({ action: "blame", path: "tracked.txt", startLine: 1, endLine: 2 });
+      assert.match(blame.content[0].text, /first/);
+      assert.match(blame.content[0].text, /second revision/);
+      assert.equal(blame.details.range, "1-2");
 
-    const blame = await execute({ action: "blame", path: "tracked.txt", startLine: 1, endLine: 2 });
-    assert.match(blame.content[0].text, /first/);
-    assert.match(blame.content[0].text, /second revision/);
-    assert.equal(blame.details.range, "1-2");
+      const hook = join(root, "external-diff.cjs");
+      const sentinel = join(root, "external-diff-ran");
+      await writeFile(hook, 'require("node:fs").writeFileSync(process.argv[2], "ran");\n');
+      const quoted = (value: string) => `"${value.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
+      await gitAt(
+        root,
+        "config",
+        "diff.scout-sentinel.command",
+        `${quoted(process.execPath)} ${quoted(hook)} ${quoted(sentinel)}`,
+      );
+      await gitAt(root, "diff", "--", "tracked.txt");
+      await access(sentinel);
+      await rm(sentinel, { force: true });
+      await execute({ action: "diff", path: "tracked.txt" });
+      await assert.rejects(access(sentinel));
 
-    const hook = join(root, "external-diff.cjs");
-    const sentinel = join(root, "external-diff-ran");
-    await writeFile(hook, 'require("node:fs").writeFileSync(process.argv[2], "ran");\n');
-    const quoted = (value: string) => `"${value.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
-    await gitAt(root, "config", "diff.scout-sentinel.command", `${quoted(process.execPath)} ${quoted(hook)} ${quoted(sentinel)}`);
-    await gitAt(root, "diff", "--", "tracked.txt");
-    await access(sentinel);
-    await rm(sentinel, { force: true });
-    await execute({ action: "diff", path: "tracked.txt" });
-    await assert.rejects(access(sentinel));
-
-    await writeFile(join(root, "tracked.txt"), `${"large evidence ".repeat(12_000)}\n`);
-    const large = await execute({ action: "diff", path: "tracked.txt" });
-    assert.ok(Buffer.byteLength(large.content[0].text) <= SCOUT_TOOL_MAX_BYTES);
-    assert.equal(large.details.truncated, true);
-    assert.match(large.content[0].text, /partial evidence|output truncated/i);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+      await writeFile(join(root, "tracked.txt"), `${"large evidence ".repeat(12_000)}\n`);
+      const large = await execute({ action: "diff", path: "tracked.txt" });
+      assert.ok(Buffer.byteLength(large.content[0].text) <= SCOUT_TOOL_MAX_BYTES);
+      assert.equal(large.details.truncated, true);
+      assert.match(large.content[0].text, /partial evidence|output truncated/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("git_evidence canonicalizes refs, treats paths literally, and rejects ambiguous inputs", async () => {
   const root = await realpath(process.cwd());
@@ -247,7 +254,8 @@ test("git_evidence canonicalizes refs, treats paths literally, and rejects ambig
     undefined,
     async (_cwd, args) => {
       calls.push([...args]);
-      if (args.includes("--show-toplevel")) return { stdout: `${root}\n`, stderr: "", code: 0, receivedBytes: root.length };
+      if (args.includes("--show-toplevel"))
+        return { stdout: `${root}\n`, stderr: "", code: 0, receivedBytes: root.length };
       if (args.includes("--verify")) {
         const input = args.at(-1) ?? "";
         const oid = input.startsWith("HEAD~1") ? first : second;
@@ -282,7 +290,11 @@ test("git_evidence rejects an ancestor repository outside the workspace root", {
   const child = join(root, "nested");
   await mkdir(child);
   const tools = new Map<string, any>();
-  registerScoutChildTools({ registerTool(tool: any) { tools.set(tool.name, tool); } } as any);
+  registerScoutChildTools({
+    registerTool(tool: any) {
+      tools.set(tool.name, tool);
+    },
+  } as any);
   try {
     await assert.rejects(
       tools.get("git_evidence").execute("id", { action: "status" }, undefined, undefined, { cwd: child }),

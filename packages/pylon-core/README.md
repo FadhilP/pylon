@@ -21,8 +21,7 @@ Reload Pi afterward. Core package settings are available through Pylon Web.
 | `/tokens` / `/tokens all` | Report branch-scoped tool payload and main/child usage/cost summary |
 | `pylon_docs` | List or read shipped Pylon, Pylon Web, and package documentation with Web/TUI-aware guidance |
 
-Gates remain authoritative: enabling a blocked baseline tool waits for gates to clear. Guard is the independent final safety authority; Pylon never approves or weakens it.
-In the full Pylon bundle, `pylon_docs` is deferred and can be activated through `search_tools`, keeping documentation out of the normal system prompt and tool context. Pylon Web marks the current host so the tool prioritizes panels, Inspector references, and Settings actions; Pi TUI prioritizes tools and slash commands. A standalone `pylon-core` install exposes its local README directly.
+Gates remain authoritative: enabling a blocked baseline tool waits for gates to clear. Guard is the independent final safety authority; Pylon never approves or weakens it. In the full Pylon bundle, `pylon_docs` is deferred and can be activated through `search_tools`, keeping documentation out of the normal system prompt and tool context. Pylon Web marks the current host so the tool prioritizes panels, Inspector references, and Settings actions; Pi TUI prioritizes tools and slash commands. A standalone `pylon-core` install exposes its local README directly.
 
 ## Numbered line edits
 
@@ -53,7 +52,9 @@ pi.events.emit("pylon:tool-policy", {
   deferredToolUsage: { example_tool: "inspect example project data" }, // optional
   allowOnly: undefined,
   restoreTools: undefined,
-  acknowledge: () => { coordinated = true; },
+  acknowledge: () => {
+    coordinated = true;
+  },
 });
 ```
 

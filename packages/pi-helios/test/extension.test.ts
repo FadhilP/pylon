@@ -484,7 +484,8 @@ test("doctor checks pinned CLI without launching a browser", async () => {
     },
   });
   let notification = "";
-  await commands.get("helios").handler("doctor browser",
+  await commands.get("helios").handler(
+    "doctor browser",
     context({
       ui: {
         notify(message: string) {

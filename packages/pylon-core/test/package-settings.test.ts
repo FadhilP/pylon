@@ -141,7 +141,6 @@ test("generic updates extract only values validated by the authoritative descrip
   );
 });
 
-
 test("prompt settings enforce authorized modes, default semantics, and UTF-8 byte limits", () => {
   const promptDescriptor = definePackageSettings({
     version: 1,
@@ -169,27 +168,15 @@ test("prompt settings enforce authorized modes, default semantics, and UTF-8 byt
   assert.equal(validPackageSettingValue(prompt, { mode: "replace", text: "x" }), false);
   assert.equal(validPackageSettingValue(prompt, { mode: "default", text: "keep this" }), false);
   assert.throws(
-    () =>
-      definePackageSettings({
-        ...promptDescriptor,
-        fields: [{ ...prompt, allowedModes: [] }],
-      }),
+    () => definePackageSettings({ ...promptDescriptor, fields: [{ ...prompt, allowedModes: [] }] }),
     /invalid package settings descriptor/,
   );
   assert.throws(
-    () =>
-      definePackageSettings({
-        ...promptDescriptor,
-        fields: [{ ...prompt, maxBytes: 32_769 }],
-      }),
+    () => definePackageSettings({ ...promptDescriptor, fields: [{ ...prompt, maxBytes: 32_769 }] }),
     /invalid package settings descriptor/,
   );
   assert.throws(
-    () =>
-      definePackageSettings({
-        ...promptDescriptor,
-        fields: [{ ...prompt, defaultText: "Too long" }],
-      }),
+    () => definePackageSettings({ ...promptDescriptor, fields: [{ ...prompt, defaultText: "Too long" }] }),
     /invalid package settings descriptor/,
   );
 });

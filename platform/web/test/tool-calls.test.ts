@@ -93,7 +93,6 @@ test("messageToolCallViews elapses a running call against now", () => {
   });
 });
 
-
 test("pairedToolCallViews settles unfinished calls once the run stops", () => {
   const tools: PairedAgentActivity[] = [{ tool: "Grep", input: "assertBudget", startedAt: "2026-01-01T00:00:00Z" }];
   const [running] = pairedToolCallViews(tools, true, Date.parse("2026-01-01T00:00:03Z"));

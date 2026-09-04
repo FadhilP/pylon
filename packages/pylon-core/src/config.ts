@@ -114,8 +114,14 @@ export function effectiveConfig(config: PylonCoreConfig): EffectivePylonCoreConf
     delegateMaxAttempts: effectivePackageSettingValue(fields.delegateMaxAttempts, config.delegateMaxAttempts) as number,
     delegateRetryBaseMs: effectivePackageSettingValue(fields.delegateRetryBaseMs, config.delegateRetryBaseMs) as number,
     delegateNamingModel: effectivePackageSettingValue(fields.delegateNamingModel, config.delegateNamingModel) as string,
-    delegateNamingPrompt: effectivePackageSettingValue(fields.delegateNamingPrompt, config.delegateNamingPrompt) as import("./package-settings.ts").PromptPackageSettingValue,
-    mainPrompt: effectivePackageSettingValue(fields.mainPrompt, config.mainPrompt) as import("./package-settings.ts").PromptPackageSettingValue,
+    delegateNamingPrompt: effectivePackageSettingValue(
+      fields.delegateNamingPrompt,
+      config.delegateNamingPrompt,
+    ) as import("./package-settings.ts").PromptPackageSettingValue,
+    mainPrompt: effectivePackageSettingValue(
+      fields.mainPrompt,
+      config.mainPrompt,
+    ) as import("./package-settings.ts").PromptPackageSettingValue,
   };
 }
 

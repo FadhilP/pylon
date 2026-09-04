@@ -61,13 +61,7 @@ test("package settings patches validate keys, values, and apply timing", () => {
   const changed = patchPackageSettings(initial, { enabled: false });
   assert.equal(changed.settings.kind, "generic");
   assert.deepEqual(changed.changes, [
-    {
-      key: "enabled",
-      previous: true,
-      next: false,
-      apply: "next-session",
-      highImpact: false,
-    },
+    { key: "enabled", previous: true, next: false, apply: "next-session", highImpact: false },
   ]);
   assert.notEqual(packageSettingsRevision(initial), packageSettingsRevision(changed.settings));
   assert.throws(() => patchPackageSettings(initial, { trusted: true }), /not a configurable/);
@@ -138,75 +132,75 @@ test("settings tool surfaces a stale revision before requesting confirmation", a
   assert.equal(confirmations, 0);
 });
 
-test("web runtime settings tool persists an approved patch and rejects its stale revision", { timeout: 30_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), "pylon-settings-tool-"));
-  const cwd = join(root, "workspace");
-  const agentDir = join(root, "agent");
-  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
-  const driver = new SessionRuntime();
-  try {
-    await driver.start({ cwd, agentDir, repositoryRoot, inMemory: true });
-    const docsTool = (driver as any).runtime.session.getToolDefinition("pylon_docs");
-    assert.ok(docsTool);
-    const docs = JSON.parse(
-      text(await docsTool.execute("docs-list", { action: "list" }, undefined, undefined, { mode: "rpc" })),
-    );
-    assert.equal(docs.host, "web");
-    assert.match(docs.guidance, /Prefer supported Web panels/);
-    const tool = (driver as any).runtime.session.getToolDefinition("pylon_settings");
-    assert.ok(tool);
-    const list = JSON.parse(
-      text(await tool.execute("list", { action: "list" }, undefined, undefined, { hasUI: false })),
-    );
-    const advisor = list.packages.find((item: any) => item.packageId === "pi-advisor");
-    assert.ok(advisor.keys.includes("model"), "optional writable settings remain discoverable");
-    assert.ok(!advisor.keys.includes("promptDefaultText"), "derived display text is not writable");
-    const read = await tool.execute(
-      "get",
-      { action: "get", packageId: "pylon-core" },
-      undefined,
-      undefined,
-      { hasUI: false },
-    );
-    const current = JSON.parse(text(read));
-    const input = {
-      action: "update",
-      packageId: "pylon-core",
-      revision: current.revision,
-      changes: { delegateMaxAttempts: 4 },
-    };
+test(
+  "web runtime settings tool persists an approved patch and rejects its stale revision",
+  { timeout: 30_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "pylon-settings-tool-"));
+    const cwd = join(root, "workspace");
+    const agentDir = join(root, "agent");
+    await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+    const driver = new SessionRuntime();
+    try {
+      await driver.start({ cwd, agentDir, repositoryRoot, inMemory: true });
+      const docsTool = (driver as any).runtime.session.getToolDefinition("pylon_docs");
+      assert.ok(docsTool);
+      const docs = JSON.parse(
+        text(await docsTool.execute("docs-list", { action: "list" }, undefined, undefined, { mode: "rpc" })),
+      );
+      assert.equal(docs.host, "web");
+      assert.match(docs.guidance, /Prefer supported Web panels/);
+      const tool = (driver as any).runtime.session.getToolDefinition("pylon_settings");
+      assert.ok(tool);
+      const list = JSON.parse(
+        text(await tool.execute("list", { action: "list" }, undefined, undefined, { hasUI: false })),
+      );
+      const advisor = list.packages.find((item: any) => item.packageId === "pi-advisor");
+      assert.ok(advisor.keys.includes("model"), "optional writable settings remain discoverable");
+      assert.ok(!advisor.keys.includes("promptDefaultText"), "derived display text is not writable");
+      const read = await tool.execute("get", { action: "get", packageId: "pylon-core" }, undefined, undefined, {
+        hasUI: false,
+      });
+      const current = JSON.parse(text(read));
+      const input = {
+        action: "update",
+        packageId: "pylon-core",
+        revision: current.revision,
+        changes: { delegateMaxAttempts: 4 },
+      };
 
-    const noUi = await tool.execute("no-ui", input, undefined, undefined, { hasUI: false });
-    assert.match(text(noUi), /confirmation UI is unavailable/);
-    let confirmation = "";
-    const updated = await tool.execute("update", input, undefined, undefined, {
-      hasUI: true,
-      ui: {
-        confirm: async (_title: string, body: string) => {
-          confirmation = body;
-          return true;
+      const noUi = await tool.execute("no-ui", input, undefined, undefined, { hasUI: false });
+      assert.match(text(noUi), /confirmation UI is unavailable/);
+      let confirmation = "";
+      const updated = await tool.execute("update", input, undefined, undefined, {
+        hasUI: true,
+        ui: {
+          confirm: async (_title: string, body: string) => {
+            confirmation = body;
+            return true;
+          },
         },
-      },
-    });
-    assert.match(confirmation, /delegateMaxAttempts: 3 → 4 \[next-operation\]/);
-    assert.match(text(updated), /"delegateMaxAttempts"/);
+      });
+      assert.match(confirmation, /delegateMaxAttempts: 3 → 4 \[next-operation\]/);
+      assert.match(text(updated), /"delegateMaxAttempts"/);
 
-    const persisted = (await driver.listPackages()).packages.find(item => item.id === "pylon-core")?.settings;
-    assert.equal(
-      persisted?.kind === "generic"
-        ? persisted.fields.find(field => field.key === "delegateMaxAttempts")?.value
-        : undefined,
-      4,
-    );
-    let staleConfirmation = false;
-    const stale = await tool.execute("stale", input, undefined, undefined, {
-      hasUI: true,
-      ui: { confirm: async () => ((staleConfirmation = true), true) },
-    });
-    assert.match(text(stale), /settings changed; call get again/);
-    assert.equal(staleConfirmation, false);
-  } finally {
-    await driver.dispose();
-    await rm(root, { recursive: true, force: true });
-  }
-});
+      const persisted = (await driver.listPackages()).packages.find(item => item.id === "pylon-core")?.settings;
+      assert.equal(
+        persisted?.kind === "generic"
+          ? persisted.fields.find(field => field.key === "delegateMaxAttempts")?.value
+          : undefined,
+        4,
+      );
+      let staleConfirmation = false;
+      const stale = await tool.execute("stale", input, undefined, undefined, {
+        hasUI: true,
+        ui: { confirm: async () => ((staleConfirmation = true), true) },
+      });
+      assert.match(text(stale), /settings changed; call get again/);
+      assert.equal(staleConfirmation, false);
+    } finally {
+      await driver.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);

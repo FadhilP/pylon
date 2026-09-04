@@ -177,6 +177,6 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
         await publishState();
         ctx.ui.setStatus("pi-discover-index", undefined);
       }
-    }
+    },
   };
 }

@@ -242,7 +242,10 @@ test("bare nul redirection is blocked before Bash can create a file", { concurre
   );
   assert.equal(agentResult.block, true);
   assert.match(agentResult.reason, /use \/dev\/null/);
-  assert.equal(await app.tool({ type: "tool_call", toolName: "bash", input: { command: "tool > /dev/null" } }, ctx), undefined);
+  assert.equal(
+    await app.tool({ type: "tool_call", toolName: "bash", input: { command: "tool > /dev/null" } }, ctx),
+    undefined,
+  );
 
   const heartbeatResult = await app.tool(
     { type: "tool_call", toolName: "heartbeat_start", toolCallId: "nul-heartbeat", input: { command: "tool 2>NUL" } },

@@ -93,11 +93,7 @@ export type ScoutGitResult = {
   termination?: GitTermination;
   receivedBytes: number;
 };
-export type ScoutGitRunner = (
-  cwd: string,
-  args: readonly string[],
-  signal?: AbortSignal,
-) => Promise<ScoutGitResult>;
+export type ScoutGitRunner = (cwd: string, args: readonly string[], signal?: AbortSignal) => Promise<ScoutGitResult>;
 
 function gitEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -239,7 +235,13 @@ async function canonicalCommit(
   input: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (input.length > 200 || input.trim() !== input || !GIT_REF.test(input) || input.includes("..") || input.includes(":"))
+  if (
+    input.length > 200 ||
+    input.trim() !== input ||
+    !GIT_REF.test(input) ||
+    input.includes("..") ||
+    input.includes(":")
+  )
     throw new Error("Git ref contains unsupported revision syntax");
   const result = await checkedGit(
     runner,
@@ -264,9 +266,10 @@ function pathArgs(root: string, input: string | undefined): string[] {
 }
 
 function gitEvidenceText(label: string, result: ScoutGitResult, empty: string): string {
-  const warning = result.termination === "output"
-    ? `[Git output exceeded ${formatSize(GIT_PROCESS_MAX_BYTES)} and the command was stopped; partial evidence follows.]\n\n`
-    : "";
+  const warning =
+    result.termination === "output"
+      ? `[Git output exceeded ${formatSize(GIT_PROCESS_MAX_BYTES)} and the command was stopped; partial evidence follows.]\n\n`
+      : "";
   const stderr = result.stderr.trim() ? `\n\n[git stderr]\n${result.stderr.trim()}` : "";
   return bounded(`${warning}${label}\n${result.stdout.trim() || empty}${stderr}`, SCOUT_TOOL_MAX_BYTES);
 }
@@ -293,7 +296,8 @@ async function gitEvidence(
       break;
     case "diff": {
       rejectUnsupported(params, ["path", "base", "target", "staged"]);
-      if (params.staged && (params.base || params.target)) throw new Error("staged diff does not accept base or target");
+      if (params.staged && (params.base || params.target))
+        throw new Error("staged diff does not accept base or target");
       if (params.target && !params.base) throw new Error("diff target requires base");
       const base = params.base ? await canonicalCommit(runner, root, params.base, signal) : undefined;
       const target = params.target ? await canonicalCommit(runner, root, params.target, signal) : undefined;
@@ -379,7 +383,6 @@ async function gitEvidence(
   details.receivedBytes = result.receivedBytes;
   return { text: gitEvidenceText(label, result, empty), details };
 }
-
 
 async function excerptSearch(
   pi: ExtensionAPI,
@@ -508,13 +511,23 @@ export default function scoutChildToolsExtension(
       {
         action: StringEnum(GIT_ACTIONS, { description: "Fixed read-only Git operation" }),
         path: Type.Optional(Type.String({ maxLength: 500, description: "Optional workspace-relative literal path" })),
-        ref: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Commit-ish for log, show, or blame" })),
+        ref: Type.Optional(
+          Type.String({ minLength: 1, maxLength: 200, description: "Commit-ish for log, show, or blame" }),
+        ),
         base: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Base commit-ish for diff" })),
-        target: Type.Optional(Type.String({ minLength: 1, maxLength: 200, description: "Target commit-ish; requires base" })),
+        target: Type.Optional(
+          Type.String({ minLength: 1, maxLength: 200, description: "Target commit-ish; requires base" }),
+        ),
         staged: Type.Optional(Type.Boolean({ description: "For diff, inspect the index versus HEAD" })),
-        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: GIT_MAX_COMMITS, description: "Maximum log commits; default 20" })),
-        startLine: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000_000, description: "First blame line, inclusive" })),
-        endLine: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000_000, description: "Last blame line, inclusive" })),
+        limit: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: GIT_MAX_COMMITS, description: "Maximum log commits; default 20" }),
+        ),
+        startLine: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: 10_000_000, description: "First blame line, inclusive" }),
+        ),
+        endLine: Type.Optional(
+          Type.Integer({ minimum: 1, maximum: 10_000_000, description: "Last blame line, inclusive" }),
+        ),
       },
       { additionalProperties: false },
     ),

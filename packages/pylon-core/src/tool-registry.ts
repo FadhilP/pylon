@@ -237,7 +237,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
       );
       return;
     }
-    if (!( ["enable", "disable"] as const).includes(action as "enable") || !names.length) {
+    if (!(["enable", "disable"] as const).includes(action as "enable") || !names.length) {
       ctx.ui.notify(usage, "warning");
       return;
     }

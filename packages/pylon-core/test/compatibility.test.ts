@@ -166,10 +166,7 @@ test("actual Advisor, Grunt, Scout, and Continuity adapters coordinate end to en
       { name: "grunt", usage: "delegate a large mechanical implementation slice to an isolated synchronous worker" },
       { name: "index_status", usage: "inspect local repository code-index status" },
       { name: "memory", usage: "inspect durable notes or propose grounded reviewer-gated memory changes" },
-      {
-        name: "pylon_docs",
-        usage: "read shipped Pylon and Pylon Web documentation for product-specific questions",
-      },
+      { name: "pylon_docs", usage: "read shipped Pylon and Pylon Web documentation for product-specific questions" },
       { name: "relationship_graph", usage: "map source symbols or tokens to related files and source locations" },
       {
         name: "search_sessions",

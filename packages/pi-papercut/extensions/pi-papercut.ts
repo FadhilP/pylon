@@ -334,17 +334,16 @@ export default function papercutExtension(pi: ExtensionAPI) {
   const lifecycleAction = async (ctx: ToolContext, action: LifecycleAction, params: ToolParams) => {
     assertLifecycleRequest(action, params);
     const records = await runLifecycle(ctx, action, params.ids, params.note);
-    return {
-      content: [{ type: "text" as const, text: lifecycleText(action, records) }],
-      details: { action, records },
-    };
+    return { content: [{ type: "text" as const, text: lifecycleText(action, records) }], details: { action, records } };
   };
 
   const lifecycleBatchAction = async (ctx: ToolContext, params: ToolParams) => {
     assertBatchRequest(params);
     const actions = await runLifecycleBatch(ctx, params.actions);
     return {
-      content: [{ type: "text" as const, text: actions.map(item => lifecycleText(item.action, item.records)).join("\n") }],
+      content: [
+        { type: "text" as const, text: actions.map(item => lifecycleText(item.action, item.records)).join("\n") },
+      ],
       details: { actions },
     };
   };

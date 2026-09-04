@@ -227,19 +227,9 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
       [1, 3],
     );
     const usageUpdates = updates.flatMap(update => (update.details?.usage ? [update.details.usage] : []));
-    assert.deepEqual(usageUpdates[0].costParts, {
-      input: 0.04,
-      output: 0.03,
-      cacheRead: 0.02,
-      cacheWrite: 0.01,
-    });
+    assert.deepEqual(usageUpdates[0].costParts, { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 });
     assert.ok(Math.abs(result.details.usage.cost - 0.3) < Number.EPSILON);
-    assert.deepEqual(result.details.usage.costParts, {
-      input: 0.12,
-      output: 0.09,
-      cacheRead: 0.06,
-      cacheWrite: 0.03,
-    });
+    assert.deepEqual(result.details.usage.costParts, { input: 0.12, output: 0.09, cacheRead: 0.06, cacheWrite: 0.03 });
     assert.deepEqual(usageUpdates.at(-1).costParts, result.details.usage.costParts);
     assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally {
@@ -444,7 +434,9 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
     await runtime.tools.get("repo_scout").execute("one", { task: "map symbol" }, undefined, undefined, context());
     assert.ok(childArgs[0].includes(childExtensionPath));
     assert.ok(
-      childArgs[0].includes("read,search_excerpt,git_evidence,rg,fd,relationship_graph,symbol_search,code_search,index_status,ls"),
+      childArgs[0].includes(
+        "read,search_excerpt,git_evidence,rg,fd,relationship_graph,symbol_search,code_search,index_status,ls",
+      ),
     );
     assert.equal(childArgs[0].filter(arg => arg === "-e").length, 2);
 

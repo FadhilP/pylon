@@ -154,7 +154,6 @@ test("completed job remains in context until its output is fetched", async () =>
   }
 });
 
-
 test("/heartbeat validates syntax, reports unavailable state, and cancels known jobs", async () => {
   const { handlers, tools, commands, ctx } = harness();
   const notifications: Array<{ text: string; level: string }> = [];
@@ -169,7 +168,13 @@ test("/heartbeat validates syntax, reports unavailable state, and cancels known 
     assert.equal(notifications.at(-1)?.level, "warning");
     const started = await tools
       .get("heartbeat_start")
-      .execute("start", { command: `node -e \"setTimeout(()=>{},10000)\"`, otherWork: "cancel it" }, undefined, undefined, ctx);
+      .execute(
+        "start",
+        { command: `node -e \"setTimeout(()=>{},10000)\"`, otherWork: "cancel it" },
+        undefined,
+        undefined,
+        ctx,
+      );
     await commands.get("heartbeat").handler(`cancel ${started.details.id}`, commandCtx);
     assert.match(notifications.at(-1)?.text ?? "", /Cancellation requested/);
   } finally {

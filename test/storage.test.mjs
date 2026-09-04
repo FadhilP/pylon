@@ -124,7 +124,6 @@ test("manual CLI migration succeeds without loading the web server", async () =>
   assert.equal(await readFile(join(root, ".pylon", "agent", "settings.json"), "utf8"), "{}");
 });
 
-
 test("manual CLI migration fails without overwriting an invalid target", async () => {
   const root = await home();
   await legacy(root, { "auth.json": "legacy" });

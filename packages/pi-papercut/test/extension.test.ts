@@ -210,7 +210,6 @@ test("capture, dedupe, list, resolve, and command flows persist project state", 
   );
 });
 
-
 test("mixed lifecycle batches commit once and roll back together", async () => {
   const cwd = join(root, "batch-repo");
   await mkdir(join(cwd, ".git"), { recursive: true });
@@ -242,10 +241,7 @@ test("mixed lifecycle batches commit once and roll back together", async () => {
     batch.details.actions.map((item: any) => item.action),
     ["resolve", "dismiss"],
   );
-  assert.equal(
-    app.emitted.filter(item => item.channel === "pi-papercut:state-change").length,
-    changesBefore + 1,
-  );
+  assert.equal(app.emitted.filter(item => item.channel === "pi-papercut:state-change").length, changesBefore + 1);
 
   const afterBatch = await tool.execute("all", { action: "list", status: "all" }, undefined, undefined, ctx);
   assert.deepEqual(
@@ -273,8 +269,5 @@ test("mixed lifecycle batches commit once and roll back together", async () => {
     Object.fromEntries(afterFailure.details.records.map((record: any) => [record.id.slice(0, 8), record.status])),
     { [first]: "resolved", [second]: "dismissed" },
   );
-  assert.equal(
-    app.emitted.filter(item => item.channel === "pi-papercut:state-change").length,
-    changesBefore + 1,
-  );
+  assert.equal(app.emitted.filter(item => item.channel === "pi-papercut:state-change").length, changesBefore + 1);
 });

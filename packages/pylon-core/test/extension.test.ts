@@ -36,7 +36,10 @@ function harness() {
   const pi = {
     events,
     getActiveTools: () => [...active],
-    getAllTools: () => [...new Set(["read", "edit", "write", "advisor", "repo_scout", "continuity_update", ...tools.keys()])].map(name => ({ name })),
+    getAllTools: () =>
+      [...new Set(["read", "edit", "write", "advisor", "repo_scout", "continuity_update", ...tools.keys()])].map(
+        name => ({ name }),
+      ),
     setActiveTools: (tools: string[]) => {
       if (failReconcile) throw Error("forced reconcile failure");
       active = [...tools];

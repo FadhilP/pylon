@@ -1556,7 +1556,15 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       ],
       [
         "pi-scout",
-        { kind: "scout", mode: "session", webSearch: true, repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5, prompt: defaultPrompt },
+        {
+          kind: "scout",
+          mode: "session",
+          webSearch: true,
+          repoTimeoutMs: 900_000,
+          maxCostUsd: 1,
+          webSearchResults: 5,
+          prompt: defaultPrompt,
+        },
       ],
       [
         "pi-grunt",
@@ -1575,7 +1583,10 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     ] as const) {
       const updated = await driver.updatePackageSettings({ packageId, settings });
       assert.equal(updated.sessionGeneration, generation);
-      assertPromptSettings((await driver.listPackages()).packages.find(item => item.id === packageId)?.settings, settings);
+      assertPromptSettings(
+        (await driver.listPackages()).packages.find(item => item.id === packageId)?.settings,
+        settings,
+      );
     }
     const unchangedRuntime = await driver.snapshot();
     assert.deepEqual(unchangedRuntime.activeTools, initialActiveTools);
@@ -1583,7 +1594,14 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
 
     const scoutDisabled = await driver.updatePackageSettings({
       packageId: "pi-scout",
-      settings: { kind: "scout", mode: "disabled", repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5, prompt: defaultPrompt },
+      settings: {
+        kind: "scout",
+        mode: "disabled",
+        repoTimeoutMs: 900_000,
+        maxCostUsd: 1,
+        webSearchResults: 5,
+        prompt: defaultPrompt,
+      },
     });
     const gruntDisabled = await driver.updatePackageSettings({
       packageId: "pi-grunt",

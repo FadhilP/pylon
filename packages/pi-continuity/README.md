@@ -12,12 +12,12 @@ pi install git:github.com/FadhilP/pylon
 
 Reload Pi afterward. Continuity works standalone; its package settings are available through Pylon Web.
 
-| Command | Use |
-| --- | --- |
-| `/plan [status|start [goal]|approve|approve-current|changes <feedback>|review|cancel|help]` | Start and manage explicit planning |
-| `/continuity [status|set <role> <provider/model[:thinking]>|select <role>|reset <role>|help]` | Configure planner, executor, and reviewers |
-| `/todos [help]` | Show stored todos |
-| `/memory [status|list [user|project]|edit <user|project> <id>|forget <user|project> [id]|owners|backups|migrate|rollback|activation <on|off>|help]` | Manage durable memory |
+| Command              | Use                                    |
+| -------------------- | -------------------------------------- |
+| `/plan [status       | start [goal]                           | approve       | approve-current | changes <feedback> | review                                     | cancel        | help]` | Start and manage explicit planning |
+| `/continuity [status | set <role> <provider/model[:thinking]> | select <role> | reset <role>    | help]`             | Configure planner, executor, and reviewers |
+| `/todos [help]`      | Show stored todos                      |
+| `/memory [status     | list [user                             | project]      | edit <user      | project> <id>      | forget <user                               | project> [id] | owners | backups                            | migrate | rollback | activation <on | off> | help]` | Manage durable memory |
 
 Tools are `continuity_recall`, `continuity_update`, and `memory`. The memory tool lists notes and batches up to two proposed additions, replacements, or removals. In Pylon it is deferred until a Memory Reviewer is configured, then active by default; explicit tool exposure still wins.
 
@@ -46,6 +46,7 @@ Memory V6 is a future-facing notebook, separate from Active Work and recall. Not
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-continuity/memory-v6/state.json
 ```
+
 Pylon Web uses `~/.pylon/agent` as `<agent-dir>` by default. Standalone Pi uses its host agent directory, normally `~/.pi/agent`; `PI_CODING_AGENT_DIR` overrides the host that sets it.
 
 A rebuildable index sits beside it. Storage allows 1,000 notes per owner and 2 MiB total; writes fail visibly instead of evicting notes. Activation is allow-none and event-driven: only eligible notes with valid trigger contracts may queue one advisory message. It never blocks or transforms a tool. Prompt similarity never activates a rule.

@@ -1027,7 +1027,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
       const action = parts[0] ?? "status";
       const value = parts[1];
       const usage = () => ctx.ui.notify(USAGE, "warning");
-      if ((parts.length === 0 || (parts.length === 1 && action === "status"))) {
+      if (parts.length === 0 || (parts.length === 1 && action === "status")) {
         showStatus(ctx);
         return;
       }
@@ -1079,13 +1079,19 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
         const reset = value === "reset";
         const candidate = reset ? SIEVE_THRESHOLD : Number(value);
         if (!Number.isSafeInteger(candidate) || candidate < MIN_SIEVE_THRESHOLD || candidate > MAX_SIEVE_THRESHOLD) {
-          ctx.ui.notify(`Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`, "warning");
+          ctx.ui.notify(
+            `Threshold must be an integer from ${MIN_SIEVE_THRESHOLD} to ${MAX_SIEVE_THRESHOLD}.`,
+            "warning",
+          );
           return;
         }
         if (!(await saveSetting(ctx, "threshold", { threshold: candidate }))) return;
         requestEpoch("configuration-change");
         publishState();
-        ctx.ui.notify(`pi-sieve threshold ${reset ? "reset" : "set"} to ${threshold}; cached prefix will reset.`, "info");
+        ctx.ui.notify(
+          `pi-sieve threshold ${reset ? "reset" : "set"} to ${threshold}; cached prefix will reset.`,
+          "info",
+        );
         return;
       }
       if (action === "rollover" && (parts.length === 3 || (parts.length === 2 && value === "reset"))) {
@@ -1105,10 +1111,16 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
           );
           return;
         }
-        if (!(await saveSetting(ctx, "rollover settings", { rolloverHighMultiplier: high, rolloverLowMultiplier: low }))) return;
+        if (
+          !(await saveSetting(ctx, "rollover settings", { rolloverHighMultiplier: high, rolloverLowMultiplier: low }))
+        )
+          return;
         requestEpoch("configuration-change");
         publishState();
-        ctx.ui.notify(`pi-sieve rollover ${reset ? "reset" : "set"} to ${high}T → ${low}T; cached prefix will reset.`, "info");
+        ctx.ui.notify(
+          `pi-sieve rollover ${reset ? "reset" : "set"} to ${high}T → ${low}T; cached prefix will reset.`,
+          "info",
+        );
         return;
       }
       usage();

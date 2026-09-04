@@ -12,16 +12,16 @@ pi install git:github.com/FadhilP/pylon
 
 Reload Pi afterward. Package settings are available through Pylon Web.
 
-| Command | Use |
-| --- | --- |
-| `/sieve` / `/sieve status` | Show state and telemetry |
-| `/sieve mode enabled|observe|disabled` | Apply projections, observe only, or disable them |
-| `/sieve projection standard-v2|stable` | Select default or experimental policy |
-| `/sieve reflow` | Start a new projection epoch |
-| `/sieve rollover HIGH TARGET` / `reset` | Configure stable-mode watermarks |
-| `/sieve active-pruning on|off` | Toggle eligible per-result reduction |
-| `/sieve threshold N` / `reset` | Set cap (1,000–50,000 characters) |
-| `/sieve reset-stats` | Persist zeroed cumulative stats |
+| Command                                 | Use                               |
+| --------------------------------------- | --------------------------------- |
+| `/sieve` / `/sieve status`              | Show state and telemetry          |
+| `/sieve mode enabled                    | observe                           | disabled`                             | Apply projections, observe only, or disable them |
+| `/sieve projection standard-v2          | stable`                           | Select default or experimental policy |
+| `/sieve reflow`                         | Start a new projection epoch      |
+| `/sieve rollover HIGH TARGET` / `reset` | Configure stable-mode watermarks  |
+| `/sieve active-pruning on               | off`                              | Toggle eligible per-result reduction  |
+| `/sieve threshold N` / `reset`          | Set cap (1,000–50,000 characters) |
+| `/sieve reset-stats`                    | Persist zeroed cumulative stats   |
 
 Standard V2 and active pruning are enabled by default. The default threshold is 8,192 JavaScript characters. Configuration is stored at `<agent-dir>/pi-sieve/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden. Stable rollover defaults to high `8T` and target `4T`, where `T` is threshold; multipliers are 1–64 and high must exceed target. Observe computes telemetry without changing provider context; disabled does neither. Changing modes starts a fresh epoch.
 

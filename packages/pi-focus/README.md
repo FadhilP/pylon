@@ -14,13 +14,13 @@ Reload Pi, then apply the palette once with `/ui theme` or select `focus-dark` i
 
 ## TUI controls
 
-| Command | Effect |
-| --- | --- |
-| `/ui` | Show current UI state |
+| Command                      | Effect                                               |
+| ---------------------------- | ---------------------------------------------------- |
+| `/ui`                        | Show current UI state                                |
 | `/ui enable` / `/ui disable` | Enable Focus or restore built-in UI for this runtime |
-| `/ui density compact|comfortable` | Choose layout density |
-| `/ui bell on|off` | Toggle a settled-run terminal bell for this runtime |
-| `/ui theme` | Reapply the included focus-dark theme |
+| `/ui density compact         | comfortable`                                         | Choose layout density                               |
+| `/ui bell on                 | off`                                                 | Toggle a settled-run terminal bell for this runtime |
+| `/ui theme`                  | Reapply the included focus-dark theme                |
 
 `compact` uses a one-line header. `comfortable` adds a secondary key-hint header; the footer always remains one line. Focus applies the Pylon-aligned `focus-dark` palette when its TUI starts. `/ui` is TUI-only. Disable the package persistently through `pi config`.
 

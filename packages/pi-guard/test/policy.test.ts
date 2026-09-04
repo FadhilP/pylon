@@ -38,7 +38,7 @@ test("command categories have stable IDs and confirmation defaults", () => {
 });
 
 test("bare Bash nul redirections are distinguished from valid or explicit targets", () => {
-  for (const command of ["tool > nul", "tool 2>NUL", "tool &>>\"nul\"", "tool >|'nul'"])
+  for (const command of ["tool > nul", "tool 2>NUL", 'tool &>>"nul"', "tool >|'nul'"])
     assert.equal(hasBashNulRedirect(command), true, command);
   for (const command of ["tool > /dev/null", "tool > ./nul", "tool > null", "tool > nul.txt"])
     assert.equal(hasBashNulRedirect(command), false, command);

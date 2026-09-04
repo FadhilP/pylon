@@ -1120,9 +1120,9 @@ export function App() {
 
   const currentProjectPage = sessionPages.find(page => page.id === activeSession?.projectId);
   const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : (projects[0] ?? general);
-  const composerProject = pendingSession?.project ?? (currentProjectPage ? toSessionProject(currentProjectPage) : undefined);
-  const composerProjectLabel =
-    composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
+  const composerProject =
+    pendingSession?.project ?? (currentProjectPage ? toSessionProject(currentProjectPage) : undefined);
+  const composerProjectLabel = composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
   const toggleTerminal = () => {
     openTerminalDrawer();
     if (mobile) setSidebarOpen(false);

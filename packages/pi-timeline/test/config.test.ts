@@ -16,7 +16,6 @@ import {
 const runtimeSettings = { gitTimeoutMs: 120_000, titleTimeoutMs: 30_000, titleMaxTokens: 32, titleChangedFiles: 20 };
 const timelinePromptDefaultText = `Session titles:\n${SESSION_TITLE_PROMPT}\n\nCheckpoint titles:\n${CHECKPOINT_TITLE_PROMPT}`;
 
-
 test("Timeline naming customization remains append-only before its output footer", () => {
   assert.equal(sessionTitlePrompt(), SESSION_TITLE_PROMPT);
   const prompt = sessionTitlePrompt({ mode: "append", text: "Use repository vocabulary." });

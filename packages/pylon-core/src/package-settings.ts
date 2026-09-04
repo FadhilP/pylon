@@ -22,9 +22,11 @@ export function composePackagePrompt(
   if (setting.mode === "default") return basePrompt;
   const customization = `## Operator customization
 ${setting.text}`;
-  const footer = immutableFooter ? `
+  const footer = immutableFooter
+    ? `
 
-${immutableFooter}` : "";
+${immutableFooter}`
+    : "";
   return setting.mode === "append"
     ? `${basePrompt}
 

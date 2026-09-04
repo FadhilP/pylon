@@ -66,7 +66,10 @@ export const compactionReviewTimeoutMs = (value?: unknown): number =>
 export const compactionReviewerMaxOutputTokens = (value?: unknown): number =>
   effectivePackageSettingValue(continuitySettingFields.compactionReviewerMaxOutputTokens, value, process.env);
 export const continuityPrompt = (value?: unknown) =>
-  effectivePackageSettingValue(continuitySettingFields.prompt, value) as import("pylon-core/package-settings").PromptPackageSettingValue;
+  effectivePackageSettingValue(
+    continuitySettingFields.prompt,
+    value,
+  ) as import("pylon-core/package-settings").PromptPackageSettingValue;
 export type ContinuityConfig = {
   version: 2;
   memoryEnabled?: boolean;

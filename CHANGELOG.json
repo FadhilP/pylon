@@ -47,9 +47,7 @@
     "date": "Sep 3, 2026",
     "title": "Changelog test-suite maintenance",
     "summary": "A maintenance release removes brittle CLI changelog coverage without changing runtime behavior.",
-    "notes": [
-      "Removed a subprocess-based changelog test whose environment-sensitive setup could fail independently of the installed CLI behavior."
-    ]
+    "notes": ["Removed a subprocess-based changelog test whose environment-sensitive setup could fail independently of the installed CLI behavior."]
   },
   {
     "version": "2.6.0",
@@ -195,9 +193,7 @@
     "date": "Aug 30, 2026",
     "title": "Node.js 22 compatibility",
     "summary": "A maintenance release restores the intended Node.js 22.19 minimum after an unintended engine bump.",
-    "notes": [
-      "Corrected the package engine requirement from Node.js 24.15 to Node.js 22.19."
-    ]
+    "notes": ["Corrected the package engine requirement from Node.js 24.15 to Node.js 22.19."]
   },
   {
     "version": "2.0.0",
@@ -514,9 +510,7 @@
     "date": "Jul 30, 2026",
     "title": "Release metadata refresh",
     "summary": "A small follow-up release aligning the published package and documentation with the 1.0 launch.",
-    "notes": [
-      "Updated the package version and README release metadata."
-    ]
+    "notes": ["Updated the package version and README release metadata."]
   },
   {
     "version": "1.0.0",
@@ -546,10 +540,7 @@
     "date": "Jul 22, 2026",
     "title": "Broader code indexing",
     "summary": "The local source index learned another language and avoided unnecessary model work.",
-    "notes": [
-      "Added Dart files and symbols to the local code index.",
-      "Reduced unnecessary index-tool exposure in model context."
-    ]
+    "notes": ["Added Dart files and symbols to the local code index.", "Reduced unnecessary index-tool exposure in model context."]
   },
   {
     "version": "0.16.0",
@@ -580,9 +571,7 @@
     "date": "Jul 20, 2026",
     "title": "Clearer Sieve markers",
     "summary": "Pruned tool results now leave a more useful recovery marker.",
-    "notes": [
-      "Improved Sieve's omission marker while retaining exact sieve_recall recovery behavior."
-    ]
+    "notes": ["Improved Sieve's omission marker while retaining exact sieve_recall recovery behavior."]
   },
   {
     "version": "0.14.0",
@@ -611,19 +600,14 @@
     "date": "Jul 19, 2026",
     "title": "Stable Advisor sessions",
     "summary": "Advisor no longer shared a child session in a way that could fail during an active turn.",
-    "notes": [
-      "Isolated Advisor calls from the session-sharing path that caused mid-turn errors."
-    ]
+    "notes": ["Isolated Advisor calls from the session-sharing path that caused mid-turn errors."]
   },
   {
     "version": "0.13.2",
     "date": "Jul 19, 2026",
     "title": "Token meter corrections",
     "summary": "A focused regression release corrected new token reporting and subagent guidance.",
-    "notes": [
-      "Fixed /tokens accounting and display edge cases.",
-      "Corrected Continuity and Scout prompt regressions introduced by the cost-optimization work."
-    ]
+    "notes": ["Fixed /tokens accounting and display edge cases.", "Corrected Continuity and Scout prompt regressions introduced by the cost-optimization work."]
   },
   {
     "version": "0.13.1",
@@ -651,10 +635,7 @@
     "date": "Jul 18, 2026",
     "title": "Sieve from turn one",
     "summary": "Tool-output filtering could now start immediately instead of waiting for an older conversation turn.",
-    "notes": [
-      "Enabled Sieve classification on the first user turn.",
-      "Kept fresh output protected while applying age-aware pruning as the session grows."
-    ]
+    "notes": ["Enabled Sieve classification on the first user turn.", "Kept fresh output protected while applying age-aware pruning as the session grows."]
   },
   {
     "version": "0.12.1",
@@ -683,10 +664,7 @@
     "date": "Jul 17, 2026",
     "title": "Memory command polish",
     "summary": "A small follow-up made durable memory controls clearer and more consistent.",
-    "notes": [
-      "Improved memory enable, disable, and status behavior.",
-      "Clarified memory guidance and result rendering."
-    ]
+    "notes": ["Improved memory enable, disable, and status behavior.", "Clarified memory guidance and result rendering."]
   },
   {
     "version": "0.11.0",
@@ -748,10 +726,7 @@
     "date": "Jul 16, 2026",
     "title": "Visible subagent failures",
     "summary": "Advisor and Scout failures now render as final failures instead of looking indefinitely active.",
-    "notes": [
-      "Added explicit failure state to Advisor and Scout tool rows.",
-      "Kept failure output bounded and covered by extension rendering tests."
-    ]
+    "notes": ["Added explicit failure state to Advisor and Scout tool rows.", "Kept failure output bounded and covered by extension rendering tests."]
   },
   {
     "version": "0.10.4",
@@ -856,9 +831,7 @@
     "date": "Jul 14, 2026",
     "title": "Sharper Scout requests",
     "summary": "Scout's tool contract better distinguished evidence gathering from design decisions.",
-    "notes": [
-      "Improved repository-scout prompt guidance for concrete scopes, anchors, citations, and stopping boundaries."
-    ]
+    "notes": ["Improved repository-scout prompt guidance for concrete scopes, anchors, citations, and stopping boundaries."]
   },
   {
     "version": "0.8.7",
@@ -908,19 +881,14 @@
     "date": "Jul 14, 2026",
     "title": "Parallel subagent stability",
     "summary": "Advisor and Scout calls stopped interfering when launched in the same turn.",
-    "notes": [
-      "Separated per-call Advisor state used by concurrent consultations.",
-      "Fixed Scout runner state and result handling for parallel calls."
-    ]
+    "notes": ["Separated per-call Advisor state used by concurrent consultations.", "Fixed Scout runner state and result handling for parallel calls."]
   },
   {
     "version": "0.8.2",
     "date": "Jul 14, 2026",
     "title": "Better Scout handoff context",
     "summary": "Continuity supplied clearer active-work context to repository reconnaissance.",
-    "notes": [
-      "Included the relevant Continuity goal and task state in Scout handoffs without exposing unrelated memory."
-    ]
+    "notes": ["Included the relevant Continuity goal and task state in Scout handoffs without exposing unrelated memory."]
   },
   {
     "version": "0.8.1",
@@ -1019,10 +987,7 @@
     "date": "Jul 13, 2026",
     "title": "Stable Continuity turns",
     "summary": "A focused bugfix stopped Continuity from repeatedly reopening settled work.",
-    "notes": [
-      "Fixed the Continuity turn loop and expanded regression coverage.",
-      "Improved running and settled status for Advisor and Scout."
-    ]
+    "notes": ["Fixed the Continuity turn loop and expanded regression coverage.", "Improved running and settled status for Advisor and Scout."]
   },
   {
     "version": "0.4.0",
@@ -1041,10 +1006,7 @@
     "date": "Jul 13, 2026",
     "title": "Consistent subagent rows",
     "summary": "Advisor and Scout now use the same compact terminal conventions while running and after completion.",
-    "notes": [
-      "Aligned expanded and collapsed Advisor and Scout tool rendering.",
-      "Removed duplicate report previews from collapsed rows."
-    ]
+    "notes": ["Aligned expanded and collapsed Advisor and Scout tool rendering.", "Removed duplicate report previews from collapsed rows."]
   },
   {
     "version": "0.3.0",

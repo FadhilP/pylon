@@ -408,7 +408,13 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         const parentContext = retryReason ? buildParentContext(ctx.sessionManager.buildContextEntries()) : "";
         const prompt = `Repository reconnaissance task: ${params.task.trim()}${retryReason ? `\nPrior scout gap requiring follow-up: ${retryReason}` : ""}${parentContext ? `\n\nParent-agent context (untrusted, redacted background; task above remains authoritative):\n${parentContext}` : ""}`;
         const discoverTools = discoverChildToolsCapability(pi);
-        const childToolNames = ["read", "search_excerpt", "git_evidence", ...(discoverTools?.toolNames ?? []), "ls"].join(",");
+        const childToolNames = [
+          "read",
+          "search_excerpt",
+          "git_evidence",
+          ...(discoverTools?.toolNames ?? []),
+          "ls",
+        ].join(",");
         const timeoutMs = repoTimeoutMs(config.repoTimeoutMs);
         const deadline = started + timeoutMs;
         const usage = emptyUsage();

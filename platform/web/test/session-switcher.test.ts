@@ -35,18 +35,18 @@ test("composer session groups preserve catalog order, deduplicate active rows, a
         sessions: [current, ...inactive],
         nextCursor: "more",
       },
-      {
-        id: "other",
-        label: "Other",
-        cwd: "/other",
-        totalCount: 1,
-        sessions: [running],
-      },
+      { id: "other", label: "Other", cwd: "/other", totalCount: 1, sessions: [running] },
     ],
   });
 
-  assert.deepEqual(groups.active.map(item => item.id), ["running", "current"]);
-  assert.deepEqual(groups.inactive.map(item => item.id), inactive.slice(0, 5).map(item => item.id));
+  assert.deepEqual(
+    groups.active.map(item => item.id),
+    ["running", "current"],
+  );
+  assert.deepEqual(
+    groups.inactive.map(item => item.id),
+    inactive.slice(0, 5).map(item => item.id),
+  );
   assert.equal(groups.inactiveLimited, true);
 });
 
@@ -65,13 +65,17 @@ test("composer session search prioritizes the current project, then sorts every 
     ],
   };
 
-  assert.deepEqual(groupSessionSwitcherSessions(catalog, "composer", "pylon").active.map(item => item.id), ["alpha"]);
-  assert.deepEqual(groupSessionSwitcherSessions(catalog, "helios", "pylon").inactive.map(item => item.id), ["beta", "gamma"]);
-  assert.deepEqual(groupSessionSwitcherSessions(catalog, "retry", "pylon").inactive.map(item => item.id), [
-    "current-project",
-    "newest-other",
-    "beta",
-    "gamma",
-  ]);
+  assert.deepEqual(
+    groupSessionSwitcherSessions(catalog, "composer", "pylon").active.map(item => item.id),
+    ["alpha"],
+  );
+  assert.deepEqual(
+    groupSessionSwitcherSessions(catalog, "helios", "pylon").inactive.map(item => item.id),
+    ["beta", "gamma"],
+  );
+  assert.deepEqual(
+    groupSessionSwitcherSessions(catalog, "retry", "pylon").inactive.map(item => item.id),
+    ["current-project", "newest-other", "beta", "gamma"],
+  );
   assert.equal(groupSessionSwitcherSessions(catalog, "retry", "pylon").inactiveLimited, false);
 });

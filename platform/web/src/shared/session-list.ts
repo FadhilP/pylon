@@ -1,4 +1,9 @@
-import type { SessionListQuery, SessionListSnapshot, SessionProjectPage, SessionSummary } from "./protocol/snapshots.ts";
+import type {
+  SessionListQuery,
+  SessionListSnapshot,
+  SessionProjectPage,
+  SessionSummary,
+} from "./protocol/snapshots.ts";
 
 export const SESSION_LIST_INITIAL_LIMIT = 3;
 export const SESSION_LIST_MORE_LIMIT = 5;

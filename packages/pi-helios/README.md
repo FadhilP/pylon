@@ -10,8 +10,7 @@ Requires Pi and Node 22.19.0 or later:
 pi install git:github.com/FadhilP/pylon
 ```
 
-Reload Pi. `@playwright/cli@0.1.18` is bundled. In Pylon, `helios_browser`, `helios_android`, and `helios_capture` are deferred until `search_tools` activates them; standalone Helios keeps them active. Its package settings are available through Pylon Web.
-Configuration is stored at `<agent-dir>/pi-helios/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
+Reload Pi. `@playwright/cli@0.1.18` is bundled. In Pylon, `helios_browser`, `helios_android`, and `helios_capture` are deferred until `search_tools` activates them; standalone Helios keeps them active. Its package settings are available through Pylon Web. Configuration is stored at `<agent-dir>/pi-helios/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
 ## Browser setup and use
 

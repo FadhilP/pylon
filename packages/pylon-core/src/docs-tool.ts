@@ -114,20 +114,11 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
     ],
     parameters: {
       type: "object",
-      properties: {
-        action: { type: "string", enum: ["list", "read"] },
-        path: { type: "string", maxLength: 240 },
-      },
+      properties: { action: { type: "string", enum: ["list", "read"] }, path: { type: "string", maxLength: 240 } },
       required: ["action"],
       additionalProperties: false,
     } as any,
-    async execute(
-      _toolCallId: string,
-      params: any,
-      _signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      ctx: any,
-    ) {
+    async execute(_toolCallId: string, params: any, _signal: AbortSignal | undefined, _onUpdate: unknown, ctx: any) {
       if (params?.action !== "list" && params?.action !== "read") {
         return textResult("Pylon documentation request failed: action must be list or read.");
       }
@@ -158,7 +149,9 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
         host === "web" && entry.category === "package"
           ? "Before answering, also read the relevant docs/web guide for Web-specific controls and surfaces."
           : undefined;
-      return textResult(`${guidance}${related ? `\n${related}` : ""}\n\n---\n\n${await readFile(entry.absolutePath, "utf8")}`);
+      return textResult(
+        `${guidance}${related ? `\n${related}` : ""}\n\n---\n\n${await readFile(entry.absolutePath, "utf8")}`,
+      );
     },
   } as any);
 
@@ -172,9 +165,7 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
         managedTools: ["pylon_docs"],
         enabledTools: ["pylon_docs"],
         deferredTools: ["pylon_docs"],
-        toolUsage: {
-          pylon_docs: "read shipped Pylon and Pylon Web documentation for product-specific questions",
-        },
+        toolUsage: { pylon_docs: "read shipped Pylon and Pylon Web documentation for product-specific questions" },
         acknowledge() {},
       });
     },

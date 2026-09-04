@@ -2,10 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { CheckpointBrowser, type CheckpointBrowserResult } from "../src/checkpoint-browser.ts";
 
-const theme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
-} as any;
+const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
 
 const items = [
   {
@@ -28,9 +25,14 @@ const items = [
 test("checkpoint browser filters before returning the selected restore action", () => {
   let result: CheckpointBrowserResult | undefined;
   let renders = 0;
-  const browser = new CheckpointBrowser(items, theme, () => renders++, value => {
-    result = value;
-  });
+  const browser = new CheckpointBrowser(
+    items,
+    theme,
+    () => renders++,
+    value => {
+      result = value;
+    },
+  );
 
   browser.handleInput("/");
   for (const character of "retry") browser.handleInput(character);
@@ -44,10 +46,15 @@ test("checkpoint browser filters before returning the selected restore action", 
 test("checkpoint browser cancellation never selects a checkpoint", () => {
   let completed = false;
   let result: CheckpointBrowserResult | undefined = { id: "first", mode: "jump" };
-  const browser = new CheckpointBrowser(items, theme, () => {}, value => {
-    completed = true;
-    result = value;
-  });
+  const browser = new CheckpointBrowser(
+    items,
+    theme,
+    () => {},
+    value => {
+      completed = true;
+      result = value;
+    },
+  );
 
   browser.handleInput("\x1b");
 

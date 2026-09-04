@@ -194,7 +194,10 @@ test("repeated compaction merges structured file history without parsing its ren
   );
   assert.equal(result.details?.mode, "active-work");
   if (result.details?.mode === "active-work")
-    assert.equal(result.details.records?.some(record => record.sourceEntryId === "first-scoped"), true);
+    assert.equal(
+      result.details.records?.some(record => record.sourceEntryId === "first-scoped"),
+      true,
+    );
 });
 
 test("preserves ordinary nested paths in compaction history and working set", () => {

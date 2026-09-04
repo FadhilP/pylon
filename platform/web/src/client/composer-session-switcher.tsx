@@ -113,10 +113,7 @@ export function ComposerSessionSwitcher({
         setLoading(true);
         void runtimeStore
           .listSessions(
-            {
-              ...(query.trim() ? { query: query.trim() } : {}),
-              limit: query.trim() ? 100 : 5,
-            },
+            { ...(query.trim() ? { query: query.trim() } : {}), limit: query.trim() ? 100 : 5 },
             controller.signal,
           )
           .then(result => {
@@ -257,12 +254,15 @@ export function ComposerSessionSwitcher({
               {groups.inactive.length > 0 && (
                 <section aria-labelledby="composer-inactive-sessions">
                   <h3 className="composer-session-group" id="composer-inactive-sessions">
-                    Not active <span>{groups.inactiveLimited ? `last ${groups.inactive.length}` : groups.inactive.length}</span>
+                    Not active{" "}
+                    <span>{groups.inactiveLimited ? `last ${groups.inactive.length}` : groups.inactive.length}</span>
                   </h3>
                   {rows(groups.inactive)}
                 </section>
               )}
-              {empty && <p className="composer-session-empty">{loading ? "Loading sessions…" : "No matching sessions."}</p>}
+              {empty && (
+                <p className="composer-session-empty">{loading ? "Loading sessions…" : "No matching sessions."}</p>
+              )}
             </div>
             <footer className="composer-session-footer">
               <button

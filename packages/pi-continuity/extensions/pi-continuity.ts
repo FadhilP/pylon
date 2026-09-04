@@ -1644,13 +1644,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     | {
         content: string;
         anchorDigests: string[];
-        message: {
-          role: "custom";
-          customType: "pi-continuity";
-          content: string;
-          display: false;
-          timestamp: number;
-        };
+        message: { role: "custom"; customType: "pi-continuity"; content: string; display: false; timestamp: number };
       }
     | undefined;
   const contextMessageDigest = (message: unknown) => sha256(JSON.stringify(message) ?? "undefined");
@@ -1853,11 +1847,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       display: false as const,
       timestamp: Date.now(),
     };
-    continuityContextProjection = {
-      content,
-      anchorDigests: messages.map(contextMessageDigest),
-      message,
-    };
+    continuityContextProjection = { content, anchorDigests: messages.map(contextMessageDigest), message };
     return { messages: [...messages, structuredClone(message)] };
   });
   pi.registerTool({
@@ -2738,8 +2728,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     handler: async (args: string, ctx: any) => {
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const action = parts[0] ?? "status";
-      const usage =
-        "Usage: /plan [status|start [goal]|approve|approve-current|changes <feedback>|cancel|review|help]";
+      const usage = "Usage: /plan [status|start [goal]|approve|approve-current|changes <feedback>|cancel|review|help]";
       if (action === "help" && parts.length === 1) {
         ctx.ui.notify(usage, "info");
         return;
@@ -2995,7 +2984,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       let thinking: ThinkingLevel | undefined = ref.thinking;
       if (interactive) {
-        thinking = (await ctx.ui.select(`${roleName} thinking level`, [...thinkingLevels])) as ThinkingLevel | undefined;
+        thinking = (await ctx.ui.select(`${roleName} thinking level`, [...thinkingLevels])) as
+          ThinkingLevel | undefined;
         if (!thinking) return;
       }
       await updateConfig(current => ({
@@ -3234,7 +3224,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return void ctx.ui.notify("Project memory removed.", "info");
   };
 
-
   /** Resolves the note a scoped `edit`/`forget <id>` subcommand names, or notifies and returns undefined. */
   const scopedNote = (ctx: any, scope: MemoryScope, id: string) => {
     const owner = scope === "user" ? "default" : project!.owner;
@@ -3353,9 +3342,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         const scope = parts[1];
         const id = parts[2]!;
         if ((scope === "user" || scope === "project") && /^[0-9a-f-]+$/i.test(id))
-          return action === "edit"
-            ? editMemoryNote(ctx, scope, id)
-            : forgetMemoryNote(ctx, scope, id);
+          return action === "edit" ? editMemoryNote(ctx, scope, id) : forgetMemoryNote(ctx, scope, id);
       }
       ctx.ui.notify(usage, "warning");
     },

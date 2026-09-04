@@ -12,6 +12,7 @@
   ```
 
   Use the Windows environment-variable syntax in a Windows shell when applicable.
+
 - Check that `PYLON_PORT` is a valid port number and that `PYLON_CWD`, if set, names a usable directory.
 - Pylon is intentionally loopback-only. Open the printed `127.0.0.1`/`::1` URL from the same machine; do not try a LAN IP or hostname.
 - If startup reports a storage or package error, do not delete agent data first. See [migration and recovery](./safety-and-storage.md#backups-migration-and-recovery).

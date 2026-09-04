@@ -251,7 +251,8 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       const valid =
         (parts.length === 0 && action === "list") ||
         (action === "help" && parts.length === 1) ||
-        (action === "list" && (parts.length === 1 || (parts.length === 2 && ["running", "all"].includes(id!.toLowerCase())))) ||
+        (action === "list" &&
+          (parts.length === 1 || (parts.length === 2 && ["running", "all"].includes(id!.toLowerCase())))) ||
         (["status", "cancel"].includes(action) && parts.length === 2);
       if (!valid) {
         ctx.ui.notify(usage, "warning");

@@ -12,15 +12,14 @@ pi install git:github.com/FadhilP/pylon
 
 Reload Pi afterward. Package settings are available through Pylon Web.
 
-| Command | Use |
-| --- | --- |
-| `/scout` or `/scout status` | Show resolved model/configuration |
-| `/scout select` / `/scout set provider/model-id[:thinking]` | Choose child model |
-| `/scout enable` / `/scout disable` | Control both scouts |
-| `/scout reset` | Enable using current main model and thinking level |
+| Command                                                     | Use                                                |
+| ----------------------------------------------------------- | -------------------------------------------------- |
+| `/scout` or `/scout status`                                 | Show resolved model/configuration                  |
+| `/scout select` / `/scout set provider/model-id[:thinking]` | Choose child model                                 |
+| `/scout enable` / `/scout disable`                          | Control both scouts                                |
+| `/scout reset`                                              | Enable using current main model and thinking level |
 
-Scout is inactive until configured or reset. Thinking supports `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; no suffix follows the current main thinking level. With Pylon, configured Repository Scout is active and Web Scout is deferred until `search_tools` activates it; standalone Scout keeps both configured tools active. `pi config` disables it persistently and `pi --no-extensions` for one run.
-Configuration is stored at `<agent-dir>/pi-scout/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
+Scout is inactive until configured or reset. Thinking supports `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; no suffix follows the current main thinking level. With Pylon, configured Repository Scout is active and Web Scout is deferred until `search_tools` activates it; standalone Scout keeps both configured tools active. `pi config` disables it persistently and `pi --no-extensions` for one run. Configuration is stored at `<agent-dir>/pi-scout/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden.
 
 ## Repository Scout
 
