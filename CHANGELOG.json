@@ -1,5 +1,44 @@
 [
   {
+    "version": "2.6.4",
+    "date": "Sep 4, 2026",
+    "title": "Visible skills and steadier continuity context",
+    "summary": "Pylon makes each session's effective Pi skills inspectable and searchable while keeping Continuity context stable across unchanged tool turns.",
+    "notes": [
+      "Added a read-only Skills area in Settings for global, project, temporary, and package-provided skills, including descriptions, source paths, automatic or manual-only invocation status, trust guidance, and load diagnostics.",
+      "Added loaded skills to global Settings search and carried the inventory through generation-aware server and client validation with bounded results, opaque identifiers, and redacted absolute paths.",
+      "Reused Continuity's hidden context projection while its source messages and generated content remain unchanged, avoiding needless context churn across tool turns while rebuilding it when the conversation changes."
+    ]
+  },
+  {
+    "version": "2.6.3",
+    "date": "Sep 3, 2026",
+    "title": "More reliable Scout concurrency checks",
+    "summary": "A maintenance release removes timing sensitivity from Scout's concurrent child-process regression coverage.",
+    "notes": [
+      "Replaced fixed-delay concurrency test coordination with explicit readiness and attempt signals, preserving overlap detection without intermittent failures."
+    ]
+  },
+  {
+    "version": "2.6.2",
+    "date": "Sep 3, 2026",
+    "title": "Restored Settings search packaging",
+    "summary": "A maintenance release restores the shared Settings search implementation omitted from the preceding package and aligns regression coverage with current behavior.",
+    "notes": [
+      "Restored the shared Settings search module required by Pylon Web, including ranked destinations and controls for providers, models, themes, tools, policies, workspaces, packages, extensions, and hooks.",
+      "Removed stale or presentation-only assertions across bundled package and Web tests so coverage remains focused on meaningful runtime behavior."
+    ]
+  },
+  {
+    "version": "2.6.1",
+    "date": "Sep 3, 2026",
+    "title": "Changelog test-suite maintenance",
+    "summary": "A maintenance release removes brittle CLI changelog coverage without changing runtime behavior.",
+    "notes": [
+      "Removed a subprocess-based changelog test whose environment-sensitive setup could fail independently of the installed CLI behavior."
+    ]
+  },
+  {
     "version": "2.6.0",
     "date": "Sep 3, 2026",
     "title": "Searchable settings, richer usage insights, and a focused terminal",
