@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { PackageSummary } from "../src/shared/protocol/snapshots.ts";
 import { buildSettingsSearchIndex, searchSettings } from "../src/shared/settings-search.ts";
 
@@ -57,9 +58,28 @@ test("settings search ranks a direct label match first", () => {
   assert.equal(results[0]?.target, "guard-timeout");
 });
 
-test("settings search builds navigable destinations for loaded package and hook settings", () => {
+test("settings search builds navigable destinations for loaded package, skill, and hook settings", () => {
   const index = buildSettingsSearchIndex(buildInput({
     packages: [packageWithSettings],
+    skills: {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: 1,
+      projectTrustRequired: false,
+      projectTrusted: true,
+      diagnostics: [],
+      skills: [
+        {
+          id: "skill-id",
+          name: "manual-review",
+          description: "Reviews a change when explicitly requested.",
+          scope: "user",
+          path: "skills/manual-review/SKILL.md",
+          source: "auto",
+          origin: "top-level",
+          manualOnly: true,
+        },
+      ],
+    },
     hookSettings: {
       sessionStart: {
         enabled: true,
@@ -90,6 +110,10 @@ test("settings search builds navigable destinations for loaded package and hook 
   assert.equal(hookResult?.hookKey, "sessionStart");
   assert.equal(hookResult?.hookSourceId, "team-rules");
   assert.equal(hookResult?.target, "hook-source-team-rules");
+
+  const skillResult = searchSettings(index, "manual review")[0];
+  assert.equal(skillResult?.tab, "skills");
+  assert.equal(skillResult?.target, "skill-skill-id");
 });
 
 test("settings search indexes discoverable names but not editable values or hook contents", () => {

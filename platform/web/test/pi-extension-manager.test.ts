@@ -45,6 +45,76 @@ test("native extension inventory is rooted in Pylon agentDir and gates project r
   );
 });
 
+test("skill inventory reports effective metadata without exposing absolute paths", async () => {
+  const { root, agentDir, cwd } = await fixture();
+  const manager = new PiExtensionManager(cwd, agentDir);
+  const skillDir = join(agentDir, "skills", "manual-review");
+  const filePath = join(skillDir, "SKILL.md");
+  const unreadablePath = join(agentDir, "skills", "broken", "SKILL.md");
+  const listed = manager.listSkills(
+    {
+      skills: [
+        {
+          name: "manual-review",
+          description: "Reviews a change when explicitly requested.",
+          filePath,
+          baseDir: skillDir,
+          sourceInfo: {
+            path: filePath,
+            source: root,
+            scope: "user",
+            origin: "package",
+            baseDir: agentDir,
+          },
+          disableModelInvocation: true,
+        },
+      ],
+      diagnostics: [
+        { type: "warning", message: `Unable to read ${unreadablePath}`, path: unreadablePath },
+        {
+          type: "collision",
+          message: 'name "manual-review" collision',
+          path: unreadablePath,
+          collision: {
+            resourceType: "skill",
+            name: "manual-review",
+            winnerPath: filePath,
+            loserPath: unreadablePath,
+          },
+        },
+      ],
+    },
+    3,
+  );
+
+  assert.equal(listed.sessionGeneration, 3);
+  assert.equal(listed.projectTrustRequired, true);
+  assert.equal(listed.projectTrusted, false);
+  assert.deepEqual(
+    listed.skills.map(({ name, scope, path, source, origin, manualOnly }) => ({
+      name,
+      scope,
+      path,
+      source,
+      origin,
+      manualOnly,
+    })),
+    [
+      {
+        name: "manual-review",
+        scope: "user",
+        path: "skills/manual-review/SKILL.md",
+        source: "local",
+        origin: "package",
+        manualOnly: true,
+      },
+    ],
+  );
+  assert.equal(listed.diagnostics[0]?.message, "Unable to read SKILL.md");
+  assert.equal(listed.diagnostics[0]?.path, "SKILL.md");
+  assert.equal(JSON.stringify(listed).includes(root), false);
+});
+
 test("native extension exact overrides preserve unrelated settings", async () => {
   const { agentDir, cwd } = await fixture();
   const manager = new PiExtensionManager(cwd, agentDir);

@@ -32,6 +32,7 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
   StateQLCommandInput,
@@ -375,6 +376,7 @@ export interface PiDriver {
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
   listExtensions?(): Promise<ExtensionListSnapshot>;
+  listSkills?(): Promise<SkillListSnapshot>;
   listHookSettings?(): Promise<HookSettingsSnapshot>;
   prompt(input: PromptInput): Promise<AcceptedCommand>;
   queuePrompt(input: PromptInput): Promise<AcceptedCommand>;

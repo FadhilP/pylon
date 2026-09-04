@@ -9,6 +9,7 @@ import type {
   HookSettingsReadModel,
   PackageSettingsReadModel,
   PackageSummary,
+  SkillListSnapshot,
 } from "./protocol/snapshots.ts";
 
 export type SettingsSearchTab =
@@ -17,6 +18,7 @@ export type SettingsSearchTab =
   | "agent-models"
   | "packages"
   | "extensions"
+  | "skills"
   | "hooks"
   | "policy"
   | "notifications"
@@ -50,6 +52,7 @@ interface SearchIndexInput {
   models: Array<{ id: string; name: string; provider: string }>;
   packages: PackageSummary[];
   extensions?: ExtensionListSnapshot;
+  skills?: SkillListSnapshot;
   hookSettings?: HookSettingsReadModel;
   toolPolicies: ToolPolicyReadModel[];
 }
@@ -93,6 +96,7 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
   entry({ id: "extension-install", tab: "extensions", section: "Extensions", label: "Install Pi package", description: "Install an extension package globally or into a registered project.", keywords: "npm source" }),
   entry({ id: "extension-trust", tab: "extensions", section: "Extensions", label: "Project extensions", description: "Trust or revoke trust for project extensions." }),
   entry({ id: "extension-reload", tab: "extensions", section: "Extensions", label: "Reload extensions", description: "Apply changed extension settings to active sessions." }),
+  entry({ id: "skills", tab: "skills", section: "Skills", label: "Loaded skills", description: "Inspect skills available to the selected Pi session.", keywords: "agent capabilities manual" }),
   entry({ id: "hook-session-start", tab: "hooks", section: "Hooks", label: "session_start", description: "Runs once when a logical session begins.", keywords: "session start lifecycle", hookKey: "sessionStart" }),
   entry({ id: "hook-before-agent-start", tab: "hooks", section: "Hooks", label: "before_agent_start", description: "Runs before every prompt sent to the agent.", keywords: "before agent start lifecycle prompt", hookKey: "beforeAgentStart" }),
   entry({ id: "policy-timeline", tab: "policy", section: "Policy › Activity and safety", label: "Timeline", description: "Keep recoverable checkpoints for session activity." }),
@@ -210,6 +214,19 @@ export function buildSettingsSearchIndex(input: SearchIndexInput): SettingsSearc
       description: extension.source,
       keywords: extension.origin,
       target: `extension-${settingSearchTarget(extension.id)}`,
+    }));
+  }
+
+  for (const skill of input.skills?.skills ?? []) {
+    const scope = skill.scope === "user" ? "Global" : skill.scope === "project" ? "Project" : "Temporary";
+    entries.push(entry({
+      id: `skill-${skill.id}`,
+      tab: "skills",
+      section: `Skills › ${scope}`,
+      label: skill.name,
+      description: skill.description,
+      keywords: `${skill.path} ${skill.source} ${skill.origin} ${skill.manualOnly ? "manual only" : "automatic"}`,
+      target: `skill-${settingSearchTarget(skill.id)}`,
     }));
   }
 

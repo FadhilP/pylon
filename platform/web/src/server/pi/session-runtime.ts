@@ -101,6 +101,7 @@ import type {
   RuntimePolicyReadModel,
   RuntimeSnapshot,
   SessionListQuery,
+  SkillListSnapshot,
   SessionListSnapshot,
   StateQLCommandInput,
   StateQLCommandResult,
@@ -1543,6 +1544,13 @@ export class SessionRuntime implements PiDriver {
     const runtime = this.requireRuntime();
     if (!manager || !this.gate.ready) throw new Error("runtime is not ready");
     return manager.list(runtime.services.resourceLoader.getExtensions(), this.gate.generation);
+  }
+
+  async listSkills(): Promise<SkillListSnapshot> {
+    const manager = this.extensionManager;
+    const runtime = this.requireRuntime();
+    if (!manager || !this.gate.ready) throw new Error("runtime is not ready");
+    return manager.listSkills(runtime.services.resourceLoader.getSkills(), this.gate.generation);
   }
 
   async listHookSettings(): Promise<HookSettingsSnapshot> {

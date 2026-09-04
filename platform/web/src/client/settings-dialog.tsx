@@ -11,6 +11,7 @@ import {
   IconSettings,
   IconSearch,
   IconShield,
+  IconBook,
   IconStack2,
   IconWebhook,
   IconX,
@@ -48,6 +49,7 @@ import type {
   PackageSettingsReadModel,
   PackageSummary,
   RuntimePolicyReadModel,
+  SkillListSnapshot,
   ToolExposureMode,
 } from "../shared/protocol/snapshots";
 import { SYNTAX_THEMES, type SyntaxTheme } from "../shared/syntax-highlighting";
@@ -73,11 +75,12 @@ export type SettingsTab =
   | "agent-models"
   | "packages"
   | "extensions"
+  | "skills"
   | "hooks"
   | "policy"
   | "notifications"
   | "appearance";
-/* Grouping the nine sections names the thing each one governs; the flat order
+/* Grouping the ten sections names the thing each one governs; the flat order
    below stays the roving-tabindex order, so it must match the visual order. */
 const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; icon: ReactNode }[] }[] = [
   {
@@ -93,6 +96,7 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
       { tab: "agent-models", label: "Agent models", icon: <IconSettings size={15} /> },
       { tab: "packages", label: "Packages", icon: <IconPackages size={15} /> },
       { tab: "extensions", label: "Extensions", icon: <IconPuzzle size={15} /> },
+      { tab: "skills", label: "Skills", icon: <IconBook size={15} /> },
       { tab: "hooks", label: "Hooks", icon: <IconWebhook size={15} /> },
     ],
   },
@@ -117,12 +121,14 @@ interface SettingsDialogProps {
   packages: PackageSummary[];
   projects: { id: string; label: string }[];
   extensions?: ExtensionListSnapshot;
+  skills?: SkillListSnapshot;
   hookSettings?: HookSettingsReadModel;
   runtimePolicy?: RuntimePolicyReadModel;
   toolPolicies: ToolPolicyReadModel[];
   policyDisabled: boolean;
   loading: boolean;
   extensionLoading: boolean;
+  skillLoading: boolean;
   hookLoading: boolean;
   busy: string;
   extensionBusy: boolean;
@@ -166,12 +172,14 @@ export function SettingsDialog({
   packages,
   projects,
   extensions,
+  skills,
   hookSettings,
   runtimePolicy,
   toolPolicies,
   policyDisabled,
   loading,
   extensionLoading,
+  skillLoading,
   hookLoading,
   busy,
   extensionBusy,
@@ -236,7 +244,7 @@ export function SettingsDialog({
     else modelGroups.push({ provider: item.provider, items: [item] });
   }
   const searchResults = searchSettings(
-    buildSettingsSearchIndex({ providers, models, packages, extensions, hookSettings, toolPolicies }),
+    buildSettingsSearchIndex({ providers, models, packages, extensions, skills, hookSettings, toolPolicies }),
     searchQuery,
   );
   const agentModelPackages = packages.filter(item => hasAgentModelFields(item.settings));
@@ -364,6 +372,7 @@ export function SettingsDialog({
     "agent-models": agentModelPackages.length ? String(agentModelPackages.length) : "",
     packages: packages.length ? String(packages.length) : "",
     extensions: extensions ? String(extensions.extensions.length) : "",
+    skills: skills ? String(skills.skills.length) : "",
     hooks: hookSettings ? `${hookKeys.filter(key => hookSettings[key].enabled).length}/${hookKeys.length}` : "",
   };
   const isWorkbenchTab = activeTab === "packages" || activeTab === "hooks";
@@ -881,6 +890,90 @@ export function SettingsDialog({
                 onTrust={onSetProjectTrust}
                 onReload={onReloadExtensions}
               />
+            </section>
+
+            <section
+              id="settings-panel-skills"
+              className="settings-pane skills-pane"
+              role="tabpanel"
+              aria-labelledby="settings-tab-skills"
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "skills"}>
+              <div className="settings-pane-header">
+                <div>
+                  <h2>Skills</h2>
+                  <p>Inspect the skills loaded for the selected Pi session from global, project, and package sources.</p>
+                </div>
+              </div>
+              {skillLoading && (
+                <div className="settings-empty">
+                  <strong>Loading skills…</strong>
+                </div>
+              )}
+              {!skillLoading && !skills && (
+                <div className="settings-empty">
+                  <strong>Skills unavailable</strong>
+                  <span>The selected session did not provide a skill inventory.</span>
+                </div>
+              )}
+              {!skillLoading && skills?.projectTrustRequired && !skills.projectTrusted && (
+                <div className="settings-callout">
+                  <IconShield size={16} aria-hidden="true" />
+                  <span>
+                    <strong>Project resources are not trusted</strong>
+                    Project skills remain unloaded until this project is trusted. Project trust can be managed in Extensions.
+                  </span>
+                </div>
+              )}
+              {!skillLoading && skills && skills.diagnostics.length > 0 && (
+                <div className="skill-diagnostics" aria-label="Skill diagnostics">
+                  {skills.diagnostics.map((diagnostic, index) => (
+                    <div className="settings-callout" key={`${diagnostic.type}-${diagnostic.path ?? index}`}>
+                      <IconAlertTriangle size={16} aria-hidden="true" />
+                      <span>
+                        <strong>{diagnostic.type === "collision" ? "Skill name collision" : `Skill ${diagnostic.type}`}</strong>
+                        {diagnostic.message}{diagnostic.path ? ` · ${diagnostic.path}` : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!skillLoading && skills && skills.skills.length === 0 && (
+                <div className="settings-empty">
+                  <strong>No skills loaded</strong>
+                  <span>Add skills under the stock Pi skill locations, then reload or start a new session.</span>
+                </div>
+              )}
+              {!skillLoading && skills && skills.skills.length > 0 && (
+                <div className="settings-provider-groups">
+                  {(["user", "project", "temporary"] as const).map(scope => {
+                    const items = skills.skills.filter(skill => skill.scope === scope);
+                    if (!items.length) return null;
+                    const label = scope === "user" ? "Global" : scope === "project" ? "Project" : "Temporary";
+                    return (
+                      <section className="settings-provider-group" key={scope} aria-labelledby={`skill-group-${scope}`}>
+                        <header>
+                          <h3 id={`skill-group-${scope}`}>{label}</h3>
+                          <span>{items.length}</span>
+                        </header>
+                        <div className="settings-option-list">
+                          {items.map(skill => (
+                            <div
+                              key={skill.id}
+                              data-settings-search-target={`skill-${settingSearchTarget(skill.id)}`}>
+                              <span>
+                                <strong>{skill.name}</strong>
+                                <small>{skill.description}</small>
+                                <small className="skill-meta">{skill.path} · {skill.source}</small>
+                              </span>
+                              <span className="provider-state">{skill.manualOnly ? "Manual only" : "Automatic"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             <section

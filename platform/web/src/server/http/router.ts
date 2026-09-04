@@ -149,6 +149,8 @@ export class ServerTransport {
         return await this.packageList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/extensions")
         return await this.extensionList(request, response);
+      if (request.method === "GET" && url.pathname === "/api/v1/skills")
+        return await this.skillList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/hooks")
         return await this.hookSettings(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/stateql")
@@ -913,6 +915,15 @@ export class ServerTransport {
     const result = await this.driver.listExtensions();
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing extensions");
+    this.send(response, 200, result);
+  }
+
+  private async skillList(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.requireTab(request);
+    if (!this.driver.listSkills) throw httpError(409, "skills are unavailable");
+    const result = await this.driver.listSkills();
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while listing skills");
     this.send(response, 200, result);
   }
 

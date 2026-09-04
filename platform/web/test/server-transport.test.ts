@@ -19,6 +19,7 @@ import type {
   PapercutMutationResult,
   RuntimeSnapshot,
   SessionListSnapshot,
+  SkillListSnapshot,
   StateQLCommandInput,
   StateQLCommandResult,
   StateQLSnapshot,
@@ -336,6 +337,27 @@ class FakeDriver implements PiDriver {
           active: true,
         },
       ],
+    });
+  }
+  listSkills(): Promise<SkillListSnapshot> {
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      projectTrustRequired: false,
+      projectTrusted: true,
+      skills: [
+        {
+          id: "b".repeat(32),
+          name: "test-skill",
+          description: "Tests skill transport.",
+          scope: "user",
+          path: "skills/test-skill/SKILL.md",
+          source: "auto",
+          origin: "top-level",
+          manualOnly: false,
+        },
+      ],
+      diagnostics: [],
     });
   }
   listHookSettings(): Promise<HookSettingsSnapshot> {
@@ -1625,6 +1647,12 @@ test(
       const extensions = await fetch(`${origin}/api/v1/extensions`, { headers: { cookie, "x-pylon-tab-id": tab } });
       assert.equal(extensions.status, 200);
       assert.equal(((await body(extensions)).extensions as unknown[]).length, 1);
+      const skills = await fetch(`${origin}/api/v1/skills`, { headers: { cookie, "x-pylon-tab-id": tab } });
+      assert.equal(skills.status, 200);
+      assert.deepEqual(
+        ((await body(skills)).skills as Array<{ name: string; path: string }>).map(skill => [skill.name, skill.path]),
+        [["test-skill", "skills/test-skill/SKILL.md"]],
+      );
       assert.equal(
         (
           await fetch(`${origin}/api/v1/commands`, {

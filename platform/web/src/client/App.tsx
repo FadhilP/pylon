@@ -260,6 +260,8 @@ export function App() {
     extensions,
     setExtensions,
     extensionsLoading,
+    skills,
+    skillsLoading,
     extensionBusy,
     setExtensionBusy,
     hookSettings,
@@ -1782,6 +1784,7 @@ export function App() {
           packages={packages}
           projects={projects.map(({ id, label }) => ({ id, label }))}
           extensions={extensions}
+          skills={skills}
           hookSettings={hookSettings}
           runtimePolicy={live.runtime?.runtimePolicy}
           toolPolicies={live.runtime?.operational.tools.policies ?? []}
@@ -1793,6 +1796,7 @@ export function App() {
           }
           loading={packagesLoading}
           extensionLoading={extensionsLoading}
+          skillLoading={skillsLoading}
           hookLoading={hooksLoading}
           busy={packageBusy}
           extensionBusy={Boolean(extensionBusy)}

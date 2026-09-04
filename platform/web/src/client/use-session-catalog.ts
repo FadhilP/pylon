@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { HeliosAndroidToolingResult } from "../shared/protocol/helios-android-tooling";
-import type { ExtensionListSnapshot, HookSettingsReadModel, PackageSummary } from "../shared/protocol/snapshots";
+import type {
+  ExtensionListSnapshot,
+  HookSettingsReadModel,
+  PackageSummary,
+  SkillListSnapshot,
+} from "../shared/protocol/snapshots";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 
 export type ReportError = (cause: unknown, fallback: string) => void;
@@ -69,7 +74,7 @@ function useSessionResource<T>(live: RuntimeStoreSnapshot, resource: SessionReso
 }
 
 /**
- * The installed packages, extensions, and hook settings for the selected session,
+ * The installed packages, extensions, skills, and hook settings for the selected session,
  * plus the per-area busy flags the settings dialog drives.
  */
 export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: boolean, reportError: ReportError) {
@@ -77,6 +82,7 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
   const [packageBusy, setPackageBusy] = useState("");
   const [extensions, setExtensions] = useState<ExtensionListSnapshot>();
   const [extensionBusy, setExtensionBusy] = useState("");
+  const [skills, setSkills] = useState<SkillListSnapshot>();
   const [hookSettings, setHookSettings] = useState<HookSettingsReadModel>();
   const [hooksBusy, setHooksBusy] = useState(false);
   const [androidTooling, setAndroidTooling] = useState<HeliosAndroidToolingResult>();
@@ -95,6 +101,14 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     apply: setExtensions,
     stale: /session changed while listing extensions|extension list is stale/i,
     fallback: "Unable to list extensions",
+    reportError,
+  });
+
+  const skillsLoading = useSessionResource(live, {
+    load: () => runtimeStore.listSkills(),
+    apply: setSkills,
+    stale: /session changed while listing skills|skill list is stale/i,
+    fallback: "Unable to list skills",
     reportError,
   });
 
@@ -142,6 +156,8 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     extensionsLoading,
     extensionBusy,
     setExtensionBusy,
+    skills,
+    skillsLoading,
     hookSettings,
     setHookSettings,
     hooksLoading,

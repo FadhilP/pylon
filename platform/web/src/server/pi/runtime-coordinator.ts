@@ -53,6 +53,7 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
   StateQLCommandInput,
@@ -553,6 +554,15 @@ export class RuntimeCoordinator implements PiDriver {
     if (!slot.driver.listExtensions) throw new Error("native extensions are unavailable");
     const result = await slot.driver.listExtensions();
     this.assertSelected(slot, generation, "listing extensions");
+    return { ...result, sessionGeneration: generation };
+  }
+
+  async listSkills(): Promise<SkillListSnapshot> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.listSkills) throw new Error("skills are unavailable");
+    const result = await slot.driver.listSkills();
+    this.assertSelected(slot, generation, "listing skills");
     return { ...result, sessionGeneration: generation };
   }
 

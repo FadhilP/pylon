@@ -770,6 +770,36 @@ export interface ExtensionListSnapshot {
   extensions: NativeExtensionReadModel[];
 }
 
+/** A skill in the selected session's effective Pi resource set. */
+export interface SkillReadModel {
+  /** Stable opaque identifier; absolute paths stay server-side. */
+  id: string;
+  name: string;
+  description: string;
+  scope: "user" | "project" | "temporary";
+  /** Package-relative or scope-relative display path. */
+  path: string;
+  source: string;
+  origin: "package" | "top-level";
+  manualOnly: boolean;
+}
+
+export interface SkillDiagnosticReadModel {
+  type: "warning" | "error" | "collision";
+  message: string;
+  /** Basename only; diagnostic absolute paths stay server-side. */
+  path?: string;
+}
+
+export interface SkillListSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  projectTrustRequired: boolean;
+  projectTrusted: boolean;
+  skills: SkillReadModel[];
+  diagnostics: SkillDiagnosticReadModel[];
+}
+
 export type HookKind = "file" | "text";
 
 export interface HookSourceReadModel {

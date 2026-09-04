@@ -43,6 +43,7 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
   StateQLRowsPage,
@@ -69,6 +70,7 @@ import {
   isPackageListSnapshot,
   isPapercutListPage,
   isSessionListSnapshot,
+  isSkillListSnapshot,
   isUsageSnapshot,
   isStateQLRowsPage,
   isStateQLSnapshot,
@@ -999,6 +1001,15 @@ export class RuntimeEventStore {
       throw new Error("Extension list is stale or invalid");
     }
     return extensions;
+  }
+
+  async listSkills(): Promise<SkillListSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const skills = await this.api.skills();
+    if (!isSkillListSnapshot(skills) || skills.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Skill list is stale or invalid");
+    }
+    return skills;
   }
 
   async setExtensionEnabled(extensionId: string, enabled: boolean): Promise<void> {

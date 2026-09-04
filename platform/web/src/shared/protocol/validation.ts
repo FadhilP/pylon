@@ -22,6 +22,7 @@ import type {
   PapercutListPage,
   RuntimeSnapshot,
   SessionListSnapshot,
+  SkillListSnapshot,
   UsageSnapshot,
   StateQLRowsPage,
   StateQLCommandInput,
@@ -1011,6 +1012,43 @@ export function isExtensionListSnapshot(value: unknown): value is ExtensionListS
       typeof item.enabled === "boolean" &&
       typeof item.active === "boolean" &&
       (item.loadError === undefined || (typeof item.loadError === "string" && item.loadError.length <= 500)),
+  );
+}
+
+export function isSkillListSnapshot(value: unknown): value is SkillListSnapshot {
+  if (
+    !record(value) ||
+    value.protocolVersion !== PROTOCOL_VERSION ||
+    !generation(value.sessionGeneration) ||
+    typeof value.projectTrustRequired !== "boolean" ||
+    typeof value.projectTrusted !== "boolean" ||
+    !Array.isArray(value.skills) ||
+    value.skills.length > 500 ||
+    !Array.isArray(value.diagnostics) ||
+    value.diagnostics.length > 200
+  )
+    return false;
+  if (
+    !value.skills.every(
+      item =>
+        record(item) &&
+        identifier(item.id) &&
+        boundedString(item.name, 200) &&
+        boundedString(item.description, 2_000) &&
+        (item.scope === "user" || item.scope === "project" || item.scope === "temporary") &&
+        validWorkspacePath(item.path) &&
+        boundedString(item.source, 500) &&
+        (item.origin === "package" || item.origin === "top-level") &&
+        typeof item.manualOnly === "boolean",
+    )
+  )
+    return false;
+  return value.diagnostics.every(
+    item =>
+      record(item) &&
+      (item.type === "warning" || item.type === "error" || item.type === "collision") &&
+      boundedString(item.message, 1_000) &&
+      (item.path === undefined || boundedString(item.path, 500)),
   );
 }
 

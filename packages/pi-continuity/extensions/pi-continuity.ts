@@ -1640,6 +1640,20 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
   });
   const activeWork = () => (work && !["handed_off", "completed", "cancelled"].includes(work.mode) ? work : undefined);
+  let continuityContextProjection:
+    | {
+        content: string;
+        anchorDigests: string[];
+        message: {
+          role: "custom";
+          customType: "pi-continuity";
+          content: string;
+          display: false;
+          timestamp: number;
+        };
+      }
+    | undefined;
+  const contextMessageDigest = (message: unknown) => sha256(JSON.stringify(message) ?? "undefined");
   pi.on("session_before_compact", async (event, ctx) => {
     try {
       // Manual compaction is already waiting for the run to settle. Cancel Pi's
@@ -1803,28 +1817,48 @@ export default function continuityExtension(pi: ExtensionAPI) {
     const boundedMessages = boundary >= 0 ? event.messages.slice(boundary) : event.messages;
     const messages = boundedMessages.filter(
       (message: any) =>
-        message?.role !== "custom" || message.customType !== "pi-continuity-memory" || message.details?.version === 2,
+        message?.role !== "custom" ||
+        (message.customType !== "pi-continuity" &&
+          (message.customType !== "pi-continuity-memory" || message.details?.version === 2)),
     );
     const contextChanged = boundary >= 0 || messages.length !== event.messages.length;
     // Execution gets a smaller resume payload; proposed plans retain approval detail.
     const text = buildContext(active, [], lastPrompt, active?.mode === "planning" ? 450 : 300);
-    if (!text) return contextChanged ? { messages } : undefined;
-    return {
-      messages: [
-        ...messages,
-        {
-          role: "custom",
-          customType: "pi-continuity",
-          content:
-            text +
-            (work?.mode === "planning"
-              ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
-              : ""),
-          display: false,
-          timestamp: Date.now(),
-        },
-      ],
+    const content = text
+      ? text +
+        (work?.mode === "planning"
+          ? "\nPlanning gate active. Inspect only. Clarify unresolved decisions, then call continuity_update set_plan before requesting approval."
+          : "")
+      : "";
+    if (!content) {
+      continuityContextProjection = undefined;
+      return contextChanged ? { messages } : undefined;
+    }
+
+    const projection = continuityContextProjection;
+    const reusable =
+      projection?.content === content &&
+      projection.anchorDigests.length <= messages.length &&
+      projection.anchorDigests.every((digest, index) => contextMessageDigest(messages[index]) === digest);
+    if (reusable && projection) {
+      const projected = [...messages];
+      projected.splice(projection.anchorDigests.length, 0, structuredClone(projection.message));
+      return { messages: projected };
+    }
+
+    const message = {
+      role: "custom" as const,
+      customType: "pi-continuity" as const,
+      content,
+      display: false as const,
+      timestamp: Date.now(),
     };
+    continuityContextProjection = {
+      content,
+      anchorDigests: messages.map(contextMessageDigest),
+      message,
+    };
+    return { messages: [...messages, structuredClone(message)] };
   });
   pi.registerTool({
     name: "continuity_recall",

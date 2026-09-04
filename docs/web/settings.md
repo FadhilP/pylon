@@ -60,6 +60,12 @@ It cannot change hooks, project policy, project trust, extensions, Guard control
 
 Extensions and extension packages run arbitrary code with the Pylon server's permissions. Review their source and package origin before enabling them. Project-scoped extension changes require a trusted project; trust permits loading project resources, it does not sandbox them. See [Safety and storage](./safety-and-storage.md).
 
+## Skills
+
+**Skills** lists the effective skills loaded for the selected session from Pi's stock discovery locations, configured paths, and packages. The list shows whether a skill is global, project-scoped, or temporary, and whether it is available for automatic model invocation or only through its `/skill:name` command.
+
+Pylon follows Pi's trust rules: project `.pi/skills/` and `.agents/skills/` resources are not loaded until the project is trusted. Global skills come from the configured Pi agent directory's `skills/` folder and `~/.agents/skills/`. The tab is an inventory, not an editor; add or change skill files outside Pylon, then reload resources or start a new session.
+
 ## Hooks
 
 **Hooks** adds local instruction sources at two lifecycle points:

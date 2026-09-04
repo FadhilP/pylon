@@ -21,6 +21,7 @@ import type {
   PapercutStatusReadModel,
   SessionListQuery,
   SessionListSnapshot,
+  SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
   StateQLRowsPage,
@@ -301,6 +302,12 @@ export class ApiClient {
   async extensions(): Promise<ExtensionListSnapshot> {
     return json<ExtensionListSnapshot>(
       await fetch("/api/v1/extensions", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
+    );
+  }
+
+  async skills(): Promise<SkillListSnapshot> {
+    return json<SkillListSnapshot>(
+      await fetch("/api/v1/skills", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }),
     );
   }
 

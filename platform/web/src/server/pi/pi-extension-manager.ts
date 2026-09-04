@@ -6,11 +6,17 @@ import {
   ProjectTrustStore,
   SettingsManager,
   type LoadExtensionsResult,
+  type LoadSkillsResult,
   type PackageSource,
   type ResolvedResource,
 } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
-import type { ExtensionListSnapshot, NativeExtensionReadModel } from "../../shared/protocol/snapshots.ts";
+import type {
+  ExtensionListSnapshot,
+  NativeExtensionReadModel,
+  SkillListSnapshot,
+  SkillReadModel,
+} from "../../shared/protocol/snapshots.ts";
 
 type ExtensionScope = "user" | "project";
 
@@ -29,7 +35,7 @@ export function isPylonPackageSource(source: string): boolean {
   );
 }
 
-function opaqueId(scope: ExtensionScope, path: string): string {
+function opaqueId(scope: string, path: string): string {
   return createHash("sha256")
     .update(`${scope}\0${resolve(path)}`)
     .digest("hex")
@@ -44,11 +50,14 @@ function scopeSettings(
   return { extensions: [...(value.extensions ?? [])], packages: structuredClone(value.packages ?? []) };
 }
 
+function relativeDisplayPath(path: string, baseDir?: string): string {
+  if (!baseDir) return basename(path);
+  const value = relative(baseDir, path).replaceAll("\\", "/");
+  return value && !value.startsWith("../") && !isAbsolute(value) ? value : basename(path);
+}
+
 function displayPath(resource: ResolvedResource): string {
-  const base = resource.metadata.baseDir;
-  if (!base) return basename(resource.path);
-  const value = relative(base, resource.path).replaceAll("\\", "/");
-  return value && !value.startsWith("../") && !isAbsolute(value) ? value : basename(resource.path);
+  return relativeDisplayPath(resource.path, resource.metadata.baseDir);
 }
 
 function exactResourcePath(resource: ResolvedResource): string {
@@ -134,6 +143,42 @@ export class PiExtensionManager {
         .filter(({ source }) => validPiPackageSource(source) && !isPylonPackageSource(source))
         .map(({ source, scope }) => ({ source, scope })),
       extensions,
+    };
+  }
+
+  listSkills(runtime: LoadSkillsResult, generation: number): SkillListSnapshot {
+    const skills: SkillReadModel[] = runtime.skills.map(skill => ({
+      id: opaqueId(skill.sourceInfo.scope, skill.filePath),
+      name: skill.name.slice(0, 200),
+      description: skill.description.slice(0, 2_000),
+      scope: skill.sourceInfo.scope,
+      path: relativeDisplayPath(skill.filePath, skill.sourceInfo.baseDir).slice(0, 500),
+      source: (displaySource(skill.sourceInfo.source) || "local").slice(0, 500),
+      origin: skill.sourceInfo.origin,
+      manualOnly: skill.disableModelInvocation,
+    }));
+    skills.sort((left, right) => left.scope.localeCompare(right.scope) || left.name.localeCompare(right.name));
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: generation,
+      projectTrustRequired: this.projectTrustRequired(),
+      projectTrusted: this.projectTrusted(),
+      skills,
+      diagnostics: runtime.diagnostics.slice(0, 200).map(diagnostic => {
+        let message = diagnostic.message;
+        for (const path of [
+          diagnostic.path,
+          diagnostic.collision?.winnerPath,
+          diagnostic.collision?.loserPath,
+        ]) {
+          if (path) message = message.replaceAll(path, basename(path));
+        }
+        return {
+          type: diagnostic.type,
+          message: message.slice(0, 1_000),
+          ...(diagnostic.path ? { path: basename(diagnostic.path).slice(0, 500) } : {}),
+        };
+      }),
     };
   }
 

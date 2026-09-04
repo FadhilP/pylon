@@ -1147,6 +1147,85 @@ test("failed legacy completion after final prose terminates without a duplicate 
   }
 });
 
+test("unchanged Continuity context keeps a stable prefix across tool turns", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-extension-stable-context-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  const ctx: any = {
+    cwd,
+    hasUI: false,
+    mode: "json",
+    sessionManager: { getSessionId: () => "stable-context-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  try {
+    const app = runtime();
+    for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    const tool = app.tools.get("continuity_update");
+    await tool.execute("plan", { action: "set_plan", goal: "Inspect", todos: ["Answer"] }, undefined, undefined, ctx);
+    const contextHook = app.handlers.get("context")![0]!;
+    const userMessage = { role: "user", content: [{ type: "text", text: "Start" }], timestamp: 1 };
+
+    const first = contextHook({ messages: [userMessage] }, ctx);
+    assert.equal(first.messages[1].customType, "pi-continuity");
+
+    const firstToolTurn = [
+      userMessage,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read-1",
+        toolName: "read",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    const second = contextHook({ messages: firstToolTurn }, ctx);
+    assert.deepEqual(second.messages.slice(0, first.messages.length), first.messages);
+    assert.equal(second.messages.filter((message: any) => message.customType === "pi-continuity").length, 1);
+
+    await tool.execute(
+      "state",
+      { action: "state", nextAction: "Review the result" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    const changed = contextHook({ messages: firstToolTurn }, ctx);
+    assert.equal(changed.messages.at(-1).customType, "pi-continuity");
+    assert.notEqual(changed.messages.at(-1).content, first.messages[1].content);
+
+    const secondToolTurn = [
+      ...firstToolTurn,
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "read-2", name: "read", arguments: {} }],
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "read-2",
+        toolName: "read",
+        content: [{ type: "text", text: "result 2" }],
+        isError: false,
+        timestamp: 5,
+      },
+    ];
+    const afterChange = contextHook({ messages: secondToolTurn }, ctx);
+    assert.deepEqual(afterChange.messages.slice(0, changed.messages.length), changed.messages);
+    assert.equal(afterChange.messages.filter((message: any) => message.customType === "pi-continuity").length, 1);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
 test("text-only final response automatically completes ready work", async () => {
   const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "continuity-extension-auto-complete-"));

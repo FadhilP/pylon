@@ -1866,6 +1866,11 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .settings-provider-copy, .settings-provider-copy > span, .settings-model-row > span, .settings-option-list > div > span { display: grid; min-width: 0; gap: 2px; }
 .settings-provider strong, .settings-model-row strong, .settings-option-list strong { overflow: hidden; font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .settings-provider small, .settings-model-row small, .settings-option-list small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.skills-pane .settings-option-list > div { align-items: start; }
+.skills-pane .settings-option-list small { overflow: visible; line-height: 1.45; text-overflow: clip; white-space: normal; }
+.skills-pane .skill-meta { margin-top: 2px; font: 11px ui-monospace, monospace; }
+.skill-diagnostics { display: grid; gap: 8px; margin-bottom: 18px; }
+.skill-diagnostics .settings-callout { margin-bottom: 0; }
 .provider-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
 .provider-actions button, .settings-option-list button, .extension-install button, .extension-reload button, .workbench-section > header > button, .hook-source-toolbar button, .android-tooling-actions button, .android-tooling-confirm button { min-height: 30px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-soft); font-size: 12px; font-weight: 600; white-space: nowrap; transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease, color var(--motion-fast) ease, transform 100ms ease; }
 .provider-actions button:hover:not(:disabled), .settings-option-list button:hover:not(:disabled), .extension-install button:hover:not(:disabled), .extension-reload button:hover:not(:disabled), .workbench-section > header > button:hover:not(:disabled), .hook-source-toolbar button:hover:not(:disabled), .android-tooling-actions button:hover:not(:disabled), .android-tooling-confirm button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
