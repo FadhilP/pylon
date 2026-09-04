@@ -44,8 +44,10 @@ export function createWorktreeObserver(pi: ExtensionAPI) {
     reset,
 
     async agentStart(ctx: any) {
-      runCwd = ctx.cwd;
-      runBaseline = worktreeSnapshot(ctx.cwd);
+      if (!runBaseline) {
+        runCwd = ctx.cwd;
+        runBaseline = worktreeSnapshot(ctx.cwd);
+      }
       await runBaseline;
     },
 

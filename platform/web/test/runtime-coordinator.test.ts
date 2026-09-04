@@ -2087,6 +2087,56 @@ test(
   },
 );
 
+test("Local branch checkout stays visible while busy and refreshes the selected runtime", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-local-branch-checkout-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "main\n");
+  await run("git", ["init", "-q"], { cwd });
+  await run("git", ["config", "user.name", "Pylon Test"], { cwd });
+  await run("git", ["config", "user.email", "pylon@test.local"], { cwd });
+  await run("git", ["add", "README.md"], { cwd });
+  await run("git", ["commit", "-qm", "main"], { cwd });
+  await run("git", ["branch", "-M", "main"], { cwd });
+  await run("git", ["branch", "feature"], { cwd });
+  const driver = new RuntimeCoordinator();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const slot = (driver as any).selected();
+    const registry = (driver as any).registry() as ProjectRegistry;
+    const projectId = projectIdForCwd(cwd);
+    await registry.setSessionWorkspace({ sessionId: slot.id, projectId, mode: "local" });
+
+    const canSleep = slot.driver.canSleep;
+    slot.driver.canSleep = () => false;
+    const busy = await driver.listLocalBranches();
+    assert.equal(busy.branches.length, 2);
+    assert.equal(busy.checkoutAvailable, false);
+    assert.match(busy.checkoutUnavailableReason ?? "", /session is still running/i);
+    slot.driver.canSleep = canSleep;
+
+    const before = await driver.snapshot();
+    const result = await driver.checkoutBranch({ branch: "feature", expectedGeneration: before.sessionGeneration });
+    assert.equal(result.sessionGeneration, before.sessionGeneration + 1);
+    assert.equal((await driver.snapshot()).gitBranch, "feature");
+    assert.equal((await run("git", ["branch", "--show-current"], { cwd })).stdout.trim(), "feature");
+
+    await registry.setSessionWorkspace({ sessionId: slot.id, projectId, mode: "worktree" });
+    await assert.rejects(
+      () => driver.checkoutBranch({ branch: "main", expectedGeneration: result.sessionGeneration }),
+      /only for Local sessions/,
+    );
+    assert.equal((await run("git", ["branch", "--show-current"], { cwd })).stdout.trim(), "feature");
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    await Promise.all(sessions.map(session => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Local sessions can run concurrently in one project", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-local-concurrency-"));
   const cwd = join(root, "workspace");

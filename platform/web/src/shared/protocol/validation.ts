@@ -15,6 +15,7 @@ import type {
   ConversationTurnIndexPage,
   ExtensionListSnapshot,
   FileSuggestionList,
+  LocalBranchListSnapshot,
   HookSettingsReadModel,
   HookSettingsSnapshot,
   PackageListSnapshot,
@@ -722,6 +723,15 @@ function commandTargetError(value: Record<string, unknown>, type: string): strin
   if (type === "reorderActiveSession" && value.beforeSessionId !== undefined && !identifier(value.beforeSessionId)) {
     return "invalid active session reorder target";
   }
+  if (
+    type === "checkoutBranch" &&
+    (typeof value.branch !== "string" ||
+      !boundedString(value.branch, 200) ||
+      !value.branch.trim() ||
+      /[\u0000-\u001f\u007f]/.test(value.branch))
+  ) {
+    return "invalid branch";
+  }
   if (type === "fork") {
     if (!identifier(value.entryId)) return "invalid entryId";
     if (!boundedString(value.name, 200) || !value.name.trim()) {
@@ -1117,6 +1127,31 @@ export function isSessionListSnapshot(value: unknown): value is SessionListSnaps
       Array.isArray(project.sessions) &&
       project.sessions.length <= 100 &&
       project.sessions.every(session => validSessionSummary(session, project.id as string)),
+  );
+}
+
+export function isLocalBranchListSnapshot(value: unknown): value is LocalBranchListSnapshot {
+  if (
+    !record(value) ||
+    value.protocolVersion !== PROTOCOL_VERSION ||
+    !generation(value.sessionGeneration) ||
+    !Array.isArray(value.branches) ||
+    value.branches.length > 500 ||
+    typeof value.checkoutAvailable !== "boolean" ||
+    typeof value.truncated !== "boolean" ||
+    (value.currentBranch !== undefined && !boundedString(value.currentBranch, 200)) ||
+    (value.checkoutUnavailableReason !== undefined && !boundedString(value.checkoutUnavailableReason, 500))
+  )
+    return false;
+  return value.branches.every(
+    branch =>
+      record(branch) &&
+      boundedString(branch.name, 200) &&
+      typeof branch.lastCommitAt === "string" &&
+      !Number.isNaN(Date.parse(branch.lastCommitAt)) &&
+      typeof branch.current === "boolean" &&
+      typeof branch.checkoutAvailable === "boolean" &&
+      (branch.checkoutUnavailableReason === undefined || boundedString(branch.checkoutUnavailableReason, 500)),
   );
 }
 

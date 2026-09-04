@@ -24,6 +24,7 @@ import type {
   FileSuggestionList,
   HookSettingsReadModel,
   HookSettingsSnapshot,
+  LocalBranchListSnapshot,
   PackageListSnapshot,
   PackageSettingsReadModel,
   PapercutListPage,
@@ -149,6 +150,11 @@ export interface ReorderProjectInput extends ProjectInput {
 export interface ReorderActiveSessionInput extends ProjectInput {
   sessionId: string;
   beforeSessionId?: string;
+}
+
+export interface CheckoutBranchInput {
+  expectedGeneration: number;
+  branch: string;
 }
 
 export interface HandoffSessionInput {
@@ -372,6 +378,7 @@ export interface PiDriver {
   ): Promise<void>;
   heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
   listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
+  listLocalBranches?(): Promise<LocalBranchListSnapshot>;
   usage(input?: UsageQuery): Promise<UsageSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
   listPackages(): Promise<PackageListSnapshot>;
@@ -395,6 +402,7 @@ export interface PiDriver {
   restoreProject(input: ProjectArchiveInput): Promise<void>;
   updateProjectWorktreeSettings?(input: ProjectWorktreeSettingsInput): Promise<void>;
   handoffSession?(input: HandoffSessionInput): Promise<ReplacementResult>;
+  checkoutBranch?(input: CheckoutBranchInput): Promise<ReplacementResult>;
   applySessionChanges?(input: ApplySessionChangesInput): Promise<ReplacementResult>;
   switchSession(input: SwitchSessionInput): Promise<ReplacementResult>;
   deleteSession(input: DeleteSessionInput): Promise<void>;

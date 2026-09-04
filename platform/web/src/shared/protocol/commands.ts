@@ -31,6 +31,7 @@ export const COMMAND_NAMES = [
   "setSessionActive",
   "setSessionPinned",
   "reorderActiveSession",
+  "checkoutBranch",
   "editPrompt",
   "rewindPrompt",
   "fork",
@@ -112,6 +113,7 @@ export type WebCommand =
   | ({ type: "setSessionActive"; sessionId: string; active: boolean } & CommandBase)
   | ({ type: "setSessionPinned"; sessionId: string; pinned: boolean } & CommandBase)
   | ({ type: "reorderActiveSession"; sessionId: string; beforeSessionId?: string } & CommandBase)
+  | ({ type: "checkoutBranch"; branch: string } & CommandBase)
   | ({ type: "editPrompt"; entryId: string; rollbackFiles: boolean } & MessageCommand)
   | ({ type: "rewindPrompt"; entryId: string } & CommandBase)
   | ({

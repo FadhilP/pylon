@@ -1,4 +1,5 @@
-import { marked, Renderer } from "marked";
+import katex from "katex";
+import { Marked, Renderer, type MarkedExtension, type Tokens } from "marked";
 import { parseFileReference, type FileReference } from "./file-reference.ts";
 import { highlightSyntax } from "./syntax-highlighting.ts";
 
@@ -46,10 +47,125 @@ class MarkdownRenderer extends Renderer {
   }
 }
 
+interface MathToken extends Tokens.Generic {
+  type: "blockMath" | "inlineMath";
+  raw: string;
+  text: string;
+  displayMode: boolean;
+}
+
+interface MathMatch {
+  raw: string;
+  text: string;
+  displayMode: boolean;
+}
+
+function isEscaped(text: string, index: number): boolean {
+  let backslashes = 0;
+  while (index > 0 && text[--index] === "\\") backslashes++;
+  return backslashes % 2 === 1;
+}
+
+function mathAtStart(source: string): MathMatch | undefined {
+  let close: string;
+  let displayMode: boolean;
+  let multiline: boolean;
+
+  if (source.startsWith("\\(")) {
+    close = "\\)";
+    displayMode = false;
+    multiline = false;
+  } else if (source.startsWith("\\[")) {
+    close = "\\]";
+    displayMode = true;
+    multiline = true;
+  } else if (source.startsWith("$$") && source[2] !== "$") {
+    close = "$$";
+    displayMode = true;
+    multiline = true;
+  } else if (source.startsWith("$") && source[1] !== "$" && source[1] !== undefined && !/\s/.test(source[1])) {
+    close = "$";
+    displayMode = false;
+    multiline = false;
+  } else {
+    return;
+  }
+
+  const openLength = close.length;
+  for (let index = openLength; index < source.length; index++) {
+    if (!multiline && source[index] === "\n") return;
+    if (!source.startsWith(close, index) || isEscaped(source, index)) continue;
+    // Require tight single-dollar content and never close immediately before a digit, which avoids common currency prose.
+    if (close === "$" && (/\s/.test(source[index - 1]) || /\d/.test(source[index + 1] ?? ""))) continue;
+    if (close === "$$" && (source[index - 1] === "$" || source[index + 2] === "$")) continue;
+
+    const text = source.slice(openLength, index).trim();
+    if (!text) return;
+    return { raw: source.slice(0, index + close.length), text, displayMode };
+  }
+}
+
+function findMathStart(source: string): number | undefined {
+  for (let index = 0; index < source.length; index++) {
+    const next = source[index + 1];
+    const possibleDelimiter = source[index] === "$" || (source[index] === "\\" && (next === "(" || next === "["));
+    if (possibleDelimiter && !isEscaped(source, index) && mathAtStart(source.slice(index))) return index;
+  }
+}
+
+function renderMath(token: MathToken): string {
+  try {
+    const math = katex.renderToString(token.text, {
+      displayMode: token.displayMode,
+      maxExpand: 1_000,
+      maxSize: 20,
+      output: "mathml",
+      strict: "ignore",
+      throwOnError: false,
+      trust: false,
+    });
+    return token.displayMode ? `<span class="math-display">${math}</span>` : math;
+  } catch {
+    return escapeHtml(token.raw);
+  }
+}
+
+const mathExtension: MarkedExtension = {
+  extensions: [
+    {
+      name: "blockMath",
+      level: "block",
+      tokenizer(source) {
+        const match = mathAtStart(source);
+        if (!match?.displayMode) return;
+        const trailingLine = /^[ \t]*(?:\n|$)/.exec(source.slice(match.raw.length));
+        if (!trailingLine) return;
+        return { type: "blockMath", raw: match.raw + trailingLine[0], text: match.text, displayMode: true };
+      },
+      renderer(token) {
+        return `${renderMath(token as MathToken)}\n`;
+      },
+    },
+    {
+      name: "inlineMath",
+      level: "inline",
+      start: findMathStart,
+      tokenizer(source) {
+        const match = mathAtStart(source);
+        return match && { type: "inlineMath", ...match };
+      },
+      renderer(token) {
+        return renderMath(token as MathToken);
+      },
+    },
+  ],
+};
+
 const renderer = new MarkdownRenderer();
+const markdown = new Marked(mathExtension);
 
 export function renderMarkdown(text: string): string {
-  return marked.parse(text, { async: false, breaks: true, gfm: true, renderer });
+  return markdown.parse(text, { async: false, breaks: true, gfm: true, renderer });
 }
 
 const sourceLanguages: Record<string, string> = {

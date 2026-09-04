@@ -15,6 +15,10 @@ import {
   claimSessionCheckout,
   captureCheckoutState,
   inspectGitWorkspace,
+  legacyTurnRefSessionIds,
+  migrateLegacyTurnRefs,
+  listLocalGitBranches,
+  switchLocalGitBranch,
   inspectWorkspaceChanges,
   inspectTreeChanges,
   mergeWorkspaceChanges,
@@ -46,6 +50,7 @@ import type {
   ExtensionListSnapshot,
   FileSuggestionList,
   HookSettingsSnapshot,
+  LocalBranchListSnapshot,
   PackageListSnapshot,
   PapercutListPage,
   PapercutMutationResult,
@@ -78,6 +83,7 @@ import { createPylonModelRuntime } from "./runtime-factory.ts";
 import { createOsStateQLCredentialVault, type StateQLCredentialVault } from "./stateql-credential-vault.ts";
 import type {
   DeleteSessionInput,
+  CheckoutBranchInput,
   DeleteContinuityMemoryInput,
   MigrateContinuityMemoryInput,
   ContinuityPlanActionInput,
@@ -409,6 +415,8 @@ export class RuntimeCoordinator implements PiDriver {
     await this.recoverProvision();
     await this.recoverHandoff();
     await this.recoverApply();
+    // TODO: Remove this startup migration after legacy pylon-session-* turn refs age out.
+    await this.migrateLegacyTurnAnchors();
     this.sessionIndex.setProjectRegistry(this.projectRegistry);
     const projects = this.projectRegistry.list();
     const project = projects.find(candidate => candidate.id === projectIdForCwd(target.cwd)) ?? projects[0];
@@ -424,6 +432,47 @@ export class RuntimeCoordinator implements PiDriver {
     );
     this.sleepTimer.unref?.();
     return { sessionId: slot.id, sessionGeneration: this.generation };
+  }
+
+  private async migrateLegacyTurnAnchors(): Promise<void> {
+    const registry = this.projectRegistry;
+    if (!registry) return;
+    const candidates: Array<{ projectId: string; cwd: string; sessionIds: string[] }> = [];
+    for (const project of [...registry.list(), ...registry.listArchived()]) {
+      try {
+        const sessionIds = await legacyTurnRefSessionIds(project.cwd);
+        if (sessionIds.length) candidates.push({ projectId: project.id, cwd: project.cwd, sessionIds });
+      } catch {
+        // A malformed or temporarily unavailable repository must not block startup.
+      }
+    }
+    if (!candidates.length || !this.target) return;
+
+    let sessions;
+    try {
+      sessions = await listSessionInventory(process.env.PI_CODING_AGENT_DIR || this.target.agentDir);
+    } catch {
+      return;
+    }
+    const knownSessions = new Map<string, (typeof sessions)[number] | undefined>();
+    for (const session of sessions) {
+      knownSessions.set(session.id, knownSessions.has(session.id) ? undefined : session);
+    }
+    const protectedBranches = registry
+      .listSessionWorkspaces()
+      .flatMap(workspace => (workspace.branch ? [workspace.branch] : []));
+    for (const candidate of candidates) {
+      const sessionIds = candidate.sessionIds.filter(sessionId => {
+        const session = knownSessions.get(sessionId);
+        return session && registry.projectForSession(sessionId, session.cwd)?.id === candidate.projectId;
+      });
+      if (!sessionIds.length) continue;
+      try {
+        await migrateLegacyTurnRefs(candidate.cwd, sessionIds, protectedBranches);
+      } catch {
+        // Migration is opportunistic and will be retried on the next startup.
+      }
+    }
   }
 
   async snapshot(): Promise<RuntimeSnapshot> {
@@ -510,6 +559,42 @@ export class RuntimeCoordinator implements PiDriver {
       if (selectedId === this.selectedId && generation === this.generation) return result;
     }
     return result!;
+  }
+
+  async listLocalBranches(): Promise<LocalBranchListSnapshot> {
+    const slot = this.selected();
+    const generation = this.generation;
+    const details = slot.driver.runtimeDetails();
+    const listed = await listLocalGitBranches(details.cwd);
+    this.assertSelected(slot, generation, "listing local branches");
+    const registry = this.registry();
+    const record = registry.workspaceForSession(slot.id);
+    const project = record ? registry.get(record.projectId) : undefined;
+    const localSlots = project
+      ? [...this.slots.values()].filter(candidate => {
+          const workspace = registry.workspaceForSession(candidate.id);
+          return workspace?.projectId === project.id && workspace.mode === "local";
+        })
+      : [];
+    const checkoutAvailable =
+      record?.mode === "local" &&
+      Boolean(project) &&
+      !this.checkoutOwner(record.projectId) &&
+      localSlots.every(candidate => this.slotCanSleep(candidate));
+    const checkoutUnavailableReason = checkoutAvailable
+      ? undefined
+      : record?.mode !== "local"
+        ? "Branch checkout is available only for Local sessions."
+        : this.checkoutOwner(record.projectId)
+          ? "Another session owns the project checkout."
+          : "A session is still running in this project. Branch checkout is disabled until every Local session is idle.";
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: generation,
+      ...listed,
+      checkoutAvailable,
+      ...(checkoutUnavailableReason ? { checkoutUnavailableReason } : {}),
+    };
   }
 
   async usage(input: UsageQuery = {}): Promise<UsageSnapshot> {
@@ -792,6 +877,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async queuePrompt(input: PromptInput): Promise<AcceptedCommand> {
+    if (this.lifecycleBusy) throw new Error("another session operation is in progress");
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
     slot.displayPendingPrompts ??= [];
@@ -1152,6 +1238,57 @@ export class RuntimeCoordinator implements PiDriver {
       const slot = this.selected();
       if (!this.slotCanSleep(slot)) throw new Error("session must be idle before moving its checkout");
       await this.moveSlotBetweenIsolatedWorkspaces(slot, input.destination);
+      return this.replacement(false);
+    });
+  }
+
+  async checkoutBranch(input: CheckoutBranchInput): Promise<ReplacementResult> {
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      const registry = this.registry();
+      const record = registry.workspaceForSession(slot.id);
+      if (!record || record.mode !== "local") {
+        throw new Error("branch checkout is available only for Local sessions");
+      }
+      const project = registry.get(record.projectId);
+      if (!project || project.archivedAt) throw new Error("project is unavailable");
+      if (this.checkoutOwner(project.id)) throw new Error("another session owns the project checkout");
+      const localSlots = [...this.slots.values()].filter(candidate => {
+        const workspace = registry.workspaceForSession(candidate.id);
+        return workspace?.projectId === project.id && workspace.mode === "local";
+      });
+      if (localSlots.some(candidate => !this.slotCanSleep(candidate))) {
+        throw new Error("a session is still running in this project; wait until every Local session is idle");
+      }
+      if (resolve(slot.driver.runtimeDetails().cwd) !== resolve(project.cwd)) {
+        throw new Error("session workspace does not match the registered project checkout");
+      }
+
+      const branch = await switchLocalGitBranch(project.cwd, input.branch);
+      let metadataError: unknown;
+      try {
+        for (const workspace of registry
+          .listSessionWorkspaces()
+          .filter(candidate => candidate.projectId === project.id && candidate.mode === "local")) {
+          await registry.setSessionWorkspace({ ...workspace, branch: `refs/heads/${branch}` });
+        }
+      } catch (error) {
+        metadataError = error;
+      }
+      this.invalidateProjectWorkspaceInventories(project.id);
+      for (const candidate of localSlots) {
+        candidate.driver.workspaceApplied();
+        await this.refreshWorkspace(candidate, false);
+      }
+      this.generation++;
+      this.emit({
+        type: "session.replaced",
+        sessionId: slot.id,
+        sessionGeneration: this.generation,
+        runtime: await this.snapshotFor(slot),
+      });
+      if (metadataError) throw metadataError;
       return this.replacement(false);
     });
   }

@@ -22,6 +22,24 @@ export interface RuntimeDiagnostic {
   message: string;
 }
 
+export interface LocalBranchSummary {
+  name: string;
+  lastCommitAt: string;
+  current: boolean;
+  checkoutAvailable: boolean;
+  checkoutUnavailableReason?: string;
+}
+
+export interface LocalBranchListSnapshot {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  branches: LocalBranchSummary[];
+  currentBranch?: string;
+  checkoutAvailable: boolean;
+  checkoutUnavailableReason?: string;
+  truncated: boolean;
+}
+
 export interface RuntimeSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionId: string;

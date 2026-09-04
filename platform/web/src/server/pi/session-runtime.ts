@@ -4358,9 +4358,18 @@ export class SessionRuntime implements PiDriver {
         if (!this.gate.accepts(generation)) return;
         const raw = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;
         if (raw?.version !== 1 || typeof raw.known !== "boolean" || !Array.isArray(raw.files)) return;
-        const turn = this.pendingWorktreeTurns.shift();
-        if (!turn || raw.known !== true || !turn.messageId || !turn.assistantEntryId) return;
-        if (raw.assistantEntryId !== undefined && raw.assistantEntryId !== turn.assistantEntryId) return;
+        if (raw.known !== true) {
+          this.pendingWorktreeTurns.shift();
+          return;
+        }
+        const assistantEntryId = raw.assistantEntryId;
+        if (typeof assistantEntryId !== "string") return;
+        const turnIndex = this.pendingWorktreeTurns.findIndex(
+          candidate => candidate.assistantEntryId === assistantEntryId,
+        );
+        if (turnIndex < 0) return;
+        const [turn] = this.pendingWorktreeTurns.splice(turnIndex, 1);
+        if (!turn?.messageId || !turn.assistantEntryId) return;
         const summary = parseWorktreeSummary({ version: 1, assistantEntryId: turn.assistantEntryId, files: raw.files });
         if (!summary) return;
         const messageId = turn.messageId;

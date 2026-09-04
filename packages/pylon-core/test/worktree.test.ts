@@ -8,6 +8,7 @@ import {
   anchorWorktreeTurn,
   appendTurnCommit,
   captureCheckoutState,
+  claimSessionCheckout,
   createSessionWorktree,
   createWorktreeSummary,
   collectWorkspaceFileDelta,
@@ -15,10 +16,13 @@ import {
   inspectWorkspaceChanges,
   listWorkspaceFiles,
   mergeWorkspaceChanges,
+  legacyTurnRefSessionIds,
+  migrateLegacyTurnRefs,
   parseWorktreeSummary,
   readWorkspaceFile,
   recreateSessionWorktree,
   removeSessionRef,
+  removeSessionBranch,
   removeSessionWorktree,
   removeWorktreeTurnRefs,
   restoreCheckoutState,
@@ -33,6 +37,14 @@ import {
 function git(cwd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile("git", args, { cwd, windowsHide: true }, error => (error ? reject(error) : resolve()));
+  });
+}
+
+function gitOutput(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, windowsHide: true }, (error, stdout) =>
+      error ? reject(error) : resolve(String(stdout).trim()),
+    );
   });
 }
 
@@ -232,11 +244,12 @@ test("turn commits chain on one session branch and diffs stay readable", async (
     await git(root, ["init", "-q"]);
     assert.equal(turnsBranchForSession("short"), undefined);
     const branch = turnsBranchForSession("session1234");
-    assert.ok(branch);
+    assert.equal(branch, "refs/pylon/turns/session1234");
     await writeFile(join(root, "one.txt"), "one\n");
     const first = await captureCheckoutState(root, true);
     const firstCommit = await appendTurnCommit(root, branch!, first.worktreeTree);
     assert.ok(firstCommit);
+    assert.equal(await gitOutput(root, ["branch", "--list", "pylon-session-*"]), "");
     await writeFile(join(root, "one.txt"), "two\n");
     const second = await captureCheckoutState(root, true);
     const secondCommit = await appendTurnCommit(root, branch!, second.worktreeTree);
@@ -263,6 +276,119 @@ test("turn commits chain on one session branch and diffs stay readable", async (
   }
 });
 
+test("legacy turn branches migrate by exact tip and delete only after a compatible copy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-anchor-migration-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "legacy\n");
+    await git(root, ["add", "tracked.txt"]);
+    await git(root, ["commit", "-qm", "legacy"]);
+    const legacy = "refs/heads/pylon-session-session5678";
+    const hidden = turnsBranchForSession("session5678")!;
+    const legacyTip = await gitOutput(root, ["rev-parse", "HEAD"]);
+    await git(root, ["update-ref", legacy, legacyTip]);
+    const before = await captureCheckoutState(root, true);
+
+    assert.equal(await appendTurnCommit(root, hidden, before.worktreeTree), legacyTip);
+    assert.equal(await gitOutput(root, ["rev-parse", hidden]), legacyTip);
+    await assert.rejects(git(root, ["rev-parse", "--verify", legacy]));
+
+    await writeFile(join(root, "tracked.txt"), "hidden\n");
+    const after = await captureCheckoutState(root, true);
+    const hiddenTip = await appendTurnCommit(root, hidden, after.worktreeTree);
+    assert.ok(hiddenTip && hiddenTip !== legacyTip);
+    assert.equal(await gitOutput(root, ["rev-parse", `${hiddenTip}^`]), legacyTip);
+
+    await git(root, ["commit", "--allow-empty", "-qm", "legacy advanced"]);
+    const advancedLegacy = await gitOutput(root, ["rev-parse", "HEAD"]);
+    await git(root, ["update-ref", legacy, advancedLegacy, ""]);
+    assert.equal(await appendTurnCommit(root, hidden, before.worktreeTree), undefined);
+    assert.equal(await gitOutput(root, ["rev-parse", hidden]), hiddenTip);
+    assert.equal(await gitOutput(root, ["rev-parse", legacy]), advancedLegacy);
+
+    await removeSessionRef(root, hidden);
+    await assert.rejects(git(root, ["rev-parse", "--verify", hidden]));
+    assert.equal(await gitOutput(root, ["rev-parse", legacy]), advancedLegacy);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy turn migration never deletes a checked-out head", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-anchor-checked-out-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "legacy\n");
+    await git(root, ["add", "tracked.txt"]);
+    await git(root, ["commit", "-qm", "legacy"]);
+    const legacy = "refs/heads/pylon-session-session9012";
+    const hidden = turnsBranchForSession("session9012")!;
+    await git(root, ["branch", legacy.slice("refs/heads/".length)]);
+    await git(root, ["switch", legacy.slice("refs/heads/".length)]);
+    const state = await captureCheckoutState(root, true);
+
+    assert.equal(await appendTurnCommit(root, hidden, state.worktreeTree), undefined);
+    assert.equal(await gitOutput(root, ["rev-parse", hidden]), await gitOutput(root, ["rev-parse", legacy]));
+    assert.equal(await gitOutput(root, ["symbolic-ref", "HEAD"]), legacy);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bulk legacy turn migration is bounded to known, unprotected session refs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-turn-anchor-bulk-migration-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "tracked.txt"]);
+    await git(root, ["commit", "-qm", "base"]);
+    const tip = await gitOutput(root, ["rev-parse", "HEAD"]);
+    const legacy = (sessionId: string) => `refs/heads/pylon-session-${sessionId}`;
+    for (const sessionId of ["session1111", "session2222", "session3333", "session4444"]) {
+      await git(root, ["update-ref", legacy(sessionId), tip]);
+    }
+
+    assert.deepEqual(await legacyTurnRefSessionIds(root), [
+      "session1111",
+      "session2222",
+      "session3333",
+      "session4444",
+    ]);
+    assert.deepEqual(
+      await migrateLegacyTurnRefs(root, ["session1111", "session2222", "session3333"], [legacy("session3333")]),
+      { migrated: 2, skipped: 1 },
+    );
+    for (const sessionId of ["session1111", "session2222"]) {
+      assert.equal(await gitOutput(root, ["rev-parse", turnsBranchForSession(sessionId)!]), tip);
+      await assert.rejects(git(root, ["rev-parse", "--verify", legacy(sessionId)]));
+    }
+    assert.equal(await gitOutput(root, ["rev-parse", legacy("session3333")]), tip);
+    assert.equal(await gitOutput(root, ["rev-parse", legacy("session4444")]), tip);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkout ownership uses its own branch namespace and restores cleanly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-session-checkout-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "tracked.txt"]);
+    await git(root, ["commit", "-qm", "base"]);
+
+    const checkout = await claimSessionCheckout(root, "checkout-one");
+    assert.equal(checkout.branch, "refs/heads/pylon-checkout-checkout-one");
+    assert.equal(await gitOutput(root, ["symbolic-ref", "HEAD"]), checkout.branch);
+    await restoreCheckoutState(root, checkout.parked);
+    await removeSessionBranch(root, checkout.branch, checkout.commonDir);
+    await assert.rejects(git(root, ["rev-parse", "--verify", checkout.branch]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
 test("session worktrees isolate a dirty baseline and expose bounded files", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-session-worktree-"));
   const owned = await mkdtemp(join(tmpdir(), "pylon-owned-worktrees-"));
@@ -277,7 +403,7 @@ test("session worktrees isolate a dirty baseline and expose bounded files", asyn
     await writeFile(join(root, "untracked.txt"), "also baseline\n");
 
     const worktree = await createSessionWorktree(root, target, owned, "session-one");
-    assert.equal(worktree.branch, "refs/heads/pylon-session-session-one");
+    assert.equal(worktree.branch, "refs/heads/pylon-worktree-session-one");
     assert.equal((await readFile(join(target, "tracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "dirty baseline\n");
     assert.equal((await readFile(join(target, "untracked.txt"), "utf8")).replaceAll("\r\n", "\n"), "also baseline\n");
     await writeFile(join(target, "tracked.txt"), "dirty baseline\nagent\n");

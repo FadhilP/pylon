@@ -120,6 +120,8 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/events") return this.events(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/sessions")
         return await this.sessionList(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/branches")
+        return await this.localBranchList(request, response);
       if (request.method === "GET" && url.pathname === "/api/v1/usage") return await this.usage(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-history")
         return await this.conversationHistory(request, response, url);
@@ -460,6 +462,16 @@ export class ServerTransport {
     const result = await this.driver.listSessions({ projectId, cursor, query, limit });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing sessions");
+    this.send(response, 200, result);
+  }
+
+  private async localBranchList(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    this.requireTab(request);
+    if (!this.driver.listLocalBranches) throw httpError(404, "branch listing is unavailable");
+    const result = await this.driver.listLocalBranches();
+    if (result.sessionGeneration !== this.journal.sessionGeneration) {
+      throw httpError(409, "session changed while listing branches");
+    }
     this.send(response, 200, result);
   }
 
@@ -1109,6 +1121,9 @@ export class ServerTransport {
           .then(() => accepted(command.expectedGeneration));
       case "reorderActiveSession":
         return this.driver.reorderActiveSession(command).then(() => accepted(command.expectedGeneration));
+      case "checkoutBranch":
+        if (!this.driver.checkoutBranch) throw new Error("branch checkout is unavailable");
+        return this.driver.checkoutBranch(command).then(result => accepted(result.sessionGeneration));
       case "editPrompt":
         return this.driver.editPrompt(command);
       case "rewindPrompt":

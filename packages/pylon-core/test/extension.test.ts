@@ -421,7 +421,7 @@ test("shared worktree observer fingerprints one shell tool batch per turn", asyn
   assert.deepEqual(changes[0].toolCallIds, ["one", "two"]);
 });
 
-test("run summary survives the final shell turn", async () => {
+test("run summary spans continued agent runs and the final shell turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-run-summary-"));
   try {
     await exec("git", ["init", "-q"], { cwd: root });
@@ -443,17 +443,19 @@ test("run summary survives the final shell turn", async () => {
     await runtime.handlers.get("tool_call")![0]({ toolName: "bash", toolCallId: "shell" }, ctx);
     await writeFile(join(root, "tracked.txt"), "changed\n");
     await runtime.handlers.get("turn_end")![0]({}, ctx);
+    await runtime.handlers.get("agent_start")![0]({}, ctx);
+    await writeFile(join(root, "added.txt"), "added\n");
     await runtime.handlers.get("agent_settled")![0]({}, ctx);
 
-    assert.deepEqual(summaries[0]?.files, [{ path: "tracked.txt", additions: 1, deletions: 1 }]);
+    const files = [
+      { path: "added.txt", additions: 1, deletions: 0 },
+      { path: "tracked.txt", additions: 1, deletions: 1 },
+    ];
+    assert.deepEqual(summaries[0]?.files, files);
     assert.equal(summaries[0]?.assistantEntryId, "assistant-1");
     assert.deepEqual(runtime.entries.at(-1), {
       customType: "pylon-worktree-summary",
-      data: {
-        version: 1,
-        assistantEntryId: "assistant-1",
-        files: [{ path: "tracked.txt", additions: 1, deletions: 1 }],
-      },
+      data: { version: 1, assistantEntryId: "assistant-1", files },
     });
     await runtime.handlers.get("agent_start")![0]({}, ctx);
     await runtime.handlers.get("agent_settled")![0]({}, ctx);

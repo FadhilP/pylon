@@ -27,7 +27,8 @@ const ident = {
 };
 const objectId = /^[0-9a-f]{40,64}$/i;
 const worktreeId = /^[A-Za-z0-9._-]{8,80}$/;
-const ownedBranch = /^refs\/heads\/(?:pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylon-session-[A-Za-z0-9._-]{8,80})$/;
+const ownedWorktreeBranch = /^refs\/heads\/(?:pylon-(?:worktree|checkout)-[A-Za-z0-9._-]{8,80}|pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylon-session-[A-Za-z0-9._-]{8,80})$/;
+const ownedTurnRef = /^refs\/pylon\/turns\/[A-Za-z0-9._-]{8,80}$/;
 const canonical = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 const rootCache = new Map<string, string>();
 const revisionCache = new Map<string, { head: string; tree: string }>();
@@ -691,26 +692,216 @@ export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspace | u
   }
 }
 
-export function sessionWorktreeBranch(opaqueId: string): string {
-  if (!worktreeId.test(opaqueId)) throw Error("Invalid worktree identifier.");
-  return `refs/heads/pylon-session-${opaqueId}`;
+export interface LocalGitBranch {
+  name: string;
+  lastCommitAt: string;
+  current: boolean;
+  checkoutAvailable: boolean;
+  checkoutUnavailableReason?: string;
 }
 
-/** Turn-snapshot branch for one agent session. Shares the pylon-session-* namespace with workspace branches; only the opaque identifier distinguishes them. */
-export function turnsBranchForSession(sessionId: string): string | undefined {
-  return worktreeId.test(sessionId) ? `refs/heads/pylon-session-${sessionId}` : undefined;
+export interface LocalGitBranchList {
+  branches: LocalGitBranch[];
+  currentBranch?: string;
+  truncated: boolean;
 }
+
+function branchWorktrees(raw: string): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const block of raw.split(/\r?\n\r?\n/)) {
+    const path = block.match(/^worktree (.+)$/m)?.[1];
+    const branch = block.match(/^branch (refs\/heads\/.+)$/m)?.[1];
+    if (path && branch) result.set(branch, path);
+  }
+  return result;
+}
+
+/** Lists bounded local branch refs by newest tip commit, with deterministic ties. */
+export async function listLocalGitBranches(cwd: string, limit = 500): Promise<LocalGitBranchList> {
+  const workspace = await inspectGitWorkspace(cwd);
+  if (!workspace) throw Error("Git branches are unavailable for this workspace.");
+  if ((await git(workspace.root, ["rev-parse", "--is-bare-repository"])) === "true") {
+    throw Error("Bare repositories are unsupported.");
+  }
+  const currentRef = workspace.headRef;
+  const checkedOut = branchWorktrees(await git(workspace.root, ["worktree", "list", "--porcelain"]));
+  const rows = (await git(workspace.root, ["for-each-ref", "--format=%(refname:lstrip=2)%00%(committerdate:unix)", "refs/heads"]))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .flatMap(row => {
+      const [name, rawTimestamp] = row.split("\0", 2);
+      const timestamp = Number(rawTimestamp);
+      if (!name || !Number.isSafeInteger(timestamp) || timestamp < 0) return [];
+      const ref = `refs/heads/${name}`;
+      if (ownedWorktreeBranch.test(ref)) return [];
+      const otherWorktree = checkedOut.get(ref);
+      const current = ref === currentRef;
+      return [{
+        name,
+        timestamp,
+        current,
+        checkoutAvailable: !current && (!otherWorktree || canonical(otherWorktree) === canonical(workspace.root)),
+        ...(otherWorktree && !current && canonical(otherWorktree) !== canonical(workspace.root)
+          ? { checkoutUnavailableReason: "Checked out in another worktree." }
+          : {}),
+      }];
+    })
+    .sort((left, right) => right.timestamp - left.timestamp || left.name.localeCompare(right.name));
+  const boundedLimit = Math.min(500, Math.max(1, limit));
+  return {
+    branches: rows.slice(0, boundedLimit).map(({ timestamp, ...branch }) => ({
+      ...branch,
+      lastCommitAt: new Date(timestamp * 1_000).toISOString(),
+    })),
+    ...(currentRef?.startsWith("refs/heads/") ? { currentBranch: currentRef.slice("refs/heads/".length) } : {}),
+    truncated: rows.length > boundedLimit,
+  };
+}
+
+/** Switches to an existing local branch without carrying workspace changes across it. */
+export async function switchLocalGitBranch(cwd: string, branch: string): Promise<string> {
+  if (!branch || branch.length > 200 || /[\u0000-\u001f\u007f]/.test(branch)) throw Error("Invalid branch name.");
+  const workspace = await inspectGitWorkspace(cwd);
+  if (!workspace) throw Error("Git branches are unavailable for this workspace.");
+  await assertSafeCheckout(workspace);
+  const checked = await git(workspace.root, ["check-ref-format", "--branch", branch]);
+  if (checked !== branch) throw Error("Invalid branch name.");
+  const targetRef = `refs/heads/${branch}`;
+  await git(workspace.root, ["rev-parse", "--verify", `${targetRef}^{commit}`]);
+  const listed = await listLocalGitBranches(workspace.root);
+  const target = listed.branches.find(candidate => candidate.name === branch);
+  if (!target) throw Error("Local branch is unavailable.");
+  if (!target.checkoutAvailable && !target.current) {
+    throw Error(target.checkoutUnavailableReason ?? "Branch checkout is unavailable.");
+  }
+  if (target.current) return branch;
+  const status = await git(workspace.root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
+  if (status) throw Error("Commit, stash, or discard workspace changes before switching branches.");
+  let failure: unknown;
+  try {
+    await git(workspace.root, ["switch", "--no-guess", branch]);
+  } catch (error) {
+    failure = error;
+  }
+  const actualRef = await headRef(workspace.root);
+  revisionCache.delete(canonical(workspace.root));
+  if (actualRef !== targetRef) {
+    if (failure) throw failure;
+    throw Error("Git did not switch to the requested branch.");
+  }
+  return branch;
+}
+
+export function sessionWorktreeBranch(opaqueId: string): string {
+  if (!worktreeId.test(opaqueId)) throw Error("Invalid worktree identifier.");
+  return `refs/heads/pylon-worktree-${opaqueId}`;
+}
+
+export function sessionCheckoutBranch(opaqueId: string): string {
+  if (!worktreeId.test(opaqueId)) throw Error("Invalid checkout identifier.");
+  return `refs/heads/pylon-checkout-${opaqueId}`;
+}
+
+export function turnsBranchForSession(sessionId: string): string | undefined {
+  return worktreeId.test(sessionId) ? `refs/pylon/turns/${sessionId}` : undefined;
+}
+
+function legacyTurnRef(branch: string): string {
+  return `refs/heads/pylon-session-${branch.slice("refs/pylon/turns/".length)}`;
+}
+
+async function readCommitRef(root: string, ref: string): Promise<string | undefined> {
+  const value = await git(root, ["rev-parse", "--verify", `${ref}^{commit}`]).catch(() => undefined);
+  return value && objectId.test(value) ? value : undefined;
+}
+
+// TODO: Remove this single-session legacy fallback after the bulk migration compatibility window closes.
+/** Copies a compatible legacy tip exactly, then removes the obsolete head with compare-and-swap. */
+async function prepareTurnRef(root: string, branch: string): Promise<{ previous?: string } | undefined> {
+  const legacy = legacyTurnRef(branch);
+  let current = await readCommitRef(root, branch);
+  const legacyTip = await readCommitRef(root, legacy);
+  if (!current && legacyTip) {
+    await git(root, ["update-ref", branch, legacyTip, ""]).catch(() => undefined);
+    current = await readCommitRef(root, branch);
+    if (!current) return undefined;
+  }
+  if (current && legacyTip) {
+    if (current !== legacyTip) {
+      const legacyIsAncestor = await git(root, ["merge-base", "--is-ancestor", legacyTip, current]).then(
+        () => true,
+        () => false,
+      );
+      if (!legacyIsAncestor) return undefined;
+    }
+    const checkedOut = branchWorktrees(await git(root, ["worktree", "list", "--porcelain"]));
+    if (checkedOut.has(legacy)) return undefined;
+    const removed = await git(root, ["update-ref", "-d", legacy, legacyTip]).then(
+      () => true,
+      () => false,
+    );
+    if (!removed || (await readCommitRef(root, legacy))) return undefined;
+  }
+  return current ? { previous: current } : {};
+}
+
+export async function legacyTurnRefSessionIds(cwd: string): Promise<string[]> {
+  const workspace = await inspectGitWorkspace(cwd);
+  if (!workspace) return [];
+  const refs = await git(workspace.root, [
+    "for-each-ref",
+    "--sort=refname",
+    "--format=%(refname)",
+    "refs/heads/pylon-session-*",
+  ]);
+  const prefix = "refs/heads/pylon-session-";
+  return refs
+    .split(/\r?\n/)
+    .filter(ref => ref.startsWith(prefix) && worktreeId.test(ref.slice(prefix.length)))
+    .map(ref => ref.slice(prefix.length))
+    .slice(0, 500);
+}
+
+export async function migrateLegacyTurnRefs(
+  cwd: string,
+  sessionIds: Iterable<string>,
+  protectedBranches: Iterable<string> = [],
+): Promise<{ migrated: number; skipped: number }> {
+  const workspace = await inspectGitWorkspace(cwd);
+  if (!workspace) return { migrated: 0, skipped: 0 };
+  const protectedRefs = new Set(protectedBranches);
+  let migrated = 0;
+  let skipped = 0;
+  for (const sessionId of [...new Set(sessionIds)].slice(0, 500)) {
+    const hidden = turnsBranchForSession(sessionId);
+    if (!hidden) {
+      skipped++;
+      continue;
+    }
+    const legacy = legacyTurnRef(hidden);
+    if (protectedRefs.has(legacy) || !(await readCommitRef(workspace.root, legacy))) {
+      skipped++;
+      continue;
+    }
+    const prepared = await prepareTurnRef(workspace.root, hidden);
+    if (prepared && !(await readCommitRef(workspace.root, legacy))) migrated++;
+    else skipped++;
+  }
+  return { migrated, skipped };
+}
+
 
 export async function appendTurnCommit(
   repositoryRootPath: string,
   branch: string,
   tree: string,
 ): Promise<string | undefined> {
-  if (!ownedBranch.test(branch) || !objectId.test(tree)) return undefined;
+  if (!ownedTurnRef.test(branch) || !objectId.test(tree)) return undefined;
   try {
     const root = await realpath(repositoryRootPath);
-    const previous = await git(root, ["rev-parse", "--verify", `${branch}^{commit}`]).catch(() => undefined);
-    if (previous !== undefined && !objectId.test(previous)) return undefined;
+    const prepared = await prepareTurnRef(root, branch);
+    if (!prepared) return undefined;
+    const previous = prepared.previous;
     if (previous) {
       // Already anchored: an identical tip tree needs no duplicate commit.
       const tipTree = await git(root, ["rev-parse", "--verify", `${previous}^{tree}`]).catch(() => undefined);
@@ -756,17 +947,19 @@ export async function anchorWorktreeTurn(
 }
 
 export async function removeSessionRef(repositoryRootPath: string, branch: string): Promise<void> {
-  if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  if (!ownedTurnRef.test(branch)) throw Error("Refusing to remove a non-Pylon turn ref.");
   try {
-    await git(await realpath(repositoryRootPath), ["update-ref", "-d", branch]);
+    const root = await realpath(repositoryRootPath);
+    const current = await readCommitRef(root, branch);
+    if (current) await git(root, ["update-ref", "-d", branch, current]);
   } catch {
-    // Best-effort cleanup: a missing checkout or stale ref must not fail session deletion.
+    // Best-effort cleanup: a missing checkout or concurrently advanced ref is retained.
   }
 }
 
 /** Best-effort cleanup of turn refs in the top checkout and currently initialized submodules. */
 export async function removeWorktreeTurnRefs(cwd: string, branch: string): Promise<void> {
-  if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  if (!ownedTurnRef.test(branch)) throw Error("Refusing to remove a non-Pylon turn ref.");
   const top = await repositorySnapshot(cwd);
   if (!top) {
     await removeSessionRef(cwd, branch);
@@ -881,6 +1074,7 @@ async function createSessionBaseline(
   repositoryCwd: string,
   source: CheckoutState,
   opaqueId: string,
+  kind: "worktree" | "checkout",
 ): Promise<{ repository: GitWorkspace; branch: string; baseline: string }> {
   if (
     !objectId.test(source.indexTree) ||
@@ -893,7 +1087,7 @@ async function createSessionBaseline(
     throw Error("Session baseline belongs to a different repository.");
   }
   await assertSafeCheckout(repository);
-  const branch = sessionWorktreeBranch(opaqueId);
+  const branch = kind === "worktree" ? sessionWorktreeBranch(opaqueId) : sessionCheckoutBranch(opaqueId);
   const baseline = await git(
     repository.root,
     ["commit-tree", source.worktreeTree, ...(source.head ? ["-p", source.head] : []), "-m", "Pylon session baseline"],
@@ -932,7 +1126,7 @@ export async function createSessionWorktreeFromState(
   ownedRoot: string,
   opaqueId = randomBytes(12).toString("base64url"),
 ): Promise<SessionWorktree> {
-  const { repository, branch, baseline } = await createSessionBaseline(repositoryCwd, source, opaqueId);
+  const { repository, branch, baseline } = await createSessionBaseline(repositoryCwd, source, opaqueId, "worktree");
   const target = resolve(targetPath);
   const root = resolve(ownedRoot);
   if (outside(root, target) || canonical(root) === canonical(target)) throw Error("Unsafe Pylon worktree path.");
@@ -962,7 +1156,7 @@ export async function claimSessionCheckout(
   opaqueId = randomBytes(12).toString("base64url"),
 ): Promise<SessionCheckout> {
   const parked = await captureCheckoutState(cwd, true);
-  const { repository, branch, baseline } = await createSessionBaseline(cwd, parked, opaqueId);
+  const { repository, branch, baseline } = await createSessionBaseline(cwd, parked, opaqueId, "checkout");
   try {
     await restoreCheckoutState(repository.root, {
       ...parked,
@@ -991,7 +1185,7 @@ export async function removeSessionWorktree(
   ownedRoot: string,
   deleteBranch = true,
 ): Promise<void> {
-  if (!ownedBranch.test(worktree.branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  if (!ownedWorktreeBranch.test(worktree.branch)) throw Error("Refusing to remove a non-Pylon branch.");
   const target = resolve(worktree.root);
   const root = resolve(ownedRoot);
   if (outside(root, target) || canonical(root) === canonical(target))
@@ -1017,7 +1211,7 @@ export async function recreateSessionWorktree(
   branch: string,
   expectedCommonDir: string,
 ): Promise<string> {
-  if (!ownedBranch.test(branch)) throw Error("Refusing to use a non-Pylon branch.");
+  if (!ownedWorktreeBranch.test(branch)) throw Error("Refusing to use a non-Pylon branch.");
   const repository = await inspectGitWorkspace(repositoryCwd);
   if (!repository || canonical(repository.commonDir) !== canonical(expectedCommonDir)) {
     throw Error("Session branch belongs to a different repository.");
@@ -1042,7 +1236,7 @@ export async function removeSessionBranch(
   branch: string,
   expectedCommonDir: string,
 ): Promise<void> {
-  if (!ownedBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
+  if (!ownedWorktreeBranch.test(branch)) throw Error("Refusing to remove a non-Pylon branch.");
   const repository = await inspectGitWorkspace(repositoryCwd);
   if (!repository || canonical(repository.commonDir) !== canonical(expectedCommonDir)) {
     throw Error("Session branch belongs to a different repository.");
@@ -1074,7 +1268,7 @@ export async function restoreCheckoutState(cwd: string, target: CheckoutState): 
       await rm(resolve(current.root, safe), { recursive: true, force: true });
     }
     if (target.headRef) {
-      if (!ownedBranch.test(target.headRef) && target.headRef !== current.headRef) {
+      if (!ownedWorktreeBranch.test(target.headRef) && target.headRef !== current.headRef) {
         const refValue = await git(current.root, ["rev-parse", "--verify", target.headRef]);
         if (target.head && refValue !== target.head) throw Error("Target branch moved.");
       }
@@ -1230,7 +1424,7 @@ export async function snapshotSessionBranch(
   expectedCommonDir: string,
   tree: string,
 ): Promise<string> {
-  if (!ownedBranch.test(branch) || !objectId.test(tree)) {
+  if (!ownedWorktreeBranch.test(branch) || !objectId.test(tree)) {
     throw Error("Invalid Pylon session snapshot.");
   }
   const repository = await inspectGitWorkspace(repositoryCwd);

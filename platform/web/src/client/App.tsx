@@ -1301,6 +1301,7 @@ export function App() {
         catalog: { activeSessions, projects: sessionPages },
         catalogRevision: live.sessionRevision ?? 0,
         canLoadCatalog: live.connection === "connected" && live.runtime?.ready === true && !pendingSession,
+        branchAvailable: live.runtime?.workspace?.gitAvailable === true && !pendingSession,
         unseenCompletions: live.unseenCompletions,
         busy: sessionBusy || projectBusy,
         deleting: sessionDeleting,

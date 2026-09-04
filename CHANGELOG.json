@@ -1,5 +1,27 @@
 [
   {
+    "version": "2.7.2",
+    "date": "Sep 4, 2026",
+    "title": "Safer branch switching and mathematical Markdown",
+    "summary": "Pylon adds guarded Git branch switching for Local sessions, renders TeX math in conversations, and makes worktree history more reliable across continued runs.",
+    "notes": [
+      "Added a branch picker to Local sessions that lists recent branches, shows checkout availability, and switches branches without leaving the composer.",
+      "Added inline and display TeX rendering with KaTeX MathML while preserving currency, escaped delimiters, code spans, citations, and sanitization of untrusted links.",
+      "Moved turn snapshots into hidden Git refs with safe migration from legacy internal branches, keeping Pylon-owned refs out of the branch picker without losing existing history.",
+      "Kept worktree change summaries aligned across continued runs by retaining the original baseline and matching summaries to their assistant entry instead of queue order."
+    ]
+  },
+  {
+    "version": "2.7.1",
+    "date": "Sep 4, 2026",
+    "title": "Pinned runtime compatibility and steadier session menus",
+    "summary": "A maintenance release pins Pylon's Pi runtime compatibility and keeps composer session actions visible and correctly layered.",
+    "notes": [
+      "Pinned the Pi AI, coding-agent, and terminal UI peer dependencies to version 0.84.3 instead of accepting arbitrary versions.",
+      "Fixed composer session action menus so their popovers remain visible, correctly positioned, and above surrounding session rows."
+    ]
+  },
+  {
     "version": "2.7.0",
     "date": "Sep 4, 2026",
     "title": "Clearer settings and faster session switching",

@@ -37,6 +37,7 @@ import type {
   HookSettingsReadModel,
   HookSettingsSnapshot,
   PackageListSnapshot,
+  LocalBranchListSnapshot,
   PackageSettingsReadModel,
   PapercutListPage,
   PapercutStatusReadModel,
@@ -67,6 +68,7 @@ import {
   isExtensionListSnapshot,
   isFileSuggestionList,
   isHookSettingsSnapshot,
+  isLocalBranchListSnapshot,
   isPackageListSnapshot,
   isPapercutListPage,
   isSessionListSnapshot,
@@ -499,6 +501,15 @@ export class RuntimeEventStore {
     return sessions;
   }
 
+  async listLocalBranches(signal?: AbortSignal): Promise<LocalBranchListSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const branches = await this.api.localBranches(signal);
+    if (!isLocalBranchListSnapshot(branches) || branches.sessionGeneration !== runtime.sessionGeneration) {
+      throw new Error("Branch list is stale or invalid");
+    }
+    return branches;
+  }
+
   async usage(input: UsageQuery = {}, signal?: AbortSignal): Promise<UsageSnapshot> {
     const runtime = this.requireReadyRuntime();
     const usage = await this.api.usage(input, signal);
@@ -785,6 +796,16 @@ export class RuntimeEventStore {
     await this.sendCommand({
       type: "handoffSession",
       destination,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
+  async checkoutBranch(branch: string): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "checkoutBranch",
+      branch,
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });

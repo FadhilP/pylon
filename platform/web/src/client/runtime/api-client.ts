@@ -17,6 +17,7 @@ import type {
   HookSettingsSnapshot,
   PackageListSnapshot,
   PapercutListPage,
+  LocalBranchListSnapshot,
   PapercutMutationResult,
   PapercutStatusReadModel,
   SessionListQuery,
@@ -128,6 +129,16 @@ export class ApiClient {
     if (input.limit) query.set("limit", String(input.limit));
     return json<SessionListSnapshot>(
       await fetch(`/api/v1/sessions${query.size ? `?${query}` : ""}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
+  }
+
+  async localBranches(signal?: AbortSignal): Promise<LocalBranchListSnapshot> {
+    return json<LocalBranchListSnapshot>(
+      await fetch("/api/v1/branches", {
         headers: { "x-pylon-tab-id": this.tabId },
         credentials: "same-origin",
         signal,

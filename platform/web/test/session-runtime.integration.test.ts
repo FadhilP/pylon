@@ -166,6 +166,97 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
   }
 });
 
+test("worktree summaries match continued runs by assistant entry ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-worktree-summary-match-"));
+  const cwd = join(root, "workspace"),
+    agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  let bus: any;
+  const bridge: InlineExtension = {
+    name: "worktree-summary-probe",
+    factory(pi) {
+      bus = pi.events;
+    },
+  };
+  const driver = new SessionRuntime({ extensionFactories: [bridge] });
+  const events: any[] = [];
+  const unsubscribe = driver.subscribe(event => events.push(event));
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    const complete = (text: string) => {
+      const message = {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop" as const,
+        timestamp: Date.now(),
+      };
+      session._emit({ type: "message_end", message });
+      const entryId = session.sessionManager.appendMessage(message);
+      session._emit({ type: "agent_end", messages: [message] });
+      return entryId;
+    };
+    const summarize = (assistantEntryId: string, path: string) =>
+      bus.emit("pylon:worktree-summary", {
+        version: 1,
+        known: true,
+        assistantEntryId,
+        files: [{ path, additions: 1, deletions: 0 }],
+      });
+
+    session._emit({ type: "agent_start" });
+    const firstEntryId = complete("First response");
+    session._emit({ type: "agent_start" });
+    const continuedEntryId = complete("Continued response");
+    summarize(continuedEntryId, "continued.ts");
+
+    session._emit({ type: "agent_start" });
+    const nextEntryId = complete("Next response");
+    summarize(nextEntryId, "next.ts");
+
+    const terminalMessageId = (entryId: string) =>
+      events.find(
+        event =>
+          event.type === "session.event" &&
+          event.payload?.type === "agent_end" &&
+          event.payload.assistantMessage?.entryId === entryId,
+      )?.payload.assistantMessage.id;
+    const changes = events.filter(
+      event => event.type === "session.event" && event.payload?.type === "worktree_summary",
+    );
+    assert.notEqual(changes[0]?.payload.messageId, terminalMessageId(firstEntryId));
+    assert.deepEqual(
+      changes.map(event => ({ messageId: event.payload.messageId, files: event.payload.files })),
+      [
+        {
+          messageId: terminalMessageId(continuedEntryId),
+          files: [{ path: "continued.ts", additions: 1, deletions: 0 }],
+        },
+        {
+          messageId: terminalMessageId(nextEntryId),
+          files: [{ path: "next.ts", additions: 1, deletions: 0 }],
+        },
+      ],
+    );
+  } finally {
+    unsubscribe();
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Continuity compaction continuation preserves timing, suppresses interruption, and honors user abort", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-compaction-continuation-"));
   const cwd = join(root, "workspace"),
