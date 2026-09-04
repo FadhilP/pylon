@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FocusEvent as ReactFocusEvent } from "react";
 import type { DialogTimeoutSeconds } from "../shared/protocol/snapshots";
 import { timeoutParts, timeoutUnitSeconds, type TimeoutUnit } from "../shared/runtime-policy-format";
+import { OverviewOrb } from "./overview-primitives";
 
 export function RuntimePolicyTimeoutControl({
   label,
@@ -9,6 +10,8 @@ export function RuntimePolicyTimeoutControl({
   searchTarget,
   inherited = false,
   inheritedFrom,
+  changed,
+  onResetDefault,
   disabled,
   onChange,
   onReset,
@@ -20,6 +23,10 @@ export function RuntimePolicyTimeoutControl({
   inherited?: boolean;
   inheritedFrom?: string;
   disabled: boolean;
+  /* The global pane compares against the shipped default rather than an
+     inherited layer, so it gets its own orb and its own reset. */
+  changed?: boolean;
+  onResetDefault?: () => void;
   onChange(value: DialogTimeoutSeconds): void;
   onReset?: () => void;
 }) {
@@ -64,11 +71,19 @@ export function RuntimePolicyTimeoutControl({
   return (
     <div className="policy-timeout" data-override={!inherited} data-settings-search-target={searchTarget}>
       <div className="policy-label-row">
+        {changed !== undefined && (
+          <OverviewOrb state={changed ? "changed" : "neutral"} label={changed ? "changed" : "default"} />
+        )}
         <span className="policy-timeout-copy">
           <span>{label}</span>
           {description && <small>{description}</small>}
         </span>
         <span className="policy-field-state">
+          {changed && onResetDefault && (
+            <button className="text-button" type="button" disabled={disabled} onClick={onResetDefault}>
+              Reset
+            </button>
+          )}
           {inherited && inheritedFrom && <small>From {inheritedFrom}</small>}
           {inherited ? (
             <button className="text-button" type="button" disabled={disabled} onClick={() => onChange(value)}>

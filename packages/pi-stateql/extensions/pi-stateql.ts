@@ -275,6 +275,8 @@ const CONFIRMED_COMMANDS = new Set<StateQLToolInput["command"]>([
 const MAX_PARAMS_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 40 * 1024;
 const BROKERED_REFERENCE_PREFIX = "PYLON_STATEQL_BROKERED_";
+// Keep StateQL's safety deadline beyond Pylon's longest finite credential dialog (24 hours).
+const CREDENTIAL_RESOLUTION_TIMEOUT_MS = 24 * 60 * 60_000 + 60_000;
 const ENDPOINT_QUERY_KEYS = new Set([
   "host",
   "hostaddr",
@@ -674,6 +676,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       controller,
       stateql: createStateQL({
         actor: actorId,
+        credentialTimeoutMs: CREDENTIAL_RESOLUTION_TIMEOUT_MS,
         signal: controller.signal,
         credentialResolver: async request => {
           if (request.reference.startsWith(BROKERED_REFERENCE_PREFIX)) {

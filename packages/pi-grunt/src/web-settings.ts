@@ -1,4 +1,4 @@
-import { validPackageSettingValue } from "pylon-core/package-settings";
+import { packageSettingDefaults, validPackageSettingValue } from "pylon-core/package-settings";
 import {
   configPath,
   gruntMaxCostUsd,
@@ -20,6 +20,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
     kind: "grunt" as const,
+    defaults: packageSettingDefaults(gruntSettingFields),
     mode:
       config.disabled === true
         ? "disabled"

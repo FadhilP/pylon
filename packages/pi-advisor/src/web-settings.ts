@@ -1,4 +1,4 @@
-import { validPackageSettingValue } from "pylon-core/package-settings";
+import { packageSettingDefaults, validPackageSettingValue } from "pylon-core/package-settings";
 import {
   advisorInputTokenBudget,
   advisorMaxCalls,
@@ -18,6 +18,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
     kind: "advisor" as const,
+    defaults: packageSettingDefaults(advisorSettingFields),
     mode: config.advisorModel ? "model" : config.useMainModel ? "session" : "disabled",
     ...(config.advisorModel ? { model: config.advisorModel } : {}),
     ...(config.thinking ? { thinking: config.thinking } : {}),

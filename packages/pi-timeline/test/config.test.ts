@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { defaultConfig, loadConfig, parseModelRef, saveConfig } from "../src/config.ts";
+import { defaultConfig, loadConfig, parseModelRef, saveConfig, timelineSettingFields } from "../src/config.ts";
 import { readSettings, updateSettings } from "../src/web-settings.ts";
+import { packageSettingDefaults } from "pylon-core/package-settings";
 import {
   CHECKPOINT_TITLE_PROMPT,
   SESSION_TITLE_IMMUTABLE_FOOTER,
@@ -28,6 +29,7 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
     assert.deepEqual(defaultConfig(), { version: 1, editRollbackDefault: false });
     assert.deepEqual(await readSettings({ agentDir }), {
       kind: "timeline",
+      defaults: packageSettingDefaults(timelineSettingFields),
       editRollbackDefault: false,
       checkpointTitleMode: "disabled",
       ...runtimeSettings,
@@ -50,6 +52,7 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
     );
     assert.deepEqual(await readSettings({ agentDir }), {
       kind: "timeline",
+      defaults: packageSettingDefaults(timelineSettingFields),
       editRollbackDefault: true,
       checkpointTitleMode: "model",
       checkpointTitleModel: "provider/cheap-model",
@@ -83,6 +86,7 @@ test("Timeline settings preserve title modes and persist bounded runtime setting
     );
     assert.deepEqual(await readSettings({ agentDir }), {
       kind: "timeline",
+      defaults: packageSettingDefaults(timelineSettingFields),
       editRollbackDefault: false,
       checkpointTitleMode: "session",
       ...runtimeSettings,

@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /** "step" is a hollow orb: a marker on a rail that carries no state of its own. */
-export type OverviewState = "neutral" | "done" | "running" | "failed" | "attention" | "step" | "set";
+export type OverviewState = "neutral" | "done" | "running" | "failed" | "attention" | "step" | "set" | "changed";
+/* The orb's second channel: what the setting is doing right now, drawn as
+   the right half. Omit it and the orb stays a single solid dot. */
+export type OverviewRun = "active" | "deferred" | "off";
 
 export function LedBar({
   a,
@@ -59,10 +62,10 @@ export function LedBar({
     </span>
   );
 }
-export function OverviewOrb({ state, label }: { state: OverviewState; label: string }) {
+export function OverviewOrb({ state, run, label }: { state: OverviewState; run?: OverviewRun; label: string }) {
   return (
     <span className="overview-orb-cell">
-      <i className={`overview-orb is-${state}`} aria-label={label} />
+      <i className={`overview-orb is-${state}${run ? ` run-${run}` : ""}`} aria-label={label} />
     </span>
   );
 }

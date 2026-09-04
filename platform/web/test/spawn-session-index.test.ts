@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { SessionIndex } from "../src/server/pi/session-index.ts";
@@ -30,9 +30,10 @@ test("web session index attributes only pi-spawn marked sessions to their owner"
   const root = await mkdtemp(join(tmpdir(), "pylon-spawn-index-"));
   const cwd = join(root, "repo");
   const otherCwd = join(root, "other-repo");
-  const agentDir = join(root, "agent");
+  const agentDir = join(root, ".pylon", "agent");
+  const legacyAgentDir = join(root, ".pi", "agent");
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  await Promise.all([mkdir(cwd), mkdir(otherCwd), mkdir(agentDir)]);
+  await Promise.all([mkdir(cwd), mkdir(otherCwd), mkdir(agentDir, { recursive: true })]);
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
     const parentManager = SessionManager.create(cwd);
@@ -60,6 +61,25 @@ test("web session index attributes only pi-spawn marked sessions to their owner"
     });
     adopted.appendSessionInfo("Adopted child");
     persist(adopted);
+    const legacyParentFile = join(legacyAgentDir, relative(agentDir, parent.file));
+    const migrated = SessionManager.create(cwd, undefined, { parentSession: legacyParentFile });
+    migrated.appendCustomEntry("pi-spawn-session", {
+      version: 1,
+      ownerSessionId: parent.id,
+      ownerSessionFile: legacyParentFile,
+      createdAt: new Date().toISOString(),
+    });
+    migrated.appendSessionInfo("Migrated child");
+    persist(migrated);
+    const forged = SessionManager.create(cwd);
+    forged.appendCustomEntry("pi-spawn-session", {
+      version: 1,
+      ownerSessionId: parent.id,
+      ownerSessionFile: join(root, "unrelated", "parent.jsonl"),
+      createdAt: new Date().toISOString(),
+    });
+    forged.appendSessionInfo("Forged child");
+    persist(forged);
     const malformed = SessionManager.create(cwd);
     malformed.appendCustomEntry("pi-spawn-session", {
       version: 1,
@@ -90,7 +110,7 @@ test("web session index attributes only pi-spawn marked sessions to their owner"
     crossProjectChild.appendSessionInfo("Cross-project child");
     persist(crossProjectChild);
 
-    const index = new SessionIndex();
+    const index = new SessionIndex(undefined, agentDir);
     const list = () =>
       index.list(
         {},
@@ -117,7 +137,15 @@ test("web session index attributes only pi-spawn marked sessions to their owner"
       title: "Parent work",
     });
     assert.equal(sessions.find(session => session.id === malformed.getSessionId())?.parentSession, undefined);
-    assert.equal(sessions.find(session => session.id === crossProjectChild.getSessionId())?.parentSession, undefined);
+    assert.deepEqual(sessions.find(session => session.id === migrated.getSessionId())?.parentSession, {
+      id: parent.id,
+      title: "Parent work",
+    });
+    assert.equal(sessions.find(session => session.id === forged.getSessionId())?.parentSession, undefined);
+    assert.deepEqual(sessions.find(session => session.id === crossProjectChild.getSessionId())?.parentSession, {
+      id: foreignParent.getSessionId(),
+      title: "Other parent",
+    });
     assert.ok(!sessions.some(session => session.id === privateAgent.getSessionId()));
 
     await new Promise(resolve => setTimeout(resolve, 10));

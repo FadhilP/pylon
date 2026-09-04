@@ -1,4 +1,4 @@
-import { validPackageSettingValue } from "pylon-core/package-settings";
+import { packageSettingDefaults, validPackageSettingValue } from "pylon-core/package-settings";
 import {
   configPath,
   loadConfig,
@@ -16,6 +16,7 @@ export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
     kind: "scout" as const,
+    defaults: packageSettingDefaults(scoutSettingFields),
     mode:
       config.disabled === true
         ? "disabled"

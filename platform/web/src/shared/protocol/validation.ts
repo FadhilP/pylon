@@ -431,9 +431,30 @@ function validGenericPackageSettings(value: Record<string, unknown>): boolean {
   );
 }
 
+const MAX_PACKAGE_SETTING_DEFAULTS = 40;
+
+function validPackageSettingDefault(value: unknown): boolean {
+  if (typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return boundedString(value, MAX_GENERIC_PROMPT_BYTES);
+  if (Array.isArray(value)) return value.length <= 200 && value.every(item => boundedString(item, 400));
+  return validGenericPromptValue(value, ["default", "append", "replace"], MAX_GENERIC_PROMPT_BYTES);
+}
+
+function validPackageSettingDefaults(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!record(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length <= MAX_PACKAGE_SETTING_DEFAULTS && keys.every(key => validPackageSettingDefault(value[key]));
+}
+
 export function validPackageSettings(value: unknown): value is PackageSettingsReadModel {
   if (!record(value) || typeof value.kind !== "string") return false;
   if (value.kind === "generic") return validGenericPackageSettings(value);
+  /* Typed kinds may publish the values they ship with. It crosses the same
+     trust boundary as the rest of a package's settings, so it is bounded
+     the same way rather than passed through. */
+  if (!validPackageSettingDefaults(value.defaults)) return false;
   const modelMode = value.mode === "disabled" || value.mode === "session" || value.mode === "model";
   const model = value.model === undefined || boundedString(value.model, 400);
   const thinking = value.thinking === undefined || thinkingLevels.has(String(value.thinking));

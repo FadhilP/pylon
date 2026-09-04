@@ -1,11 +1,12 @@
 import { configPath, effectiveTimelineSettings, loadConfig, saveConfig, timelineSettingFields } from "./config.ts";
-import { validPackageSettingValue } from "pylon-core/package-settings";
+import { packageSettingDefaults, validPackageSettingValue } from "pylon-core/package-settings";
 import { CHECKPOINT_TITLE_PROMPT, SESSION_TITLE_PROMPT } from "./prompts.ts";
 
 export async function readSettings({ agentDir }: { agentDir: string }) {
   const config = await loadConfig(configPath(agentDir));
   return {
     kind: "timeline",
+    defaults: packageSettingDefaults(timelineSettingFields),
     editRollbackDefault: config.editRollbackDefault,
     checkpointTitleMode: config.checkpointTitleModel
       ? "model"

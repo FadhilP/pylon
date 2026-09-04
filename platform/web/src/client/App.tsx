@@ -1120,6 +1120,9 @@ export function App() {
 
   const currentProjectPage = sessionPages.find(page => page.id === activeSession?.projectId);
   const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : (projects[0] ?? general);
+  const composerProject = pendingSession?.project ?? (currentProjectPage ? toSessionProject(currentProjectPage) : undefined);
+  const composerProjectLabel =
+    composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
   const toggleTerminal = () => {
     openTerminalDrawer();
     if (mobile) setSidebarOpen(false);
@@ -1285,6 +1288,36 @@ export function App() {
             }
           : undefined
       }
+      composerSessionSwitcher={{
+        projectAvailable: live.runtime?.projectAvailable !== false,
+        projectId: composerProject?.id,
+        projectLabel: composerProjectLabel,
+        sessionLabel: pendingSession
+          ? "New session"
+          : activeSession
+            ? sessionTitle(activeSession)
+            : live.runtime?.sessionName || "Untitled session",
+        branchLabel: pendingSession ? "workspace pending" : live.runtime?.gitBranch || "No Git branch",
+        catalog: { activeSessions, projects: sessionPages },
+        catalogRevision: live.sessionRevision ?? 0,
+        canLoadCatalog: live.connection === "connected" && live.runtime?.ready === true && !pendingSession,
+        unseenCompletions: live.unseenCompletions,
+        busy: sessionBusy || projectBusy,
+        deleting: sessionDeleting,
+        onSelect: session => void switchSession(session),
+        onDelete: requestDeleteSession,
+        onArchive: session => void archiveSession(session),
+        onRename: requestRenameSession,
+        onSetActive: (session, active) => void setSessionActive(session, active),
+        onSetPinned: (session, pinned) => void setSessionPinned(session, pinned),
+        onNewSession: () => {
+          if (!composerProject) return;
+          changeSurface("chat");
+          void newSession(composerProject);
+        },
+        onAddProject: () => void addProject(),
+        onError: cause => reportError(cause, "Unable to list sessions"),
+      }}
       initialDraft={
         pendingSession
           ? pendingSessionDraft.current
@@ -2188,7 +2221,7 @@ function ActiveSessionStrip({
         {sessions.map(session => {
           const completed = Boolean(unseenCompletions?.[session.id]);
           const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
-          const preview = `${session.parentSession ? `Spawned from ${session.parentSession.title} · ` : ""}${session.cwdLabel} · ${activity}`;
+          const preview = `${session.cwdLabel} · ${activity}`;
           const menuOpen = menu?.sessionId === session.id;
           return (
             <div

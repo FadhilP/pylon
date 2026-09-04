@@ -1,5 +1,7 @@
 import {
   IconBell,
+  IconChevronDown,
+  IconChevronUp,
   IconAlertTriangle,
   IconContrast,
   IconExternalLink,
@@ -33,6 +35,7 @@ import {
   GUARD_RULE_DESCRIPTIONS,
   GUARD_RULE_LABELS,
 } from "../shared/guard-policy";
+import { defaultGlobalPolicy } from "../shared/policy-defaults";
 import type {
   ModelOptionReadModel,
   ProviderAuthReadModel,
@@ -52,7 +55,7 @@ import type {
   SkillListSnapshot,
   ToolExposureMode,
 } from "../shared/protocol/snapshots";
-import { SYNTAX_THEMES, type SyntaxTheme } from "../shared/syntax-highlighting";
+import { DEFAULT_SYNTAX_THEME, SYNTAX_THEMES, type SyntaxTheme } from "../shared/syntax-highlighting";
 import { thinkingLabel } from "./format";
 import { ExtensionSettingsFields } from "./extension-settings-fields";
 import { HookSettingsFields } from "./hook-settings-fields";
@@ -67,7 +70,7 @@ import { enqueueWebAudioCues, unlockWebAudio } from "./web-audio";
 import { UiDialog } from "./ui-dialog";
 import { modelKey, selectableModels, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
 import { OverviewOrb, type OverviewState } from "./overview-primitives";
-import type { Theme } from "./use-chrome";
+import { DEFAULT_THEME, type Theme } from "./use-chrome";
 
 export type SettingsTab =
   | "providers"
@@ -212,6 +215,7 @@ export function SettingsDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
+  const [providerFilter, setProviderFilter] = useState<"all" | "connected" | "available">("all");
   const [packageQuery, setPackageQuery] = useState(initialPackageQuery);
   const [modelQuery, setModelQuery] = useState("");
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
@@ -229,9 +233,11 @@ export function SettingsDialog({
   const filteredProviders = providers
     .filter(provider => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()))
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+  const connectedProviders = filteredProviders.filter(provider => provider.configured);
+  const availableProviders = filteredProviders.filter(provider => !provider.configured);
   const providerGroups = [
-    { id: "connected", label: "Connected", providers: filteredProviders.filter(provider => provider.configured) },
-    { id: "available", label: "Available", providers: filteredProviders.filter(provider => !provider.configured) },
+    { id: "connected", label: "Connected", providers: providerFilter === "available" ? [] : connectedProviders },
+    { id: "available", label: "Available", providers: providerFilter === "connected" ? [] : availableProviders },
   ];
   const hiddenModelKeys = useHiddenModels();
   const filteredModels = models.filter(item =>
@@ -265,6 +271,70 @@ export function SettingsDialog({
         link.url !== primaryAuthLink?.url && links.findIndex(candidate => candidate.url === link.url) === index,
     ) ?? [];
   const authRetryable = authFlow?.status === "failed" || authFlow?.status === "cancelled";
+  /* The flow renders under the provider row that started it, so you keep
+     your place in the list and it is obvious which account is connecting.
+     A prompt that names no provider still falls back to the top. */
+  const authTask = (authFlow || providerPrompt) && (
+            <section
+              className={`provider-auth-task is-${authFlow?.status ?? "running"}`}
+              aria-labelledby="provider-auth-title">
+              <header>
+                <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
+                <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>
+                  {authFlow?.message ?? "Authentication requires a response."}
+                </p>
+                {authFlow?.instructions && authFlow.instructions !== authFlow.message && (
+                  <p className="provider-auth-instructions">{authFlow.instructions}</p>
+                )}
+              </header>
+              <div className="provider-auth-actions">
+                {primaryAuthLink && (
+                  <a
+                    className="provider-auth-primary"
+                    href={primaryAuthLink.url}
+                    target="_blank"
+                    rel="noopener noreferrer">
+                    {primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} />
+                    <span className="sr-only"> (opens in a new tab)</span>
+                  </a>
+                )}
+                {authRetryable && authFlow && (
+                  <button
+                    type="button"
+                    className="provider-auth-retry"
+                    onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>
+                    Try again
+                  </button>
+                )}
+                {authRunning && (
+                  <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              {authFlow?.deviceCode && (
+                <div className="provider-device-code">
+                  <span>One-time code</span>
+                  <code>{authFlow.deviceCode.userCode}</code>
+                </div>
+              )}
+              {secondaryAuthLinks.length > 0 && (
+                <div className="provider-auth-links">
+                  {secondaryAuthLinks.map(link => (
+                    <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">
+                      {link.label ?? "Open provider page"} <IconExternalLink size={14} />
+                      <span className="sr-only"> (opens in a new tab)</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+              {providerPrompt && (
+                <div className="provider-auth-manual">
+                  <UiDialog request={providerPrompt} />
+                </div>
+              )}
+            </section>
+  );
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -567,67 +637,27 @@ export function SettingsDialog({
                   aria-label="Filter providers"
                 />
               </div>
-              {(authFlow || providerPrompt) && (
-                <section
-                  className={`provider-auth-task is-${authFlow?.status ?? "running"}`}
-                  aria-labelledby="provider-auth-title">
-                  <header>
-                    <h3 id="provider-auth-title">{authFlow?.providerName ?? "Provider authentication"}</h3>
-                    <p className="provider-auth-status" role={authFlow?.status === "failed" ? "alert" : "status"}>
-                      {authFlow?.message ?? "Authentication requires a response."}
-                    </p>
-                    {authFlow?.instructions && authFlow.instructions !== authFlow.message && (
-                      <p className="provider-auth-instructions">{authFlow.instructions}</p>
-                    )}
-                  </header>
-                  <div className="provider-auth-actions">
-                    {primaryAuthLink && (
-                      <a
-                        className="provider-auth-primary"
-                        href={primaryAuthLink.url}
-                        target="_blank"
-                        rel="noopener noreferrer">
-                        {primaryAuthLink.label ?? "Open provider page"} <IconExternalLink size={15} />
-                        <span className="sr-only"> (opens in a new tab)</span>
-                      </a>
-                    )}
-                    {authRetryable && authFlow && (
-                      <button
-                        type="button"
-                        className="provider-auth-retry"
-                        onClick={() => onProviderLogin(authFlow.providerId, authFlow.authType)}>
-                        Try again
-                      </button>
-                    )}
-                    {authRunning && (
-                      <button type="button" className="provider-auth-cancel" onClick={onProviderCancel}>
-                        Cancel
-                      </button>
-                    )}
-                  </div>
-                  {authFlow?.deviceCode && (
-                    <div className="provider-device-code">
-                      <span>One-time code</span>
-                      <code>{authFlow.deviceCode.userCode}</code>
-                    </div>
-                  )}
-                  {secondaryAuthLinks.length > 0 && (
-                    <div className="provider-auth-links">
-                      {secondaryAuthLinks.map(link => (
-                        <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer">
-                          {link.label ?? "Open provider page"} <IconExternalLink size={14} />
-                          <span className="sr-only"> (opens in a new tab)</span>
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {providerPrompt && (
-                    <div className="provider-auth-manual">
-                      <UiDialog request={providerPrompt} />
-                    </div>
-                  )}
-                </section>
-              )}
+              {/* Three words rather than a segmented control, and the counts
+                  answer "how many of each" before you pick one. */}
+              <div className="settings-filter" role="group" aria-label="Filter providers by connection">
+                {(
+                  [
+                    ["all", "All", filteredProviders.length, undefined],
+                    ["connected", "Connected", connectedProviders.length, "done"],
+                    ["available", "Not connected", availableProviders.length, "neutral"],
+                  ] as const
+                ).map(([value, label, count, orb]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={providerFilter === value}
+                    onClick={() => setProviderFilter(value)}>
+                    {orb && <OverviewOrb state={orb} label={label} />}
+                    {label} <b>{count}</b>
+                  </button>
+                ))}
+              </div>
+              {!authFlow && providerPrompt && authTask}
               {providers.length === 0 && (
                 <div className="settings-empty">
                   <IconKey size={22} />
@@ -656,9 +686,23 @@ export function SettingsDialog({
                           <div className="settings-provider-list">
                             {group.providers.map(provider => (
                               <section
-                                className="settings-provider"
+                                className={`settings-provider${authFlow?.providerId === provider.id ? " is-open" : ""}`}
                                 data-settings-search-target={`provider-${settingSearchTarget(provider.id)}`}
                                 key={provider.id}>
+                                {/* Green once connected, amber while a sign-in
+                                    is in flight, grey when there is nothing
+                                    set up. The provider is not a preference,
+                                    so the orb reports state, not provenance. */}
+                                <OverviewOrb
+                                  state={
+                                    authFlow?.providerId === provider.id && authRunning
+                                      ? "attention"
+                                      : provider.configured
+                                        ? "done"
+                                        : "neutral"
+                                  }
+                                  label={provider.configured ? "connected" : "not connected"}
+                                />
                                 <div className="settings-provider-copy">
                                   <span>
                                     <strong>{provider.name}</strong>
@@ -695,6 +739,7 @@ export function SettingsDialog({
                                     </button>
                                   )}
                                 </div>
+                                {authFlow?.providerId === provider.id && authTask}
                               </section>
                             ))}
                           </div>
@@ -814,7 +859,11 @@ export function SettingsDialog({
                           <h4>Package defaults</h4>
                           <p>Configuration owned by this package.</p>
                         </div>
-                        <span>Global</span>
+                        <PackageDefaultsReset
+                          settings={selectedPackage.settings}
+                          disabled={Boolean(busy)}
+                          onUpdate={settings => onUpdate(selectedPackage, settings)}
+                        />
                       </header>
                       {hasPackageFields(selectedPackage.settings) && selectedPackage.settings ? (
                         <PackageFields
@@ -1088,13 +1137,17 @@ export function SettingsDialog({
                         aria-labelledby={`model-group-${group.provider}`}>
                         <header>
                           <h3 id={`model-group-${group.provider}`}>{group.provider}</h3>
-                          <label className="settings-model-all">
+                          {/* The same switch the rows use, so a group and the
+                              models inside it read as one control. */}
+                          <label className="settings-model-all package-switch">
+                            <span>Show all</span>
                             <input
                               type="checkbox"
+                              role="switch"
                               checked={allVisible}
+                              aria-label={`Show all ${group.provider} models`}
                               onChange={event => setProviderVisible(group.items, event.target.checked)}
                             />
-                            Show all
                           </label>
                         </header>
                         <div className="settings-provider-list">
@@ -1147,15 +1200,82 @@ export function SettingsDialog({
                   <p>Choose the color theme used throughout Pylon.</p>
                 </div>
               </div>
-              <span className="settings-kicker">Color theme</span>
+              <SettingsSectionHead
+                label="Color theme"
+                changed={theme !== DEFAULT_THEME}
+                onReset={() => onThemeChange(DEFAULT_THEME)}
+              />
               <ColorThemeOptions theme={theme} onChange={onThemeChange} />
-              <span className="settings-kicker settings-syntax-kicker">Syntax theme</span>
+              <SettingsSectionHead
+                label="Syntax theme"
+                className="settings-syntax-kicker"
+                changed={syntaxTheme !== DEFAULT_SYNTAX_THEME}
+                onReset={() => onSyntaxThemeChange(DEFAULT_SYNTAX_THEME)}
+              />
               <SyntaxThemeSelect value={syntaxTheme} onChange={onSyntaxThemeChange} />
             </section>
           </div>
         </div>
+        <SettingsLegend tab={activeTab} />
       </div>
     </div>
+  );
+}
+
+/* The orbs need naming once, but only on panes that have a rail to read.
+   Providers names its own states in words, and Models says shown or hidden
+   next to every switch, so neither one needs a key. */
+const SPLIT_LEGEND_TABS: SettingsTab[] = ["packages", "extensions"];
+const SIMPLE_LEGEND_TABS: SettingsTab[] = ["policy", "agent-models", "notifications", "appearance", "hooks"];
+
+function SettingsLegend({ tab }: { tab: SettingsTab }) {
+  const split = SPLIT_LEGEND_TABS.includes(tab);
+  if (!split && !SIMPLE_LEGEND_TABS.includes(tab)) return null;
+  return (
+    <footer className="settings-legend" aria-hidden="true">
+      <span>
+        <i className="overview-orb is-neutral" /> default
+      </span>
+      <span>
+        <i className="overview-orb is-changed" /> set
+      </span>
+      {split && (
+        <>
+          <span>
+            <i className="overview-orb is-neutral run-active" /> default, live
+          </span>
+          <span>
+            <i className="overview-orb is-changed run-deferred" /> set, deferred
+          </span>
+        </>
+      )}
+    </footer>
+  );
+}
+
+/* A section whose control is not a row still reports whether you moved it
+   off the default, so the whole dialog answers the same question. */
+function SettingsSectionHead({
+  label,
+  className,
+  changed,
+  onReset,
+}: {
+  label: string;
+  className?: string;
+  changed: boolean;
+  onReset: () => void;
+}) {
+  return (
+    <span className={`settings-kicker${className ? ` ${className}` : ""}`}>
+      <OverviewOrb state={changed ? "changed" : "neutral"} label={changed ? "changed" : "default"} />
+      {label}
+      {changed && (
+        <button className="package-row-reset" type="button" onClick={onReset}>
+          Reset
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -1169,21 +1289,34 @@ function toolOrbState(effective: string): OverviewState {
   return effective === "deferred" ? "attention" : "neutral";
 }
 
+/* The orb reports whether the model is actually in the switcher: green when
+   it is, grey when you have hidden it. Hiding is also the only way this row
+   can differ from its default, so the reset hangs off the same condition. */
 function ModelVisibilityControl({ model, hidden }: { model: ModelOptionReadModel; hidden: boolean }) {
   const key = modelKey(model);
   return (
     <label
       className="settings-model-row"
       data-settings-search-target={`model-${settingSearchTarget(`${model.provider}-${model.id}`)}`}>
+      <OverviewOrb state={hidden ? "neutral" : "done"} label={hidden ? "hidden" : "shown"} />
       <span>
         <strong>{model.name}</strong>
         <small>{model.id}</small>
       </span>
-      <input
-        type="checkbox"
-        checked={!hidden}
-        onChange={event => setHiddenModelVisible(key, event.target.checked)}
-      />
+      {/* No reset here: the switch is the reset. Every model is shown by
+          default, so flipping it back is the whole revert. */}
+      <span className="settings-row-control">
+        <span className="package-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            checked={!hidden}
+            aria-label={`Show ${model.name}`}
+            onChange={event => setHiddenModelVisible(key, event.target.checked)}
+          />
+          <small>{hidden ? "Hidden" : "Shown"}</small>
+        </span>
+      </span>
     </label>
   );
 }
@@ -1378,14 +1511,10 @@ function AndroidToolingSettings({
   );
 }
 
-const defaultGlobalPolicy: RuntimePolicyReadModel["global"] = {
-  timelineEnabled: true,
-  guardEnabled: true,
-  guardRules: { ...DEFAULT_GUARD_RULES },
-  workspace: "local",
-  guardTimeoutSeconds: 60,
-  clarifyTimeoutSeconds: 60,
-};
+/* Policy rows all report the same thing, so they share one orb. */
+function PolicyOrb({ changed }: { changed: boolean }) {
+  return <OverviewOrb state={changed ? "changed" : "neutral"} label={changed ? "changed" : "default"} />;
+}
 
 function GlobalPolicySettings({
   policy,
@@ -1396,9 +1525,10 @@ function GlobalPolicySettings({
   disabled: boolean;
   onUpdate: (settings: RuntimePolicyReadModel["global"], expectedRevision: number) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState<RuntimePolicyReadModel["global"]>(policy?.global ?? defaultGlobalPolicy);
+  const [draft, setDraft] = useState<RuntimePolicyReadModel["global"]>(policy?.global ?? defaultGlobalPolicy());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const policyDefaults = defaultGlobalPolicy();
   const latestPolicy = useRef(policy);
   const saveRequest = useRef(0);
 
@@ -1434,6 +1564,14 @@ function GlobalPolicySettings({
     }
   };
   const controlsDisabled = disabled || busy;
+  const draftGuardRules = draft.guardRules ?? DEFAULT_GUARD_RULES;
+  const changedPolicyCount =
+    (draft.timelineEnabled !== policyDefaults.timelineEnabled ? 1 : 0) +
+    (draft.guardEnabled !== policyDefaults.guardEnabled ? 1 : 0) +
+    (draft.workspace !== policyDefaults.workspace ? 1 : 0) +
+    (draft.guardTimeoutSeconds !== policyDefaults.guardTimeoutSeconds ? 1 : 0) +
+    (draft.clarifyTimeoutSeconds !== policyDefaults.clarifyTimeoutSeconds ? 1 : 0) +
+    GUARD_RISK_CATEGORIES.filter(c => draftGuardRules[c] !== policyDefaults.guardRules[c]).length;
 
   return (
     <>
@@ -1445,6 +1583,15 @@ function GlobalPolicySettings({
             unchanged. Verify is configured per project in Inspector.
           </p>
         </div>
+        {changedPolicyCount > 0 && (
+          <button
+            type="button"
+            className="workbench-reset"
+            disabled={controlsDisabled}
+            onClick={() => void save({ ...draft, ...defaultGlobalPolicy(), toolOverrides: draft.toolOverrides })}>
+            Reset {changedPolicyCount} setting{changedPolicyCount === 1 ? "" : "s"}
+          </button>
+        )}
       </div>
 
       <div className="policy-inheritance" aria-label="Policy inheritance order">
@@ -1465,6 +1612,7 @@ function GlobalPolicySettings({
         </header>
         <div className="settings-policy-list">
           <div className="settings-policy-row" data-settings-search-target="timeline">
+            <PolicyOrb changed={draft.timelineEnabled !== policyDefaults.timelineEnabled} />
             <span>
               <strong>Timeline</strong>
               <small>Keep recoverable checkpoints for session activity.</small>
@@ -1482,6 +1630,7 @@ function GlobalPolicySettings({
             </label>
           </div>
           <div className="settings-policy-row" data-settings-search-target="guard">
+            <PolicyOrb changed={draft.guardEnabled !== policyDefaults.guardEnabled} />
             <span>
               <strong>Guard</strong>
               <small>Ask before guarded commands and paths run.</small>
@@ -1503,6 +1652,9 @@ function GlobalPolicySettings({
               className="settings-policy-row"
               data-settings-search-target={settingSearchTarget(GUARD_RULE_LABELS[category])}
               key={category}>
+              <PolicyOrb
+                changed={(draft.guardRules ?? DEFAULT_GUARD_RULES)[category] !== policyDefaults.guardRules[category]}
+              />
               <span>
                 <strong>{GUARD_RULE_LABELS[category]}</strong>
                 <small>{GUARD_RULE_DESCRIPTIONS[category]}</small>
@@ -1533,6 +1685,8 @@ function GlobalPolicySettings({
             description="How long a confirmation request stays open."
             value={draft.guardTimeoutSeconds}
             disabled={controlsDisabled}
+            changed={draft.guardTimeoutSeconds !== policyDefaults.guardTimeoutSeconds}
+            onResetDefault={() => void save({ ...draft, guardTimeoutSeconds: policyDefaults.guardTimeoutSeconds })}
             onChange={guardTimeoutSeconds => void save({ ...draft, guardTimeoutSeconds })}
           />
           <RuntimePolicyTimeoutControl
@@ -1541,6 +1695,8 @@ function GlobalPolicySettings({
             description="How long Pylon waits for a clarification answer."
             value={draft.clarifyTimeoutSeconds}
             disabled={controlsDisabled}
+            changed={draft.clarifyTimeoutSeconds !== policyDefaults.clarifyTimeoutSeconds}
+            onResetDefault={() => void save({ ...draft, clarifyTimeoutSeconds: policyDefaults.clarifyTimeoutSeconds })}
             onChange={clarifyTimeoutSeconds => void save({ ...draft, clarifyTimeoutSeconds })}
           />
         </div>
@@ -1553,6 +1709,7 @@ function GlobalPolicySettings({
         </header>
         <div className="settings-policy-list">
           <label className="settings-policy-row" data-settings-search-target="workspace">
+            <PolicyOrb changed={draft.workspace !== policyDefaults.workspace} />
             <span>
               <strong>Workspace</strong>
               <small>Local does not create a branch or worktree.</small>
@@ -1596,11 +1753,22 @@ function PackageRow({
   label,
   description,
   stacked = false,
+  changed,
+  onReset,
+  live,
   children,
 }: {
   label: string;
   description?: string;
   stacked?: boolean;
+  /* Undefined where the setting publishes no default, so the orb reports
+     nothing rather than claiming the value is untouched. */
+  changed?: boolean;
+  onReset?: () => void;
+  /* Some rows configure a thing that is either running or not. For those the
+     orb reports that, because whether it matches a default says nothing
+     useful about an agent that is switched off. */
+  live?: boolean;
   children: ReactNode;
 }) {
   const searchTarget = useContext(PackageSearchTargetContext);
@@ -1610,11 +1778,26 @@ function PackageRow({
     <div
       className={`package-row${stacked ? " is-stacked" : ""}`}
       data-settings-search-target={settingSearchTarget(label)}>
-      <span>
+      <OverviewOrb
+        state={live === undefined ? (changed ? "changed" : "neutral") : live ? "done" : "neutral"}
+        label={live === undefined ? (changed ? "changed" : "default") : live ? "configured" : "not configured"}
+      />
+      <span className="package-row-copy">
         <strong>{label}</strong>
         {description && <small>{description}</small>}
       </span>
-      {stacked ? children : <span className="package-row-control">{children}</span>}
+      {stacked ? (
+        children
+      ) : (
+        <span className="package-row-control">
+          {changed && onReset && (
+            <button className="package-row-reset" type="button" onClick={onReset}>
+              Reset
+            </button>
+          )}
+          {children}
+        </span>
+      )}
     </div>
   );
 }
@@ -1676,9 +1859,30 @@ function PackageNumber({
   disabled: boolean;
   onChange: (value: number) => void;
 }) {
+  const input = useRef<HTMLInputElement>(null);
+
+  /* One place decides whether a typed or stepped value is allowed, so the
+     buttons and the keyboard cannot disagree about the bounds. */
+  const clamp = (next: number) => {
+    if (!Number.isFinite(next)) return undefined;
+    const bounded = Math.min(max ?? Number.MAX_SAFE_INTEGER, Math.max(min ?? Number.MIN_SAFE_INTEGER, next));
+    const rounded = integer ? Math.round(bounded) : bounded;
+    return Number.isSafeInteger(rounded) || !integer ? rounded : undefined;
+  };
+  const commit = (next: number | undefined) => {
+    if (next === undefined) {
+      if (input.current) input.current.value = String(value);
+      return;
+    }
+    if (input.current) input.current.value = String(next);
+    if (next !== value) onChange(next);
+  };
+  const nudge = (direction: 1 | -1) => commit(clamp(Number(input.current?.value ?? value) + direction * step));
+
   return (
-    <>
+    <span className={`number-field${disabled ? " is-disabled" : ""}`}>
       <input
+        ref={input}
         key={value}
         type="number"
         min={min}
@@ -1687,33 +1891,30 @@ function PackageNumber({
         defaultValue={value}
         disabled={disabled}
         aria-label={label}
-        onBlur={event => {
-          const next = Number(event.target.value);
-          if (
-            Number.isFinite(next) &&
-            (!integer || Number.isSafeInteger(next)) &&
-            (min === undefined || next >= min) &&
-            (max === undefined || next <= max)
-          ) {
-            if (next !== value) onChange(next);
-            return;
-          }
-          event.currentTarget.value = String(value);
-        }}
+        onBlur={event => commit(clamp(Number(event.target.value)))}
       />
       {unit && <span className="unit">{unit}</span>}
-    </>
+      {/* The native spinner crowds the digits and renders differently in
+          every browser, so the field draws its own. */}
+      <span className="number-step" aria-hidden="true">
+        <button type="button" tabIndex={-1} disabled={disabled || (max !== undefined && value >= max)} onClick={() => nudge(1)}>
+          <IconChevronUp size={11} />
+        </button>
+        <button type="button" tabIndex={-1} disabled={disabled || (min !== undefined && value <= min)} onClick={() => nudge(-1)}>
+          <IconChevronDown size={11} />
+        </button>
+      </span>
+    </span>
   );
 }
 
-/* Multi-select sets were stacked checkbox fieldsets a full row tall each; chips
-   carry the same choices without the row losing shape. At least one stays on. */
 function PackageChips({
   label,
   description,
   options,
   value,
   disabled,
+  live,
   onChange,
 }: {
   label: string;
@@ -1721,10 +1922,11 @@ function PackageChips({
   options: { value: string; label: string }[];
   value: string[];
   disabled: boolean;
+  live: boolean;
   onChange: (value: string[]) => void;
 }) {
   return (
-    <PackageRow label={label} description={description} stacked>
+    <PackageRow label={label} description={description} stacked live={live}>
       <div className="package-chips">
         {options.map(option => (
           <label className="package-chip" key={option.value}>
@@ -1742,6 +1944,82 @@ function PackageChips({
       </div>
     </PackageRow>
   );
+}
+
+/* Only generic packages publish a defaultValue per field, so only they can
+   be counted and put back. Every other kind renders "Global" as before. */
+function PackageDefaultsReset({
+  settings,
+  disabled,
+  onUpdate,
+}: {
+  settings?: PackageSettingsReadModel;
+  disabled: boolean;
+  onUpdate: (settings: PackageSettingsReadModel) => void;
+}) {
+  if (!settings) return <span>Global</span>;
+
+  /* Generic packages carry a default per field; typed ones publish one map
+     for the whole kind. Either way the count and the revert come from what
+     the package itself says it ships with. */
+  const revert =
+    settings.kind === "generic"
+      ? (() => {
+          const changed = settings.fields.filter(field => !sameSettingValue(field.value, field.defaultValue));
+          if (!changed.length) return undefined;
+          return {
+            count: changed.length,
+            apply: () =>
+              onUpdate({
+                ...settings,
+                fields: settings.fields.map(field => ({
+                  ...field,
+                  value: field.defaultValue,
+                })) as typeof settings.fields,
+              }),
+          };
+        })()
+      : (() => {
+          const defaults = (settings as { defaults?: Record<string, unknown> }).defaults;
+          if (!defaults) return undefined;
+          const live = settings as unknown as Record<string, unknown>;
+          const changed = Object.keys(defaults).filter(key => !sameSettingValue(live[key], defaults[key]));
+          if (!changed.length) return undefined;
+          return { count: changed.length, apply: () => onUpdate({ ...settings, ...defaults }) };
+        })();
+
+  if (!revert) return <span>Global</span>;
+  return (
+    <button type="button" className="workbench-reset" disabled={disabled} onClick={revert.apply}>
+      Reset {revert.count} setting{revert.count === 1 ? "" : "s"}
+    </button>
+  );
+}
+
+/* Pairs a row with the value its package ships: the orb and the reset both
+   come from comparing what is set now against that default. Returns nothing
+   when the package publishes no default for the key, so the row stays
+   unmarked rather than claiming the value is untouched. */
+function packageProvenance<S extends object>(settings: S, onUpdate: (next: S) => void) {
+  /* Generic packages carry defaults per field instead, so this reads the map
+     defensively rather than narrowing the settings union. */
+  const defaults = (settings as { defaults?: Record<string, unknown> }).defaults;
+  return (key: string) => {
+    const fallback = defaults?.[key];
+    if (fallback === undefined) return {};
+    return {
+      changed: !sameSettingValue((settings as Record<string, unknown>)[key], fallback),
+      onReset: () => onUpdate({ ...settings, [key]: fallback }),
+    };
+  };
+}
+
+/* Settings values are primitives, string lists, or a prompt object. A
+   structural compare covers all three without a per-type branch. */
+function sameSettingValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function hasPackageFields(settings: PackageSettingsReadModel | undefined): boolean {
@@ -1880,13 +2158,18 @@ function GenericPackageFields({
     <div className="package-list">
       {settings.fields.map(field => {
         const description = [field.description, `Applies ${field.apply.replace("-", " ")}.`].filter(Boolean).join(" ");
+        /* Generic fields ship their own defaultValue, so the row can say
+           whether you moved it and put it back. Lists and prompts are
+           objects, so compare by value rather than by reference. */
+        const changed = !sameSettingValue(field.value, field.defaultValue);
+        const resetField = () => updateField(field.key, field.defaultValue);
         if (field.type === "model") {
           const options = visibleModels(models, hiddenModels);
           const selected = models.find(model => modelKey(model) === field.value);
           if (selected && !options.some(model => modelKey(model) === field.value)) options.push(selected);
           const missing = field.value && !options.some(model => modelKey(model) === field.value);
           return (
-            <PackageRow key={field.key} label={field.label} description={description}>
+            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
               <select
                 aria-label={field.label}
                 value={field.value}
@@ -1906,7 +2189,7 @@ function GenericPackageFields({
 
         if (field.type === "boolean") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description}>
+            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
               <PackageSwitch
                 label={field.label}
                 checked={field.value}
@@ -1918,7 +2201,7 @@ function GenericPackageFields({
         }
         if (field.type === "integer" || field.type === "number") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description}>
+            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
               <PackageNumber
                 label={field.label}
                 value={field.value}
@@ -1935,7 +2218,7 @@ function GenericPackageFields({
         }
         if (field.type === "enum") {
           return (
-            <PackageRow key={field.key} label={field.label} description={description}>
+            <PackageRow key={field.key} label={field.label} description={description} changed={changed} onReset={resetField}>
               <select
                 aria-label={field.label}
                 value={field.value}
@@ -2066,12 +2349,14 @@ function PackageModelFields({
   onUpdate: (settings: PackageSettingsReadModel) => void;
 }) {
   const hiddenModels = useHiddenModels();
+  const provenance = packageProvenance(settings, onUpdate);
 
   if (settings.kind === "generic") {
     const field = settings.fields.find(candidate => candidate.key === "delegateNamingModel");
     if (!field || field.type !== "model") return null;
     return (
       <PackageRow
+        live={Boolean(field.value)}
         label="Naming model"
         description="Assigns short semantic names to delegated agents. Applies next session.">
         <OptionalModelSelect
@@ -2101,7 +2386,7 @@ function PackageModelFields({
     );
     return (
       <>
-        <PackageRow label="Model" description={`Disabled turns ${noun} off for every session.`}>
+        <PackageRow live={settings.mode !== "disabled"} label="Model" description={`Disabled turns ${noun} off for every session.`}>
           <ModelModeSelect
             label={`${settings.kind} model`}
             value={settings.mode === "model" ? settings.model! : settings.mode}
@@ -2110,7 +2395,7 @@ function PackageModelFields({
             onChange={value => onUpdate({ ...settings, ...modelModeUpdate(value) })}
           />
         </PackageRow>
-        <PackageRow label="Thinking" description="Inherits the session level unless set here.">
+        <PackageRow live={settings.thinking !== undefined} label="Thinking" description="Inherits the session level unless set here.">
           <ThinkingSelect
             label={`${settings.kind} thinking`}
             value={settings.thinking}
@@ -2124,9 +2409,10 @@ function PackageModelFields({
   }
 
   if (settings.kind === "grunt") {
+    const thinkingOptions = thinkingChipOptions();
     return (
       <>
-        <PackageRow label="Model" description="Disabled turns the grunt off for every session.">
+        <PackageRow live={settings.mode !== "disabled"} label="Model" description="Disabled turns the grunt off for every session.">
           <ModelModeSelect
             label="Grunt model"
             value={settings.mode === "model" ? settings.model! : settings.mode}
@@ -2138,9 +2424,10 @@ function PackageModelFields({
         <PackageChips
           label="Eligible thinking levels"
           description="Levels a grunt run may use. At least one stays selected."
-          options={thinkingChipOptions()}
+          options={thinkingOptions}
           value={settings.thinkingLevels}
           disabled={disabled}
+          live={settings.thinkingLevels.length < thinkingOptions.length}
           onChange={levels => onUpdate({ ...settings, thinkingLevels: levels as ThinkingLevelReadModel[] })}
         />
       </>
@@ -2150,6 +2437,7 @@ function PackageModelFields({
   if (settings.kind === "timeline") {
     return (
       <PackageRow
+        live={settings.checkpointTitleMode !== "disabled"}
         label="Timeline titles"
         description="Generate semantic checkpoint and session titles with the session model or a selected model.">
         <ModelModeSelect
@@ -2219,6 +2507,7 @@ function PackageModelFields({
         .filter(ref => !available.some(model => model.value === ref))
         .map(ref => ({ value: ref, label: ref })),
     ];
+    const thinkingOptions = thinkingChipOptions();
     return (
       <>
         <PackageRow label="All available models" description="Let private agents use every model the session can see.">
@@ -2235,14 +2524,16 @@ function PackageModelFields({
           options={options}
           value={eligible ?? []}
           disabled={disabled || eligible === undefined}
+          live={eligible !== undefined && eligible.length < options.length}
           onChange={next => onUpdate({ ...settings, models: next })}
         />
         <PackageChips
           label="Private-agent thinking"
           description="Thinking levels a private agent may be spawned with."
-          options={thinkingChipOptions()}
+          options={thinkingOptions}
           value={settings.agentThinkingLevels}
           disabled={disabled}
+          live={settings.agentThinkingLevels.length < thinkingOptions.length}
           onChange={levels => onUpdate({ ...settings, agentThinkingLevels: levels as ThinkingLevelReadModel[] })}
         />
       </>
@@ -2277,6 +2568,7 @@ function PackageFieldsContent({
   onUpdate,
 }: Omit<PackageFieldsProps, "searchTarget">) {
   const searchTarget = useContext(PackageSearchTargetContext);
+  const provenance = packageProvenance(settings, onUpdate);
   if (settings.kind === "generic") {
     return <GenericPackageFields settings={settings} models={models} disabled={disabled} onUpdate={onUpdate} />;
   }
@@ -2300,7 +2592,7 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={prompt => onUpdate({ ...settings, prompt })}
         />
-        <PackageRow
+        <PackageRow {...provenance("gitTimeoutMs")}
           label="Git timeout"
           description="Maximum time for each Timeline git operation. Applies to the next session.">
           <PackageNumber
@@ -2314,7 +2606,7 @@ function PackageFieldsContent({
             onChange={gitTimeoutMs => onUpdate({ ...settings, gitTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("titleTimeoutMs")}
           label="Title generation timeout"
           description="Maximum time for each session or checkpoint title call. Applies to the next session.">
           <PackageNumber
@@ -2328,7 +2620,7 @@ function PackageFieldsContent({
             onChange={titleTimeoutMs => onUpdate({ ...settings, titleTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("titleMaxTokens")}
           label="Title maximum output"
           description="Maximum tokens generated for a Timeline title. Applies to the next session.">
           <PackageNumber
@@ -2341,7 +2633,7 @@ function PackageFieldsContent({
             onChange={titleMaxTokens => onUpdate({ ...settings, titleMaxTokens })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("titleChangedFiles")}
           label="Changed files in title prompt"
           description="Maximum changed-file paths supplied to checkpoint title generation. Applies to the next session.">
           <PackageNumber
@@ -2398,7 +2690,7 @@ function PackageFieldsContent({
         />
         {settings.kind === "advisor" && (
           <>
-            <PackageRow
+            <PackageRow {...provenance("maxCalls")}
               label="Maximum consultations"
               description="Maximum Advisor calls for each original user prompt.">
               <PackageNumber
@@ -2410,7 +2702,7 @@ function PackageFieldsContent({
                 onChange={maxCalls => onUpdate({ ...settings, maxCalls })}
               />
             </PackageRow>
-            <PackageRow label="Consultation timeout" description="Stops an Advisor consultation after this duration.">
+            <PackageRow {...provenance("timeoutMs")} label="Consultation timeout" description="Stops an Advisor consultation after this duration.">
               <PackageNumber
                 label="Consultation timeout"
                 value={settings.timeoutMs}
@@ -2422,7 +2714,7 @@ function PackageFieldsContent({
                 onChange={timeoutMs => onUpdate({ ...settings, timeoutMs })}
               />
             </PackageRow>
-            <PackageRow
+            <PackageRow {...provenance("maxCostUsd")}
               label="Maximum consultation cost"
               description="Stops an Advisor consultation when this cost limit is reached.">
               <PackageNumber
@@ -2437,7 +2729,7 @@ function PackageFieldsContent({
                 onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
               />
             </PackageRow>
-            <PackageRow label="Maximum output tokens" description="Caps each Advisor response.">
+            <PackageRow {...provenance("maxOutputTokens")} label="Maximum output tokens" description="Caps each Advisor response.">
               <PackageNumber
                 label="Maximum output tokens"
                 value={settings.maxOutputTokens}
@@ -2448,7 +2740,7 @@ function PackageFieldsContent({
                 onChange={maxOutputTokens => onUpdate({ ...settings, maxOutputTokens })}
               />
             </PackageRow>
-            <PackageRow label="Input context budget" description="Caps the Advisor snapshot input token budget.">
+            <PackageRow {...provenance("inputTokenBudget")} label="Input context budget" description="Caps the Advisor snapshot input token budget.">
               <PackageNumber
                 label="Input context budget"
                 value={settings.inputTokenBudget}
@@ -2464,7 +2756,7 @@ function PackageFieldsContent({
         )}
         {settings.kind === "scout" && (
           <>
-            <PackageRow
+            <PackageRow {...provenance("repoTimeoutMs")}
               label="Repository scout timeout"
               description="Stops a repository scout run after this duration.">
               <PackageNumber
@@ -2478,7 +2770,7 @@ function PackageFieldsContent({
                 onChange={repoTimeoutMs => onUpdate({ ...settings, repoTimeoutMs })}
               />
             </PackageRow>
-            <PackageRow label="Maximum scout cost" description="Set to 0 for no cost limit.">
+            <PackageRow {...provenance("maxCostUsd")} label="Maximum scout cost" description="Set to 0 for no cost limit.">
               <PackageNumber
                 label="Maximum scout cost"
                 value={settings.maxCostUsd}
@@ -2491,7 +2783,7 @@ function PackageFieldsContent({
                 onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
               />
             </PackageRow>
-            <PackageRow
+            <PackageRow {...provenance("webSearchResults")}
               label="Web search results"
               description="Default URL candidates returned by each Web Scout search.">
               <PackageNumber
@@ -2540,7 +2832,7 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={prompt => onUpdate({ ...settings, prompt })}
         />
-        <PackageRow label="Execution mode" description="Isolated runs in a scratch workspace; direct runs in place.">
+        <PackageRow {...provenance("executionMode")} label="Execution mode" description="Isolated runs in a scratch workspace; direct runs in place.">
           <select
             aria-label="Execution mode"
             value={settings.executionMode}
@@ -2553,7 +2845,7 @@ function PackageFieldsContent({
             <option value="dynamic">Dynamic</option>
           </select>
         </PackageRow>
-        <PackageRow label="Worker timeout" description="Stops a worker run after this duration.">
+        <PackageRow {...provenance("timeoutMs")} label="Worker timeout" description="Stops a worker run after this duration.">
           <PackageNumber
             label="Worker timeout"
             value={settings.timeoutMs}
@@ -2566,7 +2858,7 @@ function PackageFieldsContent({
           />
         </PackageRow>
 
-        <PackageRow
+        <PackageRow {...provenance("maxTurns")}
           label="Maximum tool-call turns"
           description="The grunt stops after this many tool calls in one run.">
           <PackageNumber
@@ -2579,7 +2871,7 @@ function PackageFieldsContent({
             onChange={maxTurns => onUpdate({ ...settings, maxTurns })}
           />
         </PackageRow>
-        <PackageRow label="Maximum worker cost" description="Stops a worker run when this cost limit is reached.">
+        <PackageRow {...provenance("maxCostUsd")} label="Maximum worker cost" description="Stops a worker run when this cost limit is reached.">
           <PackageNumber
             label="Maximum worker cost"
             value={settings.maxCostUsd}
@@ -2592,7 +2884,7 @@ function PackageFieldsContent({
             onChange={maxCostUsd => onUpdate({ ...settings, maxCostUsd })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("parentContextChars")}
           label="Parent context"
           description="Include up to this many characters of parent-session context in each worker handoff.">
           <PackageNumber
@@ -2620,7 +2912,7 @@ function PackageFieldsContent({
             onChange={memoryEnabled => onUpdate({ ...settings, memoryEnabled })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("reserveTokens")}
           label="Automatic compaction reserve"
           description="Saved as the global default. Compaction begins when approximately this many context tokens remain; project .pi settings can override it.">
           <PackageNumber
@@ -2634,7 +2926,7 @@ function PackageFieldsContent({
             onChange={reserveTokens => onUpdate({ ...settings, reserveTokens })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("keepRecentTokens")}
           label="Continuity retained tokens"
           description="Recent raw history kept by Continuity compaction. Overrides Pi's retained-token value only for Continuity-owned compactions.">
           <PackageNumber
@@ -2648,7 +2940,7 @@ function PackageFieldsContent({
             onChange={keepRecentTokens => onUpdate({ ...settings, keepRecentTokens })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("compactionReviewTimeoutMs")}
           label="Compaction review timeout"
           description="Maximum time for a compaction reviewer call. Applies to the next review.">
           <PackageNumber
@@ -2662,7 +2954,7 @@ function PackageFieldsContent({
             onChange={compactionReviewTimeoutMs => onUpdate({ ...settings, compactionReviewTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("compactionReviewerMaxOutputTokens")}
           label="Compaction reviewer maximum output"
           description="Maximum tokens generated by the compaction reviewer. Applies to the next review.">
           <PackageNumber
@@ -2709,7 +3001,7 @@ function PackageFieldsContent({
             onChange={activePruning => onUpdate({ ...settings, activePruning })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("projectionMode")}
           label="Projection mode"
           description="Stable is experimental and enables the rollover multipliers below.">
           <select
@@ -2724,7 +3016,7 @@ function PackageFieldsContent({
             <option value="stable">Stable (experimental)</option>
           </select>
         </PackageRow>
-        <PackageRow label="Pruning threshold" description="Results larger than this are eligible for pruning.">
+        <PackageRow {...provenance("threshold")} label="Pruning threshold" description="Results larger than this are eligible for pruning.">
           <PackageNumber
             label="Pruning threshold"
             value={settings.threshold}
@@ -2742,7 +3034,7 @@ function PackageFieldsContent({
               label="Rollover"
               description="Stable projection only. The high multiplier must stay above the target."
             />
-            <PackageRow
+            <PackageRow {...provenance("rolloverHighMultiplier")}
               label="High multiplier"
               description="Rollover begins once retained content passes this multiple of the threshold.">
               <PackageNumber
@@ -2755,7 +3047,7 @@ function PackageFieldsContent({
                 onChange={rolloverHighMultiplier => onUpdate({ ...settings, rolloverHighMultiplier })}
               />
             </PackageRow>
-            <PackageRow
+            <PackageRow {...provenance("rolloverLowMultiplier")}
               label="Target multiplier"
               description="Rollover stops once retained content falls to this multiple.">
               <PackageNumber
@@ -2792,7 +3084,7 @@ function PackageFieldsContent({
           disabled={disabled}
           onChange={privateAgentSystemPrompt => onUpdate({ ...settings, privateAgentSystemPrompt })}
         />
-        <PackageRow label="Spawn timeout" description="Maximum child runtime. Set to 0 for unlimited.">
+        <PackageRow {...provenance("spawnTimeoutMs")} label="Spawn timeout" description="Maximum child runtime. Set to 0 for unlimited.">
           <PackageNumber
             label="Spawn timeout"
             value={settings.spawnTimeoutMs}
@@ -2805,7 +3097,7 @@ function PackageFieldsContent({
             onChange={spawnTimeoutMs => onUpdate({ ...settings, spawnTimeoutMs })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("recentThreadLimit")}
           label="Recent thread message limit"
           description="Default number of transcript messages returned by recent.">
           <PackageNumber
@@ -2818,7 +3110,7 @@ function PackageFieldsContent({
             onChange={recentThreadLimit => onUpdate({ ...settings, recentThreadLimit })}
           />
         </PackageRow>
-        <PackageRow
+        <PackageRow {...provenance("recentThreadMaxChars")}
           label="Recent thread message characters"
           description="Default maximum characters per transcript message.">
           <PackageNumber
@@ -2833,7 +3125,7 @@ function PackageFieldsContent({
             onChange={recentThreadMaxChars => onUpdate({ ...settings, recentThreadMaxChars })}
           />
         </PackageRow>
-        <PackageRow label="Recent thread total characters" description="Maximum total characters returned by recent.">
+        <PackageRow {...provenance("recentThreadTotalChars")} label="Recent thread total characters" description="Maximum total characters returned by recent.">
           <PackageNumber
             label="Recent thread total characters"
             value={settings.recentThreadTotalChars}
@@ -2940,7 +3232,11 @@ function ProfileRow({
   const levels = thinkingLevels(profile?.model, models, []);
   return (
     <div className="package-row">
-      <span>
+      <OverviewOrb
+        state={profile?.model ? "done" : "neutral"}
+        label={profile?.model ? "configured" : "not configured"}
+      />
+      <span className="package-row-copy">
         <strong>{label}</strong>
         <small>{description}</small>
       </span>

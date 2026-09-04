@@ -555,6 +555,9 @@ export interface PackageSummary {
 
 export type PackageModelMode = "disabled" | "session" | "model";
 
+/** A value a package setting can hold, and therefore default to. */
+export type PackageSettingPrimitiveReadModel = boolean | number | string | string[] | PromptSettingReadModel;
+
 export type GenericPackageSettingApplyTiming = "immediate" | "next-operation" | "next-session" | "reload";
 
 export type GenericPackageSettingReadField =
@@ -646,6 +649,7 @@ export type PackageSettingsReadModel =
   | GenericPackageSettingsReadModel
   | {
       kind: "advisor";
+      defaults?: Record<string, PackageSettingPrimitiveReadModel>;
       mode: PackageModelMode;
       model?: string;
       thinking?: import("./events.ts").ThinkingLevelReadModel;
@@ -659,6 +663,7 @@ export type PackageSettingsReadModel =
     }
   | {
       kind: "scout";
+      defaults?: Record<string, PackageSettingPrimitiveReadModel>;
       mode: PackageModelMode;
       model?: string;
       thinking?: import("./events.ts").ThinkingLevelReadModel;
@@ -671,6 +676,7 @@ export type PackageSettingsReadModel =
     }
   | {
       kind: "grunt";
+      defaults?: Record<string, PackageSettingPrimitiveReadModel>;
       mode: PackageModelMode;
       model?: string;
       executionMode: "isolated" | "direct" | "dynamic";
@@ -706,6 +712,7 @@ export type PackageSettingsReadModel =
     }
   | {
       kind: "timeline";
+      defaults?: Record<string, PackageSettingPrimitiveReadModel>;
       editRollbackDefault: boolean;
       checkpointTitleMode: PackageModelMode;
       checkpointTitleModel?: string;

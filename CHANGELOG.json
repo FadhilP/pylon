@@ -1,5 +1,18 @@
 [
   {
+    "version": "2.7.0",
+    "date": "Sep 4, 2026",
+    "title": "Clearer settings and faster session switching",
+    "summary": "Pylon makes configuration state easier to understand and reset, adds project-aware session switching to the composer, and improves delegated model selection and session lineage reliability.",
+    "notes": [
+      "Redesigned Settings as a compact workbench with provider filters, inline authentication status, consistent default and changed-state indicators, and one-click resets for package settings, global policies, timeouts, and appearance choices.",
+      "Added a composer session switcher that shows project, session, and Git branch context; searches sessions across projects; groups active and inactive work; and provides session actions alongside new-session and add-project flows.",
+      "Enriched Spawn model choices with authenticated-model pricing, tier, context-capacity, and reasoning metadata, plus bounded guidance for choosing the least expensive suitable model.",
+      "Made spawned-session ancestry resolve by session-file identity across projects, preserved links migrated from `.pi/agent` to `.pylon/agent`, and rejected forged or ambiguous parent references.",
+      "Aligned StateQL credential requests with Guard's longest finite timeout and upgraded the StateQL runtime to 0.8.1."
+    ]
+  },
+  {
     "version": "2.6.4",
     "date": "Sep 4, 2026",
     "title": "Visible skills and steadier continuity context",

@@ -201,6 +201,17 @@ export function validPackageSettingsDescriptor(value: unknown): value is Package
 }
 
 /** Defines an inert, storage-agnostic descriptor and rejects malformed metadata. */
+/* Typed packages already declare a defaultValue per field; this just lifts
+   those onto the read model so a settings surface can tell a value you chose
+   from the one the package ships with, and put it back. */
+export function packageSettingDefaults<T extends Record<string, PackageSettingField>>(
+  fields: T,
+): { [K in keyof T]: T[K]["defaultValue"] } {
+  const defaults = {} as { [K in keyof T]: T[K]["defaultValue"] };
+  for (const key of Object.keys(fields) as (keyof T)[]) defaults[key] = fields[key]!.defaultValue;
+  return defaults;
+}
+
 export function definePackageSettings<T extends PackageSettingsDescriptor>(descriptor: T): T {
   if (!validPackageSettingsDescriptor(descriptor)) throw new Error("invalid package settings descriptor");
   return descriptor;

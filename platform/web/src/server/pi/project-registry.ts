@@ -10,6 +10,7 @@ import {
   validGuardRules,
   type GuardRuleOverrides,
 } from "../../shared/guard-policy.ts";
+import { DEFAULT_DIALOG_TIMEOUT_SECONDS, defaultGlobalPolicy } from "../../shared/policy-defaults.ts";
 import type {
   DialogTimeoutSeconds,
   RuntimePolicyReadModel,
@@ -24,7 +25,6 @@ const VERSION = 13;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const MAX_PINNED_SESSIONS = 10_000;
-const DEFAULT_DIALOG_TIMEOUT_SECONDS = 60;
 const MAX_TOOL_OVERRIDES = 256;
 
 const GENERAL_TOOL_OVERRIDES: ToolOverrideReadModel = {
@@ -169,15 +169,7 @@ export class ProjectRegistry {
   private activeSessionOrder: string[] = [];
   private pinnedSessionIds: string[] = [];
   private sessionPolicies: SessionPolicyRecord[] = [];
-  private globalPolicy = {
-    timelineEnabled: true,
-    guardEnabled: true,
-    guardRules: { ...DEFAULT_GUARD_RULES },
-    workspace: "local" as WorkspacePolicyMode,
-    guardTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
-    clarifyTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS as DialogTimeoutSeconds,
-    toolOverrides: {} as ToolOverrideReadModel,
-  };
+  private globalPolicy = defaultGlobalPolicy();
   private policyRevision = 0;
   private loaded = false;
   private saveQueue = Promise.resolve();

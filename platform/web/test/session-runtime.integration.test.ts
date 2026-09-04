@@ -1441,11 +1441,25 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.ok(mainPrompt?.type === "prompt" && mainPrompt.defaultText?.includes("coding agent"));
     const allThinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
     const defaultPrompt = { mode: "default", text: "" } as const;
+    const typedPackageDefaults = {
+      advisor: {
+        maxCalls: 3,
+        timeoutMs: 900_000,
+        maxCostUsd: 0.5,
+        maxOutputTokens: 8_192,
+        inputTokenBudget: 32_768,
+        prompt: defaultPrompt,
+      },
+      scout: { repoTimeoutMs: 900_000, maxCostUsd: 1, webSearchResults: 5, prompt: defaultPrompt },
+      grunt: { timeoutMs: 3_600_000, maxTurns: 40, maxCostUsd: 2, parentContextChars: 0, prompt: defaultPrompt },
+    } as const;
     const assertPromptSettings = (actual: unknown, expected: unknown): void => {
       assert.ok(actual && typeof actual === "object");
-      const { promptDefaultText, ...persisted } = actual as Record<string, unknown>;
+      const { promptDefaultText, defaults, ...persisted } = actual as Record<string, unknown>;
       assert.ok(typeof promptDefaultText === "string" && promptDefaultText.length > 0);
       assert.deepEqual(persisted, expected);
+      const kind = (expected as Record<string, unknown>).kind as keyof typeof typedPackageDefaults;
+      assert.deepEqual(defaults, typedPackageDefaults[kind]);
     };
     assertPromptSettings(initialPackages.packages.find(item => item.id === "pi-spawn")?.settings, {
       kind: "spawn",

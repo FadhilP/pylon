@@ -9,6 +9,8 @@ import {
 } from "../shared/syntax-highlighting";
 
 export type Theme = "light" | "dark" | "warm";
+/** What the theme falls back to, and what "reset to default" restores. */
+export const DEFAULT_THEME: Theme = "dark";
 
 export function isTheme(value: unknown): value is Theme {
   return value === "light" || value === "dark" || value === "warm";
@@ -43,7 +45,7 @@ export function rememberSetting(key: string, value: string | number): void {
 
 function readInitialTheme(): Theme {
   const theme = document.documentElement.dataset.theme;
-  return isTheme(theme) ? theme : "dark";
+  return isTheme(theme) ? theme : DEFAULT_THEME;
 }
 
 /** Applies the theme to the document and the browser chrome, and remembers it. */

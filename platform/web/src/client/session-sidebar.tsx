@@ -598,7 +598,7 @@ export function SessionSidebar({
   );
 }
 
-function SessionRow({
+export function SessionRow({
   session,
   menuId,
   menuOpen,
@@ -667,12 +667,6 @@ function SessionRow({
         <span className="session-copy">
           <strong>{sessionTitle(session)}</strong>
           <small>
-            {session.parentSession && (
-              <>
-                Spawned from <span title={session.parentSession.id}>{session.parentSession.title}</span>
-                {" · "}
-              </>
-            )}
             {showProject ? (
               `${session.cwdLabel} · `
             ) : (

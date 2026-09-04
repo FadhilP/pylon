@@ -21,6 +21,7 @@ export { default as IconCheck } from "@tabler/icons-react/dist/esm/icons/IconChe
 export { default as IconChevronDown } from "@tabler/icons-react/dist/esm/icons/IconChevronDown.mjs";
 export { default as IconChevronLeft } from "@tabler/icons-react/dist/esm/icons/IconChevronLeft.mjs";
 export { default as IconChevronRight } from "@tabler/icons-react/dist/esm/icons/IconChevronRight.mjs";
+export { default as IconChevronUp } from "@tabler/icons-react/dist/esm/icons/IconChevronUp.mjs";
 export { default as IconCircle } from "@tabler/icons-react/dist/esm/icons/IconCircle.mjs";
 export { default as IconClock } from "@tabler/icons-react/dist/esm/icons/IconClock.mjs";
 export { default as IconContrast } from "@tabler/icons-react/dist/esm/icons/IconContrast.mjs";

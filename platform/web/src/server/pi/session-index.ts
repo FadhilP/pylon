@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
@@ -100,15 +100,18 @@ export class SessionIndex {
   private scannedAt = 0;
   private scan?: Promise<void>;
   private cache?: SessionSummaryCache;
+  private agentDir?: string;
 
   constructor(
     private registry?: ProjectRegistry,
     agentDir = process.env.PI_CODING_AGENT_DIR,
   ) {
+    this.agentDir = agentDir;
     if (agentDir) this.cache = new SessionSummaryCache(agentDir);
   }
 
   setAgentDir(agentDir: string): void {
+    this.agentDir = agentDir;
     this.cache = new SessionSummaryCache(agentDir);
     this.sessions = [];
     this.metadata.clear();
@@ -383,7 +386,7 @@ export class SessionIndex {
   private summary(
     session: SessionInfo,
     options: SessionIndexOptions,
-    sessionLookup: Map<string, SessionInfo>,
+    sessionLookup: Map<string, SessionInfo | undefined>,
     projectIdFor: (session: Pick<SessionInfo, "id" | "cwd">) => string = value => this.projectId(value),
     projectFor: (session: Pick<SessionInfo, "id" | "cwd">) => { label: string } | undefined = value =>
       this.registry?.projectForSession(value.id, value.cwd),
@@ -396,7 +399,7 @@ export class SessionIndex {
     const project = projectFor(session);
     const workStartedAt = options.workStartedAtFor?.(session.id);
     const runningUnderParentSessionId = options.runningUnderParentSessionIdFor?.(session.id);
-    const parent = owner ? sessionLookup.get(this.sessionKey(owner.id, session.cwd, owner.file)) : undefined;
+    const parent = owner ? this.parentSession(owner, sessionLookup) : undefined;
     const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
     return {
       id: session.id.slice(0, 128),
@@ -446,12 +449,37 @@ export class SessionIndex {
     }
   }
 
-  private sessionKey(id: string, cwd: string, path: string): string {
-    return `${id}\0${canonicalPath(cwd)}\0${canonicalPath(path)}`;
+  private sessionKey(id: string, path: string): string {
+    return `${id}\0${canonicalPath(path)}`;
   }
 
-  private sessionLookup(): Map<string, SessionInfo> {
-    return new Map(this.sessions.map(session => [this.sessionKey(session.id, session.cwd, session.path), session]));
+  private parentSession(
+    owner: SpawnOwner,
+    sessions: Map<string, SessionInfo | undefined>,
+  ): SessionInfo | undefined {
+    const exact = sessions.get(this.sessionKey(owner.id, owner.file));
+    if (exact) return exact;
+    const migratedPath = this.migratedOwnerPath(owner.file);
+    return migratedPath ? sessions.get(this.sessionKey(owner.id, migratedPath)) : undefined;
+  }
+
+  private migratedOwnerPath(path: string): string | undefined {
+    if (!this.agentDir) return;
+    const agentDir = canonicalPath(this.agentDir);
+    if (basename(agentDir) !== "agent" || basename(dirname(agentDir)) !== ".pylon") return;
+    const legacyAgentDir = resolve(dirname(dirname(agentDir)), ".pi", "agent");
+    const remainder = relative(canonicalPath(legacyAgentDir), canonicalPath(path));
+    if (!remainder || remainder === ".." || remainder.startsWith(`..${sep}`) || isAbsolute(remainder)) return;
+    return resolve(agentDir, remainder);
+  }
+
+  private sessionLookup(): Map<string, SessionInfo | undefined> {
+    const result = new Map<string, SessionInfo | undefined>();
+    for (const session of this.sessions) {
+      const key = this.sessionKey(session.id, session.path);
+      result.set(key, result.has(key) ? undefined : session);
+    }
+    return result;
   }
 
   private projectLabels(

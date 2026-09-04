@@ -176,21 +176,25 @@ const createSessionParameters = () =>
     { additionalProperties: false },
   );
 
-const currentModel = (ctx: any): string | undefined =>
-  ctx.model?.provider && ctx.model?.id ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-const availableModels = (ctx: any, allowed?: readonly string[]): string[] => {
+const modelReference = (model: any): string | undefined =>
+  model?.provider && model?.id ? `${model.provider}/${model.id}` : undefined;
+const currentModel = (ctx: any): string | undefined => modelReference(ctx.model);
+const availableModelEntries = (ctx: any, allowed?: readonly string[]): any[] => {
   const models = ctx.scopedModels.length
     ? ctx.scopedModels.map(({ model }: any) => model)
     : ctx.modelRegistry.getAvailable();
-  const available = [
-    ...new Set<string>(
-      models
-        .filter((model: any) => ctx.modelRegistry.hasConfiguredAuth(model))
-        .map((model: any) => `${model.provider}/${model.id}`),
-    ),
-  ];
-  return allowed ? allowed.filter(model => available.includes(model)) : available;
+  const byReference = new Map<string, any>();
+  for (const model of models) {
+    const reference = modelReference(model);
+    if (reference && ctx.modelRegistry.hasConfiguredAuth(model) && !byReference.has(reference))
+      byReference.set(reference, model);
+  }
+  return allowed
+    ? allowed.flatMap(reference => (byReference.has(reference) ? [byReference.get(reference)] : []))
+    : [...byReference.values()];
 };
+const availableModels = (ctx: any, allowed?: readonly string[]): string[] =>
+  availableModelEntries(ctx, allowed).map(model => modelReference(model)!);
 const defaultModel = (ctx: any, allowed?: readonly string[]): string | undefined => {
   const available = availableModels(ctx, allowed);
   const current = currentModel(ctx);
@@ -206,9 +210,51 @@ const modelError = (requested: string, ctx: any, allowed?: readonly string[]): s
       : " No models are currently available."
   }`;
 };
-const setModelChoices = (parameters: any, models: string[], description: string) => {
+const reportedRate = (value: unknown): string =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? `$${value}/M` : "unknown";
+const tokenCapacity = (value: unknown): string => {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) return "unknown";
+  if (value % 1_000_000 === 0) return `${value / 1_000_000}M`;
+  if (value % 1_000 === 0) return `${value / 1_000}k`;
+  return String(value);
+};
+const reportedRates = (cost: any): string => {
+  const rates = `input ${reportedRate(cost?.input)}, output ${reportedRate(cost?.output)}`;
+  const tiers = Array.isArray(cost?.tiers) ? cost.tiers : [];
+  if (!tiers.length) return rates;
+  const shown = tiers
+    .slice(0, 2)
+    .map(
+      (tier: any) =>
+        `above ${tokenCapacity(tier?.inputTokensAbove)} input: input ${reportedRate(tier?.input)}, output ${reportedRate(tier?.output)}`,
+    );
+  if (tiers.length > shown.length) shown.push(`${tiers.length - shown.length} more tiers`);
+  return `${rates}; tiers ${shown.join(", ")}`;
+};
+const MODEL_CATALOG_LIMIT = 20;
+const modelCatalog = (models: readonly any[]): string => {
+  const shown = models.slice(0, MODEL_CATALOG_LIMIT).map(model => {
+    const reasoning =
+      model?.reasoning === true ? "reasoning" : model?.reasoning === false ? "non-reasoning" : "reasoning unknown";
+    return `- ${modelReference(model)}: ${reportedRates(model?.cost)}; context ${tokenCapacity(model?.contextWindow)}; ${reasoning}`;
+  });
+  if (models.length > shown.length) shown.push(`- …and ${models.length - shown.length} more eligible models`);
+  return shown.join("\n");
+};
+const setModelChoices = (parameters: any, models: readonly any[], description: string) => {
   if (!models.length) delete parameters.properties.model;
-  else parameters.properties.model = Type.Optional(StringEnum(models, { description }));
+  else {
+    const guidance =
+      "Choose the least expensive model likely to complete the task reliably; consider context and reasoning support, and treat reported price as a signal rather than a capability guarantee.";
+    parameters.properties.model = Type.Optional(
+      StringEnum(
+        models.map(model => modelReference(model)!),
+        {
+          description: `${description}. ${guidance}\nEligible models (reported USD per 1M tokens; unknown means unavailable metadata):\n${modelCatalog(models)}`,
+        },
+      ),
+    );
+  }
 };
 
 class ProjectDirectoryError extends Error {}
@@ -598,7 +644,7 @@ export default async function spawnExtension(
   pi.registerTool(sessionTool);
 
   pi.on("session_start", (_event, ctx) => {
-    const models = availableModels(ctx, allowedModels);
+    const models = availableModelEntries(ctx, allowedModels);
     setModelChoices(AgentParameters, models, "Available provider/model fixed when the private thread is created");
     setModelChoices(SessionParameters, models, "Available provider/model fixed when the standard session is created");
     pi.registerTool(agentTool);

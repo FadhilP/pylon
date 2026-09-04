@@ -85,6 +85,7 @@ import { exitDelay } from "./motion";
 import { OverviewOrb } from "./overview-primitives";
 import { useSyntaxHighlightingRevision } from "./use-chrome";
 import { FileTypeIcon } from "./files-panel";
+import { ComposerSessionSwitcher, type ComposerSessionSwitcherProps } from "./composer-session-switcher";
 
 const markdownTags = [
   "a",
@@ -180,6 +181,7 @@ export function ConversationPanel({
   onComposerFocusRestored,
   onDraftChange,
   pendingSession,
+  composerSessionSwitcher,
   onSelectAgent,
   agentColors,
   onOpenLogin,
@@ -198,6 +200,7 @@ export function ConversationPanel({
   onComposerFocusRestored?: () => void;
   onDraftChange?: (draft: string) => void;
   pendingSession?: PendingSessionView;
+  composerSessionSwitcher?: ComposerSessionSwitcherProps;
   onSelectAgent?: (id?: string) => void;
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
@@ -1237,6 +1240,13 @@ export function ConversationPanel({
           if (draftingOnly) event.preventDefault();
           else void onDrop(event);
         }}>
+        {composerSessionSwitcher && (
+          <ComposerSessionSwitcher
+            {...composerSessionSwitcher}
+            dismissed={Boolean(openMenu)}
+            onOpen={() => setOpenMenu(undefined)}
+          />
+        )}
         {dropActive && (
           <div className="composer-drop-overlay">
             <IconFileText size={18} />
