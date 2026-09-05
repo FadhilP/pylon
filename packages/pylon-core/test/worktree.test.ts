@@ -348,12 +348,7 @@ test("bulk legacy turn migration is bounded to known, unprotected session refs",
       await git(root, ["update-ref", legacy(sessionId), tip]);
     }
 
-    assert.deepEqual(await legacyTurnRefSessionIds(root), [
-      "session1111",
-      "session2222",
-      "session3333",
-      "session4444",
-    ]);
+    assert.deepEqual(await legacyTurnRefSessionIds(root), ["session1111", "session2222", "session3333", "session4444"]);
     assert.deepEqual(
       await migrateLegacyTurnRefs(root, ["session1111", "session2222", "session3333"], [legacy("session3333")]),
       { migrated: 2, skipped: 1 },
@@ -387,7 +382,6 @@ test("checkout ownership uses its own branch namespace and restores cleanly", as
     await rm(root, { recursive: true, force: true });
   }
 });
-
 
 test("session worktrees isolate a dirty baseline and expose bounded files", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-session-worktree-"));

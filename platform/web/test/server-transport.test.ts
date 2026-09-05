@@ -447,8 +447,13 @@ class FakeDriver implements PiDriver {
     });
   }
   stateqlExport(_handle: string, format: "json" | "jsonl" | "csv") {
-    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration,
-      actor_id: this.current.sessionId, format, content: '[{"value":"complete"}]' });
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      actor_id: this.current.sessionId,
+      format,
+      content: '[{"value":"complete"}]',
+    });
   }
   stateqlCommand(input: StateQLCommandInput): Promise<StateQLCommandResult> {
     this.stateqlCommands.push(input);
@@ -1609,14 +1614,40 @@ test(
         400,
       );
       const exportInput = { generation: 1, handle: "result-1", format: "json" };
-      const download = await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(exportInput) });
+      const download = await fetch(`${origin}/api/v1/stateql/export`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify(exportInput),
+      });
       assert.equal(download.status, 200);
       assert.equal(download.headers.get("content-disposition"), 'attachment; filename="result.json"');
       assert.equal(await download.text(), '[{"value":"complete"}]');
-      for (const [input, status] of [[{ ...exportInput, generation: 2 }, 409], [{ ...exportInput, format: "xml" }, 400], [{ ...exportInput, path: "target.json" }, 400]] as const) {
-        assert.equal((await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(input) })).status, status);
+      for (const [input, status] of [
+        [{ ...exportInput, generation: 2 }, 409],
+        [{ ...exportInput, format: "xml" }, 400],
+        [{ ...exportInput, path: "target.json" }, 400],
+      ] as const) {
+        assert.equal(
+          (
+            await fetch(`${origin}/api/v1/stateql/export`, {
+              method: "POST",
+              headers: mutationHeaders,
+              body: JSON.stringify(input),
+            })
+          ).status,
+          status,
+        );
       }
-      assert.equal((await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(exportInput) })).status, 403);
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/stateql/export`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(exportInput),
+          })
+        ).status,
+        403,
+      );
       const rowsInput = { generation: 1, handle: "result-1", offset: 0, limit: 25 };
       const rows = await fetch(`${origin}/api/v1/stateql/rows`, {
         method: "POST",

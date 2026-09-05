@@ -38,7 +38,12 @@ export type StateQLMongoCommand =
 
 export type StateQLPanelCommand =
   | { command: "status" | "profile.list" | "disconnect" }
-  | { command: "table.plan"; row_token: string; changes: { set?: Record<string, unknown>; unset?: string[] }; timeout_ms?: number }
+  | {
+      command: "table.plan";
+      row_token: string;
+      changes: { set?: Record<string, unknown>; unset?: string[] };
+      timeout_ms?: number;
+    }
   | { command: "table.read"; table: { schema?: string; name: string }; limit?: number; timeout_ms?: number }
   | { command: "profile.show"; name: string }
   | { command: "profile.remove"; name: string; forget_credential?: boolean }
@@ -420,14 +425,26 @@ function connectionSources(value: Record<string, unknown>, includeProfile: boole
 function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boolean {
   switch (value.command) {
     case "table.plan":
-      return boundedString(value.row_token, 200) && plainRecord(value.changes) && hasOnlyKeys(value.changes, ["set", "unset"]) &&
+      return (
+        boundedString(value.row_token, 200) &&
+        plainRecord(value.changes) &&
+        hasOnlyKeys(value.changes, ["set", "unset"]) &&
         (value.changes.set === undefined || (plainRecord(value.changes.set) && params(value.changes.set))) &&
-        (value.changes.unset === undefined || (Array.isArray(value.changes.unset) && value.changes.unset.length <= 100 && value.changes.unset.every(name => boundedString(name, 500)))) &&
-        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+        (value.changes.unset === undefined ||
+          (Array.isArray(value.changes.unset) &&
+            value.changes.unset.length <= 100 &&
+            value.changes.unset.every(name => boundedString(name, 500)))) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "table.read":
-      return plainRecord(value.table) && hasOnlyKeys(value.table, ["schema", "name"]) &&
-        boundedString(value.table.name, 500) && optionalString(value.table.schema, 500) &&
-        (value.limit === undefined || positiveInteger(value.limit, 10_000)) && optionalTimeout(value.timeout_ms, maxTimeoutMs);
+      return (
+        plainRecord(value.table) &&
+        hasOnlyKeys(value.table, ["schema", "name"]) &&
+        boundedString(value.table.name, 500) &&
+        optionalString(value.table.schema, 500) &&
+        (value.limit === undefined || positiveInteger(value.limit, 10_000)) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
     case "status":
     case "profile.list":
     case "disconnect":
@@ -489,7 +506,8 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
       return (
         typeof value.kind === "string" &&
         INSPECTION_KINDS.has(value.kind) &&
-        (value.offset === undefined || (Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 100_000)) &&
+        (value.offset === undefined ||
+          (Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 100_000)) &&
         optionalString(value.table, 500) &&
         optionalTimeout(value.timeout_ms, maxTimeoutMs)
       );

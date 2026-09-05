@@ -8,11 +8,8 @@ import { listLocalGitBranches, switchLocalGitBranch } from "../src/worktree.ts";
 
 function git(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) =>
-    execFile(
-      "git",
-      args,
-      { cwd, env: { ...process.env, ...env }, windowsHide: true },
-      (error, stdout, stderr) => (error ? reject(new Error(String(stderr || error.message))) : resolve(String(stdout).trim())),
+    execFile("git", args, { cwd, env: { ...process.env, ...env }, windowsHide: true }, (error, stdout, stderr) =>
+      error ? reject(new Error(String(stderr || error.message))) : resolve(String(stdout).trim()),
     ),
   );
 }
@@ -53,7 +50,10 @@ test("local branches sort by tip activity and checkout fails closed for worktree
     await git(repository, ["update-ref", "refs/heads/pylon-checkout-internal012", "HEAD"]);
 
     const listed = await listLocalGitBranches(repository);
-    assert.deepEqual(listed.branches.map(branch => branch.name), ["feature", "main"]);
+    assert.deepEqual(
+      listed.branches.map(branch => branch.name),
+      ["feature", "main"],
+    );
     assert.equal(listed.currentBranch, "main");
     assert.equal(listed.branches.find(branch => branch.name === "main")?.current, true);
 

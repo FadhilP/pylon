@@ -108,7 +108,6 @@ test("marks local image links for authenticated loading without exposing file UR
   assert.match(remote, /<img src="https:\/\/example\.com\/chart\.png" alt="chart">/);
 });
 
-
 test("keeps incomplete math renderable and treats untrusted TeX commands as text", () => {
   const incomplete = renderMarkdown("\\[\n\\frac{a}{b}");
   const untrusted = renderMarkdown(String.raw`$\href{javascript:alert(1)}{x}$`);

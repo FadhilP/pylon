@@ -862,7 +862,11 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: generation };
   }
 
-  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
+  async stateqlCommand(
+    input: StateQLCommandInput,
+    signal?: AbortSignal,
+    expectedConnectionId?: string | null,
+  ): Promise<StateQLCommandResult> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlCommand) throw new Error("StateQL commands are unavailable");
@@ -1787,11 +1791,7 @@ export class RuntimeCoordinator implements PiDriver {
     timeout.unref?.();
     this.modelRefreshAbort = controller;
     try {
-      const result = await this.modelRuntime.refresh({
-        allowNetwork: true,
-        force: true,
-        signal: controller.signal,
-      });
+      const result = await this.modelRuntime.refresh({ allowNetwork: true, force: true, signal: controller.signal });
       this.assertGeneration(expectedGeneration);
       if (result.aborted) throw new Error("Model catalog refresh timed out.");
       if (result.errors.size > 0) {

@@ -626,9 +626,15 @@ function stateqlRowsResult(
     sessionGeneration,
     actor_id: actorId,
     handle,
-    ...(Array.isArray(raw.columns) ? { columns: stateqlJsonValue(raw.columns, 0, budget), full_values: true,
-      row_tokens: stateqlJsonValue(raw.row_tokens ?? rows.map(() => null), 0, budget), writable_columns: stateqlJsonValue(raw.writable_columns ?? [], 0, budget),
-      ...(typeof raw.editing_reason === "string" ? { editing_reason: raw.editing_reason.slice(0, 500) } : {}) } : {}),
+    ...(Array.isArray(raw.columns)
+      ? {
+          columns: stateqlJsonValue(raw.columns, 0, budget),
+          full_values: true,
+          row_tokens: stateqlJsonValue(raw.row_tokens ?? rows.map(() => null), 0, budget),
+          writable_columns: stateqlJsonValue(raw.writable_columns ?? [], 0, budget),
+          ...(typeof raw.editing_reason === "string" ? { editing_reason: raw.editing_reason.slice(0, 500) } : {}),
+        }
+      : {}),
     offset: raw.offset,
     limit: raw.limit,
     rows,
@@ -2035,9 +2041,19 @@ export class SessionRuntime implements PiDriver {
     let response: Promise<unknown> | undefined;
     let claimed = false;
     this.eventBus.emit("pylon:stateql-export-request", {
-      version: 1, sessionId: runtime.session.sessionId, handle, format, signal: controller.signal,
-      claim: () => { if (claimed) return false; claimed = true; return true; },
-      respond: (value: Promise<unknown>) => { response ??= Promise.resolve(value); },
+      version: 1,
+      sessionId: runtime.session.sessionId,
+      handle,
+      format,
+      signal: controller.signal,
+      claim: () => {
+        if (claimed) return false;
+        claimed = true;
+        return true;
+      },
+      respond: (value: Promise<unknown>) => {
+        response ??= Promise.resolve(value);
+      },
     });
     try {
       if (!response) throw new Error("StateQL exports are unavailable");
@@ -2045,9 +2061,20 @@ export class SessionRuntime implements PiDriver {
       controller.signal.throwIfAborted();
       if (this.gate.generation !== generation) throw new Error("Session changed during export");
       const data = value as { content?: unknown; format?: unknown };
-      if (!data || typeof data.content !== "string" || data.format !== format ||
-        Buffer.byteLength(data.content, "utf8") > 32 * 1024 * 1024) throw new Error("Invalid or oversized export");
-      return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, actor_id: runtime.session.sessionId, content: data.content, format };
+      if (
+        !data ||
+        typeof data.content !== "string" ||
+        data.format !== format ||
+        Buffer.byteLength(data.content, "utf8") > 32 * 1024 * 1024
+      )
+        throw new Error("Invalid or oversized export");
+      return {
+        protocolVersion: PROTOCOL_VERSION,
+        sessionGeneration: generation,
+        actor_id: runtime.session.sessionId,
+        content: data.content,
+        format,
+      };
     } finally {
       controller.abort();
       signal?.removeEventListener("abort", abort);
@@ -2157,7 +2184,11 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
+  async stateqlCommand(
+    input: StateQLCommandInput,
+    signal?: AbortSignal,
+    expectedConnectionId?: string | null,
+  ): Promise<StateQLCommandResult> {
     if (!isStateQLCommandInput(input)) throw new Error("StateQL command request is invalid");
     const runtime = this.requireRuntime();
     const controller = new AbortController();

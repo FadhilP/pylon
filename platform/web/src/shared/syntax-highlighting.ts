@@ -7,7 +7,10 @@ export const SYNTAX_THEMES = [
 ] as const;
 
 export type SyntaxTheme = (typeof SYNTAX_THEMES)[number]["id"];
-export interface SyntaxToken { content: string; className: string }
+export interface SyntaxToken {
+  content: string;
+  className: string;
+}
 
 export const DEFAULT_SYNTAX_THEME: SyntaxTheme = "one-dark-pro";
 
@@ -52,7 +55,9 @@ export function highlightSyntax(text: string, language: string): string | undefi
 }
 
 export function syntaxTokens(text: string, language: string): SyntaxToken[][] {
-  return runtime?.syntaxTokens(text, language, activeTheme) ?? text.split("\n").map(content => [{ content, className: "" }]);
+  return (
+    runtime?.syntaxTokens(text, language, activeTheme) ?? text.split("\n").map(content => [{ content, className: "" }])
+  );
 }
 
 export async function loadSyntaxLanguage(language: string): Promise<void> {

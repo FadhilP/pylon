@@ -56,13 +56,15 @@ export function loadSyntaxLanguage(language: string): Promise<boolean> {
   if (loadedLanguages.has(language)) return Promise.resolve(false);
   let loading = languageLoads.get(language);
   if (!loading) {
-    loading = import("shiki/langs").then(async ({ bundledLanguages }) => {
-      const loader = bundledLanguages[language as keyof typeof bundledLanguages];
-      if (!loader) return false;
-      await highlighter.loadLanguage(await loader());
-      for (const name of highlighter.getLoadedLanguages()) loadedLanguages.add(name);
-      return true;
-    }).catch(() => false);
+    loading = import("shiki/langs")
+      .then(async ({ bundledLanguages }) => {
+        const loader = bundledLanguages[language as keyof typeof bundledLanguages];
+        if (!loader) return false;
+        await highlighter.loadLanguage(await loader());
+        for (const name of highlighter.getLoadedLanguages()) loadedLanguages.add(name);
+        return true;
+      })
+      .catch(() => false);
     languageLoads.set(language, loading);
   }
   return loading;
@@ -87,9 +89,11 @@ export function highlightSyntax(text: string, language: string, theme: SyntaxThe
 
 export function syntaxTokens(text: string, language: string, theme: SyntaxTheme): SyntaxToken[][] | undefined {
   if (!loadedLanguages.has(language)) return;
-  return highlighter.codeToTokens(text, { lang: language, theme }).tokens.map(line =>
-    line.map(token => ({ content: token.content, className: tokenClasses(token.color, token.fontStyle) })),
-  );
+  return highlighter
+    .codeToTokens(text, { lang: language, theme })
+    .tokens.map(line =>
+      line.map(token => ({ content: token.content, className: tokenClasses(token.color, token.fontStyle) })),
+    );
 }
 
 function createTokenCss(): string {

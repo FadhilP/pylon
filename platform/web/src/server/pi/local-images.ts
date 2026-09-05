@@ -129,11 +129,7 @@ function imageMimeType(bytes: Buffer): LoadedLocalImage["mimeType"] | undefined 
     matches(bytes, bytes.length - 8, [0x49, 0x45, 0x4e, 0x44])
   )
     return "image/png";
-  if (
-    bytes.length >= 4 &&
-    matches(bytes, 0, [0xff, 0xd8, 0xff]) &&
-    matches(bytes, bytes.length - 2, [0xff, 0xd9])
-  )
+  if (bytes.length >= 4 && matches(bytes, 0, [0xff, 0xd8, 0xff]) && matches(bytes, bytes.length - 2, [0xff, 0xd9]))
     return "image/jpeg";
   if (
     bytes.length >= 14 &&

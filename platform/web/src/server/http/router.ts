@@ -612,11 +612,19 @@ export class ServerTransport {
   private async stateqlExport(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const session = this.mutatingSession(request);
     this.tab(request, session);
-    const body = await readJson(request) as Record<string, unknown>;
-    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["generation", "handle", "format"].includes(key)) ||
-      typeof body.handle !== "string" || !body.handle || body.handle.length > 200 ||
-      !["json", "jsonl", "csv"].includes(String(body.format))) throw httpError(400, "Invalid export request");
-    if (body.generation !== this.journal.sessionGeneration || !this.projection.snapshot().ready) throw httpError(409, "Session is not ready");
+    const body = (await readJson(request)) as Record<string, unknown>;
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Object.keys(body).some(key => !["generation", "handle", "format"].includes(key)) ||
+      typeof body.handle !== "string" ||
+      !body.handle ||
+      body.handle.length > 200 ||
+      !["json", "jsonl", "csv"].includes(String(body.format))
+    )
+      throw httpError(400, "Invalid export request");
+    if (body.generation !== this.journal.sessionGeneration || !this.projection.snapshot().ready)
+      throw httpError(409, "Session is not ready");
     if (!this.driver.stateqlExport) throw httpError(409, "StateQL exports are unavailable");
     if (this.exportController) throw httpError(409, "An export is already running");
     const controller = new AbortController();
@@ -626,11 +634,23 @@ export class ServerTransport {
     request.once("aborted", cancel);
     response.once("close", cancel);
     try {
-      const result = await this.driver.stateqlExport(body.handle, body.format as "json" | "jsonl" | "csv", controller.signal);
+      const result = await this.driver.stateqlExport(
+        body.handle,
+        body.format as "json" | "jsonl" | "csv",
+        controller.signal,
+      );
       controller.signal.throwIfAborted();
-      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "Session changed during export");
+      if (result.sessionGeneration !== this.journal.sessionGeneration)
+        throw httpError(409, "Session changed during export");
       response.setHeader("cache-control", "no-store");
-      response.setHeader("content-type", result.format === "csv" ? "text/csv; charset=utf-8" : result.format === "jsonl" ? "application/x-ndjson" : "application/json");
+      response.setHeader(
+        "content-type",
+        result.format === "csv"
+          ? "text/csv; charset=utf-8"
+          : result.format === "jsonl"
+            ? "application/x-ndjson"
+            : "application/json",
+      );
       response.setHeader("content-disposition", 'attachment; filename="result.' + result.format + '"');
       response.setHeader("content-length", Buffer.byteLength(result.content, "utf8"));
       response.end(result.content);
@@ -658,8 +678,13 @@ export class ServerTransport {
     )
       throw httpError(409, "stale session generation");
     if (!isStateQLCommandInput(body.input)) throw httpError(400, "invalid StateQL command request");
-    if (body.expectedConnectionId !== undefined && body.expectedConnectionId !== null &&
-      (typeof body.expectedConnectionId !== "string" || !body.expectedConnectionId || body.expectedConnectionId.length > 200))
+    if (
+      body.expectedConnectionId !== undefined &&
+      body.expectedConnectionId !== null &&
+      (typeof body.expectedConnectionId !== "string" ||
+        !body.expectedConnectionId ||
+        body.expectedConnectionId.length > 200)
+    )
       throw httpError(400, "invalid database connection scope");
     if (this.databaseCommand) throw httpError(409, "A database command is already running");
     if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
@@ -675,7 +700,11 @@ export class ServerTransport {
     response.once("close", cancel);
     let result: Awaited<ReturnType<NonNullable<PiDriver["stateqlCommand"]>>>;
     try {
-      result = await this.driver.stateqlCommand(body.input as StateQLCommandInput, controller.signal, body.expectedConnectionId as string | null | undefined);
+      result = await this.driver.stateqlCommand(
+        body.input as StateQLCommandInput,
+        controller.signal,
+        body.expectedConnectionId as string | null | undefined,
+      );
     } finally {
       request.removeListener("aborted", cancel);
       response.removeListener("close", cancel);
@@ -1369,7 +1398,11 @@ export class ServerTransport {
         typeof raw.requestId === "string" &&
         ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))
       ) {
-        this.openDialog(raw.requestId, event.sessionGeneration, raw.surface === "database" ? this.databaseCommand?.tabId : this.lastCommandOwner);
+        this.openDialog(
+          raw.requestId,
+          event.sessionGeneration,
+          raw.surface === "database" ? this.databaseCommand?.tabId : this.lastCommandOwner,
+        );
       }
     }
     this.projection.apply(event);

@@ -1,4 +1,12 @@
-import { IconCheck, IconChevronDown, IconFolder, IconGitBranch, IconLoader2, IconPlus, IconSearch } from "@tabler/icons-react";
+import {
+  IconCheck,
+  IconChevronDown,
+  IconFolder,
+  IconGitBranch,
+  IconLoader2,
+  IconPlus,
+  IconSearch,
+} from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatRelativeTime } from "../shared/format";
 import { groupSessionSwitcherSessions, type SessionSwitcherCatalog } from "../shared/session-list";
@@ -393,10 +401,7 @@ export function ComposerSessionSwitcher({
                 )}
                 {branches?.branches.map(branch => {
                   const unavailable =
-                    branch.current ||
-                    !branches.checkoutAvailable ||
-                    !branch.checkoutAvailable ||
-                    Boolean(branchBusy);
+                    branch.current || !branches.checkoutAvailable || !branch.checkoutAvailable || Boolean(branchBusy);
                   const reason = branch.current
                     ? "Current branch"
                     : branches.checkoutUnavailableReason || branch.checkoutUnavailableReason;

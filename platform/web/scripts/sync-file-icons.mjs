@@ -70,4 +70,6 @@ ${literal(extensions)}
 `,
 );
 
-console.log(`${used.length} icons -> public/file-icons, ${Object.keys(names).length + Object.keys(extensions).length} lookup keys`);
+console.log(
+  `${used.length} icons -> public/file-icons, ${Object.keys(names).length + Object.keys(extensions).length} lookup keys`,
+);

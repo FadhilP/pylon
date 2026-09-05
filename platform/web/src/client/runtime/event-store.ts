@@ -738,13 +738,22 @@ export class RuntimeEventStore {
     return result;
   }
 
-  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
+  async stateqlCommand(
+    input: StateQLCommandInput,
+    signal?: AbortSignal,
+    expectedConnectionId?: string | null,
+  ): Promise<StateQLCommandResult> {
     const runtime = this.requireReadyRuntime();
     const result = await this.api.stateqlCommand(runtime.sessionGeneration, input, signal, expectedConnectionId);
     const current = this.requireReadyRuntime();
-    if (current.sessionGeneration !== runtime.sessionGeneration || current.sessionId !== runtime.sessionId ||
-      !isDatabaseCommandResult(result, input.command) || result.sessionGeneration !== current.sessionGeneration ||
-      result.actor_id !== current.sessionId) throw new Error("Database command response is stale or invalid");
+    if (
+      current.sessionGeneration !== runtime.sessionGeneration ||
+      current.sessionId !== runtime.sessionId ||
+      !isDatabaseCommandResult(result, input.command) ||
+      result.sessionGeneration !== current.sessionGeneration ||
+      result.actor_id !== current.sessionId
+    )
+      throw new Error("Database command response is stale or invalid");
     return result;
   }
 
@@ -1357,7 +1366,11 @@ export class RuntimeEventStore {
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
-    try { clearDatabaseDrafts(localStorage, sessionId); } catch { /* Browser storage may be disabled. */ }
+    try {
+      clearDatabaseDrafts(localStorage, sessionId);
+    } catch {
+      /* Browser storage may be disabled. */
+    }
   }
 
   async archiveSession(sessionId: string): Promise<void> {

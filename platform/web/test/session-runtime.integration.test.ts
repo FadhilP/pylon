@@ -244,10 +244,7 @@ test("worktree summaries match continued runs by assistant entry ID", async () =
           messageId: terminalMessageId(continuedEntryId),
           files: [{ path: "continued.ts", additions: 1, deletions: 0 }],
         },
-        {
-          messageId: terminalMessageId(nextEntryId),
-          files: [{ path: "next.ts", additions: 1, deletions: 0 }],
-        },
+        { messageId: terminalMessageId(nextEntryId), files: [{ path: "next.ts", additions: 1, deletions: 0 }] },
       ],
     );
   } finally {
@@ -971,9 +968,18 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
                 ignored: "value",
               },
               {
-                command_id: "cmd_2", timestamp: "2026-07-30T10:00:01.000Z", session_id: "s_1", actor_id: value.sessionId,
-                command: "inspect.columns", sql: null, target: "public.users", handle: null,
-                executed: true, cached: false, success: true, error_code: null,
+                command_id: "cmd_2",
+                timestamp: "2026-07-30T10:00:01.000Z",
+                session_id: "s_1",
+                actor_id: value.sessionId,
+                command: "inspect.columns",
+                sql: null,
+                target: "public.users",
+                handle: null,
+                executed: true,
+                cached: false,
+                success: true,
+                error_code: null,
               },
             ],
             ignored: "value",
@@ -1028,8 +1034,12 @@ test("StateQL rows bridge normalizes a bounded page", async () => {
             total: rows.length,
             truncated: false,
             next_offset: null,
-            columns: [{ name: "id", type: "integer" }, { name: "text", type: "text" }],
-            row_tokens: rows.map(() => null), writable_columns: [],
+            columns: [
+              { name: "id", type: "integer" },
+              { name: "text", type: "text" },
+            ],
+            row_tokens: rows.map(() => null),
+            writable_columns: [],
             ignored: "value",
           }),
         );

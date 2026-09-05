@@ -352,26 +352,45 @@ export class ApiClient {
     );
   }
 
-  async stateqlExport(generation: number, handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<Blob> {
+  async stateqlExport(
+    generation: number,
+    handle: string,
+    format: "json" | "jsonl" | "csv",
+    signal?: AbortSignal,
+  ): Promise<Blob> {
     const response = await fetch("/api/v1/stateql/export", {
-      method: "POST", credentials: "same-origin", headers: this.headers(),
-      body: JSON.stringify({ generation, handle, format }), signal,
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify({ generation, handle, format }),
+      signal,
     });
-    if (!response.ok) { await json(response); throw new Error("Export failed"); }
-    if (Number(response.headers.get("content-length")) > 32 * 1024 * 1024) throw new Error("Export exceeds download limit");
+    if (!response.ok) {
+      await json(response);
+      throw new Error("Export failed");
+    }
+    if (Number(response.headers.get("content-length")) > 32 * 1024 * 1024)
+      throw new Error("Export exceeds download limit");
     const blob = await response.blob();
     if (blob.size > 32 * 1024 * 1024) throw new Error("Export exceeds download limit");
     return blob;
   }
 
-  async stateqlCommand(generation: number, input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
-    return json<StateQLCommandResult>(await fetch("/api/v1/stateql/command", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: this.headers(),
-      body: JSON.stringify({ generation, input, expectedConnectionId }),
-      signal,
-    }));
+  async stateqlCommand(
+    generation: number,
+    input: StateQLCommandInput,
+    signal?: AbortSignal,
+    expectedConnectionId?: string | null,
+  ): Promise<StateQLCommandResult> {
+    return json<StateQLCommandResult>(
+      await fetch("/api/v1/stateql/command", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: this.headers(),
+        body: JSON.stringify({ generation, input, expectedConnectionId }),
+        signal,
+      }),
+    );
   }
 
   async stateqlRows(

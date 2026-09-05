@@ -367,7 +367,11 @@ export interface PiDriver {
   stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
   stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage>;
-  stateqlCommand?(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult>;
+  stateqlCommand?(
+    input: StateQLCommandInput,
+    signal?: AbortSignal,
+    expectedConnectionId?: string | null,
+  ): Promise<StateQLCommandResult>;
   papercutList?(
     status: PapercutStatusReadModel | "all",
     query: string,

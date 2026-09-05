@@ -27,7 +27,8 @@ const ident = {
 };
 const objectId = /^[0-9a-f]{40,64}$/i;
 const worktreeId = /^[A-Za-z0-9._-]{8,80}$/;
-const ownedWorktreeBranch = /^refs\/heads\/(?:pylon-(?:worktree|checkout)-[A-Za-z0-9._-]{8,80}|pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylon-session-[A-Za-z0-9._-]{8,80})$/;
+const ownedWorktreeBranch =
+  /^refs\/heads\/(?:pylon-(?:worktree|checkout)-[A-Za-z0-9._-]{8,80}|pylon\/sessions\/[A-Za-z0-9._-]{1,80}|pylon-session-[A-Za-z0-9._-]{8,80})$/;
 const ownedTurnRef = /^refs\/pylon\/turns\/[A-Za-z0-9._-]{8,80}$/;
 const canonical = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 const rootCache = new Map<string, string>();
@@ -725,7 +726,9 @@ export async function listLocalGitBranches(cwd: string, limit = 500): Promise<Lo
   }
   const currentRef = workspace.headRef;
   const checkedOut = branchWorktrees(await git(workspace.root, ["worktree", "list", "--porcelain"]));
-  const rows = (await git(workspace.root, ["for-each-ref", "--format=%(refname:lstrip=2)%00%(committerdate:unix)", "refs/heads"]))
+  const rows = (
+    await git(workspace.root, ["for-each-ref", "--format=%(refname:lstrip=2)%00%(committerdate:unix)", "refs/heads"])
+  )
     .split(/\r?\n/)
     .filter(Boolean)
     .flatMap(row => {
@@ -736,23 +739,24 @@ export async function listLocalGitBranches(cwd: string, limit = 500): Promise<Lo
       if (ownedWorktreeBranch.test(ref)) return [];
       const otherWorktree = checkedOut.get(ref);
       const current = ref === currentRef;
-      return [{
-        name,
-        timestamp,
-        current,
-        checkoutAvailable: !current && (!otherWorktree || canonical(otherWorktree) === canonical(workspace.root)),
-        ...(otherWorktree && !current && canonical(otherWorktree) !== canonical(workspace.root)
-          ? { checkoutUnavailableReason: "Checked out in another worktree." }
-          : {}),
-      }];
+      return [
+        {
+          name,
+          timestamp,
+          current,
+          checkoutAvailable: !current && (!otherWorktree || canonical(otherWorktree) === canonical(workspace.root)),
+          ...(otherWorktree && !current && canonical(otherWorktree) !== canonical(workspace.root)
+            ? { checkoutUnavailableReason: "Checked out in another worktree." }
+            : {}),
+        },
+      ];
     })
     .sort((left, right) => right.timestamp - left.timestamp || left.name.localeCompare(right.name));
   const boundedLimit = Math.min(500, Math.max(1, limit));
   return {
-    branches: rows.slice(0, boundedLimit).map(({ timestamp, ...branch }) => ({
-      ...branch,
-      lastCommitAt: new Date(timestamp * 1_000).toISOString(),
-    })),
+    branches: rows
+      .slice(0, boundedLimit)
+      .map(({ timestamp, ...branch }) => ({ ...branch, lastCommitAt: new Date(timestamp * 1_000).toISOString() })),
     ...(currentRef?.startsWith("refs/heads/") ? { currentBranch: currentRef.slice("refs/heads/".length) } : {}),
     truncated: rows.length > boundedLimit,
   };
@@ -889,7 +893,6 @@ export async function migrateLegacyTurnRefs(
   }
   return { migrated, skipped };
 }
-
 
 export async function appendTurnCommit(
   repositoryRootPath: string,

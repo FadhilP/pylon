@@ -45,7 +45,6 @@ test("persists local-image guidance once and restores it after each compaction",
   assert.deepEqual(messages[1]!.details, { version: 1, compactionEntryId: "compact-1" });
 });
 
-
 test("loads a process-readable image by absolute file URL and detects its content type", async () => {
   await withTempDir(async directory => {
     const path = join(directory, "chart # 你好.not-png");
@@ -71,23 +70,29 @@ test("rejects unsupported, oversized, and non-file local image sources", async (
     await writeFile(unsupported, "<svg></svg>");
     await writeFile(oversized, Buffer.alloc(MAX_LOCAL_IMAGE_BYTES + 1));
 
-    await assert.rejects(loadLocalImage(pathToFileURL(unsupported).href), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 415,
+    await assert.rejects(
+      loadLocalImage(pathToFileURL(unsupported).href),
+      error => error instanceof LocalImageLoadError && error.statusCode === 415,
     );
-    await assert.rejects(loadLocalImage(pathToFileURL(oversized).href), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 413,
+    await assert.rejects(
+      loadLocalImage(pathToFileURL(oversized).href),
+      error => error instanceof LocalImageLoadError && error.statusCode === 413,
     );
-    await assert.rejects(loadLocalImage(pathToFileURL(directory).href), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 415,
+    await assert.rejects(
+      loadLocalImage(pathToFileURL(directory).href),
+      error => error instanceof LocalImageLoadError && error.statusCode === 415,
     );
-    await assert.rejects(loadLocalImage("https://example.com/image.png"), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 400,
+    await assert.rejects(
+      loadLocalImage("https://example.com/image.png"),
+      error => error instanceof LocalImageLoadError && error.statusCode === 400,
     );
-    await assert.rejects(loadLocalImage("file://server/share/image.png"), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 400,
+    await assert.rejects(
+      loadLocalImage("file://server/share/image.png"),
+      error => error instanceof LocalImageLoadError && error.statusCode === 400,
     );
-    await assert.rejects(loadLocalImage(`${pathToFileURL(unsupported).href}#fragment`), error =>
-      error instanceof LocalImageLoadError && error.statusCode === 400,
+    await assert.rejects(
+      loadLocalImage(`${pathToFileURL(unsupported).href}#fragment`),
+      error => error instanceof LocalImageLoadError && error.statusCode === 400,
     );
   });
 });

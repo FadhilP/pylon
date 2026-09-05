@@ -2529,7 +2529,9 @@ export const MarkdownContent = memo(function MarkdownContent({
     window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: reference }));
   };
 
-  return <div ref={rootRef} className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div ref={rootRef} className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />
+  );
 });
 
 export function CopyMessageButton({ text, label }: { text: string; label: string }) {

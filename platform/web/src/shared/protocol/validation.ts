@@ -1357,8 +1357,15 @@ export function isStateQLCommandInput(value: unknown): value is StateQLCommandIn
 
 export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
   if (record(value) && (value.columns !== undefined || value.full_values !== undefined)) {
-    if (value.full_values !== true || !Array.isArray(value.columns) || value.columns.length > 100 ||
-      !value.columns.every(column => record(column) && boundedString(column.name, 500) && boundedString(column.type, 500))) return false;
+    if (
+      value.full_values !== true ||
+      !Array.isArray(value.columns) ||
+      value.columns.length > 100 ||
+      !value.columns.every(
+        column => record(column) && boundedString(column.name, 500) && boundedString(column.type, 500),
+      )
+    )
+      return false;
   }
   if (
     !record(value) ||
@@ -1392,8 +1399,20 @@ export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
     )
   )
     return false;
-  if (value.row_tokens !== undefined && (!Array.isArray(value.row_tokens) || value.row_tokens.length !== value.rows.length || !value.row_tokens.every(token => token === null || boundedString(token, 200)))) return false;
-  if (value.writable_columns !== undefined && (!Array.isArray(value.writable_columns) || value.writable_columns.length > 100 || !value.writable_columns.every(column => boundedString(column, 500)))) return false;
+  if (
+    value.row_tokens !== undefined &&
+    (!Array.isArray(value.row_tokens) ||
+      value.row_tokens.length !== value.rows.length ||
+      !value.row_tokens.every(token => token === null || boundedString(token, 200)))
+  )
+    return false;
+  if (
+    value.writable_columns !== undefined &&
+    (!Array.isArray(value.writable_columns) ||
+      value.writable_columns.length > 100 ||
+      !value.writable_columns.every(column => boundedString(column, 500)))
+  )
+    return false;
   const truncated = (value.offset as number) + (value.returned as number) < (value.total as number);
   return (
     value.truncated === truncated &&

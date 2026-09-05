@@ -25,7 +25,18 @@ export interface StateQLActivityItem {
   tags: StateQLActivityTag[];
 }
 
-const READ_COMMANDS = new Set(["query", "mongo.query", "filter", "show", "rows", "count", "columns", "inspect", "plan", "mongo.plan"]);
+const READ_COMMANDS = new Set([
+  "query",
+  "mongo.query",
+  "filter",
+  "show",
+  "rows",
+  "count",
+  "columns",
+  "inspect",
+  "plan",
+  "mongo.plan",
+]);
 const WRITE_COMMANDS = new Set(["exec", "mongo.exec", "apply", "transaction.commit", "transaction.rollback"]);
 const FAILED_OPERATION_STATES = new Set(["failed", "outcome_unknown"]);
 
@@ -35,7 +46,8 @@ function tagsFor(
   operation?: StateQLOperation,
 ): StateQLActivityTag[] {
   const tags: StateQLActivityTag[] = [];
-  if (result || (entry && (READ_COMMANDS.has(entry.command) || entry.command.startsWith("inspect.")))) tags.push("read");
+  if (result || (entry && (READ_COMMANDS.has(entry.command) || entry.command.startsWith("inspect."))))
+    tags.push("read");
   if (operation || (entry && WRITE_COMMANDS.has(entry.command))) tags.push("write");
   if ((entry && !entry.success) || (operation && FAILED_OPERATION_STATES.has(operation.status))) tags.push("error");
   return tags;
