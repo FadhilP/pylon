@@ -211,6 +211,7 @@ export interface StateQLHistoryEntryReadModel {
   origin: StateQLCommandOrigin;
   command: string;
   sql: string | null;
+  target?: string | null;
   handle: string | null;
   executed: boolean;
   cached: boolean;
@@ -248,7 +249,20 @@ export type StateQLCommandResult = {
   command: StateQLCommandInput["command"];
 } & ({ status: "completed"; response: StateQLCommandResponseReadModel } | { status: "declined" });
 
+export interface StateQLExport {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
+  actor_id: string;
+  content: string;
+  format: "json" | "jsonl" | "csv";
+}
+
 export interface StateQLRowsPage {
+  columns?: Array<{ name: string; type: string }>;
+  full_values?: boolean;
+  row_tokens?: Array<string | null>;
+  writable_columns?: string[];
+  editing_reason?: string;
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
   actor_id: string;
@@ -342,6 +356,20 @@ export interface BootstrapSnapshot {
   pendingUi?: UiRequestReadModel;
 }
 
+export interface LocalImageQuery {
+  source: string;
+}
+
+export interface LocalImageContent {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionId: string;
+  sessionGeneration: number;
+  kind: "image";
+  name: string;
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  size: number;
+  data: string;
+}
 export interface ConversationAttachmentQuery {
   sourceEntryId: string;
   index: number;

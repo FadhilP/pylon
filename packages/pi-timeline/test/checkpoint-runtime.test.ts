@@ -567,6 +567,33 @@ test("capture and restore include initialized gitlinks without .gitmodules", { t
   }
 });
 
+test("failed parallel nested capture settles and removes successful sibling checkpoint refs", async () => {
+  const { root, git } = await repository();
+  const child = join(root, "child");
+  const childGit = async (...args: string[]) =>
+    (await exec("git", args, { cwd: child, windowsHide: true })).stdout.trim();
+  try {
+    await mkdir(child);
+    await childGit("init", "-q");
+    await childGit("config", "user.email", "timeline@test.local");
+    await childGit("config", "user.name", "timeline-test");
+    await writeFile(join(child, "tracked.txt"), "child\n");
+    await childGit("add", ".");
+    await childGit("commit", "-qm", "child");
+    await git("add", "child");
+    await git("commit", "-qm", "nested repository");
+    // A valid ref at this prefix prevents the child from creating checkpoint refs.
+    await childGit("update-ref", "refs/pi-timeline", "HEAD");
+    const stagedBefore = await git("write-tree");
+    await assert.rejects(capture(root, "failed-nested-session"), /cannot lock ref|exists|create/i);
+    assert.equal(await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline/"), "");
+    assert.equal(await git("write-tree"), stagedBefore);
+    assert.equal(await readFile(join(root, "tracked.txt"), "utf8"), "base\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("capture records detached HEAD", async () => {
   const { root, git } = await repository();
   try {

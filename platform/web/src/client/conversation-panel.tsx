@@ -153,6 +153,7 @@ const markdownAttributes = [
   "columnlines",
   "columnspacing",
   "data-language",
+  "data-local-image",
   "depth",
   "disabled",
   "display",
@@ -716,6 +717,17 @@ export function ConversationPanel({
       setControlBusy("");
     }
   };
+  const refreshModels = async () => {
+    if (controlBusy) return;
+    setControlBusy("models");
+    try {
+      await runtimeStore.refreshModelCatalogs();
+    } catch {
+      // The shared toast reports the refresh failure.
+    } finally {
+      setControlBusy("");
+    }
+  };
   const controlsDisabled = !connected || submitting || Boolean(controlBusy);
   const restoreQueued = async (queued: QueuedPromptReadModel) => {
     if (queued.state !== "queued") return;
@@ -1037,7 +1049,13 @@ export function ConversationPanel({
                           onSubmit={() => void submitEdit()}
                         />
                       ) : (
-                        block.text && <MarkdownContent text={block.text} />
+                        block.text && (
+                          <MarkdownContent
+                            text={block.text}
+                            allowLocalImages={block.role === "assistant"}
+                            localImageReloadKey={`${runtime?.sessionId ?? ""}:${runtime?.sessionGeneration ?? ""}`}
+                          />
+                        )
                       )}
                     </article>
                     {!editing && (
@@ -1417,6 +1435,8 @@ export function ConversationPanel({
               onToggle={() => setOpenMenu(current => (current === "model" ? undefined : "model"))}
               onClose={() => setOpenMenu(undefined)}
               onApply={setSessionControls}
+              refreshing={controlBusy === "models"}
+              onRefresh={refreshModels}
             />
             {running && !hasDraft ? (
               <button
@@ -1665,6 +1685,8 @@ function ModelControl({
   open,
   disabled,
   busy,
+  refreshing,
+  onRefresh,
   onToggle,
   onClose,
   onApply,
@@ -1673,6 +1695,8 @@ function ModelControl({
   open: boolean;
   disabled: boolean;
   busy: boolean;
+  refreshing: boolean;
+  onRefresh: () => Promise<void>;
   onToggle: () => void;
   onClose: () => void;
   onApply: (model: ModelOptionReadModel, level: ThinkingLevelReadModel) => Promise<void>;
@@ -1815,7 +1839,11 @@ function ModelControl({
         <IconChevronDown size={14} />
       </button>
       {open && (
-        <div className="model-popover composer-popover" role="dialog" aria-label="Model and thinking" aria-busy={busy}>
+        <div
+          className="model-popover composer-popover"
+          role="dialog"
+          aria-label="Model and thinking"
+          aria-busy={busy || refreshing}>
           <div className="model-search">
             <IconSearch size={13} />
             <input
@@ -1826,6 +1854,14 @@ function ModelControl({
               autoComplete="off"
               spellCheck={false}
             />
+            <button
+              type="button"
+              disabled={disabled || refreshing}
+              onClick={() => void onRefresh()}
+              aria-label="Refresh model catalogs"
+              title="Refresh model catalogs">
+              <IconRefresh className={refreshing ? "feedback-spinner" : undefined} size={13} />
+            </button>
             {modelQuery && (
               <button type="button" onClick={() => setModelQuery("")} aria-label="Clear filter">
                 <IconX size={12} />
@@ -1922,7 +1958,7 @@ function ModelControl({
               <strong>{selectedModel?.name ?? "No model"}</strong>{" "}
               {level === "off" ? "without thinking" : `with ${thinkingLabel(level)} thinking`}
             </span>
-            <small>{busy ? "Applying" : "Current session"}</small>
+            <small>{refreshing ? "Refreshing models" : busy ? "Applying" : "Current session"}</small>
           </div>
           <p className="model-help" id="model-rail-help">
             Pick a stop to set model and thinking together. Arrow keys move one option at a time.
@@ -2390,12 +2426,98 @@ function FileStrip({ files, onRemove }: { files: DroppedTextFile[]; onRemove: (i
   );
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
+function localImageObjectUrl(mimeType: string, data: string): string {
+  const binary = atob(data);
+  const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+}
+
+export const MarkdownContent = memo(function MarkdownContent({
+  text,
+  allowLocalImages = false,
+  localImageReloadKey = "",
+}: {
+  text: string;
+  allowLocalImages?: boolean;
+  localImageReloadKey?: string;
+}) {
   const syntaxRevision = useSyntaxHighlightingRevision();
+  const rootRef = useRef<HTMLDivElement>(null);
   const html = useMemo(
     () => DOMPurify.sanitize(renderMarkdown(text), { ALLOWED_ATTR: markdownAttributes, ALLOWED_TAGS: markdownTags }),
     [syntaxRevision, text],
   );
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !allowLocalImages) return;
+    const images = Array.from(root.querySelectorAll<HTMLImageElement>("img[data-local-image]"));
+    const controllers = new Set<AbortController>();
+    const objectUrls = new Set<string>();
+    const ownedImages = new Map<HTMLImageElement, string | null>();
+    const own = (image: HTMLImageElement) => {
+      if (!ownedImages.has(image)) ownedImages.set(image, image.getAttribute("title"));
+    };
+    const dispose = () => {
+      controllers.forEach(controller => controller.abort());
+      objectUrls.forEach(url => URL.revokeObjectURL(url));
+      for (const [image, title] of ownedImages) {
+        image.removeAttribute("src");
+        delete image.dataset.localImageState;
+        if (title === null) image.removeAttribute("title");
+        else image.setAttribute("title", title);
+      }
+    };
+    const load = (image: HTMLImageElement) => {
+      if (image.dataset.localImageState) return;
+      const source = image.dataset.localImage;
+      if (!source) return;
+      own(image);
+      image.dataset.localImageState = "loading";
+      const controller = new AbortController();
+      controllers.add(controller);
+      void runtimeStore
+        .localImage(source, controller.signal)
+        .then(content => {
+          if (controller.signal.aborted || !image.isConnected) return;
+          const objectUrl = localImageObjectUrl(content.mimeType, content.data);
+          objectUrls.add(objectUrl);
+          image.src = objectUrl;
+          image.dataset.localImageState = "loaded";
+        })
+        .catch(() => {
+          if (controller.signal.aborted || !image.isConnected) return;
+          image.dataset.localImageState = "error";
+          image.title = "Local image unavailable";
+        })
+        .finally(() => controllers.delete(controller));
+    };
+    for (const image of images.slice(4)) {
+      own(image);
+      image.dataset.localImageState = "error";
+      image.title = "Only four local images can be shown per message";
+    }
+    const pending = images.slice(0, 4);
+    if (typeof IntersectionObserver === "undefined") {
+      pending.forEach(load);
+      return dispose;
+    }
+    const observer = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          load(entry.target as HTMLImageElement);
+        }
+      },
+      { rootMargin: "120px" },
+    );
+    pending.forEach(image => observer.observe(image));
+    return () => {
+      observer.disconnect();
+      dispose();
+    };
+  }, [allowLocalImages, html, localImageReloadKey]);
 
   const onClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -2407,7 +2529,7 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
     window.dispatchEvent(new CustomEvent("pylon:open-file", { detail: reference }));
   };
 
-  return <div className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div ref={rootRef} className="markdown-content" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 export function CopyMessageButton({ text, label }: { text: string; label: string }) {

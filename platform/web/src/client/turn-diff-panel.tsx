@@ -1,10 +1,10 @@
 import { IconFiles, IconX } from "@tabler/icons-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { MessageReadModel } from "../shared/protocol/events";
 import { FileTypeIcon } from "./files-panel";
 import { runtimeStore } from "./runtime/event-store";
 
-const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
+const CodeViewer = lazy(() => import("./code-viewer"));
 
 type ChangedFiles = NonNullable<MessageReadModel["changedFiles"]>;
 type TurnDiffState = { loading: boolean; error?: string; text?: string; truncated?: boolean; binary?: boolean };
@@ -20,15 +20,6 @@ export function TurnDiffPanel({
 }) {
   const [state, setState] = useState<TurnDiffState>({ loading: true });
   const [scrollToFile, setScrollToFile] = useState<{ path: string; token: number }>();
-  // Pierre builds its file headers as plain DOM, so the icons are rendered once in a hidden
-  // React node and cloned into each header in place of Pierre's change-type glyph.
-  const icons = useRef<HTMLDivElement>(null);
-  const renderHeaderIcon = useCallback((path: string) => {
-    const source =
-      icons.current?.querySelector(`[data-icon-path="${CSS.escape(path)}"] svg`) ??
-      icons.current?.querySelector(`[data-icon-path=""] svg`);
-    return source?.cloneNode(true) as Element | undefined;
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -91,16 +82,6 @@ export function TurnDiffPanel({
           </button>
         ))}
       </div>
-      <div className="turn-diff-icons" ref={icons} hidden>
-        {files.map(file => (
-          <span key={file.path} data-icon-path={file.path}>
-            <FileTypeIcon path={file.path} size={14} />
-          </span>
-        ))}
-        <span data-icon-path="">
-          <FileTypeIcon path="" size={14} />
-        </span>
-      </div>
       <div className="turn-diff-view">
         {state.loading && <p role="status">Loading turn diff…</p>}
         {state.error && (
@@ -114,14 +95,14 @@ export function TurnDiffPanel({
             {state.truncated && <p role="note">Turn diff is too large — showing the first portion.</p>}
             {state.text ? (
               <Suspense fallback={<p role="status">Rendering turn diff…</p>}>
-                <PierreCodeViewer
+                <CodeViewer
                   mode="diff"
                   path={`turn:${entryId}`}
                   text={state.text}
                   revision={entryId}
                   unifiedDiff={state.text}
                   showFileHeaders
-                  renderHeaderIcon={renderHeaderIcon}
+                  renderHeaderIcon={path => <FileTypeIcon path={path} size={14} />}
                   scrollToFile={scrollToFile}
                 />
               </Suspense>

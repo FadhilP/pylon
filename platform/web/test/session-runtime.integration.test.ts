@@ -970,6 +970,11 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
                 error_code: null,
                 ignored: "value",
               },
+              {
+                command_id: "cmd_2", timestamp: "2026-07-30T10:00:01.000Z", session_id: "s_1", actor_id: value.sessionId,
+                command: "inspect.columns", sql: null, target: "public.users", handle: null,
+                executed: true, cached: false, success: true, error_code: null,
+              },
             ],
             ignored: "value",
           }),
@@ -989,6 +994,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal(snapshot.history[0]?.origin, "legacy");
     assert.equal(snapshot.history[0]?.command, "query");
     assert.equal(snapshot.history[0]?.sql, "SELECT id, email FROM users WHERE id = ?");
+    assert.equal(snapshot.history[1]?.target, "public.users");
     assert.equal("ignored" in snapshot, false);
     assert.equal("ignored" in snapshot.session, false);
     assert.equal("ignored" in snapshot.history[0]!, false);
@@ -1011,7 +1017,7 @@ test("StateQL rows bridge normalizes a bounded page", async () => {
         const rows =
           value.handle === "oversized"
             ? Array.from({ length: 5 }, (_, id) => ({ id, text: "x".repeat(60 * 1024) }))
-            : [{ id: 1, nested: [true, null] }];
+            : [{ id: 1, nested: [true, null], text: "x".repeat(500) }];
         value.respond(
           Promise.resolve({
             result_id: value.handle === "wrong-result" ? "other-result" : value.handle,
@@ -1022,6 +1028,8 @@ test("StateQL rows bridge normalizes a bounded page", async () => {
             total: rows.length,
             truncated: false,
             next_offset: null,
+            columns: [{ name: "id", type: "integer" }, { name: "text", type: "text" }],
+            row_tokens: rows.map(() => null), writable_columns: [],
             ignored: "value",
           }),
         );
@@ -1035,6 +1043,8 @@ test("StateQL rows bridge normalizes a bounded page", async () => {
     assert.equal(page.sessionGeneration, handle.sessionGeneration);
     assert.equal(page.actor_id, handle.sessionId);
     assert.equal(page.rows[0]?.id, 1);
+    assert.equal(page.rows[0]?.text, "x".repeat(500));
+    assert.equal(page.full_values, true);
     assert.equal("ignored" in page, false);
     await assert.rejects(driver.stateqlRows("", 0, 10), /request is invalid/);
     await assert.rejects(driver.stateqlRows("wrong-result", 0, 10), /returned invalid rows/);

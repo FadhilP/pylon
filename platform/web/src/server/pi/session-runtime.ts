@@ -90,6 +90,8 @@ import type {
   ExtensionListSnapshot,
   FileSuggestionList,
   HookSettingsSnapshot,
+  LocalImageContent,
+  LocalImageQuery,
   PackageListSnapshot,
   PackageSettingsReadModel,
   PapercutListPage,
@@ -104,6 +106,7 @@ import type {
   SkillListSnapshot,
   SessionListSnapshot,
   StateQLCommandInput,
+  StateQLExport,
   StateQLCommandResult,
   StateQLCommandResponseReadModel,
   StateQLRowsPage,
@@ -188,6 +191,7 @@ import {
 } from "./prompt-attachments.ts";
 import { HookInjectionBridge } from "./hook-injection.ts";
 import { HookSettingsStore } from "./hook-settings.ts";
+import { loadLocalImage, LOCAL_IMAGE_GUIDANCE_TYPE, localImageExtension } from "./local-images.ts";
 import { WorkspaceApplyTool, type WorkspaceApplyToolInfo } from "./workspace-apply-tool.ts";
 import {
   packageSettingsKeys,
@@ -548,6 +552,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
       origin: item.origin,
       command: item.command,
       sql: item.sql,
+      ...(item.target ? { target: item.target } : {}),
       handle: item.handle,
       executed: item.executed,
       cached: item.cached,
@@ -621,6 +626,9 @@ function stateqlRowsResult(
     sessionGeneration,
     actor_id: actorId,
     handle,
+    ...(Array.isArray(raw.columns) ? { columns: stateqlJsonValue(raw.columns, 0, budget), full_values: true,
+      row_tokens: stateqlJsonValue(raw.row_tokens ?? rows.map(() => null), 0, budget), writable_columns: stateqlJsonValue(raw.writable_columns ?? [], 0, budget),
+      ...(typeof raw.editing_reason === "string" ? { editing_reason: raw.editing_reason.slice(0, 500) } : {}) } : {}),
     offset: raw.offset,
     limit: raw.limit,
     rows,
@@ -1163,6 +1171,7 @@ export class SessionRuntime implements PiDriver {
       mainPrompt: pylonCoreConfig.mainPrompt,
       extensionFactories: [
         this.promptAttachments.extension,
+        localImageExtension,
         this.workspaceApplyTool.extension,
         this.pylonSettingsTool.extension,
         pylonCoreWebTools,
@@ -1350,6 +1359,20 @@ export class SessionRuntime implements PiDriver {
     }
     throw new Error("attachment is unavailable");
   }
+
+  async localImage(input: LocalImageQuery): Promise<LocalImageContent> {
+    const runtime = this.requireRuntime();
+    if (!this.gate.ready) throw new Error("runtime is not ready");
+    const image = await loadLocalImage(input.source);
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: runtime.session.sessionId,
+      sessionGeneration: this.gate.generation,
+      kind: "image",
+      ...image,
+    };
+  }
+
   async turnDiff(input: TurnDiffQuery): Promise<TurnDiffResult> {
     const runtime = this.requireRuntime();
     if (!this.gate.ready) throw new Error("runtime is not ready");
@@ -2002,6 +2025,35 @@ export class SessionRuntime implements PiDriver {
     };
   }
 
+  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport> {
+    const runtime = this.requireRuntime();
+    const generation = this.gate.generation;
+    const controller = new AbortController();
+    signal?.throwIfAborted();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    let response: Promise<unknown> | undefined;
+    let claimed = false;
+    this.eventBus.emit("pylon:stateql-export-request", {
+      version: 1, sessionId: runtime.session.sessionId, handle, format, signal: controller.signal,
+      claim: () => { if (claimed) return false; claimed = true; return true; },
+      respond: (value: Promise<unknown>) => { response ??= Promise.resolve(value); },
+    });
+    try {
+      if (!response) throw new Error("StateQL exports are unavailable");
+      const value = await response;
+      controller.signal.throwIfAborted();
+      if (this.gate.generation !== generation) throw new Error("Session changed during export");
+      const data = value as { content?: unknown; format?: unknown };
+      if (!data || typeof data.content !== "string" || data.format !== format ||
+        Buffer.byteLength(data.content, "utf8") > 32 * 1024 * 1024) throw new Error("Invalid or oversized export");
+      return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, actor_id: runtime.session.sessionId, content: data.content, format };
+    } finally {
+      controller.abort();
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+
   async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
     const runtime = this.requireRuntime();
     const controller = new AbortController();
@@ -2043,7 +2095,7 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-  async stateqlRows(handle: string, offset: number, limit: number): Promise<StateQLRowsPage> {
+  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
     if (
       !handle.trim() ||
       handle.length > 200 ||
@@ -2057,6 +2109,9 @@ export class SessionRuntime implements PiDriver {
       throw new Error("StateQL rows request is invalid");
     const runtime = this.requireRuntime();
     const controller = new AbortController();
+    signal?.throwIfAborted();
+    const abort = () => controller.abort();
+    signal?.addEventListener("abort", abort, { once: true });
     let response: Promise<unknown> | undefined;
     let claimed = false;
     let answered = false;
@@ -2078,7 +2133,11 @@ export class SessionRuntime implements PiDriver {
         response = Promise.resolve(value);
       },
     });
-    if (!response) throw new Error("StateQL rows are unavailable");
+    if (!response) {
+      signal?.removeEventListener("abort", abort);
+      controller.abort();
+      throw new Error("StateQL rows are unavailable");
+    }
     const timeout = setTimeout(() => controller.abort(), 5_000);
     timeout.unref?.();
     try {
@@ -2094,13 +2153,15 @@ export class SessionRuntime implements PiDriver {
     } finally {
       clearTimeout(timeout);
       controller.abort();
+      signal?.removeEventListener("abort", abort);
     }
   }
 
-  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult> {
+  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
     if (!isStateQLCommandInput(input)) throw new Error("StateQL command request is invalid");
     const runtime = this.requireRuntime();
     const controller = new AbortController();
+    signal?.throwIfAborted();
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     let response: Promise<unknown> | undefined;
@@ -2110,6 +2171,7 @@ export class SessionRuntime implements PiDriver {
       version: 1,
       sessionId: runtime.session.sessionId,
       command: input,
+      expectedConnectionId,
       signal: controller.signal,
       ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database"),
       claim: () => {
@@ -4433,6 +4495,7 @@ export class SessionRuntime implements PiDriver {
     if (cached?.sessionId === sessionId && cached.leafId === leafId) return cached.messages;
     const branch = session.sessionManager.getBranch();
     const messages = branch.flatMap(entry => {
+      if (entry.type === "custom_message" && entry.customType === LOCAL_IMAGE_GUIDANCE_TYPE) return [];
       if (entry.type === "compaction") return [compactionTranscriptMessage(branch, entry)];
       if (entry.type !== "message" && entry.type !== "custom_message") return [];
       return sessionEntryToContextMessages(entry).map(message => ({

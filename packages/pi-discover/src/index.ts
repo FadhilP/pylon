@@ -6,6 +6,7 @@ import { DEFAULT_MAX_BYTES, formatSize, type ExtensionAPI } from "@earendil-work
 import { Type } from "typebox";
 import { escapesRoot, fitJson, workspacePath } from "./search-common.ts";
 import { indexDatabasePath, openIndexDatabase, optimizeDatabase } from "./index-schema.ts";
+import { WorkerIndex } from "./worker-index.ts";
 import {
   RepositoryScanner,
   sameSnapshot,
@@ -224,6 +225,7 @@ export class WorkspaceIndex {
       "INSERT INTO files(repo_id,path,language,content,hash,size,dirty) VALUES (?,?,?,?,?,?,?)",
     );
     const updateFile = db.prepare("UPDATE files SET language=?,content=?,hash=?,size=?,dirty=? WHERE id=?");
+    const updateDirty = db.prepare("UPDATE files SET dirty=? WHERE id=?");
     const removeSymbols = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const insertSymbol = db.prepare(
       "INSERT INTO symbols(file_id,name,kind,line,column_no,signature) VALUES (?,?,?,?,?,?)",
@@ -247,7 +249,10 @@ export class WorkspaceIndex {
       }
       for (const file of files) {
         const current = findFile.get(repoId, file.path) as { id: number; hash: string; dirty: number } | undefined;
-        if (current?.hash === file.hash && current.dirty === Number(file.dirty)) continue;
+        if (current?.hash === file.hash && file.symbols === undefined) {
+          if (current.dirty !== Number(file.dirty)) updateDirty.run(Number(file.dirty), current.id);
+          continue;
+        }
         let fileId: number;
         if (current) {
           fileId = current.id;
@@ -261,7 +266,7 @@ export class WorkspaceIndex {
           );
         }
         insertFts.run(fileId, file.content);
-        for (const symbol of file.symbols)
+        for (const symbol of file.symbols ?? [])
           insertSymbol.run(fileId, symbol.name, symbol.kind, symbol.line, symbol.column, symbol.signature);
       }
       db.prepare("UPDATE repositories SET root=?,head=?,branch=?,indexed_at=? WHERE id=?").run(
@@ -310,7 +315,22 @@ export class WorkspaceIndex {
             db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>
           ).map(row => row.path),
         ]);
-      const { prepared, removals } = await this.scanner.prepareAll(snapshot.root, [...candidates], snapshot.dirty);
+      const hashes =
+        forceFull || !candidates.size
+          ? new Map<string, string>()
+          : new Map(
+              (
+                db
+                  .prepare("SELECT path,hash FROM files WHERE repo_id=? AND path IN (SELECT value FROM json_each(?))")
+                  .all(repoId, JSON.stringify([...candidates])) as Array<{ path: string; hash: string }>
+              ).map(row => [row.path, row.hash]),
+            );
+      const { prepared, removals } = await this.scanner.prepareAll(
+        snapshot.root,
+        [...candidates],
+        snapshot.dirty,
+        hashes,
+      );
       if (inventory) {
         const existing = db.prepare("SELECT path FROM files WHERE repo_id=?").all(repoId) as Array<{ path: string }>;
         for (const { path } of existing) if (!inventory.has(path)) removals.push(path);
@@ -571,7 +591,7 @@ export class WorkspaceIndex {
   }
 }
 
-export type IndexProvider = (cwd: string) => WorkspaceIndex;
+export type IndexProvider = (cwd: string) => Pick<WorkspaceIndex, keyof WorkspaceIndex>;
 export type IndexRegistry = { indexFor: IndexProvider; closeAll(): Promise<void> };
 
 /** One WorkspaceIndex per cwd, sharing the extension's exec adapter. */
@@ -579,17 +599,17 @@ export function createIndexRegistry(
   pi: ExtensionAPI,
   settings: DiscoverIndexSettings = DEFAULT_INDEX_SETTINGS,
 ): IndexRegistry {
-  const indexes = new Map<string, WorkspaceIndex>();
+  const indexes = new Map<string, ReturnType<IndexProvider>>();
   const indexFor = (cwd: string) => {
     let index = indexes.get(cwd);
     if (!index) {
-      index = new WorkspaceIndex(
+      index = new WorkerIndex(
         cwd,
         async (command, args, options) => {
           const result = await pi.exec(command, args, options);
           return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
         },
-        undefined,
+        indexDatabasePath(),
         settings.searchTimeoutMs,
       );
       indexes.set(cwd, index);

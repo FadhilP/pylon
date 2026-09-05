@@ -1,41 +1,18 @@
-import type { FileDiffContentsLoader } from "@pierre/diffs";
 import {
   IconAlertTriangle,
   IconArrowBackUp,
-  IconBrandDocker,
-  IconBrandGolang,
-  IconBrandNpm,
-  IconBrandPython,
   IconCheck,
   IconCopy,
   IconDatabase,
   IconExternalLink,
   IconFile,
-  IconFileCode,
   IconFiles,
-  IconFileSettings,
-  IconFileText,
-  IconFileTypeCss,
-  IconFileTypeHtml,
-  IconFileTypeJs,
-  IconFileTypeJsx,
-  IconFileTypePdf,
-  IconFileTypeRs,
-  IconFileTypeSql,
-  IconFileTypeSvg,
-  IconFileTypeTs,
-  IconFileTypeTsx,
-  IconFileTypeZip,
   IconFolder,
   IconGitCompare,
   IconGitMerge,
-  IconJson,
   IconLoader2,
-  IconMarkdown,
-  IconPhoto,
   IconRefresh,
   IconSearch,
-  IconTerminal2,
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
@@ -52,10 +29,10 @@ import {
 } from "react";
 import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
-import { fileIconKind } from "../shared/file-icon";
+import { fileIconId } from "../shared/file-icon";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
-import { createPierreLoadedDiffFiles } from "../shared/pierre-code-viewer-model";
+import { loadDiffContents, type DiffContentsLoader } from "../shared/code-viewer-model";
 import type {
   WorkspaceFileContent,
   WorkspaceFileDiff,
@@ -69,59 +46,20 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { useSyntaxHighlightingRevision } from "./use-chrome";
 
 export type FileView = "current" | "base" | "diff";
-const PierreCodeViewer = lazy(() => import("./pierre-code-viewer"));
+const CodeViewer = lazy(() => import("./code-viewer"));
 
 export function FileTypeIcon({ path, size = 14 }: { path: string; size?: number }) {
-  const kind = fileIconKind(path);
-  const props = { className: `file-type-icon is-${kind}`, size, "aria-hidden": true } as const;
-  switch (kind) {
-    case "typescript":
-      return <IconFileTypeTs {...props} />;
-    case "tsx":
-      return <IconFileTypeTsx {...props} />;
-    case "javascript":
-      return <IconFileTypeJs {...props} />;
-    case "jsx":
-      return <IconFileTypeJsx {...props} />;
-    case "html":
-      return <IconFileTypeHtml {...props} />;
-    case "css":
-      return <IconFileTypeCss {...props} />;
-    case "json":
-      return <IconJson {...props} />;
-    case "markdown":
-      return <IconMarkdown {...props} />;
-    case "python":
-      return <IconBrandPython {...props} />;
-    case "go":
-      return <IconBrandGolang {...props} />;
-    case "rust":
-      return <IconFileTypeRs {...props} />;
-    case "sql":
-      return <IconFileTypeSql {...props} />;
-    case "svg":
-      return <IconFileTypeSvg {...props} />;
-    case "image":
-      return <IconPhoto {...props} />;
-    case "pdf":
-      return <IconFileTypePdf {...props} />;
-    case "archive":
-      return <IconFileTypeZip {...props} />;
-    case "config":
-      return <IconFileSettings {...props} />;
-    case "shell":
-      return <IconTerminal2 {...props} />;
-    case "code":
-      return <IconFileCode {...props} />;
-    case "text":
-      return <IconFileText {...props} />;
-    case "npm":
-      return <IconBrandNpm {...props} />;
-    case "docker":
-      return <IconBrandDocker {...props} />;
-    default:
-      return <IconFile {...props} />;
-  }
+  return (
+    <img
+      className="file-type-icon"
+      src={`/file-icons/${fileIconId(path)}.svg`}
+      width={size}
+      height={size}
+      loading="lazy"
+      decoding="async"
+      alt=""
+    />
+  );
 }
 
 export function FilesPanel({
@@ -458,30 +396,31 @@ export function FilesPanel({
                   <code title={selectedPath}>{selectedPath}</code>
                   <span>
                     {canCompare && (
-                      <>
-                        <button className={view === "diff" ? "is-active" : ""} onClick={() => setView("diff")}>
-                          <IconGitCompare size={14} />
-                          Diff
-                        </button>
-                        <button
-                          className={view === "base" ? "is-active" : ""}
-                          title={
-                            workspace?.mode === "local"
-                              ? "Show the file from HEAD"
-                              : "Show the file from the session baseline"
-                          }
-                          onClick={() => setView("base")}>
-                          <IconArrowBackUp size={14} />
-                          Baseline
-                        </button>
-                      </>
+                      <button
+                        className={view === "base" ? "is-active" : ""}
+                        title={
+                          workspace?.mode === "local"
+                            ? "Show the file from HEAD"
+                            : "Show the file from the session baseline"
+                        }
+                        onClick={() => setView("base")}>
+                        <IconArrowBackUp size={14} />
+                        Baseline
+                      </button>
                     )}
                     <button
                       className={view === "current" ? "is-active" : ""}
                       title="Show the current file on disk"
                       onClick={() => setView(current => (current === "current" && canCompare ? "diff" : "current"))}>
+                      <IconFile size={14} />
                       Working copy
                     </button>
+                    {canCompare && (
+                      <button className={view === "diff" ? "is-active" : ""} onClick={() => setView("diff")}>
+                        <IconGitCompare size={14} />
+                        Diff
+                      </button>
+                    )}
                     <button
                       className={`icon-button copy-feedback${fileCopyState === "idle" ? "" : ` is-${fileCopyState}`}`}
                       onClick={() => void copySelectedPath()}
@@ -816,7 +755,7 @@ export function FileContent({
   targetLine?: number;
   onError: (error: unknown, fallback: string) => void;
 }) {
-  const loadDiffFiles = useMemo<FileDiffContentsLoader | undefined>(() => {
+  const loadDiffFiles = useMemo<DiffContentsLoader | undefined>(() => {
     if (!value || view !== "diff") return undefined;
     const { path, revision } = value;
     return async () => {
@@ -825,7 +764,7 @@ export function FileContent({
         // read-only expansions never contend for Git's index lock.
         const base = await runtimeStore.workspaceFile(path, "base");
         const current = await runtimeStore.workspaceFile(path, "current");
-        return createPierreLoadedDiffFiles({ path, revision, base, current });
+        return loadDiffContents({ revision, base, current });
       } catch (error) {
         onError(error, "Unable to load full diff context");
         throw error;
@@ -850,7 +789,7 @@ export function FileContent({
     return <RawFileContent text={text} path={value.path} diff={view === "diff"} targetLine={targetLine} truncated />;
   return (
     <Suspense fallback={<div className="files-empty large">Rendering…</div>}>
-      <PierreCodeViewer
+      <CodeViewer
         mode={view === "diff" ? "diff" : "file"}
         path={value.path}
         text={text}

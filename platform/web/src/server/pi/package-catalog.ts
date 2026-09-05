@@ -102,8 +102,7 @@ export class PackageCatalog {
   }
 
   async scan(): Promise<PackageCatalogState> {
-    const packages = await this.discoverPackages();
-    const rootPaths = await this.rootExtensionPaths();
+    const [packages, rootPaths] = await Promise.all([this.discoverPackages(), this.rootExtensionPaths()]);
     const packagePaths = new Set(packages.flatMap(item => item.extensionPaths));
     const defaultIds = packages
       .filter(item => item.extensionPaths.some(path => rootPaths.includes(path)))

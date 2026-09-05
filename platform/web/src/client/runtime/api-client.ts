@@ -15,6 +15,7 @@ import type {
   ExtensionListSnapshot,
   FileSuggestionList,
   HookSettingsSnapshot,
+  LocalImageContent,
   PackageListSnapshot,
   PapercutListPage,
   LocalBranchListSnapshot,
@@ -25,6 +26,8 @@ import type {
   SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -191,6 +194,16 @@ export class ApiClient {
     );
   }
 
+  async localImage(source: string, generation: number, signal?: AbortSignal): Promise<LocalImageContent> {
+    const query = new URLSearchParams({ source, generation: String(generation) });
+    return json<LocalImageContent>(
+      await fetch(`/api/v1/local-image?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
+  }
   async conversationTurnIndex(
     input: ConversationTurnIndexQuery,
     generation: number,
@@ -337,6 +350,28 @@ export class ApiClient {
         signal,
       }),
     );
+  }
+
+  async stateqlExport(generation: number, handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<Blob> {
+    const response = await fetch("/api/v1/stateql/export", {
+      method: "POST", credentials: "same-origin", headers: this.headers(),
+      body: JSON.stringify({ generation, handle, format }), signal,
+    });
+    if (!response.ok) { await json(response); throw new Error("Export failed"); }
+    if (Number(response.headers.get("content-length")) > 32 * 1024 * 1024) throw new Error("Export exceeds download limit");
+    const blob = await response.blob();
+    if (blob.size > 32 * 1024 * 1024) throw new Error("Export exceeds download limit");
+    return blob;
+  }
+
+  async stateqlCommand(generation: number, input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
+    return json<StateQLCommandResult>(await fetch("/api/v1/stateql/command", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: this.headers(),
+      body: JSON.stringify({ generation, input, expectedConnectionId }),
+      signal,
+    }));
   }
 
   async stateqlRows(

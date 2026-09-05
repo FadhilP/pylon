@@ -11,7 +11,9 @@ export interface StateQLActivityItem {
   source: "history" | "metadata";
   command: string;
   sql?: string;
+  target?: string;
   actorId?: string;
+  origin?: StateQLHistoryEntryReadModel["origin"];
   handle?: string;
   timestamp?: string;
   executed: boolean;
@@ -23,8 +25,8 @@ export interface StateQLActivityItem {
   tags: StateQLActivityTag[];
 }
 
-const READ_COMMANDS = new Set(["query", "filter", "show", "rows", "count", "columns", "inspect", "plan"]);
-const WRITE_COMMANDS = new Set(["exec", "apply"]);
+const READ_COMMANDS = new Set(["query", "mongo.query", "filter", "show", "rows", "count", "columns", "inspect", "plan", "mongo.plan"]);
+const WRITE_COMMANDS = new Set(["exec", "mongo.exec", "apply", "transaction.commit", "transaction.rollback"]);
 const FAILED_OPERATION_STATES = new Set(["failed", "outcome_unknown"]);
 
 function tagsFor(
@@ -33,7 +35,7 @@ function tagsFor(
   operation?: StateQLOperation,
 ): StateQLActivityTag[] {
   const tags: StateQLActivityTag[] = [];
-  if (result || (entry && READ_COMMANDS.has(entry.command))) tags.push("read");
+  if (result || (entry && (READ_COMMANDS.has(entry.command) || entry.command.startsWith("inspect.")))) tags.push("read");
   if (operation || (entry && WRITE_COMMANDS.has(entry.command))) tags.push("write");
   if ((entry && !entry.success) || (operation && FAILED_OPERATION_STATES.has(operation.status))) tags.push("error");
   return tags;
@@ -53,7 +55,9 @@ export function buildStateQLActivity(snapshot: StateQLSnapshot): StateQLActivity
       source: "history",
       command: entry.command,
       sql: entry.sql ?? undefined,
+      target: entry.target ?? undefined,
       actorId: entry.actor_id,
+      origin: entry.origin,
       handle,
       timestamp: entry.timestamp,
       executed: entry.executed,

@@ -25,6 +25,8 @@ import type {
   HookSettingsReadModel,
   HookSettingsSnapshot,
   LocalBranchListSnapshot,
+  LocalImageContent,
+  LocalImageQuery,
   PackageListSnapshot,
   PackageSettingsReadModel,
   PapercutListPage,
@@ -37,6 +39,7 @@ import type {
   UsageQuery,
   UsageSnapshot,
   StateQLCommandInput,
+  StateQLExport,
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
@@ -352,6 +355,7 @@ export interface PiDriver {
   terminalTarget?(): TerminalTarget;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   conversationAttachment?(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent>;
+  localImage?(input: LocalImageQuery): Promise<LocalImageContent>;
   turnDiff?(input: TurnDiffQuery): Promise<TurnDiffResult>;
   conversationTurnIndex?(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage>;
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
@@ -360,9 +364,10 @@ export interface PiDriver {
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
   timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
+  stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
-  stateqlRows?(handle: string, offset: number, limit: number): Promise<StateQLRowsPage>;
-  stateqlCommand?(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult>;
+  stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage>;
+  stateqlCommand?(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult>;
   papercutList?(
     status: PapercutStatusReadModel | "all",
     query: string,
@@ -426,6 +431,7 @@ export interface PiDriver {
   reloadExtensions?(): Promise<ReplacementResult>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
   rebuildDiscoverIndex(): Promise<void>;
+  refreshModelCatalogs?(expectedGeneration: number): Promise<void>;
   setModel(input: SetModelInput): Promise<void>;
   setThinkingLevel(input: SetThinkingLevelInput): void;
   setSessionControls(input: SetSessionControlsInput): Promise<void>;

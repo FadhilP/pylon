@@ -19,16 +19,29 @@ function fileCitationHref(text: string): string | undefined {
   return fileReferenceHref(start);
 }
 
+function isLocalImageSource(href: string): boolean {
+  return href.trim().toLowerCase().startsWith("file:");
+}
+
+function localImageMarkup(token: { href: string; text: string; title?: string | null }): string {
+  const title = token.title ? ` title="${escapeHtml(token.title)}"` : "";
+  return `<img data-local-image="${escapeHtml(token.href)}" alt="${escapeHtml(token.text)}"${title}>`;
+}
 class MarkdownRenderer extends Renderer {
   private linkDepth = 0;
 
   override link(token: Parameters<Renderer["link"]>[0]): string {
+    if (isLocalImageSource(token.href)) return localImageMarkup(token);
     this.linkDepth++;
     try {
       return super.link(token);
     } finally {
       this.linkDepth--;
     }
+  }
+
+  override image(token: Parameters<Renderer["image"]>[0]): string {
+    return isLocalImageSource(token.href) ? localImageMarkup(token) : super.image(token);
   }
 
   override codespan(token: Parameters<Renderer["codespan"]>[0]): string {
@@ -183,6 +196,20 @@ const sourceLanguages: Record<string, string> = {
   md: "markdown",
   mjs: "javascript",
   cjs: "javascript",
+  mts: "typescript",
+  cts: "typescript",
+  rs: "rust",
+  h: "c",
+  cc: "cpp",
+  hpp: "cpp",
+  cs: "csharp",
+  rb: "ruby",
+  kt: "kotlin",
+  kts: "kotlin",
+  vue: "vue",
+  svelte: "svelte",
+  tf: "terraform",
+  proto: "proto",
   ps1: "powershell",
   py: "python",
   sh: "bash",
@@ -196,9 +223,16 @@ const sourceLanguages: Record<string, string> = {
   zsh: "bash",
 };
 
+export function sourceLanguage(path: string): string {
+  const name = path.split("/").at(-1)?.toLowerCase() ?? "";
+  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
+  if (name === "makefile" || name === "gnumakefile") return "makefile";
+  const extension = name.split(".").at(-1) ?? "";
+  return sourceLanguages[extension] ?? extension;
+}
+
 export function highlightSource(text: string, path: string, diffView = false): string {
-  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
-  const language = diffView ? "diff" : sourceLanguages[extension];
+  const language = diffView ? "diff" : sourceLanguage(path);
   return language ? highlightCode(text, language) : escapeHtml(text);
 }
 

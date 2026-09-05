@@ -97,6 +97,18 @@ test("leaves currency, escaped delimiters, and code literal while preserving cit
   assert.match(html, /<a href="src\/file\.ts:12"><code>src\/file\.ts:12<\/code><\/a>/);
 });
 
+test("marks local image links for authenticated loading without exposing file URLs to the browser", () => {
+  const linked = renderMarkdown("[chart](file:///C:/private/chart.png)");
+  const embedded = renderMarkdown("![chart](file:///C:/private/chart.png)");
+  const remote = renderMarkdown("![chart](https://example.com/chart.png)");
+
+  assert.match(linked, /<img data-local-image="file:\/\/\/C:\/private\/chart\.png" alt="chart">/);
+  assert.match(embedded, /<img data-local-image="file:\/\/\/C:\/private\/chart\.png" alt="chart">/);
+  assert.doesNotMatch(linked, /\bsrc=/);
+  assert.match(remote, /<img src="https:\/\/example\.com\/chart\.png" alt="chart">/);
+});
+
+
 test("keeps incomplete math renderable and treats untrusted TeX commands as text", () => {
   const incomplete = renderMarkdown("\\[\n\\frac{a}{b}");
   const untrusted = renderMarkdown(String.raw`$\href{javascript:alert(1)}{x}$`);

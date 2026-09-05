@@ -23,7 +23,7 @@ import nord from "@shikijs/themes/nord";
 import oneDarkPro from "@shikijs/themes/one-dark-pro";
 import { createHighlighterCoreSync } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import type { SyntaxTheme } from "./syntax-highlighting.ts";
+import type { SyntaxTheme, SyntaxToken } from "./syntax-highlighting.ts";
 
 const highlighter = createHighlighterCoreSync({
   themes: [oneDarkPro, githubDark, dracula, nord, githubLight],
@@ -50,24 +50,46 @@ const highlighter = createHighlighterCoreSync({
   engine: createJavaScriptRegexEngine(),
 });
 const loadedLanguages = new Set(highlighter.getLoadedLanguages());
+const languageLoads = new Map<string, Promise<boolean>>();
+
+export function loadSyntaxLanguage(language: string): Promise<boolean> {
+  if (loadedLanguages.has(language)) return Promise.resolve(false);
+  let loading = languageLoads.get(language);
+  if (!loading) {
+    loading = import("shiki/langs").then(async ({ bundledLanguages }) => {
+      const loader = bundledLanguages[language as keyof typeof bundledLanguages];
+      if (!loader) return false;
+      await highlighter.loadLanguage(await loader());
+      for (const name of highlighter.getLoadedLanguages()) loadedLanguages.add(name);
+      return true;
+    }).catch(() => false);
+    languageLoads.set(language, loading);
+  }
+  return loading;
+}
 
 export const syntaxThemeTokenCss = createTokenCss();
 
 export function highlightSyntax(text: string, language: string, theme: SyntaxTheme): string | undefined {
   if (!loadedLanguages.has(language)) return;
-
-  const { tokens } = highlighter.codeToTokens(text, { lang: language, theme });
-  return tokens
+  return syntaxTokens(text, language, theme)!
     .map(line =>
       line
         .map(token => {
-          const classes = tokenClasses(token.color, token.fontStyle);
+          const classes = token.className;
           const content = escapeHtml(token.content);
           return classes ? `<span class="${classes}">${content}</span>` : content;
         })
         .join(""),
     )
     .join("\n");
+}
+
+export function syntaxTokens(text: string, language: string, theme: SyntaxTheme): SyntaxToken[][] | undefined {
+  if (!loadedLanguages.has(language)) return;
+  return highlighter.codeToTokens(text, { lang: language, theme }).tokens.map(line =>
+    line.map(token => ({ content: token.content, className: tokenClasses(token.color, token.fontStyle) })),
+  );
 }
 
 function createTokenCss(): string {

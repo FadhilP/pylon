@@ -193,6 +193,7 @@ export function App() {
   const [sessionDeleting, setSessionDeleting] = useState("");
   const [projectLoading, setProjectLoading] = useState("");
   const [projectBusy, setProjectBusy] = useState("");
+  const [modelRefreshBusy, setModelRefreshBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -1087,6 +1088,17 @@ export function App() {
     manageExtension("trust", () => runtimeStore.setProjectTrust(trusted), "Unable to update project trust");
   const reloadExtensions = () =>
     manageExtension("reload", () => runtimeStore.reloadExtensions(), "Unable to reload extensions");
+  const refreshModels = async () => {
+    if (modelRefreshBusy) return;
+    setModelRefreshBusy(true);
+    try {
+      await runtimeStore.refreshModelCatalogs();
+    } catch {
+      // The runtime store routes the failure through the application toast.
+    } finally {
+      setModelRefreshBusy(false);
+    }
+  };
 
   const manageAndroidTooling = async (action: "status" | "install" | "remove") => {
     if (androidToolingBusy) throw new Error("Another Android tooling operation is still running");
@@ -1178,6 +1190,9 @@ export function App() {
     }
   };
   changeSurfaceRef.current = changeSurface;
+  useEffect(() => {
+    if (live.pendingUi?.surface === "database" && live.pendingUi.owned) changeSurfaceRef.current("database");
+  }, [live.pendingUi?.requestId, live.pendingUi?.owned]);
 
   const openWorkspaceView = (next: WorkspaceViewId) => {
     if (next === "sessions") {
@@ -1842,6 +1857,9 @@ export function App() {
             session => session.runtimeState === "running" || session.runtimeState === "attention",
           )}
           models={live.runtime?.sessionControls.models ?? []}
+          modelRefreshBusy={modelRefreshBusy}
+          modelRefreshDisabled={live.connection !== "connected" || live.runtime?.ready !== true}
+          onRefreshModels={refreshModels}
           sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
           theme={theme}
           onThemeChange={setTheme}

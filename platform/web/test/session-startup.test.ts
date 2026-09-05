@@ -31,7 +31,12 @@ test("a session starts within budget in a repository with untracked files", { ti
       join(cwd, "package.json"),
       JSON.stringify({
         name: "pylon-session-startup-fixture",
-        pi: { extensions: [resolve(repositoryRoot, "packages/pi-timeline/extensions/pi-timeline.ts")] },
+        pi: {
+          extensions: [
+            resolve(repositoryRoot, "packages/pi-timeline/extensions/pi-timeline.ts"),
+            resolve(repositoryRoot, "packages/pi-discover/extensions/pi-discover.ts"),
+          ],
+        },
       }),
     );
     await writeFile(join(cwd, "src", "feature", "tracked.ts"), "export const feature = true;\n");
@@ -54,6 +59,15 @@ test("a session starts within budget in a repository with untracked files", { ti
     const durationMs = performance.now() - startedAt;
 
     assert.ok(durationMs < startupBudgetMs, `session startup took ${Math.round(durationMs)}ms`);
+    const indexedBy = performance.now() + 5_000;
+    let index = (await driver.snapshot()).discoverIndex;
+    while (index?.state !== "idle" && performance.now() < indexedBy) {
+      assert.notEqual(index?.state, "error");
+      await new Promise(resolve => setTimeout(resolve, 25));
+      index = (await driver.snapshot()).discoverIndex;
+    }
+    assert.equal(index?.state, "idle");
+    assert.ok((index?.files ?? 0) >= 26, "background worker indexed tracked and untracked source files");
   } finally {
     await driver?.dispose();
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

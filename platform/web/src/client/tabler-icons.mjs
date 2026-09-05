@@ -1,3 +1,4 @@
+export { default as IconTable } from "@tabler/icons-react/dist/esm/icons/IconTable.mjs";
 // Runtime-only subset; source imports keep using Tabler's public TypeScript declarations.
 export { default as IconActivityHeartbeat } from "@tabler/icons-react/dist/esm/icons/IconActivityHeartbeat.mjs";
 export { default as IconAdjustmentsHorizontal } from "@tabler/icons-react/dist/esm/icons/IconAdjustmentsHorizontal.mjs";

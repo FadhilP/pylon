@@ -15,6 +15,7 @@ import type {
   FileSuggestionList,
   HookSettingsReadModel,
   HookSettingsSnapshot,
+  LocalImageContent,
   PackageListSnapshot,
   PapercutMutationResult,
   RuntimeSnapshot,
@@ -201,6 +202,7 @@ class FakeDriver implements PiDriver {
   selectedThinking: string[] = [];
   packageSettingsUpdates: unknown[] = [];
   hookSettingsUpdates: HookSettingsReadModel[] = [];
+  localImageSources: string[] = [];
   planActions: unknown[] = [];
   hookSettings: HookSettingsReadModel = {
     sessionStart: { enabled: false, sources: [] },
@@ -208,6 +210,8 @@ class FakeDriver implements PiDriver {
   };
   indexRebuilds = 0;
   newSessionParent?: string;
+  modelRefreshes = 0;
+  modelRefreshFailure?: Error;
   heliosRequests: HeliosBrowserInput[] = [];
   heliosStreamRequests: HeliosBrowserStreamInput[] = [];
   heliosAndroidToolingRequests: HeliosAndroidToolingCommand[] = [];
@@ -245,6 +249,19 @@ class FakeDriver implements PiDriver {
       sessionGeneration: this.current.sessionGeneration,
       kind: "image",
       name: "Image 1",
+      mimeType: "image/png",
+      size: 1,
+      data: "eA==",
+    });
+  }
+  localImage(input: { source: string }): Promise<LocalImageContent> {
+    this.localImageSources.push(input.source);
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.current.sessionId,
+      sessionGeneration: this.current.sessionGeneration,
+      kind: "image",
+      name: "chart.png",
       mimeType: "image/png",
       size: 1,
       data: "eA==",
@@ -428,6 +445,10 @@ class FakeDriver implements PiDriver {
       truncated: false,
       next_offset: null,
     });
+  }
+  stateqlExport(_handle: string, format: "json" | "jsonl" | "csv") {
+    return Promise.resolve({ protocolVersion: PROTOCOL_VERSION, sessionGeneration: this.current.sessionGeneration,
+      actor_id: this.current.sessionId, format, content: '[{"value":"complete"}]' });
   }
   stateqlCommand(input: StateQLCommandInput): Promise<StateQLCommandResult> {
     this.stateqlCommands.push(input);
@@ -658,6 +679,15 @@ class FakeDriver implements PiDriver {
   rebuildDiscoverIndex(): Promise<void> {
     this.indexRebuilds++;
     return Promise.resolve();
+  }
+  refreshModelCatalogs(): Promise<void> {
+    this.modelRefreshes++;
+    this.current.sessionControls.models.push({
+      provider: "mock",
+      id: `refreshed-${this.modelRefreshes}`,
+      name: `Refreshed ${this.modelRefreshes}`,
+    });
+    return this.modelRefreshFailure ? Promise.reject(this.modelRefreshFailure) : Promise.resolve();
   }
   setModel(input: { provider: string; modelId: string }): Promise<void> {
     this.selectedModels.push(input);
@@ -1506,6 +1536,38 @@ test(
         ).status,
         403,
       );
+      const localImageSource = "file:///outside/workspace/chart.png";
+      const localImage = await fetch(
+        `${origin}/api/v1/local-image?source=${encodeURIComponent(localImageSource)}&generation=1`,
+        { headers: { cookie, "x-pylon-tab-id": tab } },
+      );
+      assert.equal(localImage.status, 200);
+      assert.equal((await body(localImage)).name, "chart.png");
+      assert.deepEqual(driver.localImageSources, [localImageSource]);
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/local-image?source=${encodeURIComponent(localImageSource)}&generation=2`, {
+            headers: { cookie, "x-pylon-tab-id": tab },
+          })
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/local-image?source=${encodeURIComponent(localImageSource)}`, {
+            headers: { cookie, "x-pylon-tab-id": tab },
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await fetch(`${origin}/api/v1/local-image?source=${encodeURIComponent(localImageSource)}&generation=1`, {
+            headers: { cookie, "x-pylon-tab-id": "unknown-tab" },
+          })
+        ).status,
+        403,
+      );
       const files = await fetch(`${origin}/api/v1/file-suggestions?q=src&generation=1`, {
         headers: { cookie, "x-pylon-tab-id": tab },
       });
@@ -1546,6 +1608,15 @@ test(
         ).status,
         400,
       );
+      const exportInput = { generation: 1, handle: "result-1", format: "json" };
+      const download = await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(exportInput) });
+      assert.equal(download.status, 200);
+      assert.equal(download.headers.get("content-disposition"), 'attachment; filename="result.json"');
+      assert.equal(await download.text(), '[{"value":"complete"}]');
+      for (const [input, status] of [[{ ...exportInput, generation: 2 }, 409], [{ ...exportInput, format: "xml" }, 400], [{ ...exportInput, path: "target.json" }, 400]] as const) {
+        assert.equal((await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: mutationHeaders, body: JSON.stringify(input) })).status, status);
+      }
+      assert.equal((await fetch(`${origin}/api/v1/stateql/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(exportInput) })).status, 403);
       const rowsInput = { generation: 1, handle: "result-1", offset: 0, limit: 25 };
       const rows = await fetch(`${origin}/api/v1/stateql/rows`, {
         method: "POST",
@@ -1895,6 +1966,27 @@ test(
       );
       assert.deepEqual(driver.selectedModels.at(-1), { provider: "mock", modelId: "atomic" });
       assert.equal(driver.selectedThinking.at(-1), "medium");
+
+      const refreshModels = (commandId: string) =>
+        fetch(`${origin}/api/v1/commands`, {
+          method: "POST",
+          headers: mutationHeaders,
+          body: JSON.stringify({ type: "refreshModelCatalogs", commandId, expectedGeneration: 1 }),
+        });
+      assert.equal((await refreshModels("refresh-models")).status, 200);
+      assert.equal(driver.modelRefreshes, 1);
+      let refreshedBootstrap = await body(
+        await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }),
+      );
+      assert.equal((refreshedBootstrap.runtime as RuntimeSnapshot).sessionControls.models.at(-1)?.id, "refreshed-1");
+
+      driver.modelRefreshFailure = new Error("openrouter unavailable");
+      assert.equal((await refreshModels("refresh-models-partial")).status, 500);
+      refreshedBootstrap = await body(
+        await fetch(`${origin}/api/v1/bootstrap`, { headers: { cookie, "x-pylon-tab-id": tab } }),
+      );
+      assert.equal((refreshedBootstrap.runtime as RuntimeSnapshot).sessionControls.models.at(-1)?.id, "refreshed-2");
+      driver.modelRefreshFailure = undefined;
 
       const queueCommand = {
         type: "queuePrompt",

@@ -352,7 +352,12 @@ export class SessionIndex {
       if (!this.dirtySessions.size) return;
       const pending = [...this.dirtySessions.entries()];
       this.dirtySessions.clear();
-      for (const [sessionId, target] of pending) {
+      const cache = this.cache;
+      const indexedPending = cache
+        ? await cache.refreshMany(pending.map(([sessionId, target]) => ({ sessionId, path: target.path })))
+        : undefined;
+      if (cache !== this.cache) continue;
+      for (const [pendingIndex, [sessionId, target]] of pending.entries()) {
         if (!this.cache) {
           const sessions = await SessionManager.list(target.cwd, dirname(target.path));
           const previousIds = this.sessions
@@ -364,8 +369,7 @@ export class SessionIndex {
           for (const id of previousIds) this.usageBySession.delete(id);
           continue;
         }
-        const cache = this.cache;
-        const indexed = await cache.refresh(sessionId, target.path);
+        const indexed = indexedPending![pendingIndex];
         if (cache !== this.cache) continue;
         const replacementId = indexed?.session.id;
         const removedIds = this.sessions

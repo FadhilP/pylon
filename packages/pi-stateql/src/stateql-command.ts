@@ -38,6 +38,8 @@ export type StateQLMongoCommand =
 
 export type StateQLPanelCommand =
   | { command: "status" | "profile.list" | "disconnect" }
+  | { command: "table.plan"; row_token: string; changes: { set?: Record<string, unknown>; unset?: string[] }; timeout_ms?: number }
+  | { command: "table.read"; table: { schema?: string; name: string }; limit?: number; timeout_ms?: number }
   | { command: "profile.show"; name: string }
   | { command: "profile.remove"; name: string; forget_credential?: boolean }
   | {
@@ -109,6 +111,7 @@ export type StateQLPanelCommand =
     }
   | {
       command: "inspect";
+      offset?: number;
       kind: "schema" | "table" | "columns" | "indexes" | "constraints";
       table?: string;
       timeout_ms?: number;
@@ -143,6 +146,8 @@ const WRITE_OPERATIONS = new Set([
 
 const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> = {
   status: [],
+  "table.read": ["table", "limit", "timeout_ms"],
+  "table.plan": ["row_token", "changes", "timeout_ms"],
   "profile.list": [],
   "profile.show": ["name"],
   "profile.add": ["name", "target", "secret_env", "read_only", "remember"],
@@ -155,7 +160,7 @@ const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> 
   "mongo.query": ["mongo", "cache", "as", "timeout_ms"],
   "mongo.exec": ["mongo", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
   "mongo.plan": ["mongo", "allow_unbounded", "allow_destructive", "timeout_ms"],
-  inspect: ["kind", "table", "timeout_ms"],
+  inspect: ["kind", "table", "timeout_ms", "offset"],
   "transaction.begin": ["isolation"],
   "transaction.status": ["handle"],
   "transaction.commit": ["handle", "timeout_ms"],
@@ -414,6 +419,15 @@ function connectionSources(value: Record<string, unknown>, includeProfile: boole
 
 function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boolean {
   switch (value.command) {
+    case "table.plan":
+      return boundedString(value.row_token, 200) && plainRecord(value.changes) && hasOnlyKeys(value.changes, ["set", "unset"]) &&
+        (value.changes.set === undefined || (plainRecord(value.changes.set) && params(value.changes.set))) &&
+        (value.changes.unset === undefined || (Array.isArray(value.changes.unset) && value.changes.unset.length <= 100 && value.changes.unset.every(name => boundedString(name, 500)))) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs);
+    case "table.read":
+      return plainRecord(value.table) && hasOnlyKeys(value.table, ["schema", "name"]) &&
+        boundedString(value.table.name, 500) && optionalString(value.table.schema, 500) &&
+        (value.limit === undefined || positiveInteger(value.limit, 10_000)) && optionalTimeout(value.timeout_ms, maxTimeoutMs);
     case "status":
     case "profile.list":
     case "disconnect":
@@ -475,6 +489,7 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
       return (
         typeof value.kind === "string" &&
         INSPECTION_KINDS.has(value.kind) &&
+        (value.offset === undefined || (Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 100_000)) &&
         optionalString(value.table, 500) &&
         optionalTimeout(value.timeout_ms, maxTimeoutMs)
       );

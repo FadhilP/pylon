@@ -20,7 +20,8 @@ export type PreparedFile = {
   hash: string;
   size: number;
   dirty: boolean;
-  symbols: SymbolRow[];
+  /** Omitted only when the persisted content hash already matches. */
+  symbols?: SymbolRow[];
 };
 
 export function parseNul(value: string): string[] {
@@ -182,7 +183,12 @@ export class RepositoryScanner {
   }
 
   /** Read and symbol-extract one candidate file, or undefined when it is not indexable. */
-  private async prepare(root: string, path: string, dirty: boolean): Promise<PreparedFile | undefined> {
+  private async prepare(
+    root: string,
+    path: string,
+    dirty: boolean,
+    previousHash?: string,
+  ): Promise<PreparedFile | undefined> {
     const language = languageFor(path);
     if (!language) return undefined;
     const absolute = resolve(root, path);
@@ -193,14 +199,15 @@ export class RepositoryScanner {
       const data = await readFile(absolute);
       if (data.includes(0)) return undefined;
       const content = data.toString("utf8");
+      const hash = createHash("sha256").update(data).digest("hex");
       return {
         path: path.replaceAll("\\", "/"),
         language,
         content,
         size: stat.size,
         dirty,
-        hash: createHash("sha256").update(data).digest("hex"),
-        symbols: extractSymbols(content, language),
+        hash,
+        symbols: hash === previousHash ? undefined : extractSymbols(content, language),
       };
     } catch (error: any) {
       if (error?.code === "ENOENT") return undefined;
@@ -216,6 +223,7 @@ export class RepositoryScanner {
     root: string,
     candidates: string[],
     dirty: Set<string>,
+    hashes: ReadonlyMap<string, string> = new Map(),
   ): Promise<{ prepared: PreparedFile[]; removals: string[] }> {
     const outcomes = new Array<PreparedFile | undefined>(candidates.length);
     let next = 0;
@@ -223,7 +231,12 @@ export class RepositoryScanner {
       for (;;) {
         const index = next++;
         if (index >= candidates.length) return;
-        outcomes[index] = await this.prepare(root, candidates[index]!, dirty.has(candidates[index]!));
+        outcomes[index] = await this.prepare(
+          root,
+          candidates[index]!,
+          dirty.has(candidates[index]!),
+          hashes.get(candidates[index]!),
+        );
       }
     };
     await Promise.all(Array.from({ length: Math.min(8, candidates.length) }, worker));

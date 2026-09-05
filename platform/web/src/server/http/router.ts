@@ -72,6 +72,8 @@ export class ServerTransport {
   private readonly unsubscribe: () => void;
   private readonly terminal: TerminalServer;
   private lastCommandOwner?: string;
+  private exportController?: AbortController;
+  private databaseCommand?: { tabId: string; controller: AbortController };
   private dialogOwner?: DialogOwner;
   private readonly tabLossTimers = new Map<string, NodeJS.Timeout>();
 
@@ -92,6 +94,8 @@ export class ServerTransport {
 
   dispose(): void {
     this.unsubscribe();
+    this.databaseCommand?.controller.abort();
+    this.exportController?.abort();
     this.projection.dispose();
     for (const client of this.clients) {
       clearInterval(client.heartbeat);
@@ -127,6 +131,8 @@ export class ServerTransport {
         return await this.conversationHistory(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-attachment")
         return await this.conversationAttachment(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/local-image")
+        return await this.localImage(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/turn-diff")
         return await this.turnDiff(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/conversation-turns")
@@ -158,6 +164,8 @@ export class ServerTransport {
         return await this.stateqlSnapshot(request, response, url);
       if (request.method === "POST" && url.pathname === "/api/v1/stateql/rows")
         return await this.stateqlRows(request, response);
+      if (request.method === "POST" && url.pathname === "/api/v1/stateql/export")
+        return await this.stateqlExport(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/stateql/command")
         return await this.stateqlCommand(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/papercuts")
@@ -584,11 +592,54 @@ export class ServerTransport {
     if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlRows) throw httpError(409, "StateQL rows are unavailable");
     this.renew(tabId);
-    const result = await this.driver.stateqlRows(body.handle, body.offset, body.limit);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    request.once("aborted", cancel);
+    response.once("close", cancel);
+    let result;
+    try {
+      result = await this.driver.stateqlRows(body.handle, body.offset, body.limit, controller.signal);
+    } finally {
+      request.removeListener("aborted", cancel);
+      response.removeListener("close", cancel);
+    }
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while loading StateQL rows");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
+  }
+
+  private async stateqlExport(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const session = this.mutatingSession(request);
+    this.tab(request, session);
+    const body = await readJson(request) as Record<string, unknown>;
+    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["generation", "handle", "format"].includes(key)) ||
+      typeof body.handle !== "string" || !body.handle || body.handle.length > 200 ||
+      !["json", "jsonl", "csv"].includes(String(body.format))) throw httpError(400, "Invalid export request");
+    if (body.generation !== this.journal.sessionGeneration || !this.projection.snapshot().ready) throw httpError(409, "Session is not ready");
+    if (!this.driver.stateqlExport) throw httpError(409, "StateQL exports are unavailable");
+    if (this.exportController) throw httpError(409, "An export is already running");
+    const controller = new AbortController();
+    this.exportController = controller;
+    const cancel = () => controller.abort();
+    const timeout = setTimeout(cancel, 35_000);
+    request.once("aborted", cancel);
+    response.once("close", cancel);
+    try {
+      const result = await this.driver.stateqlExport(body.handle, body.format as "json" | "jsonl" | "csv", controller.signal);
+      controller.signal.throwIfAborted();
+      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "Session changed during export");
+      response.setHeader("cache-control", "no-store");
+      response.setHeader("content-type", result.format === "csv" ? "text/csv; charset=utf-8" : result.format === "jsonl" ? "application/x-ndjson" : "application/json");
+      response.setHeader("content-disposition", 'attachment; filename="result.' + result.format + '"');
+      response.setHeader("content-length", Buffer.byteLength(result.content, "utf8"));
+      response.end(result.content);
+    } finally {
+      clearTimeout(timeout);
+      if (this.exportController === controller) this.exportController = undefined;
+      request.removeListener("aborted", cancel);
+      response.removeListener("close", cancel);
+    }
   }
 
   private async stateqlCommand(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -598,7 +649,7 @@ export class ServerTransport {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw httpError(400, "invalid StateQL command request");
     const body = input as Record<string, unknown>;
-    if (Object.keys(body).some(key => key !== "generation" && key !== "input"))
+    if (Object.keys(body).some(key => key !== "generation" && key !== "input" && key !== "expectedConnectionId"))
       throw httpError(400, "invalid StateQL command request");
     if (
       typeof body.generation !== "number" ||
@@ -607,22 +658,28 @@ export class ServerTransport {
     )
       throw httpError(409, "stale session generation");
     if (!isStateQLCommandInput(body.input)) throw httpError(400, "invalid StateQL command request");
+    if (body.expectedConnectionId !== undefined && body.expectedConnectionId !== null &&
+      (typeof body.expectedConnectionId !== "string" || !body.expectedConnectionId || body.expectedConnectionId.length > 200))
+      throw httpError(400, "invalid database connection scope");
+    if (this.databaseCommand) throw httpError(409, "A database command is already running");
     if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlCommand) throw httpError(409, "StateQL commands are unavailable");
     if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the StateQL command tab must have an SSE connection");
-    this.lastCommandOwner = tabId;
     this.renew(tabId);
     const controller = new AbortController();
+    const commandOwner = { tabId, controller };
+    this.databaseCommand = commandOwner;
     const cancel = () => controller.abort();
     request.once("aborted", cancel);
     response.once("close", cancel);
     let result: Awaited<ReturnType<NonNullable<PiDriver["stateqlCommand"]>>>;
     try {
-      result = await this.driver.stateqlCommand(body.input as StateQLCommandInput, controller.signal);
+      result = await this.driver.stateqlCommand(body.input as StateQLCommandInput, controller.signal, body.expectedConnectionId as string | null | undefined);
     } finally {
       request.removeListener("aborted", cancel);
       response.removeListener("close", cancel);
+      if (this.databaseCommand === commandOwner) this.databaseCommand = undefined;
     }
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while running StateQL command");
@@ -758,6 +815,21 @@ export class ServerTransport {
     }
   }
 
+  private async localImage(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const source = url.searchParams.get("source") ?? "";
+    const generationValue = url.searchParams.get("generation");
+    if (!source || source.length > 8_192) throw httpError(400, "invalid local image URL");
+    if (generationValue === null || !/^\d+$/.test(generationValue)) throw httpError(400, "invalid session generation");
+    const generation = Number(generationValue);
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!this.driver.localImage) throw httpError(404, "local images are unavailable");
+    const result = await this.driver.localImage({ source });
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while loading local image");
+    this.send(response, 200, result);
+  }
   private async turnDiff(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
     const generation = Number(url.searchParams.get("generation"));
@@ -1187,6 +1259,16 @@ export class ServerTransport {
           .then(() => accepted(command.expectedGeneration));
       case "rebuildDiscoverIndex":
         return this.driver.rebuildDiscoverIndex().then(() => accepted(command.expectedGeneration));
+      case "refreshModelCatalogs":
+        if (!this.driver.refreshModelCatalogs) return Promise.reject(httpError(409, "model catalogs are unavailable"));
+        return (async () => {
+          try {
+            await this.driver.refreshModelCatalogs!(command.expectedGeneration);
+          } finally {
+            this.projection.refresh(await this.driver.snapshot());
+          }
+          return accepted(command.expectedGeneration);
+        })();
       case "setModel":
         return this.driver.setModel({ provider: command.provider, modelId: command.modelId }).then(async () => {
           this.projection.refresh(await this.driver.snapshot());
@@ -1270,6 +1352,9 @@ export class ServerTransport {
       this.projection.discardPending();
       this.clearDialogOwner();
       this.lastCommandOwner = undefined;
+      this.exportController?.abort();
+      this.databaseCommand?.controller.abort();
+      this.databaseCommand = undefined;
       this.journal = new EventJournal(event.sessionGeneration, event.sessionId);
       for (const mirror of this.mirrors) mirror.controller.abort(new Error("Session changed"));
     }
@@ -1278,13 +1363,13 @@ export class ServerTransport {
     if (event.type === "ui.event") {
       const raw =
         event.payload && typeof event.payload === "object"
-          ? (event.payload as { requestId?: unknown; method?: unknown })
+          ? (event.payload as { requestId?: unknown; method?: unknown; surface?: unknown })
           : {};
       if (
         typeof raw.requestId === "string" &&
         ["select", "confirm", "input", "editor", "questionnaire"].includes(String(raw.method))
       ) {
-        this.openDialog(raw.requestId, event.sessionGeneration, this.lastCommandOwner);
+        this.openDialog(raw.requestId, event.sessionGeneration, raw.surface === "database" ? this.databaseCommand?.tabId : this.lastCommandOwner);
       }
     }
     this.projection.apply(event);

@@ -62,9 +62,12 @@ export async function worktreeFingerprint(cwd: string): Promise<string | undefin
 }
 
 async function captureRepository(repository: RepositoryState, sessionId: string, id: string) {
-  const { indexTree, worktreeTree } = await trees(repository),
-    headRef = await symbolicHead(repository.root),
-    wc = await git(
+  const [treeResult, headResult] = await Promise.allSettled([trees(repository), symbolicHead(repository.root)]);
+  if (treeResult.status === "rejected") throw treeResult.reason;
+  if (headResult.status === "rejected") throw headResult.reason;
+  const { indexTree, worktreeTree } = treeResult.value;
+  const headRef = headResult.value;
+  const wc = await git(
       repository.root,
       ["commit-tree", worktreeTree, "-p", repository.head, "-m", "pi-timeline worktree checkpoint"],
       ident,
@@ -130,9 +133,17 @@ export async function capture(
     id = randomBytes(6).toString("hex"),
     captured: RepositorySnapshot[] = [];
   try {
-    for (const repository of initial.repositories) {
-      await beforeRepository?.(repository.root);
-      captured.push(await captureRepository(repository, sessionId, id));
+    // Independent repositories may capture together; linked worktrees sharing a Git
+    // directory stay serial. Keep owner registration ordered before any ref writes.
+    const commonDirs = initial.repositories.map(repository => canonical(repository.commonDir));
+    const width = new Set(commonDirs).size === commonDirs.length ? 2 : 1;
+    for (let offset = 0; offset < initial.repositories.length; offset += width) {
+      const batch = initial.repositories.slice(offset, offset + width);
+      for (const repository of batch) await beforeRepository?.(repository.root);
+      const outcomes = await Promise.allSettled(batch.map(repository => captureRepository(repository, sessionId, id)));
+      for (const outcome of outcomes) if (outcome.status === "fulfilled") captured.push(outcome.value);
+      const failure = outcomes.find(outcome => outcome.status === "rejected");
+      if (failure?.status === "rejected") throw failure.reason;
     }
     const final = await preflight(cwd);
     if (

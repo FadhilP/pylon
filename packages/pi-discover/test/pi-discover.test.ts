@@ -1346,8 +1346,10 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     assert.ok(runtime.active.includes("rg"));
     assert.ok(runtime.active.includes("fd"));
     assert.ok(runtime.active.includes("search_tools"));
-    await waitFor(() => indexStates.at(-1)?.state === "idle");
-    assert.equal(indexStates.at(-1)?.state, "idle");
+    // Worker module loading is independent of session readiness and can exceed two
+    // seconds when the full package suite runs concurrently. Fail promptly on errors.
+    await waitFor(() => ["idle", "error"].includes(indexStates.at(-1)?.state), 10_000);
+    assert.equal(indexStates.at(-1)?.state, "idle", indexStates.at(-1)?.error);
     assert.equal(indexStates.at(-1)?.files, 1);
     assert.match(indexStates.at(-1)?.indexedAt, /^\d{4}-\d{2}-\d{2}T/);
     const callsBeforeSearch = gitCalls.length;

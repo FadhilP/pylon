@@ -11,6 +11,7 @@ import {
   IconPlugConnected,
   IconPuzzle,
   IconSettings,
+  IconRefresh,
   IconSearch,
   IconShield,
   IconBook,
@@ -141,6 +142,8 @@ interface SettingsDialogProps {
   providerLogoutDisabled: boolean;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
+  modelRefreshDisabled: boolean;
+  modelRefreshBusy: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
   syntaxTheme: SyntaxTheme;
@@ -149,6 +152,7 @@ interface SettingsDialogProps {
   onProviderLogin: (provider: string, authType: ProviderAuthType) => void;
   onProviderLogout: (provider: string) => void;
   onProviderCancel: () => void;
+  onRefreshModels: () => Promise<void>;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
@@ -191,7 +195,9 @@ export function SettingsDialog({
   androidToolingBusy,
   providerLogoutDisabled,
   models,
+  modelRefreshDisabled,
   sessionThinkingLevels,
+  modelRefreshBusy,
   theme,
   onThemeChange,
   syntaxTheme,
@@ -200,6 +206,7 @@ export function SettingsDialog({
   onProviderLogin,
   onProviderLogout,
   onProviderCancel,
+  onRefreshModels,
   onSetEnabled,
   onUpdate,
   onAndroidTooling,
@@ -1117,13 +1124,24 @@ export function SettingsDialog({
                     Choose which models appear in the model selector. The active session model always stays visible.
                   </p>
                 </div>
-                <input
-                  type="search"
-                  value={modelQuery}
-                  onChange={event => setModelQuery(event.target.value)}
-                  placeholder="Filter models"
-                  aria-label="Filter models"
-                />
+                <div className="settings-pane-actions">
+                  <button
+                    className="text-button"
+                    type="button"
+                    disabled={modelRefreshDisabled || modelRefreshBusy}
+                    aria-busy={modelRefreshBusy}
+                    onClick={() => void onRefreshModels()}>
+                    <IconRefresh className={modelRefreshBusy ? "feedback-spinner" : undefined} size={14} />
+                    {modelRefreshBusy ? "Refreshing" : "Refresh models"}
+                  </button>
+                  <input
+                    type="search"
+                    value={modelQuery}
+                    onChange={event => setModelQuery(event.target.value)}
+                    placeholder="Filter models"
+                    aria-label="Filter models"
+                  />
+                </div>
               </div>
               {models.length === 0 && (
                 <div className="settings-empty">

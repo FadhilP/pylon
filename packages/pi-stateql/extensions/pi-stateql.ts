@@ -121,7 +121,7 @@ const toolSchema = Type.Object(
 
 export type StateQLToolInput = Static<typeof toolSchema>;
 
-type RuntimeStateQL = Pick<StateQL, "close" | "executeCommand" | "snapshot">;
+type RuntimeStateQL = Pick<StateQL, "close" | "executeCommand" | "snapshot"> & Partial<Pick<StateQL, "readMaterialized" | "readTable" | "serializeResult" | "planTableUpdate">>;
 type Factory = (options: StateQLActorOptions) => RuntimeStateQL;
 
 interface Runtime {
@@ -179,6 +179,7 @@ interface RowsRequest {
 }
 
 interface PanelCommandRequest {
+  expectedConnectionId?: string | null;
   version: 1;
   sessionId: string;
   command: unknown;
@@ -777,7 +778,15 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       exclusive(async () => {
         if (request.signal?.aborted) throw new Error("StateQL rows request cancelled");
-        const response = await current(request.sessionId).stateql.executeCommand(
+        const stateql = current(request.sessionId).stateql;
+        if (stateql.readMaterialized) {
+          try { return stateql.readMaterialized(request.handle!, { offset: request.offset, limit: request.limit, signal: request.signal }); }
+          catch (cause) {
+            const error = cause as { details?: { code?: string }; message?: string };
+            throw new Error(`${error.details?.code ?? "RESULT_READ_FAILED"}: ${error.message ?? "Result unavailable"}`);
+          }
+        }
+        const response = await stateql.executeCommand(
           { command: "rows", handle: request.handle, offset: request.offset, limit: request.limit } as BatchCommand,
           { signal: request.signal, origin: "user" },
         );
@@ -803,8 +812,16 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     )
       return;
     if (!request.claim()) return;
+    const expectedConnectionId = request.expectedConnectionId === undefined
+      ? current(request.sessionId).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null
+      : request.expectedConnectionId;
+    const checkConnection = () => {
+      const connectionId = current(request.sessionId).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null;
+      if (connectionId !== expectedConnectionId) throw new Error("Database connection changed; review and submit again.");
+    };
     request.respond(
       (async () => {
+        checkConnection();
         const input =
           command.command === "history" && command.history_origin === undefined
             ? { ...command, history_origin: "user" as const }
@@ -881,6 +898,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         try {
           return await exclusive(async () => {
             if (request.signal?.aborted) throw new Error("StateQL command request cancelled");
+            checkConnection();
             let credentialToForget: string | undefined;
             if (input.command === "profile.remove" && forgetCredential) {
               const shown = await current(request.sessionId).stateql.executeCommand(
@@ -894,10 +912,26 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             let response: Response<unknown>;
             activeCredentialHost = ui;
             try {
-              response = await current(request.sessionId).stateql.executeCommand(executionCommand, {
-                signal: request.signal,
-                origin: "user",
-              });
+              const stateql = current(request.sessionId).stateql;
+              if (input.command === "table.plan") {
+                if (!stateql.planTableUpdate) throw new Error("Row edits require the current StateQL package.");
+                response = await stateql.planTableUpdate(input.row_token, input.changes, { signal: request.signal, timeoutMs: input.timeout_ms, origin: "user" });
+              } else if (input.command === "table.read") {
+                if (!stateql.readTable) throw new Error("Table reads require the current StateQL package.");
+                response = await stateql.readTable(input.table, input.limit, { signal: request.signal, timeoutMs: input.timeout_ms, origin: "user" });
+              } else {
+                const { offset: _offset, ...commandInput } = executionCommand as BatchCommand & { offset?: number };
+                response = await stateql.executeCommand(commandInput as BatchCommand, { signal: request.signal, origin: "user" });
+                if (input.command === "inspect" && input.kind === "schema" && response.ok && record(response.data)) {
+                  const field = Array.isArray(response.data.tables) ? "tables" : "collections";
+                  const items = response.data[field];
+                  if (Array.isArray(items)) {
+                    const offset = input.offset ?? 0;
+                    response = { ...response, data: { ...response.data, [field]: items.slice(offset, offset + 100),
+                      total: items.length, next_offset: offset + 100 < items.length ? offset + 100 : null } };
+                  }
+                }
+              }
             } catch (error) {
               if (reference) brokeredTargets.delete(reference);
               throw error;
@@ -931,6 +965,23 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         }
       })(),
     );
+  });
+
+  const disposeExport = pi.events.on("pylon:stateql-export-request", (value: unknown) => {
+    const request = value as { version?: number; sessionId?: string; handle?: string; format?: "json" | "jsonl" | "csv";
+      signal?: AbortSignal; claim?: () => boolean; respond?: (value: Promise<unknown>) => void };
+    if (!request || request.version !== 1 || request.sessionId !== runtime?.actorId ||
+      typeof request.handle !== "string" || !request.handle || request.handle.length > 200 ||
+      !["json", "jsonl", "csv"].includes(request.format ?? "") || !abortSignal(request.signal) ||
+      typeof request.claim !== "function" || typeof request.respond !== "function" || !request.claim()) return;
+    request.respond(exclusive(async () => {
+      request.signal?.throwIfAborted();
+      const stateql = current(request.sessionId).stateql;
+      if (!stateql.serializeResult) throw new Error("Exports require the current StateQL package.");
+      const response = await stateql.serializeResult(request.handle!, request.format!, request.signal, "user");
+      if (!response.ok) throw safeFailure(response);
+      return response.data;
+    }));
   });
 
   const disposeHealth = pi.events.on("pylon:health-request", (request: any) => {
@@ -986,6 +1037,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     disposeSnapshot();
     disposeRows();
     disposeCommand();
+    disposeExport();
     disposeHealth();
     await exclusive(() => {
       runtime?.stateql.close();

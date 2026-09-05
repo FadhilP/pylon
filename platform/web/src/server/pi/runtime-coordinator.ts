@@ -51,6 +51,8 @@ import type {
   FileSuggestionList,
   HookSettingsSnapshot,
   LocalBranchListSnapshot,
+  LocalImageContent,
+  LocalImageQuery,
   PackageListSnapshot,
   PapercutListPage,
   PapercutMutationResult,
@@ -62,6 +64,7 @@ import type {
   UsageQuery,
   UsageSnapshot,
   StateQLCommandInput,
+  StateQLExport,
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
@@ -143,6 +146,7 @@ import type { SessionWorkspaceRecord } from "./project-registry.ts";
 const SLEEP_AFTER_MS = 30 * 60 * 1000;
 const VIEW_ONLY_SLEEP_AFTER_MS = 60 * 1000;
 const SLEEP_CHECK_MS = 60 * 1000;
+const MODEL_REFRESH_TIMEOUT_MS = 15_000;
 const SETUP_LOG_BYTES = 64 * 1024;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
 const MAX_WORKSPACE_INVENTORIES = 25;
@@ -396,6 +400,7 @@ export class RuntimeCoordinator implements PiDriver {
   private pickerBusy = false;
   private pickerAbort?: AbortController;
   private setupAbort?: AbortController;
+  private modelRefreshAbort?: AbortController;
   private disposed = false;
   private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
 
@@ -501,6 +506,14 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...attachment, sessionGeneration: generation };
   }
 
+  async localImage(input: LocalImageQuery): Promise<LocalImageContent> {
+    const slot = this.selected();
+    const generation = this.generation;
+    if (!slot.driver.localImage) throw new Error("local images are unavailable");
+    const image = await slot.driver.localImage(input);
+    this.assertSelected(slot, generation, "loading local image");
+    return { ...image, sessionGeneration: generation };
+  }
   async turnDiff(input: TurnDiffQuery): Promise<TurnDiffResult> {
     const slot = this.selected();
     const generation = this.generation;
@@ -822,6 +835,15 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: generation };
   }
 
+  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport> {
+    const generation = this.generation;
+    const slot = this.selected();
+    if (!slot.driver.stateqlExport) throw new Error("StateQL exports are unavailable");
+    const result = await slot.driver.stateqlExport(handle, format, signal);
+    if (generation !== this.generation) throw new Error("Session changed during export");
+    return { ...result, sessionGeneration: generation };
+  }
+
   async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
     const slot = this.selected();
     const generation = this.generation;
@@ -831,20 +853,20 @@ export class RuntimeCoordinator implements PiDriver {
     return { ...result, sessionGeneration: generation };
   }
 
-  async stateqlRows(handle: string, offset: number, limit: number): Promise<StateQLRowsPage> {
+  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
-    const result = await slot.driver.stateqlRows(handle, offset, limit);
+    const result = await slot.driver.stateqlRows(handle, offset, limit, signal);
     this.assertSelected(slot, generation, "loading StateQL rows");
     return { ...result, sessionGeneration: generation };
   }
 
-  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal): Promise<StateQLCommandResult> {
+  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlCommand) throw new Error("StateQL commands are unavailable");
-    const result = await slot.driver.stateqlCommand(input, signal);
+    const result = await slot.driver.stateqlCommand(input, signal, expectedConnectionId);
     this.assertSelected(slot, generation, `running StateQL ${input.command}`);
     return { ...result, sessionGeneration: generation };
   }
@@ -1754,6 +1776,34 @@ export class RuntimeCoordinator implements PiDriver {
     await slot.driver.rebuildDiscoverIndex();
   }
 
+  async refreshModelCatalogs(expectedGeneration: number): Promise<void> {
+    this.assertGeneration(expectedGeneration);
+    if (!this.modelRuntime) throw new Error("model catalogs are unavailable");
+    if (process.env.PI_OFFLINE !== undefined) throw new Error("model catalog refresh is unavailable while offline");
+    if (this.modelRefreshAbort) throw new Error("a model catalog refresh is already in progress");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MODEL_REFRESH_TIMEOUT_MS);
+    timeout.unref?.();
+    this.modelRefreshAbort = controller;
+    try {
+      const result = await this.modelRuntime.refresh({
+        allowNetwork: true,
+        force: true,
+        signal: controller.signal,
+      });
+      this.assertGeneration(expectedGeneration);
+      if (result.aborted) throw new Error("Model catalog refresh timed out.");
+      if (result.errors.size > 0) {
+        const details = [...result.errors].map(([provider, error]) => `${provider}: ${error.message}`).join("; ");
+        throw new Error(`Could not refresh model catalogs: ${details}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (this.modelRefreshAbort === controller) this.modelRefreshAbort = undefined;
+    }
+  }
+
   async setModel(input: SetModelInput): Promise<void> {
     await this.selected().driver.setModel(input);
   }
@@ -1874,6 +1924,8 @@ export class RuntimeCoordinator implements PiDriver {
     this.pickerAbort = undefined;
     this.setupAbort?.abort();
     this.setupAbort = undefined;
+    this.modelRefreshAbort?.abort();
+    this.modelRefreshAbort = undefined;
     if (this.sleepTimer) clearInterval(this.sleepTimer);
     for (const slot of [...this.slots.values()]) await this.disposeSlot(slot);
     this.listeners.clear();

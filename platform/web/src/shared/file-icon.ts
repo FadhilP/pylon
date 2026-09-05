@@ -1,114 +1,27 @@
-export type FileIconKind =
-  | "archive"
-  | "code"
-  | "config"
-  | "css"
-  | "docker"
-  | "file"
-  | "go"
-  | "html"
-  | "image"
-  | "javascript"
-  | "json"
-  | "jsx"
-  | "markdown"
-  | "npm"
-  | "pdf"
-  | "python"
-  | "rust"
-  | "shell"
-  | "sql"
-  | "svg"
-  | "text"
-  | "tsx"
-  | "typescript";
+import { defaultFileIcon, fileIconExtensions, fileIconNames } from "./file-icon-map.ts";
 
-const extensionKinds: Record<string, FileIconKind> = {
-  ts: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  tsx: "tsx",
-  js: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  jsx: "jsx",
-  html: "html",
-  htm: "html",
-  css: "css",
-  scss: "css",
-  sass: "css",
-  less: "css",
-  json: "json",
-  jsonc: "json",
-  md: "markdown",
-  mdx: "markdown",
-  py: "python",
-  pyw: "python",
-  go: "go",
-  rs: "rust",
-  sql: "sql",
-  svg: "svg",
-  png: "image",
-  jpg: "image",
-  jpeg: "image",
-  gif: "image",
-  webp: "image",
-  avif: "image",
-  ico: "image",
-  bmp: "image",
-  pdf: "pdf",
-  zip: "archive",
-  gz: "archive",
-  tgz: "archive",
-  tar: "archive",
-  bz2: "archive",
-  xz: "archive",
-  rar: "archive",
-  "7z": "archive",
-  yaml: "config",
-  yml: "config",
-  toml: "config",
-  ini: "config",
-  conf: "config",
-  config: "config",
-  env: "config",
-  lock: "config",
-  sh: "shell",
-  bash: "shell",
-  zsh: "shell",
-  fish: "shell",
-  ps1: "shell",
-  bat: "shell",
-  cmd: "shell",
-  c: "code",
-  cc: "code",
-  cpp: "code",
-  cxx: "code",
-  h: "code",
-  hpp: "code",
-  cs: "code",
-  java: "code",
-  kt: "code",
-  kts: "code",
-  swift: "code",
-  rb: "code",
-  php: "code",
-  vue: "code",
-  svelte: "code",
-  txt: "text",
-  log: "text",
-  csv: "text",
-  xml: "text",
-  rtf: "text",
-};
+// The tree renders every row it is given — up to 10,000 — so remember what a
+// path resolved to rather than re-splitting it on each render.
+const resolved = new Map<string, string>();
 
-export function fileIconKind(path: string): FileIconKind {
+/** Material Icon Theme icon id for a path, served from /file-icons/<id>.svg. */
+export function fileIconId(path: string): string {
+  const cached = resolved.get(path);
+  if (cached) return cached;
+  const icon = lookup(path);
+  resolved.set(path, icon);
+  return icon;
+}
+
+function lookup(path: string): string {
   const name = path.replaceAll("\\", "/").split("/").at(-1)?.toLocaleLowerCase() ?? "";
-  if (name === "package.json" || name === "package-lock.json" || name === "npm-shrinkwrap.json") return "npm";
-  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "docker";
-  if (name === "readme" || name.startsWith("readme.")) return "markdown";
-  if (name === "license" || name.startsWith("license.")) return "text";
-  if (name.startsWith(".")) return "config";
-  const extension = name.includes(".") ? (name.split(".").at(-1) ?? "") : "";
-  return extensionKinds[extension] ?? "file";
+  const named = fileIconNames[name];
+  if (named) return named;
+  // Longest suffix first, so "component.test.tsx" prefers "test.tsx" over "tsx".
+  const parts = name.split(".");
+  for (let index = 1; index < parts.length; index++) {
+    const extension = fileIconExtensions[parts.slice(index).join(".")];
+    if (extension) return extension;
+  }
+  return defaultFileIcon;
 }

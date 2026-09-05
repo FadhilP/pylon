@@ -397,6 +397,17 @@ export class SessionSummaryCache {
   private records = new Map<string, CacheRecord>();
   private unreadablePaths = new Set<string>();
   private loaded = false;
+  private pending: Promise<void> = Promise.resolve();
+  private dirty = false;
+
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.pending.then(work);
+    this.pending = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
 
   constructor(private readonly agentDir: string) {
     this.cachePath = resolve(agentDir, "pylon-web", CACHE_FILE);
@@ -404,7 +415,11 @@ export class SessionSummaryCache {
     this.sessionsRoot = resolve(process.env.PI_CODING_AGENT_DIR || agentDir, "sessions");
   }
 
-  async scan(): Promise<IndexedSession[]> {
+  scan(): Promise<IndexedSession[]> {
+    return this.serialize(() => this.scanNow());
+  }
+
+  private async scanNow(): Promise<IndexedSession[]> {
     await this.load();
     const files = await sessionFiles(this.sessionsRoot);
     const previous = this.records;
@@ -438,7 +453,8 @@ export class SessionSummaryCache {
     for (const { key, record } of byId.values()) next.set(key, record);
     this.records = next;
     this.unreadablePaths = unreadablePaths;
-    if (changed) await this.save();
+    this.dirty ||= changed;
+    if (this.dirty) await this.save();
     return [...next.values()].map(hydrate);
   }
 
@@ -447,6 +463,19 @@ export class SessionSummaryCache {
   }
 
   async refresh(sessionId: string, path: string): Promise<IndexedSession | undefined> {
+    return (await this.refreshMany([{ sessionId, path }]))[0];
+  }
+
+  refreshMany(targets: Array<{ sessionId: string; path: string }>): Promise<Array<IndexedSession | undefined>> {
+    return this.serialize(async () => {
+      const results: Array<IndexedSession | undefined> = [];
+      for (const target of targets) results.push(await this.refreshOne(target.sessionId, target.path));
+      if (this.dirty) await this.save();
+      return results;
+    });
+  }
+
+  private async refreshOne(sessionId: string, path: string): Promise<IndexedSession | undefined> {
     await this.load();
     const key = canonicalPath(path);
     let record: CacheRecord | undefined;
@@ -454,6 +483,13 @@ export class SessionSummaryCache {
     try {
       const current = fingerprint(await stat(path));
       exists = true;
+      const cached = this.records.get(key);
+      if (
+        cached?.session.id === sessionId &&
+        sameFingerprint(cached.fingerprint, current) &&
+        !this.unreadablePaths.has(key)
+      )
+        return hydrate(cached);
       record = await parseSession(path, current);
     } catch {
       // Missing files remove the prior record for this session below.
@@ -465,11 +501,15 @@ export class SessionSummaryCache {
     }
     this.unreadablePaths.delete(key);
     for (const [candidate, value] of this.records) {
-      if (candidate === key || value.session.id === sessionId || (record && value.session.id === record.session.id))
+      if (candidate === key || value.session.id === sessionId || (record && value.session.id === record.session.id)) {
         this.records.delete(candidate);
+        this.dirty = true;
+      }
     }
-    if (record) this.records.set(key, record);
-    await this.save();
+    if (record) {
+      this.records.set(key, record);
+      this.dirty = true;
+    }
     return record ? hydrate(record) : undefined;
   }
 
@@ -498,6 +538,7 @@ export class SessionSummaryCache {
       // The cache is disposable: concurrent writers are last-writer-wins, and fingerprints repair stale records on the next scan.
       await writeFile(temporary, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
       await rename(temporary, this.cachePath);
+      this.dirty = false;
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);
     }

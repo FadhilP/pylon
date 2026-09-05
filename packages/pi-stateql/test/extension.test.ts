@@ -812,6 +812,22 @@ test("panel command bridge forwards reads and writes with user attribution, filt
   assert.equal(value.events.get("pylon:stateql-command-request")?.length, 0);
 });
 
+test("panel approval cannot execute against a replacement connection", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-command-request")![0];
+  let response: Promise<unknown> | undefined;
+  try {
+    handler({ version: 1, sessionId: "pi-session", command: { command: "exec", sql: "UPDATE users SET active = 0 WHERE id = 1" },
+      expectedConnectionId: null, signal: new AbortController().signal, claim: () => true,
+      respond: (result: Promise<unknown>) => { response = result; },
+      ui: { requestStateQLCredential: async () => undefined, setStatus() {},
+        confirm: async () => { value.instances[0].snapshot = () => ({ ...baseSnapshot, connection: { connection_id: "replacement" } } as StateQLSnapshot); return true; } },
+    });
+    await assert.rejects(response!, /connection changed/);
+    assert.equal(value.instances[0].commands.length, 0);
+  } finally { await value.handlers.get("session_shutdown")![0](); }
+});
+
 test("panel forwards Mongo reads, filters history without changing origin, confirms Mongo writes, and rejects malformed payloads", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];

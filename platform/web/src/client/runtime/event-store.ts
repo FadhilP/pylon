@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isDatabaseCommandResult, clearDatabaseDrafts } from "../../shared/database-workspace";
 import type { GuardRuleOverrides } from "../../shared/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
@@ -35,6 +36,7 @@ import type {
   ExtensionListSnapshot,
   FileSuggestionList,
   HookSettingsReadModel,
+  LocalImageContent,
   HookSettingsSnapshot,
   PackageListSnapshot,
   LocalBranchListSnapshot,
@@ -47,6 +49,8 @@ import type {
   SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
+  StateQLCommandInput,
+  StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
   TimelineCheckpointDiff,
@@ -716,10 +720,31 @@ export class RuntimeEventStore {
     const result = await this.api.stateqlSnapshot(runtime.sessionGeneration, historyLimit, signal);
     if (
       !isStateQLSnapshot(result) ||
+      this.snapshot.runtime?.sessionGeneration !== runtime.sessionGeneration ||
+      this.snapshot.runtime?.sessionId !== runtime.sessionId ||
       result.sessionGeneration !== runtime.sessionGeneration ||
       result.actor_id !== runtime.sessionId
     )
       throw new Error("StateQL status is stale or invalid");
+    return result;
+  }
+
+  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<Blob> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.stateqlExport(runtime.sessionGeneration, handle, format, signal);
+    const current = this.requireReadyRuntime();
+    if (current.sessionGeneration !== runtime.sessionGeneration || current.sessionId !== runtime.sessionId)
+      throw new Error("Session changed during export");
+    return result;
+  }
+
+  async stateqlCommand(input: StateQLCommandInput, signal?: AbortSignal, expectedConnectionId?: string | null): Promise<StateQLCommandResult> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.stateqlCommand(runtime.sessionGeneration, input, signal, expectedConnectionId);
+    const current = this.requireReadyRuntime();
+    if (current.sessionGeneration !== runtime.sessionGeneration || current.sessionId !== runtime.sessionId ||
+      !isDatabaseCommandResult(result, input.command) || result.sessionGeneration !== current.sessionGeneration ||
+      result.actor_id !== current.sessionId) throw new Error("Database command response is stale or invalid");
     return result;
   }
 
@@ -728,6 +753,8 @@ export class RuntimeEventStore {
     const result = await this.api.stateqlRows(runtime.sessionGeneration, handle, offset, limit, signal);
     if (
       !isStateQLRowsPage(result) ||
+      this.snapshot.runtime?.sessionGeneration !== runtime.sessionGeneration ||
+      this.snapshot.runtime?.sessionId !== runtime.sessionId ||
       result.sessionGeneration !== runtime.sessionGeneration ||
       result.actor_id !== runtime.sessionId ||
       result.handle !== handle ||
@@ -852,6 +879,21 @@ export class RuntimeEventStore {
       throw new Error("Attachment response is stale");
     }
     return attachment;
+  }
+
+  async localImage(source: string, signal?: AbortSignal): Promise<LocalImageContent> {
+    const runtime = this.requireReadyRuntime();
+    const image = await this.api.localImage(source, runtime.sessionGeneration, signal);
+    const current = this.requireReadyRuntime();
+    if (
+      image.sessionId !== runtime.sessionId ||
+      image.sessionGeneration !== runtime.sessionGeneration ||
+      current.sessionId !== runtime.sessionId ||
+      current.sessionGeneration !== runtime.sessionGeneration
+    ) {
+      throw new Error("Local image response is stale");
+    }
+    return image;
   }
 
   async loadEarlierMessages(all = false): Promise<void> {
@@ -1204,6 +1246,15 @@ export class RuntimeEventStore {
     });
   }
 
+  async refreshModelCatalogs(): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "refreshModelCatalogs",
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
   async setModel(provider: string, modelId: string): Promise<void> {
     const runtime = this.requireReadyRuntime();
     await this.sendCommand({
@@ -1306,6 +1357,7 @@ export class RuntimeEventStore {
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
+    try { clearDatabaseDrafts(localStorage, sessionId); } catch { /* Browser storage may be disabled. */ }
   }
 
   async archiveSession(sessionId: string): Promise<void> {

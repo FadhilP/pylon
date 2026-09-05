@@ -110,6 +110,65 @@ function runtime(sessionId: string, messages: RuntimeSnapshot["conversation"]["m
   };
 }
 
+test("model catalog refresh forces network access and rejects overlapping refreshes", async () => {
+  const previousOffline = process.env.PI_OFFLINE;
+  delete process.env.PI_OFFLINE;
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.generation = 1;
+  let release!: () => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => (markStarted = resolve));
+  const pending = new Promise<void>(resolve => (release = resolve));
+  let optionsSeen: any;
+  internal.modelRuntime = {
+    refresh: async (options: any) => {
+      optionsSeen = options;
+      markStarted();
+      await pending;
+      return { aborted: false, errors: new Map() };
+    },
+  };
+
+  try {
+    const first = coordinator.refreshModelCatalogs(1);
+    await started;
+    await assert.rejects(coordinator.refreshModelCatalogs(1), /already in progress/);
+    release();
+    await first;
+    assert.equal(optionsSeen.allowNetwork, true);
+    assert.equal(optionsSeen.force, true);
+    assert.equal(optionsSeen.signal instanceof AbortSignal, true);
+  } finally {
+    release?.();
+    await coordinator.dispose();
+    if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = previousOffline;
+  }
+});
+
+test("model catalog refresh reports provider failures", async () => {
+  const previousOffline = process.env.PI_OFFLINE;
+  delete process.env.PI_OFFLINE;
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.modelRuntime = {
+    refresh: async () => ({
+      aborted: false,
+      errors: new Map([["openrouter", new Error("service unavailable")]]),
+    }),
+  };
+
+  try {
+    await assert.rejects(coordinator.refreshModelCatalogs(1), /openrouter: service unavailable/);
+  } finally {
+    await coordinator.dispose();
+    if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+    else process.env.PI_OFFLINE = previousOffline;
+  }
+});
+
 test("project and session policies defer effective changes until a running turn settles", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-deferred-policy-"));
   const cwd = join(root, "workspace");

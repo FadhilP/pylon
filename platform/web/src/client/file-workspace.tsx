@@ -1,4 +1,13 @@
-import { IconChevronLeft, IconFiles, IconFolder, IconSearch, IconX } from "@tabler/icons-react";
+import {
+  IconArrowBackUp,
+  IconChevronLeft,
+  IconFile,
+  IconFiles,
+  IconFolder,
+  IconGitCompare,
+  IconSearch,
+  IconX,
+} from "@tabler/icons-react";
 import {
   useEffect,
   useMemo,
@@ -357,25 +366,28 @@ export function FileWorkspace({
                   <div className="file-viewer-toolbar">
                     <code title={currentUi.selectedPath}>{currentUi.selectedPath}</code>
                     <span>
-                      <button
-                        className={currentUi.view === "diff" ? "is-active" : ""}
-                        onClick={() => setSelectedView("diff")}>
-                        Diff
-                      </button>
+                      {canCompare && (
+                        <button
+                          className={currentUi.view === "base" ? "is-active" : ""}
+                          onClick={() => setSelectedView("base")}>
+                          <IconArrowBackUp size={14} />
+                          Baseline
+                        </button>
+                      )}
                       <button
                         className={currentUi.view === "current" ? "is-active" : ""}
                         onClick={() =>
                           setSelectedView(currentUi.view === "current" && canCompare ? "diff" : "current")
                         }>
+                        <IconFile size={14} />
                         Working copy
                       </button>
-                      {canCompare && (
-                        <button
-                          className={currentUi.view === "base" ? "is-active" : ""}
-                          onClick={() => setSelectedView("base")}>
-                          Baseline
-                        </button>
-                      )}
+                      <button
+                        className={currentUi.view === "diff" ? "is-active" : ""}
+                        onClick={() => setSelectedView("diff")}>
+                        <IconGitCompare size={14} />
+                        Diff
+                      </button>
                       <button
                         className="icon-button"
                         onClick={() => closeFile(currentUi.selectedPath!)}

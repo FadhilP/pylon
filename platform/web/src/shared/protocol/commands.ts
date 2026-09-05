@@ -45,6 +45,7 @@ export const COMMAND_NAMES = [
   "reloadExtensions",
   "updateHookSettings",
   "rebuildDiscoverIndex",
+  "refreshModelCatalogs",
   "setModel",
   "setThinkingLevel",
   "setSessionControls",
@@ -139,6 +140,7 @@ export type WebCommand =
   | ({ type: "reloadExtensions"; confirmed: true } & CommandBase)
   | ({ type: "updateHookSettings"; settings: HookSettingsReadModel } & CommandBase)
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
+  | ({ type: "refreshModelCatalogs" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({

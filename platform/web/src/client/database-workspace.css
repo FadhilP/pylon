@@ -1,0 +1,114 @@
+/* Database workspace: the prototype's object rail, statement seams, and editor/grid split. */
+.database-panel .primary-button, .database-connect .primary-button { width: auto; }
+.database-panel .spacer { margin-left: auto; }
+.database-body { display: grid; grid-template-columns: 216px minmax(0, 1fr); flex: 1; min-height: 0; }
+.database-tabs-workspace, .database-tab-panel, .database-history, .database-result { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
+.database-tab-panel[hidden] { display: none; }
+.database-toolbar, .database-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.database-toolbar { flex: none; min-height: 43px; background: var(--surface-raised); }
+.database-toolbar input:not([type=checkbox]), .database-toolbar select, .database-connect input:not([type=checkbox]), .database-connect select { min-width: 0; min-height: 29px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 4px 8px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; }
+.database-toolbar input[type=search] { width: min(220px, 100%); }
+.database-toolbar select { max-width: 180px; }
+.database-toolbar button, .database-status button { min-height: 28px; font-size: 12px; }
+.database-title-input { width: 130px; }
+.database-params { min-width: 140px !important; flex: 1; max-width: 320px; font-family: ui-monospace, Consolas, monospace !important; }
+.database-status { min-height: 32px; flex: none; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.database-result > .database-status, .database-history > .database-status { border-top: 1px solid var(--line); border-bottom: 0; }
+.database-tabs { display: flex; flex: none; gap: 2px; padding: 7px 10px 0; overflow: auto; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+.database-tabs button[role=tab] { display: flex; gap: 7px; align-items: center; min-height: 32px; padding: 0 11px; border-radius: 6px 6px 0 0; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.database-tabs button[aria-selected=true], .database-tab:has([aria-selected=true]) { background: var(--surface-active); color: var(--text); }
+.database-tab { display: flex; flex: none; align-items: center; border-radius: 6px 6px 0 0; transition: background-color var(--motion-fast) ease; }
+.database-tab:hover { background: var(--surface-hover); }
+.database-tab [role=tab] > span:not(.overview-orb) { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.database-tab-close { width: 23px; height: 23px; margin-right: 3px; border-radius: 4px; color: var(--text-muted); }
+.database-tab-close:hover { background: var(--surface-raised); color: var(--text); }
+.database-dirty { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.database-editor { min-height: 100px; max-height: 45%; flex: none; padding: 12px 15px; background: var(--syntax-bg); color: var(--syntax-fg); }
+.database-editor textarea { display: block; width: 100%; height: 100%; border: 0; outline: 0; resize: none; color: var(--text); background: transparent; font: 13px/1.75 ui-monospace, Consolas, monospace; tab-size: 2; }
+.database-query-input { position: relative; height: 100%; }
+.database-query-input pre, .database-query-input textarea { margin: 0; padding: 0; border: 0; border-radius: 0; font: 13px/1.75 ui-monospace, Consolas, monospace; letter-spacing: normal; tab-size: 2; white-space: pre; overflow-wrap: normal; }
+.database-query-input pre { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.database-query-input code, .database-query-input code span { font: inherit; font-weight: 400; font-style: normal; text-decoration: none; }
+.database-query-input textarea { position: relative; color: transparent; caret-color: var(--syntax-fg); background: transparent; }
+.database-query-input textarea::placeholder { color: var(--syntax-muted); }
+.database-query-input textarea::selection { color: var(--syntax-fg); background: var(--syntax-border); }
+.database-syntax { font: inherit; }
+.stateql-statement > .seam-label:has(.database-syntax) { background: var(--syntax-bg); padding: 2px 5px; border-radius: 3px; color: var(--syntax-fg); }
+.database-editor:focus-within { box-shadow: inset 3px 0 var(--accent); }
+.database-splitter { position: relative; height: 9px; flex: none; cursor: row-resize; touch-action: none; }
+.database-splitter::before { content: ""; position: absolute; top: 4px; left: 0; right: 0; height: 1px; background: var(--line); }
+.database-splitter::after { content: ""; position: absolute; top: 3px; left: calc(50% - 13px); width: 26px; height: 3px; border-radius: 2px; background: var(--line-strong); }
+.database-splitter:hover::after, .database-splitter:focus-visible::after { background: var(--accent); }
+.database-grid { flex: 1; min-height: 100px; overflow: auto; scrollbar-color: var(--line-strong) transparent; }
+.database-grid table, .database-metadata table { border-collapse: collapse; min-width: 100%; text-align: left; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.database-grid thead { position: sticky; top: 0; z-index: 1; background: var(--surface-subtle); }
+.database-grid th { height: 43px; font-weight: 500; }
+.database-grid th small { display: block; font-size: 10px; color: var(--text-muted); font-weight: 400; }
+.database-grid td, .database-grid th, .database-metadata th, .database-metadata td { max-width: 320px; padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.database-grid td { height: 32px; }
+.database-grid td:first-child { width: 45px; color: var(--text-muted); }
+.database-grid tbody tr:hover { background: var(--surface-hover); }
+.database-cell { display: block; min-width: 100%; max-width: 296px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font: inherit; color: inherit; padding: 6px 0; }
+.database-cell:hover { color: var(--accent-text); box-shadow: inset 0 -1px var(--accent); }
+.database-cell-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 12px 14px; background: var(--amber-soft); border-bottom: 1px solid var(--line); font-size: 12px; }
+.database-cell-editor > label:first-child { display: grid; flex: 1; gap: 5px; }
+.database-cell-editor input:not([type=checkbox]) { width: 100%; min-height: 30px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--text); background: var(--surface); font-family: ui-monospace, Consolas, monospace; }
+.database-empty { display: flex; min-height: 130px; flex: 1; flex-direction: column; justify-content: center; align-items: center; gap: 8px; padding: 30px 18px; color: var(--text-muted); text-align: center; font-size: 12px; }
+.database-empty strong { color: var(--text-soft); font-size: 14px; font-weight: 500; }
+.database-empty p { margin: 0; }
+.database-notice { display: flex; align-items: center; gap: 12px; flex: none; margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: var(--amber-soft); color: var(--text-soft); font-size: 12px; line-height: 1.5; }
+.database-notice.is-error { background: var(--red-soft); }
+.database-notice button { margin-left: auto; flex: none; }
+.database-muted { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.database-check { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 11px; }
+.database-check input { accent-color: var(--accent); }
+.stateql-objects { min-height: 0; overflow: auto; border-right: 1px solid var(--line); background: var(--surface-subtle); }
+.stateql-objects section { padding: 8px 7px 12px; }
+.stateql-objects section + section { border-top: 1px solid var(--line); }
+.stateql-objects section > header { display: flex; justify-content: space-between; align-items: center; padding: 4px 7px 7px; }
+.stateql-objects .section-kicker { margin: 0; }
+.stateql-objects p, .stateql-objects .database-check { margin: 7px; }
+.stateql-objects .text-button { font-size: 11px; padding: 6px 7px; }
+.database-object { display: flex; width: 100%; min-width: 0; min-height: 30px; align-items: center; gap: 7px; padding: 4px 8px; border-radius: 4px; text-align: left; color: var(--text-soft); font-size: 12px; }
+.database-object:hover { background: var(--surface-hover); }
+.database-object > span:not(.overview-orb) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.database-object small, .database-object-group summary small { margin-left: auto; color: var(--text-muted); }
+.database-profile { display: flex; align-items: center; }
+.database-object-group > summary { display: flex; align-items: center; gap: 6px; padding: 6px; list-style: none; font-size: 12px; cursor: pointer; }
+.database-object-group > summary svg { transition: transform var(--motion-fast) ease; }
+.database-object-group[open] > summary svg { transform: rotate(90deg); }
+.database-object-group > button { padding-left: 24px; }
+.database-segments { display: flex; gap: 2px; }
+.database-segments button { padding: 5px 8px; color: var(--text-muted); border-radius: 4px; text-transform: capitalize; font-size: 12px; }
+.database-segments button[aria-pressed=true] { color: var(--text); background: var(--surface-active); }
+.stateql-rail { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 20px; }
+.stateql-rail::before { content: ""; position: absolute; top: 0; bottom: 0; left: 27px; width: 1px; background: var(--line); }
+.stateql-rail > * { position: relative; }
+.seam-block > summary.stateql-statement { display: flex; min-height: 35px; }
+.stateql-statement > .overview-orb-cell { flex: 0 0 22px; }
+.stateql-statement > .seam-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Consolas, monospace; font-weight: 400; }
+.stateql-statement > .seam-rule { flex: 1 0 24px; }
+.stateql-statement > .stateql-who, .stateql-statement > .seam-open { flex: none; }
+.stateql-who { min-width: 34px; text-align: right; font-size: 12px; color: var(--text-muted); }
+.database-history-detail { padding: 0 0 12px 32px; }
+.database-history-detail pre { overflow: auto; max-height: 220px; margin: 8px 0; padding: 12px; background: var(--syntax-bg); color: var(--syntax-fg); font: 12px/1.7 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+.database-history-detail .text-button { align-self: flex-start; font-size: 12px; }
+.database-transaction, .database-plan { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); background: var(--amber-soft); font-size: 12px; }
+.database-plan { justify-content: space-between; }
+.database-prompt { flex: none; max-height: 50%; overflow: auto; border-bottom: 1px solid var(--line); }
+.database-metadata { padding: 14px; overflow: auto; }
+.database-metadata h3 { font-size: 12px; text-transform: capitalize; }
+.database-metadata td, .database-metadata th { padding: 6px 12px; }
+.database-connect { position: fixed; inset: 0; margin: auto; width: min(470px, calc(100vw - 32px)); max-height: calc(100svh - 40px); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow); }
+.database-connect::backdrop { background: rgb(0 0 0 / 28%); }
+.database-connect header, .database-connect footer { display: flex; gap: 8px; align-items: center; padding: 13px 17px; }
+.database-connect header { justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 14px; }
+.database-connect footer { justify-content: flex-end; border-top: 1px solid var(--line); }
+.database-connect-fields { display: grid; gap: 13px; padding: 16px 18px; }
+.database-connect-fields label:not(.database-check) { display: grid; gap: 6px; color: var(--text-soft); font-size: 12px; }
+.database-connect-pair { display: grid; grid-template-columns: 1fr 100px; gap: 12px; }
+.database-connect-fields small { color: var(--text-muted); font-size: 11px; }
+.database-panel button:focus-visible, .database-panel input:focus-visible, .database-panel select:focus-visible, .database-panel summary:focus-visible, .database-grid:focus-visible, .database-splitter:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@container (max-width: 800px) { .database-body { grid-template-columns: 170px minmax(0, 1fr); } .database-toolbar { gap: 6px; padding: 7px 10px; } .database-params { max-width: 100%; } .stateql-connection-strip > .database-muted { display: none; } }
+@container (max-width: 560px) { .stateql-connection-strip { flex-wrap: wrap; gap: 8px; } .stateql-connection-primary { min-width: 0; max-width: 100%; flex-wrap: wrap; } .database-body { grid-template-columns: minmax(0, 1fr); } .stateql-objects { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--line); display: flex; } .stateql-objects section { min-width: 160px; } .stateql-objects section + section { border-top: 0; border-left: 1px solid var(--line); } .database-tabs-workspace { min-height: 340px; } .database-body { overflow: auto; } .database-toolbar select { max-width: 140px; } .database-editor { max-height: 35%; } .stateql-who { display: none; } }
+@media (prefers-reduced-motion: reduce) { .database-panel *, .database-panel *::before, .database-panel *::after { animation: none !important; transition: none !important; } }
