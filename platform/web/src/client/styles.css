@@ -1074,7 +1074,11 @@
   .files-list button:hover, .files-list button.is-active { background: var(--surface-hover); color: var(--text); }
   .files-list button > span { overflow: hidden; font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
   /* Material Icon Theme svgs carry their own colour, so only layout is ours. */
-  .file-type-icon { display: block; flex: 0 0 auto; }
+  .file-type-icon, .folder-icon { display: block; flex: 0 0 auto; }
+  /* The open glyph waits until its <details> is actually open. */
+  .folder-icon.is-open { display: none; }
+  .files-directory[open] > summary .folder-icon.is-open { display: block; }
+  .files-directory[open] > summary .folder-icon.is-closed { display: none; }
   .files-directory { margin-left: 10px; }
   .files-directory > summary { display: flex; width: max-content; min-width: 100%; align-items: center; gap: 6px; padding: 6px 8px; color: var(--text-muted); cursor: pointer; font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; list-style: none; }
   .files-directory > summary::-webkit-details-marker { display: none; }

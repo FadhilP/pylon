@@ -7,7 +7,6 @@ import {
   IconExternalLink,
   IconFile,
   IconFiles,
-  IconFolder,
   IconGitCompare,
   IconGitMerge,
   IconLoader2,
@@ -29,7 +28,7 @@ import {
 } from "react";
 import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
-import { fileIconId } from "../shared/file-icon";
+import { fileIconId, folderIconId } from "../shared/file-icon";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import { loadDiffContents, type DiffContentsLoader } from "../shared/code-viewer-model";
@@ -59,6 +58,31 @@ export function FileTypeIcon({ path, size = 14 }: { path: string; size?: number 
       decoding="async"
       alt=""
     />
+  );
+}
+
+/** Both states ship and CSS picks one, because the tree's folders are
+    uncontrolled <details> and nothing in React knows which are open. */
+export function FolderTypeIcon({ name, size = 14 }: { name: string; size?: number }) {
+  return (
+    <>
+      <img
+        className="folder-icon is-closed"
+        src={`/file-icons/${folderIconId(name, false)}.svg`}
+        width={size}
+        height={size}
+        decoding="async"
+        alt=""
+      />
+      <img
+        className="folder-icon is-open"
+        src={`/file-icons/${folderIconId(name, true)}.svg`}
+        width={size}
+        height={size}
+        decoding="async"
+        alt=""
+      />
+    </>
   );
 }
 
@@ -689,7 +713,7 @@ function TreeNode({
         .map(([name, child]) => (
           <details className="files-directory" key={name}>
             <summary>
-              <IconFolder size={14} />
+              <FolderTypeIcon name={name} size={14} />
               {name}
             </summary>
             <TreeNode node={child} selectedPath={selectedPath} onSelect={onSelect} />

@@ -27,7 +27,14 @@ function lowercased(entries) {
 
 const extensions = lowercased(manifest.fileExtensions);
 const names = lowercased(manifest.fileNames);
-const used = [...new Set([...Object.values(extensions), ...Object.values(names), manifest.file])].sort();
+// Every expanded folder icon is its closed name plus "-open", so one map is
+// enough and the lookup derives the open state.
+const folders = lowercased(manifest.folderNames);
+const folderIcons = [...Object.values(folders), manifest.folder];
+const used = [...new Set([
+  ...Object.values(extensions), ...Object.values(names), manifest.file,
+  ...folderIcons, ...folderIcons.map(icon => `${icon}-open`),
+])].sort();
 
 await rm(iconDirectory, { recursive: true, force: true });
 await mkdir(iconDirectory, { recursive: true });
@@ -59,6 +66,7 @@ await writeFile(
 // literal type with one member per key, which is slow and pointless here.
 
 export const defaultFileIcon = ${JSON.stringify(manifest.file)};
+export const defaultFolderIcon = ${JSON.stringify(manifest.folder)};
 
 export const fileIconNames: Record<string, string> = {
 ${literal(names)}
@@ -67,9 +75,14 @@ ${literal(names)}
 export const fileIconExtensions: Record<string, string> = {
 ${literal(extensions)}
 };
+
+export const folderIconNames: Record<string, string> = {
+${literal(folders)}
+};
 `,
 );
 
 console.log(
-  `${used.length} icons -> public/file-icons, ${Object.keys(names).length + Object.keys(extensions).length} lookup keys`,
+  `${used.length} icons -> public/file-icons, ` +
+    `${Object.keys(names).length + Object.keys(extensions).length} file keys, ${Object.keys(folders).length} folder keys`,
 );

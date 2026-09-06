@@ -1,4 +1,10 @@
-import { defaultFileIcon, fileIconExtensions, fileIconNames } from "./file-icon-map.ts";
+import {
+  defaultFileIcon,
+  defaultFolderIcon,
+  fileIconExtensions,
+  fileIconNames,
+  folderIconNames,
+} from "./file-icon-map.ts";
 
 // The tree renders every row it is given — up to 10,000 — so remember what a
 // path resolved to rather than re-splitting it on each render.
@@ -24,4 +30,18 @@ function lookup(path: string): string {
     if (extension) return extension;
   }
   return defaultFileIcon;
+}
+
+const resolvedFolders = new Map<string, string>();
+
+/** Material Icon Theme icon id for a directory, served from /file-icons/<id>.svg.
+    Every expanded icon is its closed name plus "-open", so only one table ships. */
+export function folderIconId(name: string, open: boolean): string {
+  const key = `${open ? "+" : "-"}${name}`;
+  const cached = resolvedFolders.get(key);
+  if (cached) return cached;
+  const base = folderIconNames[name.toLocaleLowerCase()] ?? defaultFolderIcon;
+  const icon = open ? `${base}-open` : base;
+  resolvedFolders.set(key, icon);
+  return icon;
 }
