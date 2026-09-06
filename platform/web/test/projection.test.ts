@@ -214,6 +214,7 @@ test("session status retains background completion until that session is selecte
     sessionGeneration: 1,
     state: "idle",
     workStartedAt: null,
+    todoProgress: { completed: 2, total: 5 },
     completed: true,
     cue: "turn-complete",
   });
@@ -235,7 +236,14 @@ test("session status retains background completion until that session is selecte
   assert.deepEqual(published, [
     {
       type: "session.status",
-      payload: { sessionId: "background", state: "idle", workStartedAt: null, completed: true, cue: "turn-complete" },
+      payload: {
+        sessionId: "background",
+        state: "idle",
+        workStartedAt: null,
+        todoProgress: { completed: 2, total: 5 },
+        completed: true,
+        cue: "turn-complete",
+      },
     },
     { type: "session.status", payload: { sessionId: "background", state: "sleeping", workStartedAt: null } },
     { type: "session.status", payload: { sessionId: "external", state: "sleeping", completed: true } },

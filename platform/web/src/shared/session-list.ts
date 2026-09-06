@@ -1,12 +1,30 @@
+import type { SessionRuntimeState } from "./protocol/events.ts";
 import type {
   SessionListQuery,
   SessionListSnapshot,
   SessionProjectPage,
   SessionSummary,
+  SessionTodoProgress,
 } from "./protocol/snapshots.ts";
 
 export const SESSION_LIST_INITIAL_LIMIT = 3;
 export const SESSION_LIST_MORE_LIMIT = 5;
+export interface SessionLiveFields {
+  states?: Record<string, SessionRuntimeState>;
+  workStartedAts?: Record<string, string | null>;
+  todoProgress?: Record<string, SessionTodoProgress | null>;
+}
+
+export function applySessionLiveFields(session: SessionSummary, fields: SessionLiveFields): SessionSummary {
+  const next = { ...session, runtimeState: fields.states?.[session.id] ?? session.runtimeState };
+  const workStartedAt = fields.workStartedAts?.[session.id];
+  if (workStartedAt === null) delete next.workStartedAt;
+  else if (workStartedAt !== undefined) next.workStartedAt = workStartedAt;
+  const todoProgress = fields.todoProgress?.[session.id];
+  if (todoProgress === null) delete next.todoProgress;
+  else if (todoProgress !== undefined) next.todoProgress = todoProgress;
+  return next;
+}
 
 type ListSessions = (input: SessionListQuery, signal?: AbortSignal) => Promise<SessionListSnapshot>;
 

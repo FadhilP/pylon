@@ -33,11 +33,11 @@ import type {
   SessionSummary,
 } from "../shared/protocol/snapshots";
 import {
+  applySessionLiveFields,
   listSessionsPreservingPages,
   SESSION_LIST_INITIAL_LIMIT,
   SESSION_LIST_MORE_LIMIT,
 } from "../shared/session-list";
-import { showSessionRuntimeState } from "../shared/session-completions";
 import type { ComposerDraft } from "../shared/composer-drafts";
 import { ActionDialog } from "./action-dialog";
 import { AgentPanel } from "./agent-drawer";
@@ -46,6 +46,7 @@ import { agentColor, useAgentColors } from "./agent-color";
 import { copyText } from "./clipboard";
 import { ArchiveDialog } from "./archive-dialog";
 import { ChangelogDialog } from "./changelog-dialog";
+import { version } from "../../../../package.json";
 import { ConversationPanel, type ComposerSelection } from "./conversation-panel";
 import { CompactionPanel } from "./compaction-panel";
 import { BrowserPanel } from "./browser-panel";
@@ -79,7 +80,7 @@ import {
 } from "./navigation";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
+import { SessionProgress, SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
 import { TurnDiffPanel } from "./turn-diff-panel";
@@ -337,22 +338,34 @@ export function App() {
     });
   };
   const applySessionList = (result: SessionListSnapshot, appliedQuery = query.trim()) => {
+    const liveFields = {
+      states: live.sessionStatuses,
+      workStartedAts: live.sessionWorkStartedAts,
+      todoProgress: live.sessionTodoProgress,
+    };
+    const projectsWithLiveFields = result.projects.map(project => ({
+      ...project,
+      sessions: project.sessions.map(session => applySessionLiveFields(session, liveFields)),
+    }));
+    const activeWithLiveFields = result.activeSessions
+      .map(session => applySessionLiveFields(session, liveFields))
+      .filter(session => session.runtimeState !== "sleeping");
     let draftsChanged = false;
-    for (const project of result.projects) {
+    for (const project of projectsWithLiveFields) {
       for (const session of project.sessions) draftsChanged = composerDrafts.rememberProject(session) || draftsChanged;
     }
-    for (const session of result.activeSessions)
+    for (const session of activeWithLiveFields)
       draftsChanged = composerDrafts.rememberProject(session) || draftsChanged;
     if (draftsChanged) composerDrafts.persist();
-    sessionPagesRef.current = result.projects;
+    sessionPagesRef.current = projectsWithLiveFields;
     sessionPagesQuery.current = appliedQuery;
-    setSessionPages(result.projects);
-    setActiveSessions(result.activeSessions);
+    setSessionPages(projectsWithLiveFields);
+    setActiveSessions(activeWithLiveFields);
     const firstList = !query.trim() && !sessionListApplied.current;
     if (!query.trim()) sessionListApplied.current = true;
     const projectId =
-      result.activeSessions.find(session => session.active)?.projectId ??
-      result.projects.find(page => page.sessions.some(session => session.active))?.id;
+      activeWithLiveFields.find(session => session.active)?.projectId ??
+      projectsWithLiveFields.find(page => page.sessions.some(session => session.active))?.id;
     if (firstList && !query.trim() && projectId) setExpandedProjects(current => new Set([...current, projectId]));
   };
 
@@ -622,17 +635,16 @@ export function App() {
   }, [surface, navContext]);
 
   useEffect(() => {
-    if (!live.sessionStatuses && !live.sessionWorkStartedAts) return;
-    const updateSession = (session: SessionSummary): SessionSummary => {
-      const next = { ...session, runtimeState: live.sessionStatuses?.[session.id] ?? session.runtimeState };
-      const workStartedAt = live.sessionWorkStartedAts?.[session.id];
-      if (workStartedAt === null) delete next.workStartedAt;
-      else if (workStartedAt !== undefined) next.workStartedAt = workStartedAt;
-      return next;
+    if (!live.sessionStatuses && !live.sessionWorkStartedAts && !live.sessionTodoProgress) return;
+    const liveFields = {
+      states: live.sessionStatuses,
+      workStartedAts: live.sessionWorkStartedAts,
+      todoProgress: live.sessionTodoProgress,
     };
+    const updateSession = (session: SessionSummary) => applySessionLiveFields(session, liveFields);
     updateSessionPages(pages => pages.map(page => ({ ...page, sessions: page.sessions.map(updateSession) })));
     setActiveSessions(sessions => sessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
-  }, [live.sessionStatuses, live.sessionWorkStartedAts]);
+  }, [live.sessionStatuses, live.sessionWorkStartedAts, live.sessionTodoProgress]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1567,6 +1579,20 @@ export function App() {
         onWorkspaceView={openWorkspaceView}
         onAmbient={runAmbient}
       />
+      {/* The bar's leading segment: it claims the cell above the panel, so the
+          strip's rule runs unbroken and the corner is not a hole in Files, where
+          the explorer sits a row lower than the session list does. Kept beside
+          the strip rather than inside it so the strip still measures only the
+          width its tabs actually get. The version is the changelog's handle —
+          the one place the build number is worth being, and worth clicking. */}
+      <button
+        className="session-workspace-lead"
+        type="button"
+        onClick={() => setChangelogOpen(true)}
+        title={`Pylon v${version} — what's new`}>
+        Pylon
+        <small>v{version}</small>
+      </button>
       <ActiveSessionStrip
         sessions={activeSessions}
         unseenCompletions={live.unseenCompletions}
@@ -2162,52 +2188,78 @@ function ActiveSessionStrip({
   onNew: () => void;
 }) {
   const stripRef = useRef<HTMLElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
+  const overflowTrigger = useRef<HTMLButtonElement | null>(null);
+  const [stripWidth, setStripWidth] = useState(0);
   const [menu, setMenu] = useState<{ sessionId: string; left: number }>();
+  const [overflowOpen, setOverflowOpen] = useState(false);
   const [announcement, setAnnouncement] = useState("");
-  const menuSession = sessions.find(session => session.id === menu?.sessionId);
-  useEffect(() => {
-    if (!selectedId) return;
-    listRef.current
-      ?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(selectedId)}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [selectedId]);
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(undefined);
-    const onPointerDown = (event: PointerEvent) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest(".active-session-options, .active-session-menu-popover")
-      )
-        return;
-      close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      close();
-      menuTrigger.current?.focus();
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("resize", close);
-    listRef.current?.addEventListener("scroll", close);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("resize", close);
-      listRef.current?.removeEventListener("scroll", close);
-    };
-  }, [menu]);
   const working = sessions.some(session => session.workStartedAt);
   const [now, setNow] = useState(() => Date.now());
+  const capacity = activeSessionStripCapacity(stripWidth, sessions.length, Boolean(pendingLabel));
+  const visibleSessions = activeSessionsForCapacity(sessions, selectedId, capacity);
+  const visibleIds = new Set(visibleSessions.map(session => session.id));
+  const overflowSessions = sessions.filter(session => !visibleIds.has(session.id));
+  const menuSession = sessions.find(session => session.id === menu?.sessionId);
+
+  useLayoutEffect(() => {
+    const node = stripRef.current;
+    if (!node) return;
+    const update = () => setStripWidth(node.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), working ? 1_000 : 60_000);
     return () => window.clearInterval(interval);
   }, [working]);
+
+  useEffect(() => {
+    if (menu && !visibleIds.has(menu.sessionId)) setMenu(undefined);
+    if (!overflowSessions.length) setOverflowOpen(false);
+  }, [menu, overflowSessions.length, visibleSessions]);
+
+  useEffect(() => {
+    if (!menu && !overflowOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest(
+          ".active-session-options, .active-session-menu-popover, .active-session-overflow-button, .active-session-overflow-menu",
+        )
+      )
+        return;
+      setMenu(undefined);
+      setOverflowOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (menu) {
+        setMenu(undefined);
+        menuTrigger.current?.focus();
+      } else {
+        setOverflowOpen(false);
+        overflowTrigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menu, overflowOpen]);
+
   const toggleMenu = (session: SessionSummary, trigger: HTMLButtonElement) => {
     menuTrigger.current = trigger;
+    setOverflowOpen(false);
     if (menu?.sessionId === session.id) {
       setMenu(undefined);
       return;
@@ -2234,43 +2286,53 @@ function ActiveSessionStrip({
     void copyText(id).then(copied => setAnnouncement(copied ? "Session ID copied" : "Copying session ID failed"));
   };
   const sleeping = menuSession?.runtimeState === "sleeping";
+
   return (
     <nav ref={stripRef} className="active-session-strip" aria-label="Active sessions">
-      <div ref={listRef} className="active-session-tabs">
-        {sessions.map(session => {
+      <div className="active-session-tabs">
+        {visibleSessions.map(session => {
+          const selected = session.id === selectedId;
           const completed = Boolean(unseenCompletions?.[session.id]);
-          const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
-          const preview = `${session.cwdLabel} · ${activity}`;
+          const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now)
+            .replace(/^Working for /, "")
+            .replace(/ ago$/, "");
           const menuOpen = menu?.sessionId === session.id;
+          /* A todo list left over from the last turn is not progress, so the
+             bar belongs to a session that is working, as in the list. */
+          const progress = session.workStartedAt ? session.todoProgress : undefined;
+          const state = completed ? "complete" : session.runtimeState;
+          const stateLabel = completed ? "New response" : session.runtimeState;
           return (
             <div
               key={session.id}
               data-session-id={session.id}
-              className={`active-session-tab-shell${session.id === selectedId ? " is-active" : ""}`}>
+              className={`active-session-tab-shell${selected ? " is-active" : ""}`}>
               <button
                 type="button"
-                className={`active-session-tab${session.id === selectedId ? " is-active" : ""}`}
+                className={`active-session-tab${selected ? " is-active" : ""}`}
                 disabled={busy}
+                aria-current={selected ? "page" : undefined}
                 onClick={() => {
                   setMenu(undefined);
                   onSelect(session);
                 }}>
-                <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
-                <span title={preview}>{preview}</span>
                 {busySessionId === session.id || deletingSessionId === session.id ? (
                   <i
                     className="active-session-state status-orb success"
                     aria-label={deletingSessionId === session.id ? "Deleting" : "Updating"}
                   />
                 ) : (
-                  showSessionRuntimeState(session.runtimeState, completed) && (
-                    <i
-                      className={`active-session-state session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
-                      aria-label={completed ? "New response" : session.runtimeState}
-                      title={completed ? "New response" : session.runtimeState}
-                    />
-                  )
+                  <i
+                    className={`active-session-state session-runtime-state is-${state}`}
+                    aria-label={stateLabel}
+                    title={stateLabel}
+                  />
                 )}
+                <span className="active-session-label">
+                  <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
+                  {selected && <small>{session.cwdLabel} · {activity}</small>}
+                </span>
+                {selected && <SessionProgress progress={progress} className="active-session-progress" />}
               </button>
               <button
                 className="active-session-options"
@@ -2286,21 +2348,62 @@ function ActiveSessionStrip({
           );
         })}
         {pendingLabel && (
-          <button type="button" className="active-session-tab is-active" disabled>
-            <strong>New session</strong>
-            <span>{pendingLabel}</span>
+          <button type="button" className="active-session-tab active-session-pending is-active" disabled>
+            <span className="active-session-label">
+              <strong>New session</strong>
+              <small>{pendingLabel}</small>
+            </span>
           </button>
         )}
-        <button
-          className="active-session-new"
-          type="button"
-          disabled={busy}
-          onClick={onNew}
-          aria-label="New session"
-          title="New session">
-          <IconPlus size={17} />
-        </button>
       </div>
+      {overflowSessions.length > 0 && (
+        <button
+          ref={overflowTrigger}
+          className="active-session-overflow-button"
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={overflowOpen}
+          aria-controls="active-session-overflow-menu"
+          title={`${overflowSessions.length} more active sessions`}
+          onClick={() => {
+            setMenu(undefined);
+            setOverflowOpen(open => !open);
+          }}>
+          +{overflowSessions.length}
+        </button>
+      )}
+      <button
+        className="active-session-new"
+        type="button"
+        disabled={busy}
+        onClick={onNew}
+        aria-label="New session"
+        title="New session">
+        <IconPlus size={17} />
+      </button>
+      {overflowOpen && overflowSessions.length > 0 && (
+        <div id="active-session-overflow-menu" className="active-session-overflow-menu" role="menu">
+          {overflowSessions.map(session => {
+            const completed = Boolean(unseenCompletions?.[session.id]);
+            const state = completed ? "complete" : session.runtimeState;
+            return (
+              <button
+                key={session.id}
+                role="menuitem"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setOverflowOpen(false);
+                  onSelect(session);
+                }}>
+                <i className={`session-runtime-state is-${state}`} aria-hidden="true" />
+                <strong>{sessionTitle(session)}</strong>
+                <small>{session.cwdLabel}</small>
+              </button>
+            );
+          })}
+        </div>
+      )}
       {menuSession && (
         <div
           id="active-session-options-menu"
@@ -2359,6 +2462,28 @@ function ActiveSessionStrip({
       </span>
     </nav>
   );
+}
+
+/** Matches --session-tab-width in styles.css; tabs never shrink below it. */
+const ACTIVE_SESSION_TAB_WIDTH = 230;
+
+function activeSessionStripCapacity(width: number, sessionCount: number, pending: boolean): number {
+  if (!width) return sessionCount;
+  const fixed = 34 + (pending ? ACTIVE_SESSION_TAB_WIDTH : 0);
+  const withoutOverflow = Math.max(1, Math.floor((width - fixed) / ACTIVE_SESSION_TAB_WIDTH));
+  if (sessionCount <= withoutOverflow) return sessionCount;
+  return Math.max(1, Math.floor((width - fixed - 42) / ACTIVE_SESSION_TAB_WIDTH));
+}
+
+function activeSessionsForCapacity(
+  sessions: SessionSummary[],
+  selectedId: string | undefined,
+  capacity: number,
+): SessionSummary[] {
+  if (sessions.length <= capacity) return sessions;
+  const selectedIndex = selectedId ? sessions.findIndex(session => session.id === selectedId) : -1;
+  if (selectedIndex < 0 || selectedIndex < capacity) return sessions.slice(0, capacity);
+  return [...sessions.slice(0, Math.max(0, capacity - 1)), sessions[selectedIndex]!];
 }
 
 function WorkspaceViewHeader({ view, onClose }: { view: WorkspaceViewId; onClose: () => void }) {

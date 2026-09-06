@@ -60,6 +60,7 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  SessionTodoProgress,
   SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
@@ -252,6 +253,7 @@ interface RuntimeSlot {
   pinned: boolean;
   lastState: SessionRuntimeState;
   lastWorkStartedAt?: string;
+  lastTodoProgress: string;
   pendingUi?: UiRequest;
   nativeQueue: { steering: number; followUp: number };
   queuedPrompts: RuntimeQueuedPrompt[];
@@ -282,6 +284,9 @@ interface RuntimeSlot {
   checkoutProvisional?: { projectId: string; branch: string; commonDir: string; parked: CheckoutState };
 }
 
+function todoProgressKey(progress: SessionTodoProgress | undefined): string {
+  return progress ? `${progress.completed}/${progress.total}` : "";
+}
 const workspaceReadOnlyTools = new Set([
   "advisor",
   "continuity_update",
@@ -553,6 +558,7 @@ export class RuntimeCoordinator implements PiDriver {
         workStartedAtFor: sessionId =>
           this.externalSpawnRuns.get(sessionId)?.startedAt ??
           this.slots.get(sessionId)?.driver.runtimeDetails().workStartedAt,
+        todoProgressFor: sessionId => this.slots.get(sessionId)?.driver.runtimeDetails().todoProgress,
         runningUnderParentSessionIdFor: sessionId => this.externalSpawnRuns.get(sessionId)?.parentSessionId,
         fallbacks: [...this.slots.values()].map(slot => {
           const details = slot.driver.runtimeDetails();
@@ -1951,6 +1957,7 @@ export class RuntimeCoordinator implements PiDriver {
       pinned: this.registry().isSessionPinned(handle.sessionId),
       lastState: driver.runtimeState(),
       lastWorkStartedAt: driver.runtimeDetails().workStartedAt,
+      lastTodoProgress: todoProgressKey(driver.runtimeDetails().todoProgress),
       nativeQueue: { steering: 0, followUp: 0 },
       queuedPrompts: [],
       displayPendingPrompts: [],
@@ -3091,10 +3098,20 @@ export class RuntimeCoordinator implements PiDriver {
     if (!slot) return;
     const state = slot.driver.runtimeState();
     const workStartedAt = slot.driver.runtimeDetails().workStartedAt;
+    const todoProgress = slot.driver.runtimeDetails().todoProgress;
+    const progressKey = todoProgressKey(todoProgress);
     if ((cue === "turn-complete" && !completed) || (cue === "attention" && state !== "attention")) cue = undefined;
-    if (state === slot.lastState && workStartedAt === slot.lastWorkStartedAt && !completed && !cue) return;
+    if (
+      state === slot.lastState &&
+      workStartedAt === slot.lastWorkStartedAt &&
+      progressKey === slot.lastTodoProgress &&
+      !completed &&
+      !cue
+    )
+      return;
     slot.lastState = state;
     slot.lastWorkStartedAt = workStartedAt;
+    slot.lastTodoProgress = progressKey;
     this.emitStatus(sessionId, state, completed, cue);
   }
 
@@ -3112,6 +3129,7 @@ export class RuntimeCoordinator implements PiDriver {
       sessionGeneration: this.generation,
       state,
       workStartedAt: workStartedAt ?? null,
+      todoProgress: this.slots.get(sessionId)?.driver.runtimeDetails().todoProgress ?? null,
       ...(completed ? { completed: true } : {}),
       ...(cue ? { cue } : {}),
     });

@@ -1055,6 +1055,7 @@ export class RuntimeProjection {
         sessionId,
         state: event.state,
         ...(Object.hasOwn(event, "workStartedAt") ? { workStartedAt: event.workStartedAt } : {}),
+        ...(Object.hasOwn(event, "todoProgress") ? { todoProgress: event.todoProgress } : {}),
         ...(event.completed ? { completed: true } : {}),
         ...(event.cue ? { cue: event.cue } : {}),
       });

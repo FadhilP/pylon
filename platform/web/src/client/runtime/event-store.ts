@@ -45,6 +45,7 @@ import type {
   PapercutStatusReadModel,
   RuntimeSnapshot,
   SessionListQuery,
+  SessionTodoProgress,
   SessionListSnapshot,
   SkillListSnapshot,
   UsageQuery,
@@ -118,6 +119,7 @@ export interface RuntimeStoreSnapshot {
   sessionRevision?: number;
   sessionStatuses?: Record<string, SessionRuntimeState>;
   sessionWorkStartedAts?: Record<string, string | null>;
+  sessionTodoProgress?: Record<string, SessionTodoProgress | null>;
   unseenCompletions?: Record<string, true>;
   error?: string;
   errorRevision?: number;
@@ -1812,6 +1814,7 @@ export class RuntimeEventStore {
         );
         const sessionWorkStartedAts = { ...current.sessionWorkStartedAts };
         const sessionStatuses = { ...current.sessionStatuses };
+        const sessionTodoProgress = { ...current.sessionTodoProgress };
         delete sessionStatuses[status.sessionId];
         sessionStatuses[status.sessionId] = status.state as SessionRuntimeState;
         if (status.workStartedAt === null) {
@@ -1819,16 +1822,35 @@ export class RuntimeEventStore {
         } else if (typeof status.workStartedAt === "string" && !Number.isNaN(Date.parse(status.workStartedAt))) {
           sessionWorkStartedAts[status.sessionId] = status.workStartedAt;
         }
+        if (status.todoProgress === null) {
+          sessionTodoProgress[status.sessionId] = null;
+        } else {
+          const progress = asRecord(status.todoProgress);
+          if (
+            Number.isSafeInteger(progress.completed) &&
+            Number(progress.completed) >= 0 &&
+            Number.isSafeInteger(progress.total) &&
+            Number(progress.total) > 0 &&
+            Number(progress.completed) <= Number(progress.total)
+          ) {
+            sessionTodoProgress[status.sessionId] = {
+              completed: Number(progress.completed),
+              total: Number(progress.total),
+            };
+          }
+        }
         while (Object.keys(sessionStatuses).length > MAX_SESSION_STATUSES) {
           const oldest = Object.keys(sessionStatuses)[0]!;
           delete sessionStatuses[oldest];
           delete sessionWorkStartedAts[oldest];
+          delete sessionTodoProgress[oldest];
         }
         this.set(
           {
             ...current,
             sessionStatuses,
             sessionWorkStartedAts,
+            sessionTodoProgress,
             unseenCompletions,
             sequence: event.sequence,
             audioCues: appendWebAudioCue(current.audioCues, event),
@@ -1947,6 +1969,7 @@ export class RuntimeEventStore {
       agentActive: false,
       sessionStatuses: clearRuntime ? undefined : this.snapshot.sessionStatuses,
       sessionWorkStartedAts: undefined,
+      sessionTodoProgress: undefined,
       audioCues: [],
       error: undefined,
     });

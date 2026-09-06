@@ -1,10 +1,9 @@
 import {
   IconArrowBackUp,
-  IconChevronLeft,
   IconFile,
   IconFiles,
-  IconFolder,
   IconGitCompare,
+  IconList,
   IconSearch,
   IconX,
 } from "@tabler/icons-react";
@@ -262,13 +261,16 @@ export function FileWorkspace({
           aria-label="Workspace explorer"
           aria-hidden={mobile && !navigationOpen}
           inert={mobile && !navigationOpen}>
-          <header>
-            <strong>
-              <IconFolder size={16} />
-              Explorer
-            </strong>
-            <button type="button" onClick={onSessions}>
-              <IconChevronLeft size={14} />
+          <header className="panel-header">
+            <span>
+              <strong>Explorer</strong>
+              {/* the session list's count has a counterpart here, but only once
+                  the inventory has actually arrived — 0 files while indexing is
+                  a wrong answer, not an empty one */}
+              {currentFiles.length ? <small>{currentFiles.length.toLocaleString()} files</small> : undefined}
+            </span>
+            <button className="panel-swap" type="button" onClick={onSessions}>
+              <IconList size={14} />
               Sessions
             </button>
           </header>

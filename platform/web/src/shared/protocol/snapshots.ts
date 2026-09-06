@@ -461,6 +461,10 @@ export interface FileSuggestionList {
   paths: string[];
 }
 
+export interface SessionTodoProgress {
+  completed: number;
+  total: number;
+}
 export interface SessionSummary {
   id: string;
   projectId: string;
@@ -471,6 +475,7 @@ export interface SessionSummary {
   createdAt: string;
   modifiedAt: string;
   workStartedAt?: string;
+  todoProgress?: SessionTodoProgress;
   userMessageCount: number;
   preview: string;
   active: boolean;

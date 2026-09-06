@@ -21,9 +21,10 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
-import type { SessionProjectPage, SessionSummary } from "../shared/protocol/snapshots";
+import type { SessionProjectPage, SessionSummary, SessionTodoProgress } from "../shared/protocol/snapshots";
 import { formatSessionActivity } from "../shared/format";
 import { SESSION_LIST_INITIAL_LIMIT, SESSION_LIST_MORE_LIMIT } from "../shared/session-list";
 import { showSessionRuntimeState } from "../shared/session-completions";
@@ -122,6 +123,7 @@ export function SessionSidebar({
   onReorderActiveSession,
 }: SidebarProps) {
   const [openMenu, setOpenMenu] = useState("");
+  const [liveOnly, setLiveOnly] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [generalOpen, setGeneralOpen] = useState(true);
   const [now, setNow] = useState(() => Date.now());
@@ -275,6 +277,94 @@ export function SessionSidebar({
     void reorder(kind, id, reordered);
   };
 
+  const normalizedQuery = query.trim();
+  const liveSessions = activeSessions.filter(isLiveSession);
+  const sessionsForProject = (project: SessionProject) => {
+    if (!liveOnly) return project.sessions;
+    if (normalizedQuery) return project.sessions.filter(isLiveSession);
+    return liveSessions.filter(session => session.projectId === project.id);
+  };
+  const displayedProjects = liveOnly
+    ? visibleProjects.filter(project => sessionsForProject(project).length > 0)
+    : visibleProjects;
+  const totalCount = pages.reduce((total, page) => total + page.totalCount, 0);
+  const flatResults = normalizedQuery
+    ? [...visibleProjects, ...(general ? [general] : [])]
+        .flatMap(project => sessionsForProject(project).map(session => ({ project, session })))
+        .sort((left, right) => Date.parse(right.session.modifiedAt) - Date.parse(left.session.modifiedAt))
+    : [];
+
+  const row = (session: SessionSummary, menuId: string, showProject = false) => (
+    <SessionRow
+      key={menuId}
+      session={session}
+      menuId={menuId}
+      menuOpen={openMenu === menuId}
+      busy={busy}
+      deleting={deleting}
+      completed={Boolean(unseenCompletions?.[session.id])}
+      now={now}
+      compact
+      showProject={showProject}
+      titleContent={highlightSessionTitle(sessionTitle(session), normalizedQuery)}
+      onSelect={selectSession}
+      onDelete={onDeleteSession}
+      onArchive={onArchiveSession}
+      onRename={onRenameSession}
+      onSetActive={onSetSessionActive}
+      onSetPinned={onSetSessionPinned}
+      onToggleMenu={toggleMenu}
+      onCloseMenu={() => closeMenu(true)}
+      onCopySessionId={id => announceCopy(id, "Session ID")}
+    />
+  );
+  const rows = (sessions: SessionSummary[], prefix: string) => {
+    const content: ReactNode[] = [];
+    let previousBucket = "";
+    for (const session of sessions) {
+      const bucket = sessionTimeBucket(session.modifiedAt, now);
+      if (bucket !== previousBucket) {
+        previousBucket = bucket;
+        content.push(
+          <div className="session-time-bucket" key={`${prefix}-${bucket}`}>
+            {bucket}
+          </div>,
+        );
+      }
+      content.push(row(session, `${prefix}-${session.id}`));
+    }
+    return content;
+  };
+  const controls = (project: SessionProject, page: SessionProjectPage | undefined, contextual = false) => {
+    if (!page || (liveOnly && !normalizedQuery) || (!page.nextCursor && page.sessions.length <= SESSION_LIST_INITIAL_LIMIT)) return null;
+    return (
+      <div className={`session-list-controls${contextual ? " is-contextual" : ""}`} key={`${project.id}-controls`}>
+        {page.nextCursor && (
+          <button
+            className="session-list-button"
+            type="button"
+            onClick={() => onLoadMore(project)}
+            disabled={projectLoading === project.id}>
+            {projectLoading === project.id
+              ? "Loading…"
+              : contextual
+                ? `Show more in ${project.label}`
+                : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
+          </button>
+        )}
+        {page.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
+          <button
+            className="session-list-button"
+            type="button"
+            onClick={() => onShowLess(project)}
+            disabled={projectLoading === project.id}>
+            Show less{contextual ? ` in ${project.label}` : ""}
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       <aside
@@ -283,12 +373,15 @@ export function SessionSidebar({
         aria-label="Projects and sessions"
         aria-hidden={mobile && !isOpen}
         inert={mobile && !isOpen}>
-        <div className="session-context-header">
-          <strong>All sessions</strong>
+        <div className="panel-header">
+          <span>
+            <strong>Sessions</strong>
+            <small>{projects.length} projects</small>
+          </span>
           {onShowFiles && (
-            <button className="session-context-files" type="button" onClick={onShowFiles}>
+            <button className="panel-swap" type="button" onClick={onShowFiles}>
               <IconFolder size={14} />
-              Files
+              Explorer
             </button>
           )}
           <button className="icon-button mobile-close" onClick={onClose} aria-label="Close navigation">
@@ -309,287 +402,237 @@ export function SessionSidebar({
         </label>
 
         <nav className="project-list">
-          <div className="project-heading">
-            <h2 className="nav-label">
-              <button
-                type="button"
-                aria-expanded={projectsOpen || Boolean(query.trim())}
-                onClick={() => setProjectsOpen(open => !open)}>
-                <span>Projects</span>
-                <IconChevronRight className={projectsOpen || query.trim() ? "is-expanded" : ""} size={13} />
-              </button>
-            </h2>
-            <div>
-              <button
-                className="project-add"
-                type="button"
-                onClick={onOpenArchives}
-                disabled={Boolean(projectBusy || deleting)}>
-                <IconArchive size={13} />
-                Archived
-              </button>
-              <button
-                className="project-add"
-                type="button"
-                onClick={onAddProject}
-                disabled={Boolean(projectBusy || deleting)}
-                aria-label="Add project">
-                <IconPlus size={14} />
-                Add project
-              </button>
+          {loading && !pages.length && <div className="sidebar-state">Loading sessions...</div>}
+          {normalizedQuery ? (
+            <div className="session-search-results">
+              {flatResults.length ? (
+                flatResults.map(({ project, session }) => row(session, `search-${project.id}-${session.id}`, true))
+              ) : !loading ? (
+                <div className="sidebar-state">No matching {liveOnly ? "live " : ""}sessions.</div>
+              ) : null}
+              {[...visibleProjects, ...(general ? [general] : [])].map(project =>
+                controls(
+                  project,
+                  pages.find(page => page.id === project.id),
+                  true,
+                ),
+              )}
             </div>
-          </div>
-          {(projectsOpen || Boolean(query.trim())) && loading && projects.length === 0 && (
-            <div className="sidebar-state">Loading sessions...</div>
-          )}
-          {(projectsOpen || Boolean(query.trim())) &&
-            visibleProjects.map(project => {
-              const expanded = Boolean(query.trim()) || expandedProjects.has(project.id);
-              const page = pages.find(candidate => candidate.id === project.id);
-              return (
-                <section
-                  className={`project-group${preview?.kind === "project" && preview.id === project.id ? " is-dragging" : ""}`}
-                  key={project.id}>
-                  <div className="project-row" data-reorder-kind="project" data-reorder-id={project.id}>
-                    <button
-                      type="button"
-                      className={`project-toggle ${project.active ? "is-active" : ""}`}
-                      onClick={() => onToggleProject(project.id)}
-                      onPointerDown={event =>
-                        startPointerReorder(
-                          event,
-                          "project",
-                          project.id,
-                          visibleProjects.map(item => item.id),
-                        )
-                      }
-                      onKeyDown={event =>
-                        keyboardReorder(
-                          event,
-                          "project",
-                          project.id,
-                          visibleProjects.map(item => item.id),
-                        )
-                      }
-                      aria-expanded={expanded}
-                      aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown">
-                      {expanded ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
-                      <span>{project.label}</span>
-                      <small>{page?.totalCount ?? project.sessions.length}</small>
-                    </button>
-                    <button
-                      className="project-new"
-                      type="button"
-                      onClick={() => onNewSession(project)}
-                      disabled={Boolean(busy || deleting || projectBusy)}
-                      aria-label={`New session in ${project.label}`}
-                      title={`New session in ${project.label}`}>
-                      <IconPlus size={14} />
-                    </button>
-                    <details
-                      className="session-menu project-menu"
-                      data-menu-id={`project-${project.id}`}
-                      open={openMenu === `project-${project.id}`}>
-                      <summary
-                        aria-label={`More options for ${project.label}`}
-                        aria-expanded={openMenu === `project-${project.id}`}
-                        title="More options"
-                        onClick={event => {
-                          event.preventDefault();
-                          toggleMenu(`project-${project.id}`, event.currentTarget);
-                        }}>
-                        <IconDots size={15} />
-                      </summary>
-                      <div className="session-menu-popover">
-                        <button
-                          type="button"
-                          disabled={Boolean(projectBusy || busy || deleting)}
-                          onClick={() => {
-                            closeMenu(true);
-                            onRenameProject(project);
-                          }}>
-                          <IconPencil size={14} />
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            closeMenu(true);
-                            announceCopy(project.cwd, "Project path");
-                          }}>
-                          <IconCopy size={14} />
-                          Copy path
-                        </button>
-                        <button
-                          type="button"
-                          disabled={Boolean(projectBusy || busy || deleting)}
-                          onClick={() => {
-                            closeMenu(true);
-                            onWorktreeSetup(project);
-                          }}>
-                          <IconTerminal2 size={14} />
-                          Worktree setup
-                        </button>
-                        <button
-                          type="button"
-                          disabled={Boolean(projectBusy || busy || deleting)}
-                          onClick={() => {
-                            closeMenu(true);
-                            onArchiveProject(project);
-                          }}>
-                          <IconArchive size={14} />
-                          Archive
-                        </button>
-                        <button
-                          className="is-danger"
-                          type="button"
-                          disabled={Boolean(projectBusy || busy || deleting)}
-                          onClick={() => {
-                            closeMenu(true);
-                            onRemoveProject(project);
-                          }}>
-                          <IconTrash size={14} />
-                          Remove project
-                        </button>
-                      </div>
-                    </details>
-                  </div>
-                  {expanded && (
-                    <div className="project-sessions">
-                      {project.sessions.map(session => (
-                        <SessionRow
-                          key={session.id}
-                          session={session}
-                          menuId={`project-${project.id}-${session.id}`}
-                          menuOpen={openMenu === `project-${project.id}-${session.id}`}
-                          busy={busy}
-                          deleting={deleting}
-                          completed={Boolean(unseenCompletions?.[session.id])}
-                          now={now}
-                          onSelect={selectSession}
-                          onDelete={onDeleteSession}
-                          onArchive={onArchiveSession}
-                          onRename={onRenameSession}
-                          onSetActive={onSetSessionActive}
-                          onSetPinned={onSetSessionPinned}
-                          onToggleMenu={toggleMenu}
-                          onCloseMenu={() => closeMenu(true)}
-                          onCopySessionId={id => announceCopy(id, "Session ID")}
-                        />
-                      ))}
-                      {page && (page.sessions.length > SESSION_LIST_INITIAL_LIMIT || page.nextCursor) && (
-                        <div className="session-list-controls">
-                          {page.nextCursor && (
-                            <button
-                              className="session-list-button"
-                              type="button"
-                              onClick={() => onLoadMore(project)}
-                              disabled={projectLoading === project.id}>
-                              {projectLoading === project.id
-                                ? "Loading…"
-                                : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
-                            </button>
-                          )}
-                          {page.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
-                            <button
-                              className="session-list-button"
-                              type="button"
-                              onClick={() => onShowLess(project)}
-                              disabled={projectLoading === project.id}>
-                              Show less
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
-          {(projectsOpen || Boolean(query.trim())) &&
-            !loading &&
-            projects.length === 0 &&
-            (!query || !general?.sessions.length) && (
-              <div className="sidebar-state">
-                {query ? "No matching sessions." : "No projects yet. Add a folder to start."}
-              </div>
-            )}
-          {general && (
-            <section className="general-session-group" aria-labelledby="general-sessions-heading">
+          ) : (
+            <>
               <div className="project-heading">
-                <h2 className="nav-label" id="general-sessions-heading">
-                  <button type="button" aria-expanded={generalOpen} onClick={() => setGeneralOpen(open => !open)}>
-                    <span>General</span>
-                    <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
+                <h2 className="nav-label">
+                  <button type="button" aria-expanded={projectsOpen} onClick={() => setProjectsOpen(open => !open)}>
+                    <span>Projects</span>
+                    <IconChevronRight className={projectsOpen ? "is-expanded" : ""} size={13} />
                   </button>
                 </h2>
                 <div>
                   <button
                     className="project-add"
                     type="button"
-                    onClick={onNewGeneral}
-                    disabled={Boolean(busy || deleting || projectBusy)}
-                    aria-label="New general session"
-                    title="New general session">
+                    onClick={onAddProject}
+                    disabled={Boolean(projectBusy || deleting)}
+                    aria-label="Add project">
                     <IconPlus size={14} />
+                    Add project
                   </button>
                 </div>
               </div>
-              {generalOpen && (
-                <div className="active-session-list">
-                  {general.sessions.length ? (
-                    general.sessions.map(session => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        menuId={`general-${session.id}`}
-                        menuOpen={openMenu === `general-${session.id}`}
-                        busy={busy}
-                        deleting={deleting}
-                        completed={Boolean(unseenCompletions?.[session.id])}
-                        now={now}
-                        onSelect={selectSession}
-                        onDelete={onDeleteSession}
-                        onArchive={onArchiveSession}
-                        onRename={onRenameSession}
-                        onSetActive={onSetSessionActive}
-                        onSetPinned={onSetSessionPinned}
-                        onToggleMenu={toggleMenu}
-                        onCloseMenu={() => closeMenu(true)}
-                        onCopySessionId={id => announceCopy(id, "Session ID")}
-                      />
-                    ))
-                  ) : (
-                    <p className="active-session-empty">Search and work with files accessible on this PC.</p>
-                  )}
-                  {(general.sessions.length > SESSION_LIST_INITIAL_LIMIT || generalPage?.nextCursor) && (
-                    <div className="session-list-controls">
-                      {generalPage?.nextCursor && (
-                        <button
-                          className="session-list-button"
-                          type="button"
-                          onClick={() => onLoadMore(general)}
-                          disabled={projectLoading === general.id}>
-                          {projectLoading === general.id ? "Loading…" : "Show more"}
-                        </button>
-                      )}
-                      {general.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
-                        <button
-                          className="session-list-button"
-                          type="button"
-                          onClick={() => onShowLess(general)}
-                          disabled={projectLoading === general.id}>
-                          Show less
-                        </button>
-                      )}
+              {projectsOpen && displayedProjects.map(project => {
+                const expanded = expandedProjects.has(project.id);
+                const page = pages.find(candidate => candidate.id === project.id);
+                const projectSessions = sessionsForProject(project);
+                const projectLive = liveSessions.filter(session => session.projectId === project.id);
+                const hiddenState = !expanded
+                  ? projectLive.some(session => session.runtimeState === "attention")
+                    ? "attention"
+                    : projectLive.some(session => session.runtimeState === "running")
+                      ? "running"
+                      : ""
+                  : "";
+                return (
+                  <section
+                    className={`project-group${preview?.kind === "project" && preview.id === project.id ? " is-dragging" : ""}`}
+                    key={project.id}>
+                    <div className="project-row" data-reorder-kind="project" data-reorder-id={project.id}>
+                      <button
+                        type="button"
+                        className={`project-toggle ${project.active ? "is-active" : ""}`}
+                        onClick={() => onToggleProject(project.id)}
+                        onPointerDown={event =>
+                          startPointerReorder(
+                            event,
+                            "project",
+                            project.id,
+                            visibleProjects.map(item => item.id),
+                          )
+                        }
+                        onKeyDown={event =>
+                          keyboardReorder(
+                            event,
+                            "project",
+                            project.id,
+                            visibleProjects.map(item => item.id),
+                          )
+                        }
+                        aria-expanded={expanded}
+                        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                        title={project.cwd}>
+                        {expanded ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
+                        <span>{project.label}</span>
+                        <small className={hiddenState ? "has-live" : ""}>
+                          {hiddenState && (
+                            <i className={`session-runtime-state is-${hiddenState}`} aria-hidden="true" />
+                          )}
+                          {hiddenState ? `${projectLive.length} · ` : ""}
+                          {page?.totalCount ?? project.sessions.length}
+                        </small>
+                      </button>
+                      <button
+                        className="project-new"
+                        type="button"
+                        onClick={() => onNewSession(project)}
+                        disabled={Boolean(busy || deleting || projectBusy)}
+                        aria-label={`New session in ${project.label}`}
+                        title={`New session in ${project.label}`}>
+                        <IconPlus size={14} />
+                      </button>
+                      <details
+                        className="session-menu project-menu"
+                        data-menu-id={`project-${project.id}`}
+                        open={openMenu === `project-${project.id}`}>
+                        <summary
+                          aria-label={`More options for ${project.label}`}
+                          aria-expanded={openMenu === `project-${project.id}`}
+                          title="More options"
+                          onClick={event => {
+                            event.preventDefault();
+                            toggleMenu(`project-${project.id}`, event.currentTarget);
+                          }}>
+                          <IconDots size={15} />
+                        </summary>
+                        <div className="session-menu-popover">
+                          <button
+                            type="button"
+                            disabled={Boolean(projectBusy || busy || deleting)}
+                            onClick={() => {
+                              closeMenu(true);
+                              onRenameProject(project);
+                            }}>
+                            <IconPencil size={14} />
+                            Rename
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              closeMenu(true);
+                              announceCopy(project.cwd, "Project path");
+                            }}>
+                            <IconCopy size={14} />
+                            Copy path
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(projectBusy || busy || deleting)}
+                            onClick={() => {
+                              closeMenu(true);
+                              onWorktreeSetup(project);
+                            }}>
+                            <IconTerminal2 size={14} />
+                            Worktree setup
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(projectBusy || busy || deleting)}
+                            onClick={() => {
+                              closeMenu(true);
+                              onArchiveProject(project);
+                            }}>
+                            <IconArchive size={14} />
+                            Archive
+                          </button>
+                          <button
+                            className="is-danger"
+                            type="button"
+                            disabled={Boolean(projectBusy || busy || deleting)}
+                            onClick={() => {
+                              closeMenu(true);
+                              onRemoveProject(project);
+                            }}>
+                            <IconTrash size={14} />
+                            Remove project
+                          </button>
+                        </div>
+                      </details>
                     </div>
-                  )}
+                    {expanded && (
+                      <div className="project-sessions">
+                        {projectSessions.length ? rows(projectSessions, project.id) : <p className="session-empty">No live sessions.</p>}
+                        {controls(project, page)}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+              {projectsOpen && !loading && !displayedProjects.length && (!general || liveOnly) && (
+                <div className="sidebar-state">
+                  {liveOnly ? "No sessions are live." : "No projects yet. Add a folder to start."}
                 </div>
               )}
-            </section>
+              {general && (!liveOnly || sessionsForProject(general).length > 0) && (
+                <section className="general-session-group" aria-labelledby="general-sessions-heading">
+                  <div className="project-heading">
+                    <h2 className="nav-label" id="general-sessions-heading">
+                      <button type="button" aria-expanded={generalOpen} onClick={() => setGeneralOpen(open => !open)}>
+                        <span>General</span>
+                        <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
+                      </button>
+                    </h2>
+                    <div>
+                      <button
+                        className="project-add"
+                        type="button"
+                        onClick={onNewGeneral}
+                        disabled={Boolean(busy || deleting || projectBusy)}
+                        aria-label="New general session"
+                        title="New general session">
+                        <IconPlus size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  {generalOpen && (
+                    <div className="project-sessions">
+                      {sessionsForProject(general).length ? (
+                        rows(sessionsForProject(general), "general")
+                      ) : (
+                        <p className="session-empty">Search and work with files accessible on this PC.</p>
+                      )}
+                      {controls(general, generalPage)}
+                    </div>
+                  )}
+                </section>
+              )}
+            </>
           )}
         </nav>
 
+        <footer className="session-sidebar-footer">
+          <span>
+            {liveOnly
+              ? normalizedQuery
+                ? `${flatResults.length} live matches`
+                : `${liveSessions.length} sessions`
+              : `${totalCount} sessions`}
+            {!liveOnly && liveSessions.length > 0 ? <em> · {liveSessions.length} live</em> : null}
+          </span>
+          <button
+            type="button"
+            aria-pressed={liveOnly}
+            onClick={() => setLiveOnly(value => !value)}>
+            Live only
+          </button>
+        </footer>
         <div className="sr-only" aria-live="polite">
           {announcement}
         </div>
@@ -597,6 +640,27 @@ export function SessionSidebar({
     </>
   );
 }
+
+export function SessionProgress({
+  progress,
+  className = "",
+}: {
+  progress?: SessionTodoProgress;
+  className?: string;
+}) {
+  if (!progress || progress.total <= 0 || progress.completed < 0 || progress.completed > progress.total) return null;
+  return (
+    <span
+      className={`session-progress ${className}`.trim()}
+      role="img"
+      aria-label={`${progress.completed} of ${progress.total} tasks complete`}>
+      {Array.from({ length: Math.min(progress.total, 100) }, (_, index) => (
+        <i className={index < progress.completed ? "is-complete" : ""} key={index} />
+      ))}
+    </span>
+  );
+}
+
 
 export function SessionRow({
   session,
@@ -606,7 +670,9 @@ export function SessionRow({
   deleting,
   completed,
   now,
+  compact = false,
   showProject = false,
+  titleContent,
   reorderKind,
   dragging = false,
   onPointerDown,
@@ -628,7 +694,9 @@ export function SessionRow({
   deleting: string;
   completed: boolean;
   now: number;
+  compact?: boolean;
   showProject?: boolean;
+  titleContent?: ReactNode;
   reorderKind?: "active";
   dragging?: boolean;
   onPointerDown?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
@@ -648,58 +716,74 @@ export function SessionRow({
   const workStartedAt = session.workStartedAt ? Date.parse(session.workStartedAt) : Number.NaN;
   const working = !Number.isNaN(workStartedAt);
   const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
+  const progress = working ? session.todoProgress : undefined;
+  const state = completed ? "complete" : session.runtimeState;
+  const stateLabel = completed ? "New response" : session.runtimeState;
+  const parentTitle = session.runningUnderParentSessionId ? "View this running session through its parent" : undefined;
+  const linkProps = {
+    type: "button" as const,
+    onClick: () => onSelect(session),
+    onPointerDown,
+    onKeyDown,
+    disabled: unavailable,
+    title: parentTitle,
+    "aria-current": session.active ? ("page" as const) : undefined,
+    "aria-keyshortcuts": reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+  };
+  const stateIndicator =
+    busy === session.id || deleting === session.id ? (
+      <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
+    ) : (
+      <span className={`session-runtime-state is-${state}`} aria-label={stateLabel} title={stateLabel} />
+    );
 
   return (
     <div
-      className={`session-row ${session.active ? "is-active" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`}
+      className={`session-row state-${state} ${session.active ? "is-active" : ""}${compact ? " is-compact" : ""}${working ? " is-working" : ""}${reorderKind ? " is-reorderable" : ""}${dragging ? " is-dragging" : ""}`}
       data-reorder-kind={reorderKind}
       data-reorder-id={reorderKind ? session.id : undefined}>
-      <button
-        className={`session-link ${session.active ? "is-active" : ""}`}
-        type="button"
-        onClick={() => onSelect(session)}
-        onPointerDown={onPointerDown}
-        onKeyDown={onKeyDown}
-        disabled={unavailable}
-        title={session.runningUnderParentSessionId ? "View this running session through its parent" : undefined}
-        aria-current={session.active ? "page" : undefined}
-        aria-keyshortcuts={reorderKind ? "Alt+ArrowUp Alt+ArrowDown" : undefined}>
-        <span className="session-copy">
-          <strong>{sessionTitle(session)}</strong>
-          <small>
-            {showProject ? (
-              `${session.cwdLabel} · `
-            ) : (
-              <>
-                <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>
-                  {displayDate(session.createdAt)}
-                </time>
-                {" · "}
-              </>
-            )}
-            <time
-              dateTime={working ? session.workStartedAt : session.modifiedAt}
-              title={
-                working
-                  ? `Working since ${displayTime(session.workStartedAt!)}`
-                  : `Last active ${displayTime(session.modifiedAt)}`
-              }>
-              {activity}
-            </time>
+      {compact ? (
+        <button className={`session-link ${session.active ? "is-active" : ""}${progress ? " has-progress" : ""}`} {...linkProps}>
+          {stateIndicator}
+          <strong
+            className="session-compact-title"
+            title={`Created ${displayTime(session.createdAt)} · Last active ${displayTime(session.modifiedAt)}`}>
+            {titleContent ?? sessionTitle(session)}
+          </strong>
+          <small className="session-compact-meta">
+            {showProject ? session.cwdLabel : compactSessionActivity(activity)}
           </small>
-        </span>
-        {busy === session.id || deleting === session.id ? (
-          <span className="status-orb success" aria-label={deleting === session.id ? "Deleting" : "Updating"} />
-        ) : (
-          showSessionRuntimeState(session.runtimeState, completed) && (
-            <span
-              className={`session-runtime-state ${completed ? "is-complete" : `is-${session.runtimeState}`}`}
-              aria-label={completed ? "New response" : session.runtimeState}
-              title={completed ? "New response" : session.runtimeState}
-            />
-          )
-        )}
-      </button>
+          <SessionProgress progress={progress} />
+        </button>
+      ) : (
+        <button className={`session-link ${session.active ? "is-active" : ""}`} {...linkProps}>
+          <span className="session-copy">
+            <strong>{sessionTitle(session)}</strong>
+            <small>
+              {showProject ? (
+                `${session.cwdLabel} · `
+              ) : (
+                <>
+                  <time dateTime={session.createdAt} title={`Created ${displayTime(session.createdAt)}`}>
+                    {displayDate(session.createdAt)}
+                  </time>
+                  {" · "}
+                </>
+              )}
+              <time
+                dateTime={working ? session.workStartedAt : session.modifiedAt}
+                title={
+                  working
+                    ? `Working since ${displayTime(session.workStartedAt!)}`
+                    : `Last active ${displayTime(session.modifiedAt)}`
+                }>
+                {activity}
+              </time>
+            </small>
+          </span>
+          {showSessionRuntimeState(session.runtimeState, completed) ? stateIndicator : null}
+        </button>
+      )}
       <details className="session-menu" data-menu-id={menuId} open={menuOpen}>
         <summary
           aria-label={`More options for ${sessionTitle(session)}`}
@@ -791,6 +875,39 @@ function orderByIds<T extends { id: string }>(items: T[], ids?: string[]): T[] {
   const byId = new Map(items.map(item => [item.id, item]));
   return [...ids.flatMap(id => byId.get(id) ?? []), ...items.filter(item => !ids.includes(item.id))];
 }
+function isLiveSession(session: SessionSummary): boolean {
+  return session.runtimeState === "running" || session.runtimeState === "attention";
+}
+
+function compactSessionActivity(activity: string): string {
+  return activity.replace(/^Working for /, "").replace(/ ago$/, "");
+}
+
+function sessionTimeBucket(value: string, now: number): "Today" | "Yesterday" | "Earlier" {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return "Earlier";
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  if (timestamp >= today.getTime()) return "Today";
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  return timestamp >= yesterday.getTime() ? "Yesterday" : "Earlier";
+}
+
+function highlightSessionTitle(title: string, query: string): ReactNode {
+  if (!query) return title;
+  const index = title.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  if (index < 0) return title;
+  return (
+    <>
+      {title.slice(0, index)}
+      <mark>{title.slice(index, index + query.length)}</mark>
+      {title.slice(index + query.length)}
+    </>
+  );
+}
+
+
 
 function moveBefore(ids: string[], id: string, before?: string): string[] {
   const next = ids.filter(value => value !== id);

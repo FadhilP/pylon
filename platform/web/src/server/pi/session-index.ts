@@ -89,6 +89,7 @@ export interface SessionIndexOptions {
   /** Model pricing, used to split a delegated total that was logged without one. */
   rates?: UsageRateLookup;
   workStartedAtFor?: (sessionId: string) => string | undefined;
+  todoProgressFor?: (sessionId: string) => SessionSummary["todoProgress"];
   runningUnderParentSessionIdFor?: (sessionId: string) => string | undefined;
 }
 
@@ -402,6 +403,7 @@ export class SessionIndex {
     const owner = metadata.owner;
     const project = projectFor(session);
     const workStartedAt = options.workStartedAtFor?.(session.id);
+    const todoProgress = options.todoProgressFor?.(session.id);
     const runningUnderParentSessionId = options.runningUnderParentSessionIdFor?.(session.id);
     const parent = owner ? this.parentSession(owner, sessionLookup) : undefined;
     const parentTitle = parent ? (parent.name || parent.firstMessage || "Untitled session").slice(0, 200) : undefined;
@@ -417,6 +419,7 @@ export class SessionIndex {
       createdAt: session.created.toISOString(),
       modifiedAt: session.modified.toISOString(),
       ...(workStartedAt ? { workStartedAt } : {}),
+      ...(todoProgress ? { todoProgress } : {}),
       userMessageCount,
       preview: session.firstMessage.slice(0, 500),
       active: session.id === options.activeId,

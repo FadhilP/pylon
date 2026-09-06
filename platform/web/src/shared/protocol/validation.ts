@@ -1573,6 +1573,14 @@ function validSessionSummary(value: unknown, projectId?: string): boolean {
     !Number.isNaN(Date.parse(value.modifiedAt)) &&
     (value.workStartedAt === undefined ||
       (typeof value.workStartedAt === "string" && !Number.isNaN(Date.parse(value.workStartedAt)))) &&
+    (value.todoProgress === undefined ||
+      (record(value.todoProgress) &&
+        Number.isSafeInteger(value.todoProgress.completed) &&
+        (value.todoProgress.completed as number) >= 0 &&
+        Number.isSafeInteger(value.todoProgress.total) &&
+        (value.todoProgress.total as number) > 0 &&
+        (value.todoProgress.total as number) <= 100 &&
+        (value.todoProgress.completed as number) <= (value.todoProgress.total as number))) &&
     Number.isSafeInteger(value.userMessageCount) &&
     (value.userMessageCount as number) >= 0 &&
     typeof value.preview === "string" &&

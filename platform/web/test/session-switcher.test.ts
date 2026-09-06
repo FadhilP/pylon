@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { groupSessionSwitcherSessions } from "../src/shared/session-list.ts";
+import { applySessionLiveFields, groupSessionSwitcherSessions } from "../src/shared/session-list.ts";
 import type { SessionSummary } from "../src/shared/protocol/snapshots.ts";
 
 function session(id: string, projectId: string, name: string, modifiedAt = "2026-01-01T00:00:00.000Z"): SessionSummary {
@@ -78,4 +78,27 @@ test("composer session search prioritizes the current project, then sorts every 
     ["current-project", "newest-other", "beta", "gamma"],
   );
   assert.equal(groupSessionSwitcherSessions(catalog, "retry", "pylon").inactiveLimited, false);
+});
+
+test("live session fields update and explicitly clear transient work data", () => {
+  const original = {
+    ...session("current", "pylon", "Current work"),
+    workStartedAt: "2026-01-01T00:00:00.000Z",
+    todoProgress: { completed: 1, total: 3 },
+  };
+  const updated = applySessionLiveFields(original, {
+    states: { current: "attention" },
+    workStartedAts: { current: "2026-01-01T00:01:00.000Z" },
+    todoProgress: { current: { completed: 2, total: 3 } },
+  });
+  assert.equal(updated.runtimeState, "attention");
+  assert.equal(updated.workStartedAt, "2026-01-01T00:01:00.000Z");
+  assert.deepEqual(updated.todoProgress, { completed: 2, total: 3 });
+
+  const cleared = applySessionLiveFields(updated, {
+    workStartedAts: { current: null },
+    todoProgress: { current: null },
+  });
+  assert.equal(cleared.workStartedAt, undefined);
+  assert.equal(cleared.todoProgress, undefined);
 });

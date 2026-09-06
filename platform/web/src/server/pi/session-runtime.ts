@@ -103,6 +103,7 @@ import type {
   RuntimePolicyReadModel,
   RuntimeSnapshot,
   SessionListQuery,
+  SessionTodoProgress,
   SkillListSnapshot,
   SessionListSnapshot,
   StateQLCommandInput,
@@ -3262,9 +3263,11 @@ export class SessionRuntime implements PiDriver {
     sessionPath?: string;
     name?: string;
     workStartedAt?: string;
+    todoProgress?: SessionTodoProgress;
     userMessageCount: number;
   } {
     const runtime = this.requireRuntime();
+    const todoProgress = this.todoProgress();
     return {
       sessionId: runtime.session.sessionId,
       generation: this.gate.generation,
@@ -3272,10 +3275,16 @@ export class SessionRuntime implements PiDriver {
       sessionPath: runtime.session.sessionFile,
       name: runtime.session.sessionManager.getSessionName(),
       workStartedAt: this.workStartedAt,
+      ...(todoProgress ? { todoProgress } : {}),
       userMessageCount: runtime.session.getSessionStats().userMessages,
     };
   }
 
+  private todoProgress(): SessionTodoProgress | undefined {
+    const todos = this.operational.continuity.work?.todos;
+    if (!todos?.length) return undefined;
+    return { completed: todos.filter(todo => todo.status === "done").length, total: todos.length };
+  }
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;

@@ -405,6 +405,7 @@ test("session index pages projects, counts user messages, and searches unloaded 
       generation: 7,
       stateFor: () => "sleeping" as const,
       workStartedAtFor: (id: string) => (id === second.getSessionId() ? workStartedAt : undefined),
+      todoProgressFor: (id: string) => (id === second.getSessionId() ? { completed: 1, total: 3 } : undefined),
     };
     const page = await index.list({ projectId: projectIdForCwd(cwd), limit: 1 }, options);
     assert.equal(page.projects[0]?.sessions.length, 1);
@@ -414,6 +415,7 @@ test("session index pages projects, counts user messages, and searches unloaded 
     const search = await index.list({ query: "Second searchable" }, options);
     assert.equal(search.projects[0]?.sessions[0]?.id, second.getSessionId());
     assert.equal(search.projects[0]?.sessions[0]?.workStartedAt, workStartedAt);
+    assert.deepEqual(search.projects[0]?.sessions[0]?.todoProgress, { completed: 1, total: 3 });
 
     const draft = {
       id: "draft-session",
@@ -1659,6 +1661,7 @@ test("session status publishes work timer changes even when runtime state is unc
     driver: { runtimeState: () => state, runtimeDetails: () => ({ workStartedAt }) },
     lastState: "running",
     lastWorkStartedAt: undefined,
+    lastTodoProgress: "",
   };
   const internal = coordinator as any;
   internal.generation = 1;
@@ -1681,6 +1684,38 @@ test("session status publishes work timer changes even when runtime state is unc
   );
 });
 
+test("session status publishes todo progress changes and explicit clears", () => {
+  const coordinator = new RuntimeCoordinator();
+  const events: Array<{ todoProgress?: { completed: number; total: number } | null }> = [];
+  coordinator.subscribe(event => {
+    if (event.type === "session.status") events.push(event);
+  });
+  let todoProgress: { completed: number; total: number } | undefined;
+  const slot = {
+    driver: { runtimeState: () => "running", runtimeDetails: () => ({ todoProgress }) },
+    lastState: "running",
+    lastWorkStartedAt: undefined,
+    lastTodoProgress: "",
+  };
+  const internal = coordinator as any;
+  internal.generation = 1;
+  internal.selectedId = "session";
+  internal.slots.set("session", slot);
+
+  internal.publishStatus("session");
+  todoProgress = { completed: 1, total: 3 };
+  internal.publishStatus("session");
+  todoProgress = { completed: 2, total: 3 };
+  internal.publishStatus("session");
+  todoProgress = undefined;
+  internal.publishStatus("session");
+
+  assert.deepEqual(
+    events.map(event => event.todoProgress),
+    [{ completed: 1, total: 3 }, { completed: 2, total: 3 }, null],
+  );
+});
+
 test("terminal completion is not discarded while other runtime work remains active", () => {
   const coordinator = new RuntimeCoordinator();
   const events: any[] = [];
@@ -1692,6 +1727,7 @@ test("terminal completion is not discarded while other runtime work remains acti
     driver: { runtimeState: () => "running", runtimeDetails: () => ({ workStartedAt: "2026-07-30T10:00:00.000Z" }) },
     lastState: "running",
     lastWorkStartedAt: "2026-07-30T10:00:00.000Z",
+    lastTodoProgress: "",
   });
 
   internal.publishStatus("background", true, "turn-complete");
@@ -1702,6 +1738,7 @@ test("terminal completion is not discarded while other runtime work remains acti
     sessionGeneration: 1,
     state: "running",
     workStartedAt: "2026-07-30T10:00:00.000Z",
+    todoProgress: null,
     completed: true,
     cue: "turn-complete",
   });

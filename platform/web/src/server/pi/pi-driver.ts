@@ -35,6 +35,7 @@ import type {
   RuntimeSnapshot,
   SessionListQuery,
   SessionListSnapshot,
+  SessionTodoProgress,
   SkillListSnapshot,
   UsageQuery,
   UsageSnapshot,
@@ -321,6 +322,7 @@ export type DriverEvent =
       sessionGeneration: number;
       state: SessionRuntimeState;
       workStartedAt?: string | null;
+      todoProgress?: SessionTodoProgress | null;
       completed?: boolean;
       cue?: "turn-complete" | "attention";
     }
