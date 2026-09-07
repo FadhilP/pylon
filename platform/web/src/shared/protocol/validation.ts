@@ -1527,6 +1527,8 @@ export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnaps
     value.projects.length > 100 ||
     !Array.isArray(value.sessions) ||
     value.sessions.length > 100 ||
+    !Array.isArray(value.sources) ||
+    value.sources.length > 500 ||
     !Number.isSafeInteger(value.totalSessionCount) ||
     (value.totalSessionCount as number) < 0 ||
     (value.nextCursor !== undefined && !identifier(value.nextCursor))
@@ -1542,6 +1544,17 @@ export function isArchiveListSnapshot(value: unknown): value is ArchiveListSnaps
         (project.sessionCount as number) >= 0 &&
         typeof project.archivedAt === "string" &&
         !Number.isNaN(Date.parse(project.archivedAt)),
+    )
+  )
+    return false;
+  if (
+    !value.sources.every(
+      source =>
+        record(source) &&
+        identifier(source.id) &&
+        boundedString(source.label, 500) &&
+        Number.isSafeInteger(source.count) &&
+        (source.count as number) >= 0,
     )
   )
     return false;

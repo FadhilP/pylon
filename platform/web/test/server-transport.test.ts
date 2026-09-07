@@ -324,6 +324,7 @@ class FakeDriver implements PiDriver {
       sessionGeneration: this.current.sessionGeneration,
       projects: [],
       sessions: [],
+      sources: [],
       totalSessionCount: 0,
     });
   }

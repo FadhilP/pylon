@@ -6,6 +6,7 @@ import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type {
   ArchiveListQuery,
   ArchiveListSnapshot,
+  ArchiveSourceSummary,
   ArchivedProjectSummary,
   ArchivedSessionSummary,
   SessionListSnapshot,
@@ -270,6 +271,7 @@ export class SessionIndex {
         sessionGeneration: options.generation,
         projects: [],
         sessions: [],
+        sources: [],
         totalSessionCount: 0,
       };
     }
@@ -292,7 +294,7 @@ export class SessionIndex {
         archivedAt: project.archivedAt!,
       }));
     const archiveRecords = new Map(registry.listArchivedSessions().map(record => [record.id, record.archivedAt]));
-    const source = this.sessions
+    const matching = this.sessions
       .filter(session => archiveRecords.has(session.id))
       .filter(session => !archivedProjectIds.has(projectIdFor(session)))
       .filter(
@@ -303,6 +305,18 @@ export class SessionIndex {
             .includes(query),
       )
       .sort((left, right) => Date.parse(archiveRecords.get(right.id)!) - Date.parse(archiveRecords.get(left.id)!));
+    /* The sources are counted over everything the search matched, not over the
+       page — a count that only described one page would promise rows the next
+       press cannot show. */
+    const counts = new Map<string, ArchiveSourceSummary>();
+    for (const session of matching) {
+      const id = projectIdFor(session);
+      const existing = counts.get(id);
+      if (existing) existing.count++;
+      else counts.set(id, { id, label: projectFor(session)?.label ?? basename(session.cwd), count: 1 });
+    }
+    const sources = [...counts.values()].sort((left, right) => left.label.localeCompare(right.label));
+    const source = input.projectId ? matching.filter(session => projectIdFor(session) === input.projectId) : matching;
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
     const offset = cursorId ? source.findIndex(session => session.id === cursorId) + 1 : 0;
     const limit = Math.min(100, Math.max(1, input.limit ?? 20));
@@ -317,8 +331,11 @@ export class SessionIndex {
     return {
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: options.generation,
-      projects,
+      /* A chosen source is a project's sessions, so the archived-projects
+         section is not part of that answer. */
+      projects: input.projectId ? [] : projects,
       sessions,
+      sources,
       totalSessionCount: source.length,
       ...(offset + page.length < source.length && page.length ? { nextCursor: encodeCursor(page.at(-1)!.id) } : {}),
     };

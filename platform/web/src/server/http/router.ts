@@ -803,6 +803,7 @@ export class ServerTransport {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? "";
     const generation = Number(url.searchParams.get("generation"));
+    const projectId = url.searchParams.get("project")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 100 : Number(rawLimit);
     const direction = url.searchParams.get("direction") ?? "before";
@@ -905,6 +906,7 @@ export class ServerTransport {
     this.requireTab(request);
     const query = url.searchParams.get("q")?.trim() ?? "";
     const generation = Number(url.searchParams.get("generation"));
+    const projectId = url.searchParams.get("project")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 15 : Number(rawLimit);
     if (query.length > 200) throw httpError(400, "query is too long");
@@ -1043,13 +1045,15 @@ export class ServerTransport {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? undefined;
     const query = url.searchParams.get("q")?.trim() || undefined;
+    const projectId = url.searchParams.get("project")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 20 : Number(rawLimit);
     if (cursor && (!/^[A-Za-z0-9_-]{1,128}$/.test(cursor) || !decodeSessionCursor(cursor)))
       throw httpError(400, "invalid cursor");
     if (query && query.length > 200) throw httpError(400, "query is too long");
+    if (projectId && !/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw httpError(400, "invalid project");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid limit");
-    const result = await this.driver.listArchived({ cursor, query, limit });
+    const result = await this.driver.listArchived({ cursor, query, limit, projectId });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing archives");
     this.send(response, 200, result);

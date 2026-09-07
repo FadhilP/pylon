@@ -37,7 +37,7 @@
   .brand-copy span { color: var(--text-muted); font-size: 12px; line-height: 1.3; }
   .icon-button.mobile-close, .icon-button.mobile-menu { display: none; }
   kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-raised); color: var(--text-muted); font-size: 12px; box-shadow: 0 1px 0 var(--line); }
-  .nav-label { color: var(--text-muted); font-size: 12px; font-weight: 600; }
+  .nav-label { color: var(--text-muted); font-size: 12.5px; font-weight: 600; }
   .nav-label button { display: flex; width: 100%; align-items: center; gap: 5px; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; }
   .nav-label button svg { transition: transform 120ms ease; }
   .nav-label button svg.is-expanded { transform: rotate(90deg); }
@@ -201,7 +201,7 @@
   .empty-state strong { color: var(--text-soft); font-size: 12px; }
   .empty-state span { font-size: 12px; }
   .session-row { display: grid; min-height: 58px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; border-radius: 7px; transition: background-color var(--motion-fast) ease; }
-  .session-row + .session-row { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+  .session-row + .session-row { border-top: 1px solid color-mix(in srgb, var(--line) 0%, transparent); }
   .session-row:hover, .session-row.is-active { background: var(--surface-subtle); }
   .session-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
   .session-copy strong, .session-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -329,7 +329,7 @@
   .session-search kbd { padding: 1px 4px; font-size: 10px; }
   .project-list { min-height: 0; flex: 1; overflow: auto; padding: 4px 0 8px; -ms-overflow-style: none; scrollbar-width: none; }
   .project-list::-webkit-scrollbar { display: none; }
-  .project-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 6px 3px 10px; }
+  .project-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 6px 3px 4px; }
   .project-heading > div { display: flex; align-items: center; gap: 2px; }
   .project-add { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 5px; color: var(--text-muted); font-size: 12px; transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
   .project-add:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
@@ -492,40 +492,79 @@
   .archive-dialog > header { display: flex; min-height: 52px; align-items: center; justify-content: space-between; padding: 0 14px 0 17px; border-bottom: 1px solid var(--line); }
   .archive-dialog > header > div { display: flex; align-items: center; gap: 9px; }
   .archive-dialog > header strong { font-size: 14px; }
-  .archive-search { display: flex; min-height: 38px; align-items: center; gap: 8px; margin: 14px 16px 5px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); color: var(--text-muted); }
+  .archive-search { display: flex; min-height: 38px; align-items: center; gap: 8px; margin: 14px 16px 5px; padding: 0 4px 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); color: var(--text-muted); }
   .archive-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .archive-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
-  .archive-content { min-height: 220px; overflow: auto; padding: 8px 16px 18px; }
-  .archive-content section + section { margin-top: 18px; }
-  .archive-content h2 { margin: 0 0 7px; color: var(--text-muted); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
-  .archive-row { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
-  .archive-row > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-  .archive-row strong, .archive-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .archive-row strong { color: var(--text); font-size: 12.5px; }
-  .archive-row small { color: var(--text-muted); font-size: 12px; }
-  .archive-more { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 6px 8px; border-radius: 6px; color: var(--text-muted); font-size: 12px; }
+  /* The filter rides inside the search field: same act, same control. A select,
+     not a row of buttons, because a busy machine has forty projects. */
+  .archive-search select { max-width: 42%; flex: 0 0 auto; height: 26px; padding: 0 4px 0 9px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; }
+  .archive-search select:hover { color: var(--text-soft); }
+  .archive-content { min-height: 220px; flex: 1; overflow: auto; padding: 4px 0 10px; }
+  /* The sidebar's project row, so it behaves the way that one taught: a
+     chevron, a name, and a count that stays on whether folded or not. */
+  .archive-group { position: sticky; z-index: 1; top: 0; display: grid; width: 100%; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 7px; height: 27px; padding: 0 16px; background: var(--surface-raised); color: var(--text-muted); font-size: 11px; text-align: left; }
+  .archive-group:hover { background: var(--surface-hover); }
+  .archive-group > svg { transition: transform var(--motion-fast) ease; }
+  .archive-group.is-open > svg { transform: rotate(90deg); }
+  .archive-group b { color: var(--text-soft); font-weight: 400; }
+  .archive-row { display: grid; min-height: 30px; grid-template-columns: 14px minmax(0, 2.4fr) minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 0 16px; color: var(--text-soft); }
+  .archive-row:hover { background: var(--surface-hover); color: var(--text); }
+  .archive-row > svg { color: var(--text-muted); }
+  .archive-name { overflow: hidden; min-width: 0; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .archive-where { overflow: hidden; min-width: 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  /* Each row is its own grid, so the last two columns are pinned to a width —
+     otherwise "5d ago" and "1mo ago" push the origin column out of line. */
+  .archive-when { width: 58px; color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .archive-restore { display: inline-flex; min-width: 74px; min-height: 23px; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-raised); color: var(--text-soft); font-size: 11.5px; }
+  .archive-restore:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
+  .archive-restore:disabled { opacity: 0.45; }
+  .archive-more { display: inline-flex; align-items: center; gap: 6px; margin: 8px 16px 0; padding: 6px 8px; border-radius: 6px; color: var(--text-muted); font-size: 12px; }
   .archive-more:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  /* Restore acts on what the filter left, so it sits with the count of it. */
+  .archive-foot { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px 0 16px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 11px; }
+  .archive-confirm { display: inline-flex; align-items: center; gap: 8px; color: var(--text-soft); }
+  .archive-cancel { padding: 0 4px; color: var(--text-muted); font-size: 11.5px; }
+  .archive-cancel:hover { color: var(--text); }
   .archive-empty { display: flex; min-height: 220px; align-items: center; justify-content: center; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: 12px; text-align: center; }
   .archive-empty strong { color: var(--text-soft); font-size: 13px; }
   .changelog-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(7 9 12 / 58%); backdrop-filter: blur(3px); animation: backdrop-in var(--motion-standard) ease-out; }
-  .changelog-dialog { display: flex; width: min(780px, 100%); max-height: min(620px, calc(100dvh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 24px 70px rgb(0 0 0 / 36%); animation: modal-in var(--motion-standard) var(--motion-ease-out); }
+  .changelog-dialog { display: flex; width: min(1120px, 100%); max-height: min(660px, calc(100dvh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 24px 70px rgb(0 0 0 / 36%); animation: modal-in var(--motion-standard) var(--motion-ease-out); }
   .changelog-dialog > header { display: flex; min-height: 52px; align-items: center; justify-content: space-between; padding: 0 14px 0 17px; border-bottom: 1px solid var(--line); }
   .changelog-dialog > header > div { display: flex; align-items: center; gap: 9px; }
   .changelog-dialog > header strong { font-size: 14px; }
-  .changelog-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 190px minmax(0, 1fr); }
-  .changelog-versions { min-height: 0; padding: 14px 10px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-subtle); }
-  .changelog-versions > span { display: block; padding: 5px 8px 9px; color: var(--text-muted); font-size: 12px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
-  .changelog-versions button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 10px 9px; border-radius: var(--radius-control); color: var(--text-soft); text-align: left; }
+  .changelog-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 310px minmax(0, 1fr); }
+  .changelog-versions { display: flex; min-height: 0; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface-subtle); }
+  .changelog-search { display: flex; height: 31px; flex: 0 0 auto; align-items: center; gap: 8px; margin: 10px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--radius-control); background: var(--surface); color: var(--text-muted); }
+  .changelog-search:focus-within { border-color: var(--accent); background: var(--surface-raised); }
+  .changelog-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: none; color: var(--text); font: 12px ui-monospace, monospace; }
+  .changelog-search input::placeholder { color: var(--text-muted); font-family: inherit; }
+  .changelog-search input::-webkit-search-cancel-button { display: none; }
+  .changelog-version-list { min-height: 0; flex: 1; padding-bottom: 8px; overflow-y: auto; }
+  .changelog-week { position: sticky; z-index: 1; top: 0; display: flex; height: 27px; align-items: center; gap: 5px; margin: 0; padding: 0 12px; background: var(--surface-subtle); color: var(--text-muted); font: 400 11px ui-monospace, monospace; white-space: nowrap; }
+  .changelog-week b { overflow: hidden; color: var(--text-soft); font-weight: 400; text-overflow: ellipsis; }
+  .changelog-versions button { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 10px; padding: 7px 12px; color: var(--text-soft); text-align: left; }
+  .changelog-versions button:hover { background: var(--surface-hover); }
   .changelog-versions button.is-active { background: var(--surface-active); color: var(--text); }
-  .changelog-versions strong { font: 12px ui-monospace, monospace; }
-  .changelog-versions small { color: var(--text-muted); font-size: 12px; }
-  .changelog-release { overflow: auto; padding: 38px 44px 42px; }
-  .changelog-meta { display: flex; gap: 10px; color: var(--text-muted); font: 12px ui-monospace, monospace; }
-  .changelog-release h2 { margin: 12px 0 8px; font-size: 28px; letter-spacing: -0.035em; }
-  .changelog-release > p { max-width: 560px; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
-  .changelog-release section { margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--line); }
-  .changelog-release h3 { width: max-content; margin: 0 0 12px; padding: 4px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--accent-text); font: 650 12px ui-monospace, monospace; }
-  .changelog-release ul { margin: 0; padding-left: 18px; color: var(--text-soft); font-size: 13px; line-height: 1.55; }
+  .changelog-version-title { display: -webkit-box; min-width: 0; overflow: hidden; font-size: 12.5px; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .changelog-versions button.is-active .changelog-version-title { font-weight: 560; }
+  .changelog-versions small { color: var(--text-muted); font: 12px ui-monospace, monospace; }
+  .changelog-version-sub { grid-column: 1 / -1; }
+  .changelog-versions-foot { display: flex; height: 30px; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 0 12px; border-top: 1px solid var(--line); color: var(--text-muted); font: 12px ui-monospace, monospace; }
+  .changelog-release { overflow: auto; padding: 30px 44px 44px; }
+  .changelog-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--text-muted); font: 13px ui-monospace, monospace; }
+  .changelog-tallies { display: inline-flex; flex-wrap: wrap; margin-left: auto; gap: 10px; }
+  .changelog-tally { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; }
+  .changelog-release h2 { margin: 10px 0 10px; font-size: 25px; font-weight: 600; letter-spacing: -0.028em; line-height: 1.2; }
+  .changelog-release > p { margin: 0 0 26px; color: var(--text-soft); font-size: 13.5px; line-height: 1.6; }
+  .changelog-notes, .changelog-hits { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+  /* The orb sits on the optical centre of the first line; on the baseline a 7px dot reads as a dropped full stop. */
+  .changelog-notes > li, .changelog-hits > li { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); color: var(--text-soft); font-size: 13px; line-height: 1.55; }
+  .changelog-notes .overview-orb, .changelog-hits .overview-orb { margin-top: 6px; }
+  .changelog-hits > li { grid-template-columns: 7px minmax(0, 1fr) auto; align-items: baseline; }
+  .changelog-hits small { color: var(--text-muted); font: 11.5px ui-monospace, monospace; }
+  .changelog-hit-count { margin: 0 0 14px; color: var(--text-muted); font-size: 12px; }
+  .changelog-release mark { border-radius: 2px; background: color-mix(in srgb, var(--accent) 26%, transparent); color: inherit; }
+  .changelog-empty { padding: 12px; color: var(--text-muted); font-size: 12px; }
   .workspace-layout { position: relative; display: grid; height: calc(100% - var(--header-height) - var(--terminal-height)); grid-template-columns: minmax(0, 1fr); overflow: hidden; }
   /* The reference rail is always the last column; the panel it opens sits
      between it and the pane. */
@@ -2473,12 +2512,12 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 @media (max-width: 680px) {
   .archive-backdrop, .changelog-backdrop, .settings-backdrop, .edit-confirm-backdrop { padding: 10px; }
   .archive-dialog, .changelog-dialog, .settings-dialog { max-height: calc(100dvh - 20px); }
-  .changelog-layout { min-height: 0; grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-  .changelog-versions { display: flex; align-items: center; gap: 8px; padding: 10px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); }
-  .changelog-versions > span { padding: 0 4px; }
-  .changelog-versions button { width: min(150px, 100%); flex: 0 0 auto; }
-  .changelog-release { padding: 28px 22px 34px; }
-  .archive-row { align-items: flex-start; }
+  .changelog-layout { min-height: 0; grid-template-columns: 1fr; grid-template-rows: minmax(0, 260px) minmax(0, 1fr); }
+  .changelog-versions { border-right: 0; border-bottom: 1px solid var(--line); }
+  .changelog-release { padding: 24px 20px 32px; }
+  /* Narrow: the origin is the first thing to go, the title is the last. */
+  .archive-row { grid-template-columns: 14px minmax(0, 1fr) auto auto; }
+  .archive-where { display: none; }
   .app-toast-stack { right: 12px; max-width: none; }
   .inspector { width: 100%; }
   .message-stream { padding: 20px 16px; }

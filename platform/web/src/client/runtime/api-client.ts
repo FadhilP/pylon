@@ -130,6 +130,7 @@ export class ApiClient {
     if (input.cursor) query.set("cursor", input.cursor);
     if (input.query) query.set("q", input.query);
     if (input.limit) query.set("limit", String(input.limit));
+    if (input.projectId) query.set("project", input.projectId);
     return json<SessionListSnapshot>(
       await fetch(`/api/v1/sessions${query.size ? `?${query}` : ""}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -449,6 +450,7 @@ export class ApiClient {
     if (input.cursor) query.set("cursor", input.cursor);
     if (input.query) query.set("q", input.query);
     if (input.limit) query.set("limit", String(input.limit));
+    if (input.projectId) query.set("project", input.projectId);
     return json<ArchiveListSnapshot>(
       await fetch(`/api/v1/archives${query.size ? `?${query}` : ""}`, {
         headers: { "x-pylon-tab-id": this.tabId },

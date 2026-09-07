@@ -577,10 +577,17 @@ export interface ArchivedSessionSummary extends SessionSummary {
   archivedAt: string;
 }
 
+export interface ArchiveSourceSummary {
+  id: string;
+  label: string;
+  count: number;
+}
+
 export interface ArchiveListQuery {
   cursor?: string;
   query?: string;
   limit?: number;
+  projectId?: string;
 }
 
 export interface ArchiveListSnapshot {
@@ -588,6 +595,8 @@ export interface ArchiveListSnapshot {
   sessionGeneration: number;
   projects: ArchivedProjectSummary[];
   sessions: ArchivedSessionSummary[];
+  /** Every project with archived sessions matching the search, with its count. */
+  sources: ArchiveSourceSummary[];
   totalSessionCount: number;
   nextCursor?: string;
 }
