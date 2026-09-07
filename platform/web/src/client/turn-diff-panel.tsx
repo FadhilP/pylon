@@ -1,7 +1,7 @@
 import { IconFiles, IconX } from "@tabler/icons-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import type { MessageReadModel } from "../shared/protocol/events";
-import { FileTypeIcon } from "./files-panel";
+import { FileTypeIcon } from "./file-icons";
 import { runtimeStore } from "./runtime/event-store";
 
 const CodeViewer = lazy(() => import("./code-viewer"));

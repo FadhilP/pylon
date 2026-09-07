@@ -93,3 +93,6 @@ export { default as IconWebhook } from "@tabler/icons-react/dist/esm/icons/IconW
 export { default as IconWorld } from "@tabler/icons-react/dist/esm/icons/IconWorld.mjs";
 export { default as IconX } from "@tabler/icons-react/dist/esm/icons/IconX.mjs";
 export { default as IconMessage } from "@tabler/icons-react/dist/esm/icons/IconMessage.mjs";
+export { default as IconChevronsDown } from "@tabler/icons-react/dist/esm/icons/IconChevronsDown.mjs";
+export { default as IconChevronsUp } from "@tabler/icons-react/dist/esm/icons/IconChevronsUp.mjs";
+export { default as IconCrosshair } from "@tabler/icons-react/dist/esm/icons/IconCrosshair.mjs";

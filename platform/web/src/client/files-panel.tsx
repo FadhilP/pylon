@@ -22,13 +22,10 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { WORKSPACE_FILE_DRAG_TYPE } from "../shared/composer-input";
 import type { FileReference } from "../shared/file-reference";
-import { fileIconId, folderIconId } from "../shared/file-icon";
 import { formatCompactNumber } from "../shared/format";
 import { highlightSource } from "../shared/markdown";
 import { loadDiffContents, type DiffContentsLoader } from "../shared/code-viewer-model";
@@ -38,6 +35,8 @@ import type {
   WorkspaceFileReadModel,
   WorkspaceReadModel,
 } from "../shared/protocol/snapshots";
+import { FileTypeIcon } from "./file-icons";
+import { WorkspaceTree } from "./workspace-tree";
 import { displayTime } from "./format";
 import { referenceDefinition } from "./navigation";
 import { copyText } from "./clipboard";
@@ -47,60 +46,22 @@ import { useSyntaxHighlightingRevision } from "./use-chrome";
 export type FileView = "current" | "base" | "diff";
 const CodeViewer = lazy(() => import("./code-viewer"));
 
-export function FileTypeIcon({ path, size = 14 }: { path: string; size?: number }) {
-  return (
-    <img
-      className="file-type-icon"
-      src={`/file-icons/${fileIconId(path)}.svg`}
-      width={size}
-      height={size}
-      loading="lazy"
-      decoding="async"
-      alt=""
-    />
-  );
-}
-
-/** Both states ship and CSS picks one, because the tree's folders are
-    uncontrolled <details> and nothing in React knows which are open. */
-export function FolderTypeIcon({ name, size = 14 }: { name: string; size?: number }) {
-  return (
-    <>
-      <img
-        className="folder-icon is-closed"
-        src={`/file-icons/${folderIconId(name, false)}.svg`}
-        width={size}
-        height={size}
-        decoding="async"
-        alt=""
-      />
-      <img
-        className="folder-icon is-open"
-        src={`/file-icons/${folderIconId(name, true)}.svg`}
-        width={size}
-        height={size}
-        decoding="async"
-        alt=""
-      />
-    </>
-  );
-}
-
 export function FilesPanel({
   live,
+  projectId,
   requestedPath,
   onClose,
   onExpand,
   onError,
 }: {
   live: RuntimeStoreSnapshot;
+  projectId?: string;
   requestedPath?: FileReference & { requestId: number; view?: FileView };
   onClose: () => void;
   onExpand?: (selectedPath?: string, view?: FileView) => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
-  const [tab, setTab] = useState<"changes" | "files">("changes");
   const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
   const [query, setQuery] = useState("");
   const [selectedPath, setSelectedPath] = useState<string>();
@@ -247,11 +208,6 @@ export function FilesPanel({
     }, 1_500);
   };
 
-  const matchingFiles = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    return normalized ? files.filter(file => file.path.toLocaleLowerCase().includes(normalized)) : files;
-  }, [files, query]);
-  const visible = tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
   const fileCopyState = copyFeedback?.path === selectedPath ? (copyFeedback?.state ?? "idle") : "idle";
   const workspace = runtime?.workspace;
   const canCompare = workspace?.mode === "worktree" || workspace?.mode === "checkout" || workspace?.mode === "local";
@@ -317,14 +273,8 @@ export function FilesPanel({
           )}
         </div>
         {runtime?.discoverIndex && <DiscoverIndexBar live={live} />}
-        <nav className="files-tabs" aria-label="File views">
-          <button className={tab === "changes" ? "is-active" : ""} onClick={() => setTab("changes")}>
-            Changes <span>{workspace?.changedCount ?? 0}</span>
-          </button>
-          <button className={tab === "files" ? "is-active" : ""} onClick={() => setTab("files")}>
-            Files
-          </button>
-          {(workspace?.mode === "checkout" || workspace?.mode === "worktree") && (
+        {(workspace?.mode === "checkout" || workspace?.mode === "worktree") && (
+          <nav className="files-tabs" aria-label="File actions">
             <button
               className="files-apply-button"
               type="button"
@@ -338,8 +288,8 @@ export function FilesPanel({
               )}
               Apply to {workspace.applyTargetBranch ?? "project branch"}
             </button>
-          )}
-        </nav>
+          </nav>
+        )}
         {workspace?.lastApply && (
           <div
             className={`files-apply-status is-${workspace.lastApply.state}`}
@@ -361,58 +311,27 @@ export function FilesPanel({
           <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search files" />
         </label>
         <div className={`files-panel-body${selectedPath ? "" : " is-list-only"}`}>
-          <div className="files-list" aria-label={tab === "changes" ? "Changed files" : "Project files"}>
-            {inventoryLoading && !files.length && !inventoryProgress && (
-              <span className="files-empty">Indexing workspace…</span>
-            )}
-            {inventoryLoading && !files.length && inventoryProgress && (
-              <span className="files-progress">
-                Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
+          <WorkspaceTree
+            files={files}
+            selectedPath={selectedPath}
+            query={query}
+            projectId={projectId}
+            onClearQuery={() => setQuery("")}
+            onSelect={(path, changed) => {
+              setSelectedPath(path);
+              setSelectedLine(undefined);
+              setView(changed ? "diff" : "current");
+            }}>
+            {inventoryLoading && !files.length && (
+              <span className={inventoryProgress ? "files-progress" : "files-empty"}>
+                {inventoryProgress
+                  ? `Loading ${inventoryProgress.loaded.toLocaleString()} of ${inventoryProgress.total.toLocaleString()} files…`
+                  : "Indexing workspace…"}
               </span>
             )}
-            {!inventoryLoading && !visible.length && (
-              <span className="files-empty">{tab === "changes" ? "No session changes" : "No files found"}</span>
-            )}
-            {tab === "changes" ? (
-              visible.map(file => (
-                <FileRow
-                  key={file.path}
-                  file={file}
-                  selectedPath={selectedPath}
-                  onSelect={path => {
-                    setSelectedPath(path);
-                    setSelectedLine(undefined);
-                    setView("diff");
-                  }}
-                />
-              ))
-            ) : query.trim() ? (
-              visible.map(file => (
-                <FileRow
-                  key={file.path}
-                  file={file}
-                  fullPath
-                  selectedPath={selectedPath}
-                  onSelect={path => {
-                    setSelectedPath(path);
-                    setSelectedLine(undefined);
-                    setView("current");
-                  }}
-                />
-              ))
-            ) : (
-              <FileTree
-                files={visible}
-                selectedPath={selectedPath}
-                onSelect={path => {
-                  setSelectedPath(path);
-                  setSelectedLine(undefined);
-                  setView("current");
-                }}
-              />
-            )}
+            {!inventoryLoading && !files.length && <span className="files-empty">No files found</span>}
             {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
-          </div>
+          </WorkspaceTree>
           {selectedPath && (
             <div className="file-viewer">
               <>
@@ -648,123 +567,6 @@ function DiscoverIndexBar({ live }: { live: RuntimeStoreSnapshot }) {
       </button>
       {index.error && <p role="alert">{index.error}</p>}
     </section>
-  );
-}
-
-interface FileTreeNode {
-  files: WorkspaceFileReadModel[];
-  directories: Map<string, FileTreeNode>;
-}
-
-export function FileTree({
-  files,
-  selectedPath,
-  onSelect,
-}: {
-  files: WorkspaceFileReadModel[];
-  selectedPath?: string;
-  onSelect: (path: string) => void;
-}) {
-  const root = useMemo(() => {
-    const value: FileTreeNode = { files: [], directories: new Map() };
-    for (const file of files) {
-      const parts = file.path.split("/");
-      let node = value;
-      // Registered submodule folders render as non-selectable directory chains, never as selectable rows.
-      if (file.kind === "submodule") {
-        for (const part of parts) {
-          let child = node.directories.get(part);
-          if (!child) {
-            child = { files: [], directories: new Map() };
-            node.directories.set(part, child);
-          }
-          node = child;
-        }
-        continue;
-      }
-      for (const directory of parts.slice(0, -1)) {
-        let child = node.directories.get(directory);
-        if (!child) {
-          child = { files: [], directories: new Map() };
-          node.directories.set(directory, child);
-        }
-        node = child;
-      }
-      node.files.push(file);
-    }
-    return value;
-  }, [files]);
-  return <TreeNode node={root} selectedPath={selectedPath} onSelect={onSelect} />;
-}
-
-function TreeNode({
-  node,
-  selectedPath,
-  onSelect,
-}: {
-  node: FileTreeNode;
-  selectedPath?: string;
-  onSelect: (path: string) => void;
-}) {
-  return (
-    <>
-      {[...node.directories]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([name, child]) => (
-          <details className="files-directory" key={name}>
-            <summary>
-              <FolderTypeIcon name={name} size={14} />
-              {name}
-            </summary>
-            <TreeNode node={child} selectedPath={selectedPath} onSelect={onSelect} />
-          </details>
-        ))}
-      {node.files
-        .sort((left, right) => left.path.localeCompare(right.path))
-        .map(file => (
-          <FileRow key={file.path} file={file} selectedPath={selectedPath} onSelect={onSelect} />
-        ))}
-    </>
-  );
-}
-
-export function FileRow({
-  file,
-  selectedPath,
-  onSelect,
-  fullPath = false,
-}: {
-  file: WorkspaceFileReadModel;
-  selectedPath?: string;
-  onSelect: (path: string) => void;
-  fullPath?: boolean;
-}) {
-  const name = file.path.split("/").at(-1) ?? file.path;
-  const startDrag = (event: ReactDragEvent<HTMLButtonElement>) => {
-    event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.setData(WORKSPACE_FILE_DRAG_TYPE, file.path);
-  };
-  return (
-    <button
-      type="button"
-      draggable
-      className={selectedPath === file.path ? "is-active" : ""}
-      onDragStart={startDrag}
-      onClick={() => onSelect(file.path)}>
-      <FileTypeIcon path={file.path} size={14} />
-      <span title={file.path}>{fullPath ? file.path : name}</span>
-      {file.status && <small className={`is-${file.status}`}>{file.status[0].toUpperCase()}</small>}
-      {file.binary ? (
-        <em>binary</em>
-      ) : (
-        file.status && (
-          <em>
-            <ins>+{file.additions ?? 0}</ins>
-            <del>-{file.deletions ?? 0}</del>
-          </em>
-        )
-      )}
-    </button>
   );
 }
 

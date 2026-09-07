@@ -84,7 +84,7 @@ import { modelKey as toModelKey, useHiddenModels, visibleModels } from "./model-
 import { exitDelay } from "./motion";
 import { OverviewOrb } from "./overview-primitives";
 import { useSyntaxHighlightingRevision } from "./use-chrome";
-import { FileTypeIcon } from "./files-panel";
+import { FileTypeIcon } from "./file-icons";
 import { ComposerSessionSwitcher, type ComposerSessionSwitcherProps } from "./composer-session-switcher";
 
 const markdownTags = [

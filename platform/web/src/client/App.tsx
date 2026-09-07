@@ -1255,9 +1255,12 @@ export function App() {
     />
   );
   /**
-   * The sidebar, and so its resizer and scrim. A workspace view keeps it: the
-   * session list is workspace scope itself, so Usage replaces the surface and
-   * its reference panel rather than the list you navigate from.
+   * The sidebar, and so its scrim. A workspace view keeps it: the session list is
+   * workspace scope itself, so Usage replaces the surface and its reference panel
+   * rather than the list you navigate from.
+   *
+   * The resizer is not tied to this: when the sidebar gives way to the file
+   * explorer, that column is still --sidebar-width, so it still wants the handle.
    */
   const sidebarVisible = workspaceView ? true : surface !== "files" || fileNavigation === "sessions";
   const surfaceMain =
@@ -1514,6 +1517,7 @@ export function App() {
         <FilesPanel
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
           live={live}
+          projectId={activeSession?.projectId}
           requestedPath={requestedFile}
           onClose={() => setReference(null)}
           onExpand={(path, fileView) => {
@@ -1722,7 +1726,7 @@ export function App() {
           }
         />
       )}
-      {sidebarVisible && !mobile && !sidebarCollapsed && (
+      {!mobile && !sidebarCollapsed && (
         <SidebarResizer
           container={appShellRef}
           width={leftPanelWidth}
@@ -1796,6 +1800,7 @@ export function App() {
       ) : (
         <FileWorkspace
           live={live}
+          projectId={activeSession?.projectId}
           requestedPath={requestedFile}
           stateStore={fileWorkspaceStates}
           contentStore={fileWorkspaceContents}

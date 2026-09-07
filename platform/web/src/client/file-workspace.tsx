@@ -1,12 +1,4 @@
-import {
-  IconArrowBackUp,
-  IconFile,
-  IconFiles,
-  IconGitCompare,
-  IconList,
-  IconSearch,
-  IconX,
-} from "@tabler/icons-react";
+import { IconArrowBackUp, IconFile, IconFiles, IconGitCompare, IconList, IconSearch, IconX } from "@tabler/icons-react";
 import {
   useEffect,
   useMemo,
@@ -19,7 +11,9 @@ import {
 } from "react";
 import type { FileReference } from "../shared/file-reference";
 import type { WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileReadModel } from "../shared/protocol/snapshots";
-import { FileContent, FileRow, FileTree, FileTypeIcon, type FileView } from "./files-panel";
+import { FileContent, type FileView } from "./files-panel";
+import { FileTypeIcon } from "./file-icons";
+import { WorkspaceTree } from "./workspace-tree";
 import {
   closeChangedFileTabs,
   closeFileTab,
@@ -41,6 +35,7 @@ export type FileWorkspaceContentStore = Map<string, Map<string, FileWorkspaceCon
 
 export function FileWorkspace({
   live,
+  projectId,
   requestedPath,
   stateStore,
   contentStore,
@@ -57,6 +52,7 @@ export function FileWorkspace({
   onError,
 }: {
   live: RuntimeStoreSnapshot;
+  projectId?: string;
   requestedPath?: FileReference & { requestId: number; sessionId?: string; view?: FileView };
   stateStore: MutableRefObject<Map<string, FileWorkspaceState>>;
   contentStore: MutableRefObject<FileWorkspaceContentStore>;
@@ -241,11 +237,6 @@ export function FileWorkspace({
     () => (inventorySessionId === sessionId ? files : []),
     [files, inventorySessionId, sessionId],
   );
-  const matchingFiles = useMemo(() => {
-    const normalized = currentUi.query.trim().toLocaleLowerCase();
-    return normalized ? currentFiles.filter(file => file.path.toLocaleLowerCase().includes(normalized)) : currentFiles;
-  }, [currentFiles, currentUi.query]);
-  const visibleFiles = currentUi.tab === "changes" ? matchingFiles.filter(file => file.status) : matchingFiles;
 
   const selectFile = (path: string, view: FileView, fromChanges = false) =>
     updateUi(current => openFileTab(current, path, view, undefined, fromChanges));
@@ -282,55 +273,25 @@ export function FileWorkspace({
               placeholder="Filter files"
             />
           </label>
-          <nav className="files-tabs" aria-label="Explorer view">
-            <button
-              className={currentUi.tab === "changes" ? "is-active" : ""}
-              onClick={() => updateUi(current => ({ ...current, tab: "changes" }))}>
-              Changes <span>{runtime?.workspace?.changedCount ?? 0}</span>
-            </button>
-            <button
-              className={currentUi.tab === "files" ? "is-active" : ""}
-              onClick={() => updateUi(current => ({ ...current, tab: "files" }))}>
-              Files
-            </button>
-          </nav>
-          <div className="files-list">
-            {inventoryLoading && !currentFiles.length && !inventoryProgress && (
-              <span className="files-empty">Indexing workspace…</span>
-            )}
-            {inventoryLoading && !currentFiles.length && inventoryProgress && (
-              <span className="files-progress">
-                Loading {inventoryProgress.loaded.toLocaleString()} of {inventoryProgress.total.toLocaleString()} files…
+          <WorkspaceTree
+            files={currentFiles}
+            selectedPath={currentUi.selectedPath}
+            query={currentUi.query}
+            projectId={projectId}
+            onClearQuery={() => updateUi(current => ({ ...current, query: "" }))}
+            onSelect={(path, changed) => selectFile(path, changed ? "diff" : "current", changed)}>
+            {inventoryLoading && !currentFiles.length && (
+              <span className={inventoryProgress ? "files-progress" : "files-empty"}>
+                {inventoryProgress
+                  ? `Loading ${inventoryProgress.loaded.toLocaleString()} of ${inventoryProgress.total.toLocaleString()} files…`
+                  : "Indexing workspace…"}
               </span>
             )}
-            {!inventoryLoading && !visibleFiles.length && (
-              <span className="files-empty">
-                {currentUi.tab === "changes" ? "No session changes" : "No files found"}
-              </span>
-            )}
-            {currentUi.tab === "changes" || currentUi.query.trim() ? (
-              visibleFiles.map(file => (
-                <FileRow
-                  key={file.path}
-                  file={file}
-                  fullPath={Boolean(currentUi.query.trim())}
-                  selectedPath={currentUi.selectedPath}
-                  onSelect={path =>
-                    currentUi.tab === "changes" ? selectFile(path, "diff", true) : selectFile(path, "current")
-                  }
-                />
-              ))
-            ) : (
-              <FileTree
-                files={visibleFiles}
-                selectedPath={currentUi.selectedPath}
-                onSelect={path => selectFile(path, "current")}
-              />
-            )}
+            {!inventoryLoading && !currentFiles.length && <span className="files-empty">No files found</span>}
             {inventorySessionId === sessionId && truncated && (
               <span className="files-truncated">Showing first 10,000 files</span>
             )}
-          </div>
+          </WorkspaceTree>
         </aside>
       )}
 

@@ -2,10 +2,9 @@ export type FileWorkspaceView = "current" | "base" | "diff";
 
 export interface FileWorkspaceState {
   sessionId: string;
-  tab: "changes" | "files";
   query: string;
   openPaths: string[];
-  /** Paths opened from the Changes tab; closed automatically when leaving the session. */
+  /** Paths opened as diffs from the change filter; closed automatically when leaving the session. */
   changedPaths: string[];
   views: Record<string, FileWorkspaceView>;
   selectedPath?: string;
@@ -17,17 +16,7 @@ export function workspaceStateForSession(
   states: Map<string, FileWorkspaceState>,
   sessionId: string,
 ): FileWorkspaceState {
-  return (
-    states.get(sessionId) ?? {
-      sessionId,
-      tab: "files",
-      query: "",
-      openPaths: [],
-      changedPaths: [],
-      views: {},
-      view: "current",
-    }
-  );
+  return states.get(sessionId) ?? { sessionId, query: "", openPaths: [], changedPaths: [], views: {}, view: "current" };
 }
 
 export function openFileTab(
