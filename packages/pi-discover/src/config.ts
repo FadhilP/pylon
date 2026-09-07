@@ -25,6 +25,18 @@ export const discoverSettings = definePackageSettings({
     },
     {
       version: 1,
+      key: "filesystemVerifyIntervalMs",
+      label: "Filesystem content verification interval (0: every refresh)",
+      type: "integer",
+      defaultValue: 300_000,
+      min: 0,
+      max: 300_000,
+      step: 1_000,
+      unit: "ms",
+      apply: "reload",
+    },
+    {
+      version: 1,
       key: "symbolResults",
       label: "Symbol search results",
       type: "integer",
@@ -59,6 +71,7 @@ export const discoverSettings = definePackageSettings({
 export type DiscoverConfig = {
   version: 1;
   searchTimeoutMs?: number;
+  filesystemVerifyIntervalMs?: number;
   symbolResults?: number;
   codeResults?: number;
   relationshipResults?: number;
@@ -66,6 +79,7 @@ export type DiscoverConfig = {
 export type EffectiveDiscoverConfig = {
   version: 1;
   searchTimeoutMs: number;
+  filesystemVerifyIntervalMs: number;
   symbolResults: number;
   codeResults: number;
   relationshipResults: number;
@@ -77,6 +91,10 @@ export function effectiveConfig(config: DiscoverConfig): EffectiveDiscoverConfig
   return {
     version: 1,
     searchTimeoutMs: effectivePackageSettingValue(fields.searchTimeoutMs, config.searchTimeoutMs) as number,
+    filesystemVerifyIntervalMs: effectivePackageSettingValue(
+      fields.filesystemVerifyIntervalMs,
+      config.filesystemVerifyIntervalMs,
+    ) as number,
     symbolResults: effectivePackageSettingValue(fields.symbolResults, config.symbolResults) as number,
     codeResults: effectivePackageSettingValue(fields.codeResults, config.codeResults) as number,
     relationshipResults: effectivePackageSettingValue(fields.relationshipResults, config.relationshipResults) as number,

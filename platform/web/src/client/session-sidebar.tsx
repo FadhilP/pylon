@@ -655,7 +655,10 @@ export function SessionProgress({
       role="img"
       aria-label={`${progress.completed} of ${progress.total} tasks complete`}>
       {Array.from({ length: Math.min(progress.total, 100) }, (_, index) => (
-        <i className={index < progress.completed ? "is-complete" : ""} key={index} />
+        <i
+          className={index < progress.completed ? "is-complete" : index === progress.completed ? "is-current" : ""}
+          key={index}
+        />
       ))}
     </span>
   );

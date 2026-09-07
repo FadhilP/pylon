@@ -14,10 +14,10 @@ export class WorkerIndex {
   private failure?: Error;
   private closing?: Promise<void>;
 
-  constructor(cwd: string, exec: IndexExecutor, path: string, timeout: number) {
+  constructor(cwd: string, exec: IndexExecutor, path: string, timeout: number, filesystemVerifyIntervalMs?: number) {
     this.exec = exec;
     this.worker = new Worker(new URL("./index-worker.mjs", import.meta.url), {
-      workerData: { cwd, path, timeout },
+      workerData: { cwd, path, timeout, filesystemVerifyIntervalMs },
       // The bootstrap supplies its own TS loader; do not inherit host test, profiler or loader hooks.
       execArgv: [],
     });
@@ -64,7 +64,7 @@ export class WorkerIndex {
         this.worker.postMessage({
           type: "exec-result",
           id: message.id,
-          error: { message: String(error?.message ?? error) },
+          error: { message: String(error?.message ?? error), code: error?.code },
         });
     }
   }

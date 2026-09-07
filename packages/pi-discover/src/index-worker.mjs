@@ -28,6 +28,7 @@ const index = new WorkspaceIndex(
     }),
   workerData.path,
   workerData.timeout,
+  workerData.filesystemVerifyIntervalMs,
 );
 const methods = new Set([
   "refresh",

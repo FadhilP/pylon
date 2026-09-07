@@ -166,6 +166,47 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
   }
 });
 
+test("terminal agent end stops reporting SDK settlement as running when todo progress remains", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-terminal-status-"));
+  const cwd = join(root, "workspace"),
+    agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    (driver as any).requestPackageStates = () => {};
+    session._isAgentRunActive = true;
+
+    session._emit({ type: "agent_start" });
+    (driver as any).operational.continuity = {
+      ...(driver as any).operational.continuity,
+      revision: 1,
+      work: {
+        todos: [
+          { id: "todo-1", text: "Finished", status: "done" },
+          { id: "todo-2", text: "Still tracked", status: "in_progress" },
+        ],
+      },
+    };
+    assert.equal(driver.runtimeState(), "running");
+    session._emit({ type: "agent_end", messages: [] });
+
+    assert.deepEqual(driver.runtimeDetails().todoProgress, { completed: 1, total: 2 });
+    assert.equal(session.isStreaming, true);
+    assert.equal(driver.runtimeState(), "idle");
+
+    session._emit({ type: "agent_start" });
+    session._emit({ type: "agent_end", messages: [], willRetry: true });
+    assert.ok(driver.runtimeDetails().workStartedAt);
+    assert.equal(driver.runtimeState(), "running");
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("worktree summaries match continued runs by assistant entry ID", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-worktree-summary-match-"));
   const cwd = join(root, "workspace"),

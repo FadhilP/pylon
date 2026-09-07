@@ -776,7 +776,7 @@ test("SQLite index migrates schema 1 by purging and rebuilding derived rows", as
     assert.equal(((await index.searchSymbols(root, { query: "currentSymbol" })) as any[])[0].path, "current.ts");
     const migrated = new DatabaseSync(dbPath);
     try {
-      assert.equal((migrated.prepare("PRAGMA user_version").get() as any).user_version, 3);
+      assert.equal((migrated.prepare("PRAGMA user_version").get() as any).user_version, 4);
       assert.equal((migrated.prepare("SELECT count(*) AS count FROM workspaces").get() as any).count, 1);
       assert.equal(
         (migrated.prepare("SELECT count(*) AS count FROM files WHERE path='stale.ts'").get() as any).count,
@@ -1358,8 +1358,8 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
       .execute("one", { query: "beforeTurn" }, undefined, undefined, ctx);
     assert.equal(JSON.parse(result.content[0].text).results[0].name, "beforeTurn");
     const searchCalls = gitCalls.slice(callsBeforeSearch);
-    assert.equal(searchCalls.length, 3);
-    assert.deepEqual(searchCalls.map(args => args[0]).sort(), ["ls-files", "status", "status"]);
+    assert.equal(searchCalls.length, 4);
+    assert.deepEqual(searchCalls.map(args => args[0]).sort(), ["ls-files", "rev-parse", "status", "status"]);
 
     await writeFile(sourcePath, "export function manualRebuild() {}\n");
     await runtime.commands.get("discover-index").handler("rebuild", ctx);

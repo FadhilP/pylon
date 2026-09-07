@@ -22,7 +22,7 @@ export function indexDatabasePath(
   return current;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 // 0x10000 checks every table, including existing indexes with no query history; 0x2 runs the recommended bounded analysis.
 const SQLITE_OPTIMIZE_ALL = "PRAGMA optimize=0x10002;";
 
@@ -38,7 +38,8 @@ function createSchema(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS repositories (
       id INTEGER PRIMARY KEY, root TEXT NOT NULL, root_key TEXT NOT NULL UNIQUE,
-      head TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', indexed_at INTEGER
+      head TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL DEFAULT '', indexed_at INTEGER,
+      source_mode TEXT NOT NULL DEFAULT 'git', policy TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS repository_states (
       repo_id INTEGER PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
@@ -47,6 +48,7 @@ function createSchema(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
       path TEXT NOT NULL, language TEXT NOT NULL, content TEXT NOT NULL, hash TEXT NOT NULL, size INTEGER NOT NULL, dirty INTEGER NOT NULL DEFAULT 0,
+      fingerprint TEXT, verified_at INTEGER,
       UNIQUE(repo_id, path)
     );
     CREATE INDEX IF NOT EXISTS files_repo_path ON files(repo_id, path);
@@ -82,7 +84,14 @@ function initializeSchema(db: DatabaseSync): void {
     const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
     if (version > SCHEMA_VERSION)
       throw new Error(`pi-discover index schema ${version} is newer than supported schema ${SCHEMA_VERSION}`);
-    if (version < SCHEMA_VERSION) {
+    if (version === 3) {
+      db.exec(`
+        ALTER TABLE repositories ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'git';
+        ALTER TABLE repositories ADD COLUMN policy TEXT NOT NULL DEFAULT '';
+        ALTER TABLE files ADD COLUMN fingerprint TEXT;
+        ALTER TABLE files ADD COLUMN verified_at INTEGER;
+      `);
+    } else if (version < SCHEMA_VERSION) {
       db.exec(`
         DROP TABLE IF EXISTS workspace_repositories;
         DROP TABLE IF EXISTS workspaces;

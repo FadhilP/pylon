@@ -4,9 +4,11 @@ import { relative, resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import { DEFAULT_MAX_BYTES, formatSize, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { executableAvailable, type ExecutableProbe } from "pylon-core/executable";
 import { escapesRoot, fitJson, workspacePath } from "./search-common.ts";
 import { indexDatabasePath, openIndexDatabase, optimizeDatabase } from "./index-schema.ts";
 import { WorkerIndex } from "./worker-index.ts";
+import { FILESYSTEM_POLICY, FILESYSTEM_VERIFY_MS } from "./filesystem-scanner.ts";
 import {
   RepositoryScanner,
   sameSnapshot,
@@ -20,7 +22,12 @@ import {
 export { extractSymbols } from "./symbols.ts";
 export { indexDatabasePath } from "./index-schema.ts";
 
-export type DiscoverIndexSettings = { searchTimeoutMs: number; symbolResults: number; codeResults: number };
+export type DiscoverIndexSettings = {
+  searchTimeoutMs: number;
+  symbolResults: number;
+  codeResults: number;
+  filesystemVerifyIntervalMs?: number;
+};
 const DEFAULT_INDEX_SETTINGS: DiscoverIndexSettings = { searchTimeoutMs: 30_000, symbolResults: 30, codeResults: 10 };
 const DEFAULT_SYMBOL_RESULTS = DEFAULT_INDEX_SETTINGS.symbolResults;
 const DEFAULT_CODE_RESULTS = DEFAULT_INDEX_SETTINGS.codeResults;
@@ -122,19 +129,23 @@ async function directoryExists(path: string): Promise<boolean> {
 export class WorkspaceIndex {
   private db?: DatabaseSync;
   private workspaceId?: number;
+  private workspaceRootKey?: string;
   private pending: Promise<void> = Promise.resolve();
   private freshening?: Promise<void>;
   private readonly scanner: RepositoryScanner;
   private readonly path: string;
 
+  private readonly filesystemVerifyIntervalMs: number;
   constructor(
     cwd: string,
     exec: IndexExecutor,
     path = indexDatabasePath(),
     searchTimeoutMs = DEFAULT_INDEX_SETTINGS.searchTimeoutMs,
+    filesystemVerifyIntervalMs = FILESYSTEM_VERIFY_MS,
   ) {
-    this.scanner = new RepositoryScanner(cwd, exec, searchTimeoutMs);
+    this.scanner = new RepositoryScanner(cwd, exec, searchTimeoutMs, path);
     this.path = path;
+    this.filesystemVerifyIntervalMs = filesystemVerifyIntervalMs;
   }
 
   private database(): DatabaseSync {
@@ -149,16 +160,16 @@ export class WorkspaceIndex {
   }
 
   private ensureWorkspace(identity: RepositoryIdentity): void {
-    if (this.workspaceId) return;
+    if (this.workspaceId && this.workspaceRootKey === identity.rootKey) return;
     const db = this.database();
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(
         `
-        INSERT INTO repositories(root,root_key) VALUES (?,?)
+        INSERT INTO repositories(root,root_key,source_mode) VALUES (?,?,?)
         ON CONFLICT(root_key) DO UPDATE SET root=excluded.root
       `,
-      ).run(identity.root, identity.rootKey);
+      ).run(identity.root, identity.rootKey, identity.mode ?? "git");
       const repoId = Number(
         (db.prepare("SELECT id FROM repositories WHERE root_key=?").get(identity.rootKey) as { id: number }).id,
       );
@@ -177,6 +188,7 @@ export class WorkspaceIndex {
         "",
       );
       db.exec("COMMIT");
+      this.workspaceRootKey = identity.rootKey;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
@@ -226,6 +238,7 @@ export class WorkspaceIndex {
     );
     const updateFile = db.prepare("UPDATE files SET language=?,content=?,hash=?,size=?,dirty=? WHERE id=?");
     const updateDirty = db.prepare("UPDATE files SET dirty=? WHERE id=?");
+    const updateFingerprint = db.prepare("UPDATE files SET fingerprint=?,verified_at=? WHERE id=?");
     const removeSymbols = db.prepare("DELETE FROM symbols WHERE file_id = ?");
     const insertSymbol = db.prepare(
       "INSERT INTO symbols(file_id,name,kind,line,column_no,signature) VALUES (?,?,?,?,?,?)",
@@ -251,6 +264,7 @@ export class WorkspaceIndex {
         const current = findFile.get(repoId, file.path) as { id: number; hash: string; dirty: number } | undefined;
         if (current?.hash === file.hash && file.symbols === undefined) {
           if (current.dirty !== Number(file.dirty)) updateDirty.run(Number(file.dirty), current.id);
+          updateFingerprint.run(file.fingerprint ?? null, file.verifiedAt ?? null, current.id);
           continue;
         }
         let fileId: number;
@@ -265,17 +279,34 @@ export class WorkspaceIndex {
               .lastInsertRowid,
           );
         }
+        updateFingerprint.run(file.fingerprint ?? null, file.verifiedAt ?? null, fileId);
         insertFts.run(fileId, file.content);
         for (const symbol of file.symbols ?? [])
           insertSymbol.run(fileId, symbol.name, symbol.kind, symbol.line, symbol.column, symbol.signature);
       }
-      db.prepare("UPDATE repositories SET root=?,head=?,branch=?,indexed_at=? WHERE id=?").run(
+      db.prepare("UPDATE repositories SET root=?,head=?,branch=?,indexed_at=?,source_mode=?,policy=? WHERE id=?").run(
         identity.root,
         identity.head,
         identity.branch,
         Date.now(),
+        identity.mode ?? "git",
+        identity.mode === "filesystem" ? FILESYSTEM_POLICY : "",
         repoId,
       );
+      if (identity.mode === "filesystem") {
+        // Filesystem workspaces have one member: publish freshness and scope with the
+        // content transaction, never after a partially successful refresh.
+        db.prepare("UPDATE workspaces SET head='',branch='',indexed_at=?,membership_state=? WHERE id=?").run(
+          Date.now(),
+          FILESYSTEM_POLICY,
+          this.workspaceId!,
+        );
+        db.prepare("DELETE FROM workspace_repositories WHERE workspace_id=?").run(this.workspaceId!);
+        db.prepare("INSERT INTO workspace_repositories(workspace_id,repo_id,prefix) VALUES (?,?,'')").run(
+          this.workspaceId!,
+          repoId,
+        );
+      }
       db.prepare("UPDATE repository_states SET generation=generation+1 WHERE repo_id=?").run(repoId);
       db.exec("COMMIT");
       return true;
@@ -287,7 +318,7 @@ export class WorkspaceIndex {
 
   /**
    * Bring one repository's rows up to date, retrying if the working tree moves mid-scan.
-   * A full pass rebuilds from the git inventory; an incremental pass revisits dirty files only.
+   * Git revisits dirty paths; filesystem mode reconciles a complete metadata inventory.
    */
   private async refreshRepository(
     repoId: number,
@@ -300,23 +331,62 @@ export class WorkspaceIndex {
       const state = db
         .prepare(
           `
-        SELECT r.head,r.indexed_at,s.generation
+        SELECT r.head,r.indexed_at,r.source_mode,r.policy,s.generation
         FROM repositories r JOIN repository_states s ON s.repo_id=r.id WHERE r.id=?
       `,
         )
-        .get(repoId) as { head: string; indexed_at?: number; generation: number };
-      const full = forceFull || !state.indexed_at || state.head !== snapshot.head;
-      const inventory = full ? await this.scanner.inventory(snapshot.root) : undefined;
-      const candidates =
-        inventory ??
-        new Set([
-          ...snapshot.dirty,
-          ...(
-            db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>
-          ).map(row => row.path),
-        ]);
+        .get(repoId) as { head: string; indexed_at?: number; source_mode: string; policy: string; generation: number };
+      const filesystem = snapshot.filesystem;
+      const reconstruct = forceFull || (filesystem !== undefined && state.policy !== FILESYSTEM_POLICY);
+      const full =
+        reconstruct ||
+        !state.indexed_at ||
+        state.head !== snapshot.head ||
+        state.source_mode !== (snapshot.mode ?? "git");
+      const inventory = filesystem
+        ? new Set(filesystem.files.keys())
+        : full
+          ? await this.scanner.inventory(snapshot.root)
+          : undefined;
+      let candidates: Set<string>;
+      if (filesystem) {
+        const existing = new Map(
+          (
+            db.prepare("SELECT path,fingerprint,verified_at FROM files WHERE repo_id=?").all(repoId) as Array<{
+              path: string;
+              fingerprint: string | null;
+              verified_at: number | null;
+            }>
+          ).map(row => [row.path, row]),
+        );
+        const now = Date.now();
+        candidates = new Set(
+          [...filesystem.files]
+            .filter(([path, fingerprint]) => {
+              const row = existing.get(path);
+              return (
+                full ||
+                !row ||
+                row.fingerprint !== fingerprint ||
+                !row.verified_at ||
+                row.verified_at > now ||
+                now - row.verified_at >= this.filesystemVerifyIntervalMs
+              );
+            })
+            .map(([path]) => path),
+        );
+      } else {
+        candidates =
+          inventory ??
+          new Set([
+            ...snapshot.dirty,
+            ...(
+              db.prepare("SELECT path FROM files WHERE repo_id=? AND dirty=1").all(repoId) as Array<{ path: string }>
+            ).map(row => row.path),
+          ]);
+      }
       const hashes =
-        forceFull || !candidates.size
+        reconstruct || !candidates.size
           ? new Map<string, string>()
           : new Map(
               (
@@ -330,6 +400,7 @@ export class WorkspaceIndex {
         [...candidates],
         snapshot.dirty,
         hashes,
+        filesystem?.files,
       );
       if (inventory) {
         const existing = db.prepare("SELECT path FROM files WHERE repo_id=?").all(repoId) as Array<{ path: string }>;
@@ -378,6 +449,7 @@ export class WorkspaceIndex {
   }
 
   private async refreshNow(forceFull = false): Promise<void> {
+    this.scanner.beginRefresh();
     for (let attempt = 0; attempt < 3; attempt++) {
       const snapshot = await this.scanner.snapshot();
       this.ensureWorkspace(snapshot);
@@ -391,8 +463,10 @@ export class WorkspaceIndex {
           await this.refreshRepository(ids.get(repository.rootKey)!, repository, forceFull);
       }
       const latestSnapshot = await this.refreshRepository(ids.get(snapshot.rootKey)!, rootRepository, forceFull);
-      if (!sameSnapshot(snapshot, latestSnapshot)) continue;
-      this.publishWorkspace(latestSnapshot, repositories, ids);
+      if (!snapshot.filesystem) {
+        if (!sameSnapshot(snapshot, latestSnapshot)) continue;
+        this.publishWorkspace(latestSnapshot, repositories, ids);
+      }
       optimizeDatabase(this.database());
       return;
     }
@@ -470,7 +544,10 @@ export class WorkspaceIndex {
 
   private async ready(): Promise<void> {
     await this.pending;
-    if (!this.workspaceId) this.ensureWorkspace(await this.scanner.snapshot());
+    if (!this.workspaceId) {
+      this.scanner.beginRefresh();
+      this.ensureWorkspace(await this.scanner.snapshot());
+    }
   }
 
   private scopedPath(cwd: string, input?: string): string {
@@ -573,8 +650,9 @@ export class WorkspaceIndex {
     return this.database()
       .prepare(
         `
-      SELECT w.root,w.head,w.branch,w.indexed_at,count(DISTINCT f.id) AS files,count(DISTINCT s.id) AS symbols
+      SELECT w.root,w.head,w.branch,w.indexed_at,r.source_mode AS mode,count(DISTINCT f.id) AS files,count(DISTINCT s.id) AS symbols
       FROM workspaces w
+      LEFT JOIN repositories r ON r.root_key=w.root_key
       LEFT JOIN workspace_repositories wr ON wr.workspace_id=w.id
       LEFT JOIN files f ON f.repo_id=wr.repo_id
       LEFT JOIN symbols s ON s.file_id=f.id
@@ -598,6 +676,7 @@ export type IndexRegistry = { indexFor: IndexProvider; closeAll(): Promise<void>
 export function createIndexRegistry(
   pi: ExtensionAPI,
   settings: DiscoverIndexSettings = DEFAULT_INDEX_SETTINGS,
+  probe: ExecutableProbe = executableAvailable,
 ): IndexRegistry {
   const indexes = new Map<string, ReturnType<IndexProvider>>();
   const indexFor = (cwd: string) => {
@@ -607,10 +686,15 @@ export function createIndexRegistry(
         cwd,
         async (command, args, options) => {
           const result = await pi.exec(command, args, options);
+          // Pi maps spawn errors to an empty nonzero result. Recover missing-tool
+          // classification with the same probe used by live search, not stderr guesses.
+          if (result.code !== 0 && !result.stdout && !result.stderr && !(await probe(command)))
+            throw Object.assign(new Error(`${command} executable unavailable`), { code: "ENOENT" });
           return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
         },
         indexDatabasePath(),
         settings.searchTimeoutMs,
+        settings.filesystemVerifyIntervalMs,
       );
       indexes.set(cwd, index);
     }

@@ -85,6 +85,7 @@ test("packed package installs and launches its production web app", { timeout: 2
         `import { createRequire } from "node:module";
        import { join } from "node:path";
        import { pathToFileURL } from "node:url";
+       import { writeFile } from "node:fs/promises";
        const packageRoot = process.argv[1];
        const installedRequire = createRequire(join(packageRoot, "package.json"));
        const { createJiti } = await import(pathToFileURL(installedRequire.resolve("jiti")).href);
@@ -96,8 +97,19 @@ test("packed package installs and launches its production web app", { timeout: 2
        const listedDocs = await docs.listPylonDocs(pathToFileURL(coreExtension).href);
        installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
        installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
-       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function" || !listedDocs.some(item => item.path === "docs/web/README.md")) process.exit(1);`,
+       if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function" || !listedDocs.some(item => item.path === "docs/web/README.md")) process.exit(1);
+       const { WorkerIndex } = await jiti.import(join(packageRoot, "packages", "pi-discover", "src", "worker-index.ts"));
+       const project = process.argv[2];
+       await writeFile(join(project, "source.ts"), "export function packagedSymbol() {}\\n");
+       await writeFile(join(project, "ignored.ts"), "export function packagedSymbol() {}\\n");
+       await writeFile(join(project, ".gitignore"), "ignored.ts\\n");
+       const index = new WorkerIndex(project, async () => ({ code: 128, stdout: "", stderr: "fatal: not a git repository" }), join(project, "index.sqlite"), 30000);
+       try {
+         const hits = await index.searchSymbols(project, { query: "packagedSymbol" });
+         if (hits.length !== 1 || hits[0].path !== "source.ts") throw new Error("Installed filesystem indexing failed");
+       } finally { await index.close(); }`,
         packageRoot,
+        project,
       ],
       { encoding: "utf8", timeout: 30_000 },
     );

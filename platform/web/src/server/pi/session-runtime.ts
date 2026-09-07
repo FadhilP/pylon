@@ -3242,8 +3242,10 @@ export class SessionRuntime implements PiDriver {
   runtimeState(): SessionRuntimeState {
     const runtime = this.requireRuntime();
     if (this.ui.hasPendingDialog) return "attention";
+    // Pi remains streaming while post-turn extension handlers settle; terminal agent_end has already cleared this timer.
+    const agentTurnActive = runtime.session.isStreaming && this.workStartedAt !== undefined;
     if (
-      runtime.session.isStreaming ||
+      agentTurnActive ||
       runtime.session.pendingMessageCount > 0 ||
       this.indexUpdate ||
       this.operational.jobs.items.some(job => job.state === "running")

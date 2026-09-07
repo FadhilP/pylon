@@ -28,11 +28,12 @@
     "settings": "./src/web-settings.ts"
   },
   "dependencies": {
+    "ignore": "^7.0.8",
     "pylon-core": "0.1.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },

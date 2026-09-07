@@ -389,6 +389,11 @@
   .session-progress { display: flex; min-width: 0; height: 3px; gap: 2px; }
   .session-progress > i { min-width: 1px; flex: 1; border-radius: 2px; background: var(--line-strong); opacity: 0.55; }
   .session-progress > i.is-complete { background: var(--accent); opacity: 1; }
+  .session-progress > i.is-current { animation: session-progress-current 2.4s ease-in-out infinite; }
+  @keyframes session-progress-current {
+    0%, 100% { background: var(--line-strong); opacity: 0.55; }
+    50% { background: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); opacity: 0.85; }
+  }
   .session-row.is-compact .session-progress { grid-column: 2 / -1; margin-right: 2px; }
   .session-menu > summary { display: grid; width: 27px; height: 27px; place-items: center; margin-right: 3px; border-radius: var(--radius-control); color: var(--text-muted); cursor: pointer; list-style: none; opacity: 0.7; transition: opacity 120ms ease, background 120ms ease, color 120ms ease; }
   .session-row.is-compact .session-menu > summary { opacity: 0; }
@@ -841,7 +846,7 @@
   .composer-branch-list > p { padding: 10px 8px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .composer-branch-list > .composer-branch-note { margin: 2px; border-radius: 6px; background: var(--amber-soft); color: var(--amber); }
   .composer-branch-spinner { animation: spin 800ms linear infinite; }
-  .composer-session-switcher { position: absolute; z-index: 30; bottom: calc(100% + 8px); left: 0; width: min(280px, calc(100vw - 48px)); padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); animation: request-in var(--motion-fast) var(--motion-ease-out); transform-origin: bottom left; }
+  .composer-session-switcher { position: absolute; z-index: 30; bottom: calc(100% + 8px); left: 0; width: min(340px, calc(100vw - 48px)); padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow); animation: request-in var(--motion-fast) var(--motion-ease-out); transform-origin: bottom left; }
   .composer-session-search { display: flex; align-items: center; gap: 7px; padding: 5px 8px 7px; border-bottom: 1px solid var(--line); color: var(--text-muted); }
   .composer-session-search > svg { flex: 0 0 auto; }
   .composer-session-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
@@ -854,7 +859,7 @@
   .composer-session-group span { padding: 1px 5px; border-radius: 5px; background: var(--surface-active); color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
   .composer-session-switcher .session-link:hover:not(:disabled) { background: var(--surface-hover); }
   .composer-session-switcher .session-link.is-active { background: var(--surface-subtle); }
-  .composer-session-switcher .session-menu-popover { z-index: 3; top: 42px; right: 5px; }
+  .composer-session-switcher .session-menu-popover { z-index: 3; top: 28px; right: 5px; }
   .composer-session-empty { padding: 16px 9px; color: var(--text-muted); font-size: 12px; }
   .composer-session-footer { display: flex; align-items: center; padding: 5px 4px 2px; border-top: 1px solid var(--line); }
   .composer-session-footer button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border-radius: 6px; color: var(--text-soft); font-size: 12px; }
@@ -1149,7 +1154,7 @@
   .files-list { position: relative; min-height: 0; flex: 1; overflow: auto; padding: 3px 0 8px; border-bottom: 1px solid var(--line); outline: 0; }
   /* One row shape for files and folders. Indentation is space from a single
      origin, so deep paths never drift away from the rail. */
-  .files-row { position: relative; display: grid; width: 100%; height: 22px; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding-right: 10px; color: var(--text-soft); text-align: left; }
+  .files-row { position: relative; display: grid; width: 100%; height: 22.5px; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding-right: 10px; color: var(--text-soft); text-align: left; }
   .files-row:hover { background: var(--surface-hover); color: var(--text); }
   .files-row.is-active, .files-row.is-focused { background: var(--surface-active); color: var(--text); }
   .files-row.is-directory > span { color: var(--text-soft); }

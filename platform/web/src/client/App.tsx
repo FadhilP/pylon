@@ -2335,7 +2335,7 @@ function ActiveSessionStrip({
                 )}
                 <span className="active-session-label">
                   <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
-                  {selected && <small>{session.cwdLabel} · {activity}</small>}
+                  <small>{session.cwdLabel} · {activity}</small>
                 </span>
                 {selected && <SessionProgress progress={progress} className="active-session-progress" />}
               </button>
@@ -2391,6 +2391,9 @@ function ActiveSessionStrip({
           {overflowSessions.map(session => {
             const completed = Boolean(unseenCompletions?.[session.id]);
             const state = completed ? "complete" : session.runtimeState;
+            const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now)
+              .replace(/^Working for /, "")
+              .replace(/ ago$/, "");
             return (
               <button
                 key={session.id}
@@ -2403,7 +2406,7 @@ function ActiveSessionStrip({
                 }}>
                 <i className={`session-runtime-state is-${state}`} aria-hidden="true" />
                 <strong>{sessionTitle(session)}</strong>
-                <small>{session.cwdLabel}</small>
+                <small>{session.cwdLabel} · {activity}</small>
               </button>
             );
           })}

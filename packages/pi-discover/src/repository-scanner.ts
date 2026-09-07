@@ -4,14 +4,21 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { canonicalPath, escapesRoot, boundedError, SEARCH_TIMEOUT_MS } from "./search-common.ts";
 import { extractSymbols, languageFor, type SymbolRow } from "./symbols.ts";
+import { scanFilesystem, readFilesystemFile, type FilesystemScan } from "./filesystem-scanner.ts";
 
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_NESTED_REPOSITORIES = 100;
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type IndexExecutor = (command: string, args: string[], options: { timeout: number }) => Promise<ExecResult>;
-export type RepositoryIdentity = { root: string; rootKey: string; head: string; branch: string };
-export type RepositorySnapshot = RepositoryIdentity & { dirty: Set<string> };
+export type RepositoryIdentity = {
+  root: string;
+  rootKey: string;
+  head: string;
+  branch: string;
+  mode?: "git" | "filesystem";
+};
+export type RepositorySnapshot = RepositoryIdentity & { dirty: Set<string>; filesystem?: FilesystemScan };
 export type IndexedRepository = RepositorySnapshot & { prefix: string };
 export type PreparedFile = {
   path: string;
@@ -20,6 +27,8 @@ export type PreparedFile = {
   hash: string;
   size: number;
   dirty: boolean;
+  fingerprint?: string;
+  verifiedAt?: number;
   /** Omitted only when the persisted content hash already matches. */
   symbols?: SymbolRow[];
 };
@@ -70,6 +79,9 @@ function statusSnapshot(root: string, value: string): RepositorySnapshot {
 
 export function sameSnapshot(left: RepositorySnapshot, right: RepositorySnapshot): boolean {
   return (
+    left.rootKey === right.rootKey &&
+    left.mode === right.mode &&
+    left.filesystem?.token === right.filesystem?.token &&
     left.head === right.head &&
     left.branch === right.branch &&
     left.dirty.size === right.dirty.size &&
@@ -80,14 +92,18 @@ export function sameSnapshot(left: RepositorySnapshot, right: RepositorySnapshot
 /** Reads git state and file contents for a workspace root and its nested repositories. */
 export class RepositoryScanner {
   private resolvedRoot?: string;
+  private filesystemMode = false;
+  private deadline = Infinity;
   private readonly cwd: string;
   private readonly exec: IndexExecutor;
   private readonly timeoutMs: number;
+  private readonly excludedPath?: string;
 
-  constructor(cwd: string, exec: IndexExecutor, timeoutMs = SEARCH_TIMEOUT_MS) {
+  constructor(cwd: string, exec: IndexExecutor, timeoutMs = SEARCH_TIMEOUT_MS, excludedPath?: string) {
     this.cwd = cwd;
     this.exec = exec;
     this.timeoutMs = timeoutMs;
+    this.excludedPath = excludedPath;
   }
 
   /** Workspace root, available once `snapshot()` has run at least once. */
@@ -103,13 +119,54 @@ export class RepositoryScanner {
   }
 
   async snapshotAt(root: string): Promise<RepositorySnapshot> {
+    if (this.filesystemMode) {
+      const filesystem = await scanFilesystem(root, this.excludedPath, this.remainingTime());
+      return {
+        root,
+        rootKey: canonicalPath(root),
+        head: "",
+        branch: "",
+        mode: "filesystem",
+        dirty: new Set(),
+        filesystem,
+      };
+    }
     const result = await this.gitAt(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
     return statusSnapshot(root, result.stdout);
   }
 
+  beginRefresh(): void {
+    this.deadline = Date.now() + this.timeoutMs;
+  }
+
+  private remainingTime(): number {
+    const remaining = this.deadline - Date.now();
+    if (remaining <= 0) throw new Error("filesystem refresh timed out");
+    return Math.min(this.timeoutMs, remaining);
+  }
+
   async snapshot(): Promise<RepositorySnapshot> {
-    if (!this.resolvedRoot)
-      this.resolvedRoot = await realpath((await this.gitAt(this.cwd, ["rev-parse", "--show-toplevel"])).stdout.trim());
+    // Validate cwd independently: ENOENT from a missing directory is not missing Git.
+    const cwd = await realpath(this.cwd);
+    let result: ExecResult;
+    try {
+      result = await this.exec("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { timeout: this.timeoutMs });
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") throw error;
+      result = { code: 1, stdout: "", stderr: "fatal: not a git repository" };
+    }
+    if (result.code === 0) {
+      const root = await realpath(result.stdout.trim());
+      if (this.filesystemMode && this.resolvedRoot && canonicalPath(root) !== canonicalPath(this.resolvedRoot))
+        throw new Error("Git root changed outside the indexed directory; start a new session at the intended root");
+      this.resolvedRoot = root;
+      this.filesystemMode = false;
+    } else {
+      if (!/not a git repository/i.test(result.stderr))
+        throw new Error(`git rev-parse failed: ${boundedError(result.stderr || result.stdout)}`);
+      this.resolvedRoot = cwd;
+      this.filesystemMode = true;
+    }
     return this.snapshotAt(this.resolvedRoot);
   }
 
@@ -158,6 +215,7 @@ export class RepositoryScanner {
   /** The root repository plus every nested repository reachable from it, each with its path prefix. */
   async indexedRepositories(root: RepositorySnapshot): Promise<IndexedRepository[]> {
     const repositories: IndexedRepository[] = [{ ...root, prefix: "" }];
+    if (root.filesystem) return repositories;
     const queue = [{ repository: repositories[0], ancestors: new Set([root.rootKey]) }];
     const physicalRoots = new Set([root.rootKey]);
     const childrenByRoot = new Map<string, Array<{ path: string; snapshot: RepositorySnapshot }>>();
@@ -188,15 +246,26 @@ export class RepositoryScanner {
     path: string,
     dirty: boolean,
     previousHash?: string,
+    fingerprint?: string,
   ): Promise<PreparedFile | undefined> {
     const language = languageFor(path);
     if (!language) return undefined;
     const absolute = resolve(root, path);
     if (escapesRoot(root, absolute)) return undefined;
     try {
-      const stat = await lstat(absolute);
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) return undefined;
-      const data = await readFile(absolute);
+      if (fingerprint !== undefined) this.remainingTime();
+      let data: Buffer;
+      let size: number;
+      if (fingerprint !== undefined) {
+        ({ data } = await readFilesystemFile(root, path, fingerprint));
+        size = data.length;
+      } else {
+        const stat = await lstat(absolute);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_FILE_BYTES) return undefined;
+        data = await readFile(absolute);
+        size = stat.size;
+      }
+      if (fingerprint !== undefined) this.remainingTime();
       if (data.includes(0)) return undefined;
       const content = data.toString("utf8");
       const hash = createHash("sha256").update(data).digest("hex");
@@ -204,13 +273,15 @@ export class RepositoryScanner {
         path: path.replaceAll("\\", "/"),
         language,
         content,
-        size: stat.size,
+        size,
+        fingerprint,
+        verifiedAt: fingerprint === undefined ? undefined : Date.now(),
         dirty,
         hash,
         symbols: hash === previousHash ? undefined : extractSymbols(content, language),
       };
     } catch (error: any) {
-      if (error?.code === "ENOENT") return undefined;
+      if (error?.code === "ENOENT" && fingerprint === undefined) return undefined;
       throw error;
     }
   }
@@ -224,6 +295,7 @@ export class RepositoryScanner {
     candidates: string[],
     dirty: Set<string>,
     hashes: ReadonlyMap<string, string> = new Map(),
+    fingerprints?: ReadonlyMap<string, string>,
   ): Promise<{ prepared: PreparedFile[]; removals: string[] }> {
     const outcomes = new Array<PreparedFile | undefined>(candidates.length);
     let next = 0;
@@ -236,10 +308,13 @@ export class RepositoryScanner {
           candidates[index]!,
           dirty.has(candidates[index]!),
           hashes.get(candidates[index]!),
+          fingerprints?.get(candidates[index]!),
         );
       }
     };
-    await Promise.all(Array.from({ length: Math.min(8, candidates.length) }, worker));
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(8, candidates.length) }, worker));
+    const failure = settled.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
     const prepared: PreparedFile[] = [];
     const removals: string[] = [];
     for (const [index, file] of outcomes.entries()) {

@@ -279,6 +279,7 @@ export function ComposerSessionSwitcher({
         deleting={deleting}
         completed={Boolean(unseenCompletions?.[session.id])}
         now={now}
+        compact
         showProject
         onSelect={closeAndRun(onSelect)}
         onDelete={closeAndRun(onDelete)}
