@@ -10,7 +10,6 @@ import {
   readDatabaseDrafts,
   saveDatabaseDraft,
   clearDatabaseDrafts,
-  type DatabaseDriver,
   type DatabaseQuery,
   type DatabaseResult,
 } from "../shared/database-workspace";
@@ -68,7 +67,6 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const ownTransaction = snapshot?.transaction?.owner_actor_id === snapshot?.actor_id;
   const readOnly = snapshot?.connection?.read_only !== false;
   const driver = snapshot?.connection?.driver ?? "postgres";
-  const selected = tabs.find(tab => tab.id === active);
   const toolRevision = live.runtime?.conversation.tools
     .filter(tool => tool.name === "stateql" && tool.status !== "running")
     .map(tool => `${tool.id}:${tool.status}`)

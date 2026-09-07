@@ -958,9 +958,11 @@ export function ConversationPanel({
     <section className="conversation-panel" aria-label="Live conversation">
       {pendingSession ? (
         <PendingSessionShell pending={pendingSession} />
-      ) : (
-        live.connection === "loading" && <div className="conversation-state">Loading runtime…</div>
-      )}
+      ) : live.connection === "loading" ? (
+        <div className="conversation-state">Loading runtime…</div>
+      ) : live.connection === "connected" && !runtime ? (
+        <div className="conversation-state">No session selected. Select a session or start a new one.</div>
+      ) : null}
       {!draftingOnly && showActiveAgents && (
         <ActiveAgents runs={activeAgents} colors={agentColors} onSelect={onSelectAgent} />
       )}

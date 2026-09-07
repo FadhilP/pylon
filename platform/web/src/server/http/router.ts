@@ -10,7 +10,7 @@ import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot, StateQLCommandInput, UsageQuery } from "../../shared/protocol/snapshots.ts";
-import type { WebEvent } from "../../shared/protocol/envelope.ts";
+import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
 import { usageWindow } from "../pi/usage-aggregation.ts";
@@ -230,13 +230,16 @@ export class ServerTransport {
     if (validTabId(tabId)) session.tabs.add(tabId);
     // Flush, snapshot, and cursor capture are one synchronous serialization boundary.
     this.projection.flush();
-    const runtime = this.projection.snapshot();
-    const runtimeIssue = describeRuntimeSnapshotIssue(runtime);
-    if (runtimeIssue) throw httpError(503, runtimeIssue);
+    const runtime = this.projection.selectedSnapshot();
+    if (runtime) {
+      const runtimeIssue = describeRuntimeSnapshotIssue(runtime);
+      if (runtimeIssue) throw httpError(503, runtimeIssue);
+    }
     const pending = this.pendingFor(tabId);
     const body: BootstrapSnapshot = {
-      protocolVersion: runtime.protocolVersion,
+      protocolVersion: PROTOCOL_VERSION,
       sequence: this.journal.sequence,
+      sessionGeneration: this.journal.sessionGeneration,
       csrfToken: session.csrfToken,
       runtime,
       unseenCompletionSessionIds: this.projection.unseenCompletionSessionIds(),
@@ -803,7 +806,6 @@ export class ServerTransport {
     this.requireTab(request);
     const cursor = url.searchParams.get("cursor") ?? "";
     const generation = Number(url.searchParams.get("generation"));
-    const projectId = url.searchParams.get("project")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 100 : Number(rawLimit);
     const direction = url.searchParams.get("direction") ?? "before";
@@ -906,7 +908,6 @@ export class ServerTransport {
     this.requireTab(request);
     const query = url.searchParams.get("q")?.trim() ?? "";
     const generation = Number(url.searchParams.get("generation"));
-    const projectId = url.searchParams.get("project")?.trim() || undefined;
     const rawLimit = url.searchParams.get("limit");
     const limit = rawLimit === null ? 15 : Number(rawLimit);
     if (query.length > 200) throw httpError(400, "query is too long");
@@ -1381,7 +1382,7 @@ export class ServerTransport {
   }
 
   private onDriverEvent(event: DriverEvent): void {
-    if (event.type === "session.replaced" || event.type === "session.unavailable") {
+    if (event.type === "session.replaced" || event.type === "session.unavailable" || event.type === "session.cleared") {
       this.projection.discardPending();
       this.clearDialogOwner();
       this.lastCommandOwner = undefined;

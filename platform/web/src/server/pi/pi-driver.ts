@@ -306,6 +306,7 @@ export type DriverEvent =
       sessionGeneration: number;
       runtime: RuntimeSnapshot;
     }
+  | { type: "session.cleared"; sessionId: string; sessionGeneration: number }
   | { type: "ui.event"; sessionId: string; sessionGeneration: number; payload: unknown }
   | { type: "ui.closed"; sessionId: string; sessionGeneration: number; requestId: string }
   | {

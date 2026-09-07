@@ -28,7 +28,6 @@ interface PendingRequest {
   dispatched: boolean;
   resolve(result: ExecResult): void;
   reject(error: PlaywrightClientError): void;
-  cleanup(): void;
 }
 
 function validResult(value: unknown): value is ExecResult {
@@ -130,7 +129,6 @@ export class PlaywrightClient {
           cleanup();
           reject(error);
         },
-        cleanup,
       };
       signal?.addEventListener("abort", abort, { once: true });
       timer = setTimeout(() => {

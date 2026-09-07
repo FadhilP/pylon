@@ -63,7 +63,7 @@ import {
   recordPendingV4Migration,
   type MigrationJournal,
 } from "../src/memory-migration.ts";
-import { assertSafe, assertSafePath, sanitizeAndClip } from "../src/secrets.ts";
+import { assertSafe, assertSafePath, assertSafeWithPaths, sanitizeAndClip } from "../src/secrets.ts";
 import { blocked, planningTools } from "../src/plan-gate.ts";
 import { buildContext, shortlistNotes } from "../src/context.ts";
 import {
@@ -97,7 +97,6 @@ import {
   continuityPrompt,
   loadConfig,
   parseModelRef,
-  saveConfig,
   updateConfig,
   thinkingLevels,
   type ModelProfile,
@@ -603,7 +602,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     await writeJsonAtomic(paths().memory, state);
     await refreshMemoryCompilation(state);
   };
-  const ownerFor = (scope: MemoryScope) => (scope === "user" ? "default" : project?.owner);
   const resolveProject = async (cwd: string) => {
     const resolved = await projectContext(cwd, workspace?.projectOwner ?? project?.owner ?? workspace!.id);
     project = resolved;
@@ -857,7 +855,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
       assertSafe(
         work.goal,
         work.planSummary,
-        ...work.constraints,
         ...(work.handoff?.assumptions ?? []),
         ...(work.handoff?.acceptanceCriteria ?? []),
         work.revisionFeedback?.text,
@@ -866,6 +863,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
         ...work.todos.map(t => t.text),
       );
       assertSafePath(...(work.handoff?.workingSet ?? []));
+      for (const constraint of work.constraints) assertSafeWithPaths(constraint, work.handoff?.workingSet ?? []);
       await writeJson(path, work);
       publishState();
     } catch (error) {
@@ -1399,7 +1397,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     }
     tasksVisible ? refresh(ctx) : hideTasks(ctx);
   });
-  pi.on("agent_end", () => {});
   pi.on("agent_settled", async (_e, ctx) => {
     tasksVisible = false;
     hideTasks(ctx);
@@ -2526,6 +2523,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     executionMode: "sequential",
     promptGuidelines: [
       "Use set_plan for explicit /plan; skip it for straightforward read-only work and one-shot local fixes. Prefer 2–4 outcome-level todos. planSummary is the compact executor handoff; add concrete paths/symbols, assumptions or gaps, and acceptance criteria in structured fields. Revise via planTodos IDs. Continuity owns plan presentation; otherwise use internal task list.",
+      "For continuity_update plans, also list repository paths referenced in constraints in workingSet. Only complete occurrences of these validated paths are exempt from opaque-credential detection; credential assignments and unsafe path components remain rejected.",
       "Clarify only a blocking user decision, recommended option first, as the sole tool call at a safe checkpoint. Never re-ask an answered question without new evidence. Use IDs.",
       "Keep verification out of new todo lists; a sole verification-only todo completes automatically. Keep every Continuity update tool-only and before final text.",
       "Never call a completion tool. Write exactly one text-only final response. For clean/no_checks, acknowledge allowUnverified tool-only; disclose the limitation.",

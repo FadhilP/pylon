@@ -49,7 +49,6 @@ async function grepFallback(
       : ["-r", "-n", "-H", "--binary-files=without-match", "-m", String(MAX_MATCHES_PER_FILE)];
   if (params.glob) args.push(`--include=${params.glob}`);
   args.push("--", params.pattern, path);
-  // ponytail: grep is a degraded fallback; stream it if fallback memory becomes material.
   const outcome = await runSearch(pi, "grep", args, run);
   if (outcome.status === "missing") return UNAVAILABLE;
   if (outcome.status === "empty")

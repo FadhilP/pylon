@@ -80,7 +80,13 @@ import {
 } from "./navigation";
 import { startsHeliosBrowser } from "../shared/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
-import { SessionProgress, SessionSidebar, sessionTitle, type SessionProject } from "./session-sidebar";
+import {
+  currentSessionProgress,
+  SessionProgress,
+  SessionSidebar,
+  sessionTitle,
+  type SessionProject,
+} from "./session-sidebar";
 import { SettingsDialog } from "./settings-dialog";
 import { TerminalPanel } from "./terminal-panel";
 import { TurnDiffPanel } from "./turn-diff-panel";
@@ -533,12 +539,25 @@ export function App() {
   }, [surface]);
 
   useEffect(() => {
-    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    if (
+      live.connection !== "connected" ||
+      live.generation === undefined ||
+      (live.runtime !== undefined && !live.runtime.ready)
+    )
+      return;
     let active = true;
     const controller = new AbortController();
     const request = ++sessionListRequest.current;
-    const sessionId = live.runtime.sessionId;
-    const sessionGeneration = live.runtime.sessionGeneration;
+    const sessionId = live.runtime?.sessionId;
+    const sessionGeneration = live.generation;
+    const selectionStillCurrent = () => {
+      const snapshot = runtimeStore.getSnapshot();
+      return (
+        snapshot.connection === "connected" &&
+        snapshot.generation === sessionGeneration &&
+        snapshot.runtime?.sessionId === sessionId
+      );
+    };
     const requestQuery = query.trim();
     const previousPages = sessionPagesQuery.current === requestQuery ? sessionPagesRef.current : [];
     setSessionsLoading(true);
@@ -551,20 +570,11 @@ export function App() {
           controller.signal,
         )
           .then(result => {
-            if (
-              !active ||
-              request !== sessionListRequest.current ||
-              !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)
-            )
-              return;
+            if (!active || request !== sessionListRequest.current || !selectionStillCurrent()) return;
             applySessionList(result, requestQuery);
           })
           .catch(cause => {
-            if (
-              active &&
-              request === sessionListRequest.current &&
-              runtimeRequestStillCurrent(runtimeStore.getSnapshot(), sessionId, sessionGeneration)
-            ) {
+            if (active && request === sessionListRequest.current && selectionStillCurrent()) {
               reportError(cause, "Unable to list sessions");
             }
           })
@@ -580,9 +590,9 @@ export function App() {
     };
   }, [
     live.connection,
+    live.generation,
     live.runtime?.ready,
     live.runtime?.sessionId,
-    live.runtime?.sessionGeneration,
     live.runtime?.sessionName,
     live.sessionRevision,
     query,
@@ -904,7 +914,7 @@ export function App() {
   };
 
   const setSessionActive = async (session: SessionSummary, active: boolean) => {
-    if (sessionBusy || sessionDeleting || (!active && session.active)) return;
+    if (sessionBusy || sessionDeleting) return;
     setSessionBusy(session.id);
     try {
       await runtimeStore.setSessionActive(session.id, active);
@@ -1145,7 +1155,8 @@ export function App() {
   const currentProjectPage = sessionPages.find(page => page.id === activeSession?.projectId);
   const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : (projects[0] ?? general);
   const composerProject =
-    pendingSession?.project ?? (currentProjectPage ? toSessionProject(currentProjectPage) : undefined);
+    pendingSession?.project ??
+    (currentProjectPage ? toSessionProject(currentProjectPage) : live.runtime ? undefined : currentProject);
   const composerProjectLabel = composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
   const toggleTerminal = () => {
     openTerminalDrawer();
@@ -1301,7 +1312,7 @@ export function App() {
       key={
         pendingSession
           ? `conversation:pending:${pendingSession.requestId}`
-          : `conversation:${live.runtime?.sessionId ?? "loading"}:${surface}`
+          : `conversation:${live.runtime?.sessionId ?? (live.connection === "connected" ? "empty" : "loading")}:${surface}`
       }
       live={live}
       projectAvailable={live.runtime?.projectAvailable !== false}
@@ -1326,11 +1337,18 @@ export function App() {
           ? "New session"
           : activeSession
             ? sessionTitle(activeSession)
-            : live.runtime?.sessionName || "Untitled session",
-        branchLabel: pendingSession ? "workspace pending" : live.runtime?.gitBranch || "No Git branch",
+            : live.runtime
+              ? live.runtime.sessionName || "Untitled session"
+              : "No session selected",
+        branchLabel: pendingSession
+          ? "workspace pending"
+          : live.runtime
+            ? live.runtime.gitBranch || "No Git branch"
+            : "Select a session",
         catalog: { activeSessions, projects: sessionPages },
         catalogRevision: live.sessionRevision ?? 0,
-        canLoadCatalog: live.connection === "connected" && live.runtime?.ready === true && !pendingSession,
+        canLoadCatalog:
+          live.connection === "connected" && live.generation !== undefined && live.runtime?.ready !== false && !pendingSession,
         branchAvailable: live.runtime?.workspace?.gitAvailable === true && !pendingSession,
         unseenCompletions: live.unseenCompletions,
         busy: sessionBusy || projectBusy,
@@ -2302,9 +2320,9 @@ function ActiveSessionStrip({
             .replace(/^Working for /, "")
             .replace(/ ago$/, "");
           const menuOpen = menu?.sessionId === session.id;
-          /* A todo list left over from the last turn is not progress, so the
-             bar belongs to a session that is working, as in the list. */
-          const progress = session.workStartedAt ? session.todoProgress : undefined;
+          /* A todo list left over from an earlier turn is not current progress, so the
+             bar belongs only to the turn that is actively working on that list. */
+          const progress = currentSessionProgress(session);
           const state = completed ? "complete" : session.runtimeState;
           const stateLabel = completed ? "New response" : session.runtimeState;
           return (
@@ -2337,7 +2355,7 @@ function ActiveSessionStrip({
                   <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
                   <small>{session.cwdLabel} · {activity}</small>
                 </span>
-                {selected && <SessionProgress progress={progress} className="active-session-progress" />}
+                <SessionProgress progress={progress} className="active-session-progress" />
               </button>
               <button
                 className="active-session-options"

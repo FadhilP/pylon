@@ -440,10 +440,6 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
   return input as BatchCommand & StateQLToolInput;
 }
 
-function panelCommand(value: unknown): StateQLPanelCommand | undefined {
-  return parseStateQLPanelCommand(value);
-}
-
 interface BrokeredTarget {
   source: string;
   prompt: StateQLPasswordTarget;
@@ -706,11 +702,6 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       }),
     };
   };
-  const replaceAborted = (active: Runtime): void => {
-    if (runtime !== active || !active.controller.signal.aborted || stopping) return;
-    active.stateql.close();
-    runtime = open(active.actorId);
-  };
   const current = (actorId?: string): Runtime => {
     if (!runtime || stopping || (actorId && runtime.actorId !== actorId))
       throw new Error("StateQL is unavailable for this Pi session");
@@ -804,7 +795,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
 
   const disposeCommand = pi.events.on("pylon:stateql-command-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<PanelCommandRequest>) : undefined;
-    const command = panelCommand(request?.command);
+    const command = parseStateQLPanelCommand(request?.command);
     const ui = commandUi(request?.ui);
     if (
       request?.version !== 1 ||

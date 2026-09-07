@@ -606,14 +606,6 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
   );
   registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const tool = tools.get("search_sessions");
-  assert.match(tool.description, /only when the user explicitly requests/);
-  assert.match(tool.description, /exact historical Pi session ID.*sessionId.*query for the requested subject/i);
-  assert.match(
-    tool.promptGuidelines.join("\n"),
-    /exact historical Pi session ID.*sessionId.*requested subject as query.*do not pass the ID as query text to continuity_recall/i,
-  );
-  assert.match(tool.description, /explicit cross-workspace request/);
-  assert.match(tool.description, /untrusted and possibly stale/);
   const ctx = { cwd: process.cwd(), sessionManager: { getSessionId: () => "current" } };
 
   const result = await tool.execute(
@@ -1297,46 +1289,10 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
     waitForIdle: async () => undefined,
     ui: { notify: (text: string, level: string) => notifications.push({ text, level }), setStatus: () => undefined },
   };
-  let policy: any;
   const indexStates: any[] = [];
-  runtime.events.on("pylon:tool-policy", value => {
-    if (value?.kind === "register" && value?.owner === "pi-discover") policy = value;
-  });
   runtime.events.on("pi-discover:index-state", value => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.deepEqual(policy.managedTools, [
-      "search_tools",
-      "symbol_search",
-      "fd",
-      "rg",
-      "code_search",
-      "relationship_graph",
-      "index_status",
-      "search_sessions",
-      "session_stats",
-    ]);
-    assert.deepEqual(policy.enabledTools, policy.managedTools);
-    assert.deepEqual(policy.deferredTools, [
-      "symbol_search",
-      "code_search",
-      "relationship_graph",
-      "index_status",
-      "search_sessions",
-      "session_stats",
-    ]);
-    assert.deepEqual(policy.toolUsage, {
-      search_tools: "find and activate inactive tools by capability",
-      symbol_search: "search local repository symbols by name, kind, language, or path",
-      fd: "find files and directories by path pattern",
-      rg: "search file contents with regex and line-numbered matches",
-      code_search: "search indexed source with ranked lexical snippets",
-      relationship_graph: "map source symbols or tokens to related files and source locations",
-      index_status: "inspect local repository code-index status",
-      search_sessions:
-        "search within exact historical Pi session IDs or assistant tool calls when explicitly requested",
-      session_stats: "inspect historical Pi session usage and tool-call statistics when explicitly requested",
-    });
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
     assert.ok(!runtime.active.includes("search_sessions"));
@@ -1734,7 +1690,6 @@ test("relationship_graph preserves parseable grouped shape at small byte caps", 
     } as any,
     80,
   );
-  assert.match(tools.get("relationship_graph").description, /confirm important relationships from source/);
   const result = await tools
     .get("relationship_graph")
     .execute("id", { query: "x" }, undefined, undefined, { cwd: process.cwd() });

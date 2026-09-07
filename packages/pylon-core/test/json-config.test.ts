@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadJsonConfig, saveJsonConfig } from "../src/json-config.ts";
@@ -26,7 +26,7 @@ test("a valid config round-trips through save and load", async () => {
   const path = join(dir, "nested", "config.json");
   await saveJsonConfig({ version: 1, name: "kept" }, path);
   assert.deepEqual(await loadJsonConfig(path, parse, fallback), { version: 1, name: "kept" });
-  assert.deepEqual(await quarantined(join(dir, "nested")), [], "a successful save leaves no temporary file");
+  assert.deepEqual(await readdir(join(dir, "nested")), ["config.json"], "a successful save leaves no temporary file");
 });
 
 test("unparseable and structurally invalid configs are quarantined, not deleted", async () => {
@@ -39,4 +39,17 @@ test("unparseable and structurally invalid configs are quarantined, not deleted"
     assert.equal(aside.length, 1, contents);
     assert.equal(await readFile(join(dir, aside[0]), "utf8"), contents, "the original bytes are recoverable");
   }
+});
+
+test("a failed atomic save preserves the destination and removes its temporary file", async t => {
+  const dir = await scratch();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "config.json");
+  await mkdir(path);
+  await writeFile(join(path, "kept"), "original");
+
+  await assert.rejects(saveJsonConfig({ version: 1 }, path));
+
+  assert.equal(await readFile(join(path, "kept"), "utf8"), "original");
+  assert.deepEqual(await readdir(dir), ["config.json"]);
 });

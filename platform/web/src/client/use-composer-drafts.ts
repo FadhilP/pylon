@@ -16,13 +16,8 @@ function initialComposerDrafts(): Map<string, ComposerDraft> {
 }
 
 /**
- * Unsent composer text, kept per session and mirrored to localStorage.
- *
- * Drafts live in refs rather than state: typing must not re-render the whole app,
- * and every reader already re-renders for its own reasons.
- *
- * A second map remembers each session's project so a draft written before the
- * session's project is known can still be filed correctly later.
+ * Keep per-session drafts in refs to avoid app-wide renders, and mirror them to localStorage.
+ * Track project IDs separately so drafts saved before project discovery can be reassigned later.
  */
 export function useComposerDrafts() {
   const drafts = useRef(initialComposerDrafts());
@@ -47,10 +42,7 @@ export function useComposerDrafts() {
     persist();
   };
 
-  /**
-   * Moves a draft written against a pending session onto the session the runtime
-   * actually created, dropping the placeholder it was recovered from.
-   */
+  /** Move a pending-session draft to the created session and remove its placeholder. */
   const adopt = (sessionId: string, projectId: string, text: string, recoveredSessionId?: string) => {
     projects.current.set(sessionId, projectId);
     if (recoveredSessionId) drafts.current.delete(recoveredSessionId);

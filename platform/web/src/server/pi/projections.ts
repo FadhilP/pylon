@@ -922,6 +922,7 @@ export class RuntimeProjection {
   private readonly turnMessages = new Map<string, string>();
   private readonly unseenCompletions = new Set<string>();
   pendingUi?: UiRequestReadModel;
+  private selected = true;
 
   constructor(
     private runtime: RuntimeSnapshot,
@@ -953,6 +954,10 @@ export class RuntimeProjection {
         widgets: this.runtime.extensionUi.widgets.map(item => ({ ...item, lines: [...item.lines] })),
       },
     };
+  }
+
+  selectedSnapshot(): RuntimeSnapshot | null {
+    return this.selected ? this.snapshot() : null;
   }
 
   unseenCompletionSessionIds(): string[] {
@@ -1013,6 +1018,7 @@ export class RuntimeProjection {
 
   replaceRuntime(runtime: RuntimeSnapshot): void {
     this.flush();
+    this.selected = true;
     this.runtime = runtime;
     this.messages.clear();
     this.tools.clear();
@@ -1022,6 +1028,17 @@ export class RuntimeProjection {
     for (const message of runtime.conversation.messages) this.messages.set(message.id, { ...message });
     for (const tool of runtime.conversation.tools) this.tools.set(tool.id, { ...tool });
     for (const run of runtime.conversation.delegatedRuns) this.delegatedRuns.set(run.id, structuredClone(run));
+    this.pendingUi = undefined;
+  }
+
+  clearRuntime(): void {
+    this.flush();
+    this.selected = false;
+    this.messages.clear();
+    this.tools.clear();
+    this.delegatedRuns.clear();
+    this.turnMessages.clear();
+    this.latestAssistantMessageId = undefined;
     this.pendingUi = undefined;
   }
 
@@ -1092,6 +1109,14 @@ export class RuntimeProjection {
       this.publish(`operational.${event.channel}`, operational);
       return;
     }
+    if (event.type === "session.cleared") {
+      const sessionId = event.sessionId.slice(0, 128);
+      this.unseenCompletions.delete(sessionId);
+      this.clearRuntime();
+      this.publish(event.type, { sessionId, sessionGeneration: event.sessionGeneration });
+      return;
+    }
+
     if (event.type === "session.replaced" || event.type === "session.unavailable") {
       const sessionId = event.sessionId.slice(0, 128);
       this.unseenCompletions.delete(sessionId);

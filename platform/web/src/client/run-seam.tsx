@@ -1,8 +1,4 @@
-/* A seam is a point where the run changed shape — context compacted, a
-   request retried, a request that failed. These are not messages, so they
-   are not cards: each is a rule across the transcript with the state orb on
-   it, the label riding the left and the consequence in mono on the right.
-   In flight the rule itself carries the motion, so nothing needs a spinner. */
+/* Inline markers for compaction, retries, and failed requests. */
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { OverviewOrb, type OverviewState } from "./overview-primitives";
@@ -18,7 +14,7 @@ function SeamContent({ state, label, value }: { state: OverviewState; label: str
   );
 }
 
-/** An event with nothing to open: the number closes the rule. */
+/** Status-only event marker. */
 export function RunSeam({ state, label, value }: { state: OverviewState; label: string; value?: ReactNode }) {
   return (
     <div className={`seam is-${state}`} role="status" aria-live="polite">
@@ -27,7 +23,7 @@ export function RunSeam({ state, label, value }: { state: OverviewState; label: 
   );
 }
 
-/** An event whose detail lives elsewhere, so the affordance points away. */
+/** Event marker that opens details elsewhere. */
 export function SeamLink({
   state,
   label,
@@ -52,11 +48,7 @@ export function SeamLink({
   );
 }
 
-/** An event whose detail belongs in the thread, so it opens in place.
-    Actions sit under the panel rather than inside it, the way a message's
-    own actions sit under the message. A seam whose detail also lives
-    elsewhere carries that second opener on the rule, after its own: the
-    chevrons say which way each one goes. */
+/** Expand details inline, with actions below and an optional external opener beside the summary. */
 export function SeamDisclosure({
   state,
   label,

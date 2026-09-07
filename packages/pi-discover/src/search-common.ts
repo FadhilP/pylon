@@ -108,10 +108,8 @@ export async function runSearch(
 }
 
 /**
- * Serialize the largest prefix of `count` items that fits in `maxBytes`.
- * `build` renders a payload for a given item count; `fallbacks` are progressively
- * smaller shapes tried when even zero items are too large. The returned `count` is
- * how many items the payload actually carries.
+ * Serialize the largest fitting item prefix and return its actual count.
+ * If even build(0) exceeds maxBytes, try progressively smaller fallback shapes.
  */
 export function fitJson(
   build: (count: number) => unknown,

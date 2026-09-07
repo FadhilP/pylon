@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, mkdtemp, open, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { promisify } from "node:util";
 import type { EvidenceRange } from "./memory.ts";

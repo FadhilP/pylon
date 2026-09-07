@@ -1,11 +1,8 @@
-/* Overview prototype primitives shared by the inspector and the agents panel.
-   Keep these in sync with prototypes/panel-kit.css (.orb, .orb-cell, .slabel, .bar). */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /** "step" is a hollow orb: a marker on a rail that carries no state of its own. */
 export type OverviewState = "neutral" | "done" | "running" | "failed" | "attention" | "step" | "set" | "changed";
-/* The orb's second channel: what the setting is doing right now, drawn as
-   the right half. Omit it and the orb stays a single solid dot. */
+// Optional right-half status; omit for a solid orb.
 export type OverviewRun = "active" | "deferred" | "off";
 
 export function LedBar({

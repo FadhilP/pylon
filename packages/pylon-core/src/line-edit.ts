@@ -209,10 +209,7 @@ function parseInsert(edit: LineEditOperation, position: number, lineCount: numbe
   };
 }
 
-/**
- * Validates every operation against the same original snapshot and returns them ordered from the
- * end of the file backwards, so applying them in sequence never shifts a later operation's index.
- */
+/** Validate against the original snapshot, then order edits bottom-up to avoid index shifts. */
 function parseOperations(edits: LineEditOperation[], lineCount: number, snapshot: Snapshot): ParsedOperation[] {
   const parsed: ParsedOperation[] = [];
   const claimedLines = new Set<number>();
@@ -257,10 +254,7 @@ const isInvalidated = (start: number, end: number, operations: ParsedOperation[]
     operation => operation.invalidated && operation.invalidated.start <= start && operation.invalidated.end >= end,
   );
 
-/**
- * Maps the ranges the model has already seen onto the edited file, dropping spans an operation
- * replaced and shifting the rest by the net line delta ahead of them.
- */
+/** Carry seen ranges through edits, dropping replaced spans and shifting surviving ones. */
 function carrySeenLines(seen: Interval[], operations: ParsedOperation[]): Interval[] {
   const carried: Interval[] = [];
   for (const interval of seen) {
@@ -368,10 +362,11 @@ async function numberedRead(
   const startIndex = params.offset ? Math.max(0, params.offset - 1) : 0;
   const selectedEnd = params.limit === undefined ? lines.length : Math.min(lines.length, startIndex + params.limit);
   const truncation = truncateHead(lines.slice(startIndex, selectedEnd).join("\n"));
-  if (truncation.firstLineExceedsLimit || truncation.outputLines < 1) return result;
+  if (truncation.firstLineExceedsLimit) return result;
 
   const startLine = startIndex + 1;
-  const endLine = startLine + truncation.outputLines - 1;
+  // Count exactly what numbered() displays, including a trailing empty line.
+  const endLine = startLine + truncation.content.split("\n").length - 1;
   const snapshot = recordSnapshot(snapshots, path, fullHash, { start: startLine, end: endLine });
   const output =
     `[${params.path}#${snapshot.tag}]\n${numbered(truncation.content, startLine)}` +
@@ -382,9 +377,8 @@ async function numberedRead(
 }
 
 /**
- * Reports what actually landed on disk. When the persisted bytes survived unchanged the model keeps
- * the ranges it has already seen; otherwise something transformed the file and it gets a fresh,
- * narrow context window around the first change instead.
+ * Report persisted bytes, retaining seen ranges only when they match the intended edit.
+ * If saving transformed the file, return fresh context around the first change instead.
  */
 function describeEditOutcome(
   params: any,

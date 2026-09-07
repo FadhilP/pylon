@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -9,10 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extension from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
 import {
-  archivalActivationDraft,
   emptyMemoryState,
-  isMemoryState,
-  isNotebookNote,
   isReviewRecord,
   serverNoteId,
   serverReviewId,
@@ -22,7 +19,7 @@ import {
 } from "../src/memory.ts";
 import type { ActivationDraft } from "../src/memory-activation.ts";
 import { writeJsonAtomic } from "../src/storage.ts";
-import { projectContext, worktreeFingerprint } from "../src/worktree.ts";
+import { projectContext } from "../src/worktree.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -33,11 +30,6 @@ after(async () => {
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   await rm(isolatedAgentDir, { recursive: true, force: true });
 });
-
-async function waitFor(predicate: () => boolean) {
-  for (let attempt = 0; attempt < 100 && !predicate(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
-}
 
 const generatedWriteDraft = (): ActivationDraft => ({
   classification: "grounded",

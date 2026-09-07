@@ -83,10 +83,6 @@ async function runCommand(command: string, args: string[], options: RunOptions):
   return { stdout };
 }
 
-function concise(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, " ").slice(0, 300);
-}
-
 async function exists(path: string): Promise<boolean> {
   try {
     await lstat(path);

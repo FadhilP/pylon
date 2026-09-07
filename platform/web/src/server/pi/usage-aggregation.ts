@@ -47,11 +47,8 @@ export interface UsageRates {
 export type UsageRateLookup = (provider: string, model: string) => UsageRates | undefined;
 
 /**
- * Rates from a model catalogue. A catalogue entry can carry a placeholder, so
- * each rate is checked rather than trusted, and cache rates fall back to the
- * input rate. Title and naming turns log a model with no provider beside it, so
- * a model id that names exactly one entry also resolves — an id two providers
- * share does not, and is dropped rather than guessed.
+ * Reject invalid rates and default missing cache rates to input.
+ * Provider-less records resolve only when the model ID is unique in the catalogue.
  */
 export function modelRateLookup(models: Iterable<{ provider: string; id: string; cost?: unknown }>): UsageRateLookup {
   const rate = (value: unknown) =>
@@ -76,14 +73,7 @@ export function modelRateLookup(models: Iterable<{ provider: string; id: string;
     byRef.get(`${provider}/${model}`) ?? (provider === "unknown" ? byModelId.get(model) : undefined);
 }
 
-/**
- * Sessions logged before delegates reported their per-part cost carry a total
- * and nothing else. The catalogue's rates can still say how that total divides:
- * the rates supply the ratio between prompt and completion, and the bill itself
- * supplies the magnitude, so a rate that has since changed — or a volume tier —
- * moves the split only as far as it moved the ratio, and the parts still add up
- * to what was charged. It is a derived number, and the snapshot says so.
- */
+/** Split unattributed cost by catalogue rate ratios, preserving the charged total and marking it estimated. */
 function estimateCostParts(record: UsageRecord, rates: UsageRateLookup): void {
   const unattributed = record.cost - record.costInput - record.costOutput;
   if (unattributed <= 0) return;

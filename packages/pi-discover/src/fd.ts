@@ -69,7 +69,6 @@ export function registerFd(
           ? matchesGlob(candidate, pattern) || matchesGlob(basename(candidate), pattern)
           : regex!.test(candidate);
       };
-      // ponytail: find is a degraded fallback; stream it if fallback memory becomes material.
       const found = await runSearch(pi, "find", [path], run);
       if (found.status === "missing") {
         lastError = found.error;

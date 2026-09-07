@@ -1096,6 +1096,8 @@ export class SessionRuntime implements PiDriver {
   private timingSessionId?: string;
   private workStartedAt?: string;
   private workStartedAtMs?: number;
+  private workTodoStateAtStart?: string;
+  private workTodoChanged = false;
   private workModelName?: string;
   private workThinkingLevel?: RuntimeSnapshot["sessionControls"]["thinkingLevel"];
   private workTurnId?: string;
@@ -3265,6 +3267,7 @@ export class SessionRuntime implements PiDriver {
     sessionPath?: string;
     name?: string;
     workStartedAt?: string;
+    promptReady: boolean;
     todoProgress?: SessionTodoProgress;
     userMessageCount: number;
   } {
@@ -3277,15 +3280,26 @@ export class SessionRuntime implements PiDriver {
       sessionPath: runtime.session.sessionFile,
       name: runtime.session.sessionManager.getSessionName(),
       workStartedAt: this.workStartedAt,
+      promptReady: runtime.session.isIdle,
       ...(todoProgress ? { todoProgress } : {}),
       userMessageCount: runtime.session.getSessionStats().userMessages,
     };
   }
 
+  /** Keeps a completed task list visible only through the turn that changed it. */
+  private todoStateKey(): string | undefined {
+    const todos = this.operational.continuity.work?.todos;
+    if (!todos?.length) return undefined;
+    return JSON.stringify(todos.map(todo => [todo.id, todo.status, todo.updatedAt]));
+  }
+
   private todoProgress(): SessionTodoProgress | undefined {
     const todos = this.operational.continuity.work?.todos;
     if (!todos?.length) return undefined;
-    return { completed: todos.filter(todo => todo.status === "done").length, total: todos.length };
+    if (this.workStartedAt && this.todoStateKey() !== this.workTodoStateAtStart) this.workTodoChanged = true;
+    const progress = { completed: todos.filter(todo => todo.status === "done").length, total: todos.length };
+    if (this.workStartedAt && progress.completed === progress.total && !this.workTodoChanged) return undefined;
+    return progress;
   }
   async dispose(): Promise<void> {
     if (this.disposed) return;
@@ -3530,6 +3544,8 @@ export class SessionRuntime implements PiDriver {
           this.workStartedAt = new Date(this.workStartedAtMs).toISOString();
           this.workUserEntryId = this.latestUserEntryId(session);
           this.workAssistantEntryIdAtStart = this.latestAssistantEntryId(session);
+          this.workTodoStateAtStart = this.todoStateKey();
+          this.workTodoChanged = false;
         }
         this.workModelName = session.model?.name;
         this.workThinkingLevel = session.supportsThinking() ? session.thinkingLevel : undefined;

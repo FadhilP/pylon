@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { truncateTail, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -18,6 +21,8 @@ type Result = {
   code: number | null;
   output: string;
   truncated: boolean;
+  fullOutputPath?: string;
+  logError?: string;
   durationMs: number;
 };
 type VerificationState = "running" | "passed" | "failed" | "cancelled" | "stale" | "error" | "no_checks" | "clean";
@@ -108,10 +113,14 @@ function resultText(input: {
     return `${outcome} ${input.results.length}/${input.checkCount} checks: ${ids} · ${(input.durationMs / 1000).toFixed(1)}s.${input.hygiene ? " Hygiene passed." : ""}${omitted}`;
   }
   const summary = input.results
-    .map(
-      result =>
-        `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)${result.code !== 0 && result.output ? `\n${result.output}` : ""}${result.code !== 0 && result.truncated ? "\n[output truncated]" : ""}`,
-    )
+    .map(result => {
+      const status = `${result.code === 0 ? "PASS" : "FAIL"} ${result.command} (${(result.durationMs / 1000).toFixed(1)}s)`;
+      if (result.code === 0) return status;
+      const log = result.fullOutputPath
+        ? `full captured output (sensitive; session-scoped): ${result.fullOutputPath}`
+        : (result.logError ?? "full output unavailable");
+      return [status, result.output, result.truncated ? `[output truncated; ${log}]` : ""].filter(Boolean).join("\n");
+    })
     .join("\n\n");
   return [
     `${outcome}${input.hygiene ? `\n\n${hygieneText(input.hygiene)}` : ""}`,
@@ -129,6 +138,33 @@ export default function verifyExtension(pi: ExtensionAPI) {
   let currentSessionId = "";
   let terminalState: VerificationState | undefined;
   let policy: VerifyPolicy = { mode: "auto" };
+  const logDirectories = new Set<string>();
+  const pendingLogs = new Set<Promise<Pick<Result, "fullOutputPath" | "logError">>>();
+  let closing = false;
+  const removeLog = async (directory: string) => {
+    await rm(directory, { recursive: true, force: true, maxRetries: 3 });
+    logDirectories.delete(directory);
+  };
+  const saveLog = (output: string) => {
+    const pending = (async (): Promise<Pick<Result, "fullOutputPath" | "logError">> => {
+      if (closing) return { logError: "full output unavailable: session is closing" };
+      let directory: string | undefined;
+      try {
+        // mkdtemp creates a private directory; filenames never come from check output.
+        directory = await mkdtemp(join(tmpdir(), "pylon-verify-"));
+        logDirectories.add(directory);
+        const fullOutputPath = join(directory, "output.log");
+        await writeFile(fullOutputPath, output, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        return { fullOutputPath };
+      } catch {
+        if (directory) await removeLog(directory).catch(() => undefined);
+        return { logError: "full output unavailable: temporary log could not be saved" };
+      }
+    })();
+    pendingLogs.add(pending);
+    void pending.finally(() => pendingLogs.delete(pending));
+    return pending;
+  };
   const catalog = async (cwd: string) => {
     const detection = await detectChecks(cwd);
     return {
@@ -215,7 +251,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     const persisted = {
       ...event,
       ...(hygiene ? { hygiene } : {}),
-      results: details.results.map(({ output: _output, ...result }) => result),
+      results: details.results.map(({ output: _output, fullOutputPath: _path, logError: _error, ...result }) => result),
     };
     latestContext = persisted;
     pi.appendEntry("pi-verify-result", persisted);
@@ -243,7 +279,10 @@ export default function verifyExtension(pi: ExtensionAPI) {
     });
     void publishCatalog(currentCwd, currentSessionId).catch(() => undefined);
   });
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
+    closing = true;
+    await Promise.all(pendingLogs);
+    await Promise.all([...logDirectories].map(directory => removeLog(directory).catch(() => undefined)));
     disposePolicy?.();
     disposeCatalog?.();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-verify" });
@@ -302,7 +341,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     name: "verify",
     label: "Verify",
     description:
-      "Run bounded hygiene and detected checks. Changed scope selects affected workspace packages and falls back to full checks when ownership is uncertain; project scope runs default project checks even when Git is clean. Optionally select up to six stable check IDs.",
+      "Run bounded hygiene and detected checks. Changed scope selects affected workspace packages and falls back to full checks when ownership is uncertain; project scope runs default project checks even when Git is clean. Optionally select up to six stable check IDs. Failed check output is capped at 160 lines/12 KiB; truncated failures include a private temporary log path, cleaned up at session shutdown.",
     promptSnippet: "Run detected project checks and return bounded failures",
     promptGuidelines: [
       "Use verify only after code changes are final—never in the same assistant message as other tool calls. Call Verify alone in a tool-only assistant turn and wait for its result. After passed, stale, or cancelled results, write one evidence-aware final response and stop; stale is reportable and does not require another Verify. After failed or error results caused by the current changes, diagnose and repair them, then Verify again; if the failure is unrelated or unsafe to repair, stop with a caveated final response. Omit checks by default; only pass exact IDs supplied by the user or verification catalog, and never infer IDs from scripts or labels. It runs git diff --check for dirty Git worktrees before declared checks. Use scope changed for normal edits: it selects checks for affected workspace packages and falls back to full checks for root, shared, unknown, or ambiguous paths. Use project for broad refactors or release checks. Verify never installs dependencies.",
@@ -469,6 +508,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
           .finally(() => clearInterval(heartbeat));
         const raw = [execution.stdout, execution.stderr].filter(Boolean).join("\n");
         const output = truncateTail(raw, { maxLines: 160, maxBytes: 12 * 1024 });
+        const log = execution.code !== 0 && output.truncated ? await saveLog(raw) : {};
         indexedResults.push({
           index: checkIndexes.get(check.id)!,
           result: {
@@ -478,6 +518,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
             code: execution.code,
             output: output.content.trim(),
             truncated: output.truncated,
+            ...log,
             durationMs: Date.now() - started,
           },
         });

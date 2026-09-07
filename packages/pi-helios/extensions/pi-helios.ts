@@ -252,7 +252,7 @@ const browserActionFields = {
     Type.String({
       pattern: ELEMENT_REF_PATTERN,
       maxLength: 32,
-      description: "Element reference from latest snapshot, such as e12 or f1e12",
+      description: "Element reference from latest snapshot, such as e12 or f1e12; not accepted by press",
     }),
   ),
   text: Type.Optional(
@@ -265,7 +265,7 @@ const browserActionFields = {
     Type.String({
       maxLength: 64,
       description:
-        "Keyboard key or chord, such as Enter, ArrowLeft, or Control+A; named keys are case-insensitive, while single-character case is preserved",
+        "press accepts only key and sends it to the current focus; click the intended element or use Tab to focus it first. Key/chord examples: Enter, ArrowLeft, Control+A. Named keys are case-insensitive; single-character case is preserved",
     }),
   ),
   value: Type.Optional(Type.String({ maxLength: 1000 })),

@@ -1043,10 +1043,8 @@ export default function timelineExtension(
     )
       return mutations.checkpoint;
     if (!mutations.checkpoint) {
-      // Capturing is slow enough that the tree can change under us. Each pass compares the
-      // mutation generation across the capture and retries while it moved, so the checkpoint
-      // we keep always reflects a tree that held still for one full capture. The loop also
-      // exits when the agent or a heartbeat job starts up again, since they will re-trigger it.
+      // Retry if the mutation generation changes during capture.
+      // Stop when stable or when agent/heartbeat work resumes; resumed work will trigger another capture.
       const run = (async () => {
         for (;;) {
           const generation = mutations.generation;

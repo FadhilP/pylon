@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import extension from "../extensions/pi-verify.ts";
@@ -530,6 +530,71 @@ test("verify keeps failed check diagnostics", async () => {
     .execute("call", { scope: "project" }, undefined, undefined, { cwd, hasUI: false });
   assert.equal(result.details.state, "failed");
   assert.match(result.content[0].text, /decisive failure detail/);
+});
+
+test("truncated failures retain captured diagnostics privately until session shutdown", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-log-test-"));
+  const tools = new Map<string, any>();
+  const handlers = new Map<string, (...args: any[]) => any>();
+  const entries: any[] = [];
+  const output = "not ok 1 - early decisive failure\n" + "ok - later passing check\n".repeat(200);
+  let code = 1;
+  extension({
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
+    events: { emit: () => {} },
+    appendEntry: (_type: string, data: any) => entries.push(data),
+    exec: async (command: string, args: string[]) => {
+      if (command === "git") return { code: 0, stdout: args[0] === "rev-parse" ? "abc\n" : "", stderr: "" };
+      return { code, stdout: output, stderr: "stderr detail" };
+    },
+  } as any);
+  const run = () =>
+    tools.get("verify").execute("call", { scope: "project" }, undefined, undefined, { cwd, hasUI: false });
+  try {
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "node fail.js" } }));
+    const failed = await run();
+    const result = failed.details.results[0];
+    assert.equal(failed.details.state, "failed");
+    assert.doesNotMatch(result.output, /early decisive failure/);
+    assert.equal(await readFile(result.fullOutputPath, "utf8"), `${output}\nstderr detail`);
+    assert.ok(failed.content[0].text.includes(result.fullOutputPath));
+    assert.equal("fullOutputPath" in entries.at(-1).results[0], false);
+    assert.equal("output" in entries.at(-1).results[0], false);
+    if (process.platform !== "win32") assert.equal((await stat(result.fullOutputPath)).mode & 0o777, 0o600);
+
+    const previousTemp = Object.fromEntries(["TMPDIR", "TEMP", "TMP"].map(key => [key, process.env[key]]));
+    try {
+      for (const key of Object.keys(previousTemp)) process.env[key] = join(cwd, "missing-temp-parent");
+      const unsaved = await run();
+      assert.equal(unsaved.details.state, "failed");
+      assert.equal(unsaved.details.results[0].code, 1);
+      assert.equal(unsaved.details.results[0].fullOutputPath, undefined);
+      assert.match(unsaved.content[0].text, /temporary log could not be saved/);
+      assert.match(unsaved.details.results[0].output, /stderr detail/);
+    } finally {
+      for (const [key, value] of Object.entries(previousTemp)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    code = 0;
+    const passed = await run();
+    assert.equal(passed.details.results[0].truncated, true);
+    assert.equal(passed.details.results[0].fullOutputPath, undefined);
+    await handlers.get("session_shutdown")!();
+    await assert.rejects(readFile(result.fullOutputPath), { code: "ENOENT" });
+
+    code = 1;
+    const late = await run();
+    assert.equal(late.details.state, "failed");
+    assert.equal(late.details.results[0].fullOutputPath, undefined);
+    assert.match(late.details.results[0].logError, /session is closing/);
+  } finally {
+    await handlers.get("session_shutdown")!();
+    await rm(cwd, { recursive: true, force: true, maxRetries: 3 });
+  }
 });
 
 test("verify selects a stable child-package check ID", async () => {

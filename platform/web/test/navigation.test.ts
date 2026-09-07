@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
-/**
- * The surface handoff is the one piece of navigation with a rule you cannot
- * read off the registries: a surface that fills the main area displaces the
- * conversation into the reference rail, and coming back returns the rail to
- * whatever it was showing — unless you chose something else while it was
- * docked, in which case your choice stands.
- */
-const vite = await createServer({ server: { middlewareMode: true }, appType: "custom" });
+/** Surface changes dock the conversation, then restore the prior reference unless the user chose another. */
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+});
 
 test("navigation", async t => {
   const navigation = await vite.ssrLoadModule("/src/client/navigation.ts");

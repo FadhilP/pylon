@@ -20,12 +20,6 @@ import type { Theme } from "./use-chrome";
 
 type Runtime = RuntimeStoreSnapshot["runtime"];
 
-/**
- * The app's nav chrome: one rail for the workspace, one row for the surface,
- * one rail for what is docked beside it. Each renders a registry from
- * navigation.ts and owns no state of its own.
- */
-
 /** One icon size for both rails, so the scope and reference sides stay level. */
 const RAIL_ICON_SIZE = 19;
 
@@ -70,11 +64,6 @@ function RailButton({
   );
 }
 
-/**
- * Workspace scope, plus the ambient controls collected at its foot. This is
- * the first surface in the app that is about the workspace rather than the
- * selected session, which is what lets everything to its right mean one thing.
- */
 export function ScopeRail({
   workspaceView,
   theme,
@@ -120,10 +109,6 @@ export function ScopeRail({
   );
 }
 
-/**
- * What fills the main area, drawn as tabs on the pane they label rather than
- * as a switch in the topbar — so the row reads as "what is in this pane".
- */
 export function SurfaceTabs({
   surface,
   context,
@@ -168,11 +153,6 @@ export function SurfaceTabs({
   );
 }
 
-/**
- * What is docked beside the surface. Flat, because the Inspector container
- * had one sibling left once Database and Browser became surfaces — and its
- * own tab bar no longer fit the panel it lived in.
- */
 export function ReferenceRail({
   reference,
   context,
@@ -213,12 +193,7 @@ export function ReferenceRail({
   );
 }
 
-/**
- * The shell every docked reference shares: a header naming the view, the one
- * line saying what it is for, and a scrolling body. The views themselves
- * render only their content — the Inspector used to own this chrome and its
- * own tab bar, which is what made it a container rather than a view.
- */
+/** Shared header and body shell for docked reference views. */
 export function ReferencePanel({
   reference,
   overlay,
@@ -228,9 +203,7 @@ export function ReferencePanel({
 }: {
   reference: ReferenceId;
   overlay: boolean;
-  /** For content that scrolls itself — the conversation — rather than sitting
-      in the panel's own scroll container, which would collapse it to its
-      content height. */
+  /** Fill the panel when content manages its own scrolling. */
   fill?: boolean;
   children: ReactNode;
   onClose: () => void;

@@ -641,6 +641,22 @@ export function SessionSidebar({
   );
 }
 
+export function currentSessionProgress(
+  session: Pick<SessionSummary, "workStartedAt" | "todoProgress">,
+): SessionTodoProgress | undefined {
+  const progress = session.todoProgress;
+  if (
+    !session.workStartedAt ||
+    Number.isNaN(Date.parse(session.workStartedAt)) ||
+    !progress ||
+    progress.total <= 0 ||
+    progress.completed < 0 ||
+    progress.completed > progress.total
+  )
+    return undefined;
+  return progress;
+}
+
 export function SessionProgress({
   progress,
   className = "",
@@ -719,7 +735,7 @@ export function SessionRow({
   const workStartedAt = session.workStartedAt ? Date.parse(session.workStartedAt) : Number.NaN;
   const working = !Number.isNaN(workStartedAt);
   const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
-  const progress = working ? session.todoProgress : undefined;
+  const progress = currentSessionProgress(session);
   const state = completed ? "complete" : session.runtimeState;
   const stateLabel = completed ? "New response" : session.runtimeState;
   const parentTitle = session.runningUnderParentSessionId ? "View this running session through its parent" : undefined;
@@ -840,14 +856,8 @@ export function SessionRow({
           </button>
           <button
             type="button"
-            disabled={unavailable || session.active || session.pinned}
-            title={
-              session.active
-                ? "The selected session must remain active"
-                : session.pinned
-                  ? "Unpin before deactivating"
-                  : undefined
-            }
+            disabled={unavailable || session.pinned}
+            title={session.pinned ? "Unpin before deactivating" : undefined}
             onClick={() => {
               onCloseMenu();
               onSetActive(session, sleeping);

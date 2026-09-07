@@ -222,13 +222,8 @@ const CELL = 5;
 const CELL_GAP = 2;
 
 /**
- * The chart is the app's LED cells on a time axis: one column per day, stacked
- * by whatever the series are — input and output when combined, one segment per
- * provider, model, project or agent when broken down. No second chart grammar.
- *
- * The viewBox is sized to the element's real pixel width so one SVG unit is one
- * CSS pixel — a fixed box gets scaled by the container, which would scale the
- * tick text with it.
+ * Stack series in daily LED columns.
+ * Match the viewBox to the measured width so tick text does not scale with the container.
  */
 function Chart({ series, days, metric }: { series: Series[]; days: string[]; metric: Metric }) {
   const ref = useRef<SVGSVGElement>(null);

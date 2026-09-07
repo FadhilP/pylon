@@ -27,10 +27,6 @@ export function isSyntaxTheme(value: string | undefined | null): value is Syntax
   return SYNTAX_THEMES.some(theme => theme.id === value);
 }
 
-export function getSyntaxTheme(): SyntaxTheme {
-  return activeTheme;
-}
-
 export function setSyntaxTheme(theme: SyntaxTheme): void {
   if (theme === activeTheme) return;
   activeTheme = theme;

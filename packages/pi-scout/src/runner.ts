@@ -132,11 +132,7 @@ async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<Sco
   };
   let commandId = 0;
 
-  /**
-   * Scout can be told to stop searching and return early, on budget or on deadline.
-   * The request, the reply that answers it, and whether that reply was usable are one
-   * unit of state; keeping them together is what makes the outcome ladder below readable.
-   */
+  /** Track a budget/deadline finalization request, its reply, and whether the reply is usable. */
   const finalization = {
     attempted: false,
     succeeded: false,

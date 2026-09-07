@@ -14,11 +14,8 @@ const MAX_SELECTION = 6;
 const OVERRIDE_MODES = ["active", "deferred", "disabled"];
 
 /**
- * Owns the active tool set for a session.
- *
- * Packages register policies over the tools they manage; the baseline is whatever the runtime
- * offered before any policy applied. Every mutation runs through `reconcile`, which recomputes the
- * active set from scratch and rolls the caller's change back if the runtime rejects it.
+ * Reconcile package policies against the runtime's original tool set.
+ * Roll back mutations if the runtime rejects the recomputed active set.
  */
 export function createToolRegistry(pi: ExtensionAPI) {
   const baseline = new Set<string>();

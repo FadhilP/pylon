@@ -99,6 +99,10 @@ export function createSettlement({ child, nextCommandId, onBegin, onFinish }: Se
     finish,
     clearContinuationTimer,
 
+    expectContinuation() {
+      if (!settled) continuationExpected = true;
+    },
+
     compactionStarted() {
       activeCompactions++;
       clearContinuationTimer();

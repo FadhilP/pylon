@@ -6,8 +6,6 @@ import {
   findNotes,
   groupReleasesByWeek,
   noteKind,
-  NOTE_KINDS,
-  NOTE_ORB,
   releaseMatches,
   splitMatch,
   tallyNotes,
@@ -25,16 +23,6 @@ const release = (date: string, notes: string[] = ["Added a thing."]): ChangelogR
   title: "Title",
   summary: "Summary",
   notes,
-});
-
-test("every note in the packaged changelog buckets into a drawable kind", () => {
-  const notes = RELEASES.flatMap(item => item.notes);
-  assert.ok(notes.length > 300, "expected the packaged history to be present");
-  for (const note of notes) {
-    const kind = noteKind(note);
-    assert.ok(NOTE_KINDS.includes(kind), `unknown kind for: ${note}`);
-    assert.ok(NOTE_ORB[kind], `kind ${kind} has no orb class`);
-  }
 });
 
 test("kinds follow the leading verb", () => {

@@ -145,10 +145,6 @@ export class PackageCatalog {
     };
   }
 
-  async restoreEnabled(enabledIds: Set<string>): Promise<void> {
-    await this.writeEnabled(enabledIds);
-  }
-
   async readSettings(packageId: string, state?: PackageCatalogState): Promise<PackageSettingsReadModel | undefined> {
     const definition = (state ?? (await this.scan())).packages.find(item => item.id === packageId);
     if (!definition?.settingsPath) return undefined;

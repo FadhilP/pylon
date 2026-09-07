@@ -1279,12 +1279,14 @@ test("queued prompts stay ordered and continue after queued control failures", a
   assert.deepEqual(internal.queueReadModel(slot).items, []);
 });
 
-test("multiple queued prompts advance after streaming settles", async () => {
+test("queued prompts wait for SDK readiness after the displayed turn finishes", async () => {
   const coordinator = new RuntimeCoordinator();
   const internal = coordinator as any;
   const prompted: string[] = [];
+  let attempts = 0;
   let state = "running";
   let workStartedAt: string | undefined = "turn-original";
+  let promptReady = false;
   const slot = {
     id: "session",
     innerGeneration: 4,
@@ -1297,12 +1299,14 @@ test("multiple queued prompts advance after streaming settles", async () => {
     queuedPrompts: [] as any[],
     driver: {
       runtimeState: () => state,
-      runtimeDetails: () => ({ workStartedAt }),
+      runtimeDetails: () => ({ workStartedAt, promptReady }),
       prompt: async (input: any) => {
-        if (state !== "idle") throw new Error("Agent is already processing");
+        attempts++;
+        if (!promptReady) throw new Error("prompt was rejected before acceptance");
         prompted.push(input.message);
         state = "running";
         workStartedAt = `turn-${prompted.length}`;
+        promptReady = false;
         internal.onSlotEvent(slot, {
           type: "session.event",
           payload: { type: "message_start", clientMessageId: input.commandId, message: { role: "user" } },
@@ -1318,20 +1322,23 @@ test("multiple queued prompts advance after streaming settles", async () => {
   internal.refreshWorkspace = async () => {};
   const enqueue = (message: string) =>
     coordinator.queuePrompt({ message, commandId: `command-${message}`, expectedGeneration: 1 });
-  const endTurn = () =>
+  const endTurn = () => {
+    workStartedAt = undefined;
+    state = "idle";
     internal.onSlotEvent(slot, {
       type: "session.event",
       sessionId: slot.id,
       sessionGeneration: 4,
       payload: { type: "agent_end", stopped: false },
     });
+  };
 
   await enqueue("first");
   await enqueue("second");
   endTurn();
   await waitFor(() => Boolean((slot as any).queueFlushTimer));
-  workStartedAt = undefined;
-  state = "idle";
+  assert.equal(attempts, 0);
+  promptReady = true;
   await waitFor(() => prompted.length === 1);
   assert.deepEqual(prompted, ["first"]);
   assert.deepEqual(
@@ -1341,8 +1348,8 @@ test("multiple queued prompts advance after streaming settles", async () => {
 
   endTurn();
   await waitFor(() => Boolean((slot as any).queueFlushTimer));
-  workStartedAt = undefined;
-  state = "idle";
+  assert.equal(attempts, 1);
+  promptReady = true;
   await waitFor(() => prompted.length === 2);
   assert.deepEqual(prompted, ["first", "second"]);
   assert.deepEqual(internal.queueReadModel(slot).items, []);
@@ -1381,6 +1388,94 @@ test("queue pump retries only a transient busy prompt rejection", async () => {
   await coordinator.queuePrompt({ message: "retry me", commandId: "command-retry", expectedGeneration: 1 });
   await waitFor(() => attempts === 2);
   assert.deepEqual(internal.queueReadModel(slot).items, []);
+});
+
+test("deactivating the selected session follows visit history and clears the last selection", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const events: any[] = [];
+  const disposed: string[] = [];
+  const deactivated: string[] = [];
+  const sleepable = new Map([
+    ["session-a", true],
+    ["session-b", true],
+    ["session-c", false],
+  ]);
+  const makeSlot = (id: string) => ({
+    id,
+    target: { cwd: "C:/repo", agentDir: "C:/agent" },
+    innerGeneration: 1,
+    eventRevision: 0,
+    lastActivityAt: Date.now(),
+    receivedInput: true,
+    pinned: false,
+    lastState: "idle",
+    lastTodoProgress: "",
+    nativeQueue: { steering: 0, followUp: 0 },
+    queuedPrompts: [],
+    displayPendingPrompts: [],
+    unsubscribe: () => {},
+    driver: {
+      canSleep: () => sleepable.get(id) === true,
+      runtimeState: () => "idle",
+      runtimeDetails: () => ({
+        sessionId: id,
+        generation: 1,
+        cwd: "C:/repo",
+        promptReady: true,
+        userMessageCount: 1,
+      }),
+      dispose: async () => {
+        disposed.push(id);
+      },
+    },
+  });
+  const slots = [makeSlot("session-a"), makeSlot("session-b"), makeSlot("session-c")];
+  internal.target = { cwd: "C:/repo", agentDir: "C:/agent" };
+  internal.projectRegistry = {
+    isSessionArchived: () => false,
+    isSessionPinned: () => false,
+    deactivateSession: async (sessionId: string) => {
+      deactivated.push(sessionId);
+    },
+  };
+  internal.generation = 1;
+  internal.selectedId = "session-a";
+  internal.selectionHistory = ["session-a"];
+  for (const slot of slots) internal.slots.set(slot.id, slot);
+  internal.selectionSnapshot = async (slot: any) => runtime(slot.id);
+  internal.queueWorkspaceRefresh = () => {};
+  internal.sessionIndex.invalidate = () => {};
+  coordinator.subscribe(event => events.push(event));
+  await internal.select(slots[1]);
+  await internal.select(slots[2]);
+  events.length = 0;
+  assert.deepEqual(internal.selectionHistory, ["session-c", "session-b", "session-a"]);
+  await assert.rejects(
+    coordinator.setSessionActive({ sessionId: "session-c", active: false }),
+    /cannot deactivate a running or queued session/,
+  );
+  assert.equal(internal.selectedId, "session-c");
+  assert.deepEqual(deactivated, []);
+
+  sleepable.set("session-c", true);
+  await coordinator.setSessionActive({ sessionId: "session-c", active: false });
+  assert.equal(internal.selectedId, "session-b");
+  await coordinator.setSessionActive({ sessionId: "session-b", active: false });
+  assert.equal(internal.selectedId, "session-a");
+  await coordinator.setSessionActive({ sessionId: "session-a", active: false });
+  assert.equal(internal.selectedId, "");
+  assert.deepEqual(deactivated, ["session-c", "session-b", "session-a"]);
+  assert.deepEqual(disposed, ["session-c", "session-b", "session-a"]);
+  assert.deepEqual(
+    events.filter(event => event.type === "session.replaced").map(event => event.sessionId),
+    ["session-b", "session-a"],
+  );
+  assert.deepEqual(
+    events.filter(event => event.type === "session.cleared").map(event => [event.sessionId, event.sessionGeneration]),
+    [["session-a", 6]],
+  );
+  await assert.rejects(coordinator.snapshot(), /no session is selected/);
 });
 
 test("accepted queued prompts remain snapshot-visible until their user message materializes", async () => {

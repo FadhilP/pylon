@@ -18,7 +18,7 @@ test("concurrent JSON updates do not lose writes", async () => {
     assert.equal(items.length, 20);
     assert.equal(new Set(items).size, 20);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
@@ -31,7 +31,7 @@ test("malformed versioned state is quarantined while missing state uses fallback
     assert.deepEqual(await readVersionedJson(path, { version: 1 }, value => value?.version === 1), { version: 1 });
     assert.ok((await readdir(root)).some(name => name.startsWith("state.json.reset-unsupported-")));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
@@ -50,6 +50,6 @@ test("dead stale lock is removed only after owner fencing is checked", async () 
     const result = await updateJson<number[]>(path, [], items => [...items, 1], Array.isArray);
     assert.deepEqual(result, [1]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });

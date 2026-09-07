@@ -409,7 +409,7 @@ export class SessionSummaryCache {
     return next;
   }
 
-  constructor(private readonly agentDir: string) {
+  constructor(agentDir: string) {
     this.cachePath = resolve(agentDir, "pylon-web", CACHE_FILE);
     // SessionManager follows PI_CODING_AGENT_DIR even when Pylon receives a distinct package/config directory.
     this.sessionsRoot = resolve(process.env.PI_CODING_AGENT_DIR || agentDir, "sessions");

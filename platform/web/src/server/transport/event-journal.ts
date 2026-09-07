@@ -19,7 +19,7 @@ export class EventJournal {
   private lastSequence = 0;
 
   constructor(
-    private generation: number,
+    private readonly generation: number,
     private readonly sessionId: string,
     private readonly maxEvents = MAX_JOURNAL_EVENTS,
     private readonly maxBytes = MAX_JOURNAL_BYTES,
@@ -33,10 +33,6 @@ export class EventJournal {
   }
   get oldestSequence(): number {
     return this.entries[0]?.sequence ?? this.lastSequence + 1;
-  }
-
-  replaceGeneration(generation: number, sessionId: string): EventJournal {
-    return new EventJournal(generation, sessionId, this.maxEvents, this.maxBytes);
   }
 
   append(type: string, payload: unknown): WebEvent {

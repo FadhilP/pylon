@@ -1,10 +1,4 @@
-/**
- * Structural-validation primitives shared by every persisted Continuity file.
- *
- * Each helper is deliberately narrow so call sites read as a specification of the
- * stored shape rather than a chain of `typeof` checks. Semantics differ subtly
- * between the string helpers; pick the one whose doc comment matches the field.
- */
+/** Persisted-state validators; string helpers differ in trimming and empty-value handling. */
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const SHA256 = /^[0-9a-f]{64}$/;

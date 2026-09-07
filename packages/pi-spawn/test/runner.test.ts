@@ -193,6 +193,27 @@ test("runner waits for a Continuity turn triggered after asynchronous compaction
   assert.equal(run.contextTokens, 4);
 });
 
+test("runner keeps a Continuity compaction interruption alive until compaction starts", async () => {
+  const child = await fake(`if(command.type==='prompt'){
+    emit({type:'message_end',message:{role:'assistant',content:[],stopReason:'aborted',diagnostics:[{type:'pi-continuity-compaction-interruption'}],usage:{}}});
+    emit({type:'agent_settled'});
+    setTimeout(()=>{
+      emit({type:'compaction_start',reason:'manual'});
+      setTimeout(()=>{
+        emit({type:'compaction_end',reason:'manual',result:{},aborted:false,willRetry:false});
+        emit({type:'agent_start'});
+        emit({type:'message_end',message:{role:'assistant',content:[{type:'text',text:'continued'}],stopReason:'stop',usage:{}}});
+        emit({type:'agent_settled'});
+      },25);
+    },25);
+    setInterval(()=>{},1000);
+  }`);
+  const run = await runSpawn([], { cwd: child.dir, prompt: "x", invocation: child.invocation });
+  assert.equal(run.error, undefined);
+  assert.equal(run.text, "continued");
+  assert.equal(run.turns, 2);
+});
+
 test("runner recognizes continuation across alternate compaction event ordering and retries", async () => {
   for (const sequence of [
     `emit({type:'compaction_start',reason:'manual'});

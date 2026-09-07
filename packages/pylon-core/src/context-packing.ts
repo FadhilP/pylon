@@ -1,18 +1,7 @@
 /**
- * Budget packing for the bounded parent context handed to a delegated child agent.
- *
- * Only the packing is shared. *Which* transcript entries are worth sending differs
- * per package and stays with each caller; how many of them fit, and which duplicates
- * to drop, does not.
- */
-
-/**
- * Selects the most recent records that fit, newest-first, then restores reading order.
- *
- * De-duplication is by `identity` rather than by raw text so that callers can ignore
- * whitespace or redaction differences. A record whose identity is empty is dropped.
- * A record that does not fit is skipped rather than ending the scan — a single large
- * record must not hide every older one that would still fit.
+ * Pack caller-selected context newest-first, then restore reading order.
+ * Deduplicate by caller-defined identity, dropping empty identities.
+ * Skip non-fitting records so older records can still fit.
  */
 export function packRecentRecords(
   records: readonly string[],

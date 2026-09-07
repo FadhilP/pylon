@@ -350,8 +350,9 @@ export interface DiscoverIndexReadModel {
 export interface BootstrapSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sequence: number;
+  sessionGeneration: number;
   csrfToken: string;
-  runtime: RuntimeSnapshot;
+  runtime: RuntimeSnapshot | null;
   unseenCompletionSessionIds: string[];
   pendingUi?: UiRequestReadModel;
 }

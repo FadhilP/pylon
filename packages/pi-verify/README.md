@@ -24,6 +24,8 @@ Verify first runs bounded `git diff --check HEAD --` hygiene in dirty Git worktr
 
 If the root declares no checks, it examines immediate non-hidden source directories in stable order without recursion, skipping common generated/vendor directories. At most six checks run; same-directory checks are sequential and independent directories run up to four at once. Pass `checks` only as up to six exact IDs supplied by the user or verification catalog, never guessed labels. Each check times out after five minutes. A failure prevents new checks while already-running ones finish. Hygiene output is capped at 80 lines/8 KiB and each check at 160 lines/12 KiB; omitted IDs are reported.
 
+When a failed check's output is truncated, Verify saves the full captured stdout/stderr in a private OS temporary directory and returns its path. These logs may contain sensitive data. Normal session shutdown (including reload/switch) attempts removal with bounded retries; crashes or cleanup failures can leave files behind. POSIX permissions restrict access; Windows uses the temporary directory's inherited access controls. Log contents and paths are excluded from compact Verify metadata, but the ordinary tool transcript retains the bounded excerpt and returned path. If saving fails, Verify preserves the check failure and reports that the full log is unavailable.
+
 Verify does not install dependencies or invent project-specific commands. Detected build tools may restore their own dependencies. A clean worktree is `clean`, not falsely “verified.” Detected checks run with your user permissions.
 
 ## Integrations

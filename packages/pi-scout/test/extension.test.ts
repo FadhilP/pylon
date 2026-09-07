@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
-import { REPO_SCOUT_PROMPT, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
+import { REPO_SCOUT_PROMPT, WEB_SCOUT_IMMUTABLE_FOOTER, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
 import type { ScoutRun } from "../src/runner.ts";
 
 class Bus {
@@ -421,7 +421,7 @@ test("Repo Scout conditionally loads pi-discover child tools and fails closed on
     };
   };
   const runtime = await harness(run);
-  const childExtensionPath = join(process.cwd(), "..", "pi-discover", "src", "discover-child-tools.ts");
+  const childExtensionPath = join(import.meta.dirname, "..", "..", "pi-discover", "src", "discover-child-tools.ts");
   const respond = (request: any) =>
     request.respond({
       version: 2,
@@ -624,6 +624,7 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
     }),
   );
   try {
+    await saveConfig({ version: 1, disabled: false, prompt: { mode: "append", text: "Prefer original sources." } });
     const result = await runtime.tools.get("web_scout").execute(
       "id",
       { task: "read current docs", startUrls: ["https://example.com"], maxPages: 2 },
@@ -681,7 +682,10 @@ test("Web Scout launches headless without UI or confirmation and revokes grant",
       assert.ok(childArgs.includes(flag));
     assert.ok(childArgs.includes("scout_browser"));
     assert.equal(childArgs[childArgs.indexOf("--tools") + 1], "scout_browser");
-    assert.equal(childArgs[childArgs.indexOf("--system-prompt") + 1], WEB_SCOUT_PROMPT);
+    const childPrompt = childArgs[childArgs.indexOf("--system-prompt") + 1];
+    assert.ok(childPrompt.startsWith(WEB_SCOUT_PROMPT));
+    assert.ok(childPrompt.includes("Prefer original sources."));
+    assert.ok(childPrompt.endsWith(WEB_SCOUT_IMMUTABLE_FOOTER));
     assert.equal(childArgs.filter(value => value === "-e").length, 1);
     assert.equal(childArgs.includes("scout_web_search"), false);
   } finally {

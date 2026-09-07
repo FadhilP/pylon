@@ -1,6 +1,4 @@
-/* The one tool-call renderer, shared by the transcript and the agents drawer.
-   A group is a header row, its calls are rows on the same 22px orb rail, and
-   arguments and result share one inset panel — state lives on the orbs. */
+/* Tool-call renderer shared by the transcript and agents drawer. */
 import { IconChevronDown } from "@tabler/icons-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { formatToolDuration } from "../shared/format";

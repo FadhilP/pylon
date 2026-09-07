@@ -396,6 +396,7 @@ export class RuntimeCoordinator implements PiDriver {
   private readonly sessionIndex = new SessionIndex();
   private projectRegistry?: ProjectRegistry;
   private selectedId = "";
+  private selectionHistory: string[] = [];
   private generation = 0;
   private target?: RuntimeTarget;
   private modelRuntime?: ModelRuntime;
@@ -434,6 +435,7 @@ export class RuntimeCoordinator implements PiDriver {
       project ? { ...target, cwd: project.cwd, projectId: project.id } : { ...target, inMemory: true },
     );
     this.selectedId = slot.id;
+    this.noteSelection(slot.id);
     this.generation = 1;
     await this.wakePinnedSessions(slot.id);
     this.sleepTimer = setInterval(
@@ -540,7 +542,7 @@ export class RuntimeCoordinator implements PiDriver {
   async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
     let result: SessionListSnapshot | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const selectedId = this.selected().id;
+      const selectedId = this.selectedId;
       const generation = this.generation;
       const activeIds = new Set(this.registry().listActiveSessionOrder());
       const pinnedIds = new Set(this.registry().listPinnedSessionIds());
@@ -634,9 +636,8 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async listArchived(input: ArchiveListQuery = {}): Promise<ArchiveListSnapshot> {
-    const selected = this.selected();
     return this.sessionIndex.listArchived(input, {
-      activeId: selected.id,
+      activeId: this.selectedId,
       generation: this.generation,
       stateFor: sessionId => this.slots.get(sessionId)?.driver.runtimeState() ?? "sleeping",
       pinnedFor: sessionId => this.registry().isSessionPinned(sessionId),
@@ -1056,16 +1057,16 @@ export class RuntimeCoordinator implements PiDriver {
       if (parent && this.registry().isSessionArchived(parent.id)) throw new Error("parent session is archived");
       const project = input.projectId ? this.registry().get(input.projectId) : undefined;
       if (input.projectId && (!project || project.archivedAt)) throw new Error("project is unavailable");
-      const current = this.selected().driver.runtimeDetails();
+      const current = this.slots.get(this.selectedId)?.driver.runtimeDetails();
       const draft = await this.createSlot({
         ...this.baseTarget(),
-        cwd: project?.cwd ?? parent?.cwd ?? current.cwd,
+        cwd: project?.cwd ?? parent?.cwd ?? current?.cwd ?? this.baseTarget().cwd,
         projectId:
           project?.id ??
           (parent ? this.registry().projectForSession(parent.id, parent.cwd)?.id : undefined) ??
-          this.registry().projectForSession(current.sessionId, current.cwd)?.id,
-        parentSessionPath: parent?.path ?? current.sessionPath,
-        parentSessionId: parent?.id ?? current.sessionId,
+          (current ? this.registry().projectForSession(current.sessionId, current.cwd)?.id : undefined),
+        parentSessionPath: parent?.path ?? current?.sessionPath,
+        parentSessionId: parent?.id ?? current?.sessionId,
       });
       let slot = draft;
       try {
@@ -1531,7 +1532,6 @@ export class RuntimeCoordinator implements PiDriver {
         this.emitProjectsChanged();
         return;
       }
-      if (input.sessionId === this.selectedId) throw new Error("cannot deactivate the selected session");
       if (this.registry().isSessionPinned(input.sessionId)) throw new Error("unpin before deactivating");
       if (!awake) {
         await this.registry().deactivateSession(input.sessionId);
@@ -1540,7 +1540,15 @@ export class RuntimeCoordinator implements PiDriver {
         return;
       }
       if (!this.slotCanSleep(awake)) throw new Error("cannot deactivate a running or queued session");
-      await this.registry().deactivateSession(input.sessionId);
+      if (input.sessionId === this.selectedId) {
+        const fallback = this.previousSelection(input.sessionId);
+        const fallbackRuntime = fallback ? await this.selectionSnapshot(fallback) : undefined;
+        await this.registry().deactivateSession(input.sessionId);
+        if (fallback && fallbackRuntime) this.commitSelection(fallback, fallbackRuntime);
+        else this.clearSelection(input.sessionId);
+      } else {
+        await this.registry().deactivateSession(input.sessionId);
+      }
       await this.disposeSlot(awake);
       this.emitStatus(input.sessionId, "sleeping");
       this.sessionIndex.invalidate();
@@ -2818,8 +2826,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (conflict) throw new Error("another checkout-bound session is already running in this project");
   }
 
-  private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
-    const previousId = this.selectedId;
+  private async selectionSnapshot(slot: RuntimeSlot): Promise<RuntimeSnapshot> {
     slot.lastActivityAt = Date.now();
     let runtime: RuntimeSnapshot;
     let revision: number;
@@ -2829,7 +2836,13 @@ export class RuntimeCoordinator implements PiDriver {
     } while (revision !== slot.eventRevision);
     const issue = describeRuntimeSnapshotIssue(runtime);
     if (issue) throw new InvalidRuntimeSnapshotError(issue);
+    return runtime;
+  }
+
+  private commitSelection(slot: RuntimeSlot, runtime: RuntimeSnapshot): ReplacementResult {
+    const previousId = this.selectedId;
     this.selectedId = slot.id;
+    this.noteSelection(slot.id);
     this.generation++;
     this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });
     if (slot.pendingUi)
@@ -2838,6 +2851,30 @@ export class RuntimeCoordinator implements PiDriver {
     this.publishStatus(slot.id);
     this.queueWorkspaceRefresh(slot);
     return this.replacement(false);
+  }
+
+  private async select(slot: RuntimeSlot): Promise<ReplacementResult> {
+    return this.commitSelection(slot, await this.selectionSnapshot(slot));
+  }
+
+  private noteSelection(sessionId: string): void {
+    this.selectionHistory = [sessionId, ...this.selectionHistory.filter(id => id !== sessionId)];
+  }
+
+  private previousSelection(sessionId: string): RuntimeSlot | undefined {
+    for (const candidateId of this.selectionHistory) {
+      if (candidateId === sessionId) continue;
+      const candidate = this.slots.get(candidateId);
+      if (candidate) return candidate;
+    }
+    return undefined;
+  }
+
+  private clearSelection(previousId: string): void {
+    this.selectedId = "";
+    this.selectionHistory = this.selectionHistory.filter(id => id !== previousId);
+    this.generation++;
+    this.emit({ type: "session.cleared", sessionId: previousId, sessionGeneration: this.generation });
   }
 
   private onSlotEvent(slot: RuntimeSlot, event: DriverEvent): void {
@@ -2917,6 +2954,7 @@ export class RuntimeCoordinator implements PiDriver {
     }
     this.slots.delete(oldId);
     this.slots.set(slot.id, slot);
+    this.selectionHistory = this.selectionHistory.map(id => (id === oldId ? slot.id : id));
     if (wasSelected) this.selectedId = slot.id;
     if (slot.queuedPrompts[0]?.state === "queued") this.scheduleQueuedPrompt(slot);
     if (slot.suppressEvents) return;
@@ -3322,7 +3360,7 @@ export class RuntimeCoordinator implements PiDriver {
 
   private selected(): RuntimeSlot {
     const slot = this.slots.get(this.selectedId);
-    if (!slot) throw new Error("runtime has not started");
+    if (!slot) throw new Error(this.target ? "no session is selected" : "runtime has not started");
     return slot;
   }
 
@@ -3397,6 +3435,11 @@ export class RuntimeCoordinator implements PiDriver {
     if (!queued || queued.state !== "queued") return;
     if (slot.driver.runtimeDetails().workStartedAt) {
       this.scheduleQueuedPrompt(slot, 100);
+      return;
+    }
+    // The displayed turn ends before Pi finishes settling and can accept another prompt.
+    if (slot.driver.runtimeDetails().promptReady === false) {
+      this.scheduleQueuedPrompt(slot);
       return;
     }
     if (slot.driver.runtimeState() !== "idle") {
@@ -3782,6 +3825,7 @@ export class RuntimeCoordinator implements PiDriver {
     if (slot.queueFlushTimer) clearTimeout(slot.queueFlushTimer);
     slot.unsubscribe();
     this.slots.delete(slot.id);
+    this.selectionHistory = this.selectionHistory.filter(id => id !== slot.id);
     await slot.workspaceRefresh?.catch(() => undefined);
     await slot.driver.dispose();
   }

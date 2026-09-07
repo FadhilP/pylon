@@ -20,6 +20,7 @@ const clip = (text: string, max: number) => {
   return max <= marker.length ? marker.slice(0, max) : `${safe.slice(0, max - marker.length)}${marker}`;
 };
 const maskPaths = (text: string, paths: string[]) => {
+  const boundary = (char: string | undefined) => char === undefined || /[\s`"'()[\]{},;<>]/.test(char);
   assertSafePath(...paths);
   let prefix = "\uE000";
   while (text.includes(prefix)) prefix += "\uE000";
@@ -28,7 +29,13 @@ const maskPaths = (text: string, paths: string[]) => {
   );
   const tokens = values.map((_, index) => `${prefix}${index}\uE001`);
   return {
-    masked: values.reduce((value, path, index) => value.replaceAll(path, tokens[index]), text),
+    masked: values.reduce(
+      (value, path, index) =>
+        value.replaceAll(path, (match, offset: number, source: string) =>
+          boundary(source[offset - 1]) && boundary(source[offset + match.length]) ? tokens[index] : match,
+        ),
+      text,
+    ),
     restore: (value: string) => tokens.reduce((safe, token, index) => safe.replaceAll(token, values[index]), value),
   };
 };
@@ -48,6 +55,8 @@ export function assertSafePath(...paths: (string | undefined)[]) {
     throw Error("candidate rejected: possible credential");
 }
 export function assertSafeWithPaths(text: string, paths: string[]) {
+  // Path exemptions must never hide an explicit credential assignment or token.
+  if (explicitPatterns.some(pattern => pattern.test(text))) throw Error("candidate rejected: possible credential");
   assertSafe(maskPaths(text, paths).masked);
 }
 export function redactSecrets(text: string) {
@@ -66,6 +75,6 @@ export function sanitizePathAndClip(path: string, max: number) {
   return clip(redactPathSecrets(path), max);
 }
 export function sanitizeAndClipWithPaths(text: string, paths: string[], max: number) {
-  const masked = maskPaths(text, paths);
+  const masked = maskPaths(replace(text, explicitPatterns), paths);
   return clip(masked.restore(redactSecrets(masked.masked)), max);
 }

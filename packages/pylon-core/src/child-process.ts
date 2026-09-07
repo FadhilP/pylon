@@ -1,10 +1,4 @@
-/**
- * Plumbing shared by every package that drives a `pi` child agent over NDJSON.
- *
- * This module owns only mechanism — locating the CLI, killing a process group,
- * framing lines, bounding buffers, tallying usage. Which events matter and what
- * counts as failure stays with each caller, because those policies genuinely differ.
- */
+/** Shared child-process transport and accounting; callers own event and failure policy. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -79,15 +73,9 @@ export const emptyUsage = (): ChildUsage => ({
   costParts: emptyCostParts(),
 });
 
-/**
- * A provider bills a turn in four parts and reports them beside the total. A
- * delegate that keeps only the total leaves whoever reads its usage later
- * unable to say what the prompt cost against what the reply cost, so the parts
- * ride along with it — the total stays the number every budget is measured in.
- */
+/** Preserve cost components for reporting; budgets still use the total. */
 export const emptyCostParts = (): CostParts => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
-/** Two tallies added: the parts add like the totals beside them. */
 export const sumCostParts = (left: CostParts, right: CostParts): CostParts => ({
   input: left.input + right.input,
   output: left.output + right.output,

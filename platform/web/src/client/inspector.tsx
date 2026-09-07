@@ -3,7 +3,6 @@ import {
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
-  IconClock,
   IconFile,
   IconGitBranch,
   IconGitFork,
@@ -17,8 +16,8 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import DOMPurify from "dompurify";
-import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { formatCacheHitRate, formatCompactNumber, formatWorkDuration } from "../shared/format";
+import { lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { formatCacheHitRate, formatCompactNumber } from "../shared/format";
 import {
   DEFAULT_GUARD_RULES,
   GUARD_ACTIONS,
@@ -26,7 +25,6 @@ import {
   GUARD_RULE_DESCRIPTIONS,
   GUARD_RULE_LABELS,
   mergeGuardRules,
-  resolveGuardRule,
   type GuardAction,
   type GuardRuleOverrides,
 } from "../shared/guard-policy";
@@ -64,7 +62,6 @@ import { useSyntaxHighlightingRevision } from "./use-chrome";
 
 /** The session-scoped reference views. The rail owns choosing between them. */
 export type ViewId = Extract<ReferenceId, "overview" | "policy" | "timeline" | "memory" | "tools">;
-type Tone = "success" | "warning" | "danger" | "neutral" | "active";
 const CodeViewer = lazy(() => import("./code-viewer"));
 
 interface SessionReferenceProps {
@@ -78,11 +75,7 @@ interface SessionReferenceProps {
   onOpenMemoryReviewerSettings: () => void;
 }
 
-/**
- * One session reference view, with no chrome of its own. The panel header,
- * the description and the choice of view all belong to the rail that opened
- * it — this renders only the body.
- */
+/** Session reference body; the rail owns its header and view selection. */
 export function SessionReference({
   view,
   live,
@@ -120,7 +113,6 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
   const operational = runtime?.operational;
   const work = operational?.continuity.work;
   const completedTodos = work?.todos.filter(todo => todo.status === "done").length ?? 0;
-  const progress = work?.todos.length ? (completedTodos / work.todos.length) * 100 : 0;
   const workState: OverviewState =
     work?.mode === "executing"
       ? "running"
@@ -148,7 +140,6 @@ function Overview({ live }: { live: RuntimeStoreSnapshot }) {
                 </div>
                 <div className="overview-run-status">
                   <OverviewStateLabel state={workState}>{work.mode}</OverviewStateLabel>
-                  {/* <LedBar a={progress} responsive tone={workState} running={workState === "running"} label={`${completedTodos} of ${work.todos.length} tasks complete`} /> */}
                   <small>
                     {completedTodos} of {work.todos.length}
                   </small>
@@ -2322,14 +2313,5 @@ function FeatureUnavailable({ name }: { name: string }) {
       <strong>{name} unavailable</strong>
       <span>Installed package version does not expose compatible state.</span>
     </div>
-  );
-}
-
-function Status({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return (
-    <span className={`status status-${tone}`}>
-      <span aria-hidden="true" />
-      {children}
-    </span>
   );
 }

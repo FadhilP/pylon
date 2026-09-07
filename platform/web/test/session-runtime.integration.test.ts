@@ -166,7 +166,7 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
   }
 });
 
-test("terminal agent end stops reporting SDK settlement as running when todo progress remains", async () => {
+test("terminal status and completed todo progress follow the active turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-terminal-status-"));
   const cwd = join(root, "workspace"),
     agentDir = join(root, "agent");
@@ -185,22 +185,32 @@ test("terminal agent end stops reporting SDK settlement as running when todo pro
       revision: 1,
       work: {
         todos: [
-          { id: "todo-1", text: "Finished", status: "done" },
-          { id: "todo-2", text: "Still tracked", status: "in_progress" },
+          { id: "todo-1", text: "Finished", status: "done", updatedAt: "2026-01-01T00:00:00.000Z" },
+          { id: "todo-2", text: "Still tracked", status: "in_progress", updatedAt: "2026-01-01T00:00:01.000Z" },
         ],
       },
     };
     assert.equal(driver.runtimeState(), "running");
+    assert.deepEqual(driver.runtimeDetails().todoProgress, { completed: 1, total: 2 });
+    (driver as any).operational.continuity.work.todos[1] = {
+      id: "todo-2",
+      text: "Still tracked",
+      status: "done",
+      updatedAt: "2026-01-01T00:00:02.000Z",
+    };
+    assert.deepEqual(driver.runtimeDetails().todoProgress, { completed: 2, total: 2 });
     session._emit({ type: "agent_end", messages: [] });
 
-    assert.deepEqual(driver.runtimeDetails().todoProgress, { completed: 1, total: 2 });
+    assert.deepEqual(driver.runtimeDetails().todoProgress, { completed: 2, total: 2 });
     assert.equal(session.isStreaming, true);
     assert.equal(driver.runtimeState(), "idle");
 
     session._emit({ type: "agent_start" });
+    assert.equal(driver.runtimeDetails().todoProgress, undefined);
     session._emit({ type: "agent_end", messages: [], willRetry: true });
     assert.ok(driver.runtimeDetails().workStartedAt);
     assert.equal(driver.runtimeState(), "running");
+    assert.equal(driver.runtimeDetails().todoProgress, undefined);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });

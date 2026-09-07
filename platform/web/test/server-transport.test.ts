@@ -752,6 +752,14 @@ class FakeDriver implements PiDriver {
       runtime,
     });
   }
+  emitCleared(): void {
+    this.current = { ...this.current, sessionGeneration: this.current.sessionGeneration + 1 };
+    this.emit({
+      type: "session.cleared",
+      sessionId: this.current.sessionId,
+      sessionGeneration: this.current.sessionGeneration,
+    });
+  }
   emitStatus(sessionId: string, state: "sleeping" | "idle" | "running" | "attention", completed = false): void {
     this.emit({
       type: "session.status",
@@ -967,6 +975,28 @@ test("bootstrap rejects invalid runtime snapshots with a bounded diagnostic", as
     assert.match(String((await body(response)).error), /Invalid runtime snapshot in conversation/);
   } finally {
     await transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
+  }
+});
+
+test("bootstrap represents a cleared session selection without a fake runtime", async () => {
+  const driver = new FakeDriver();
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`] });
+  try {
+    driver.emitCleared();
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/bootstrap`, {
+      headers: { "x-pylon-tab-id": "empty-selection-tab" },
+    });
+    assert.equal(response.status, 200);
+    const boot = await body(response);
+    assert.equal(boot.runtime, null);
+    assert.equal(boot.sessionGeneration, 2);
+  } finally {
+    transport.dispose();
     await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
   }
 });

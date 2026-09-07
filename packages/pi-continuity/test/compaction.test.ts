@@ -11,7 +11,14 @@ import {
   CONTINUITY_COMPACTION_TYPE,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "../src/compaction.ts";
-import { assertSafe, assertSafePath, redactPathSecrets, redactSecrets } from "../src/secrets.ts";
+import {
+  assertSafe,
+  assertSafePath,
+  assertSafeWithPaths,
+  redactPathSecrets,
+  redactSecrets,
+  sanitizeAndClipWithPaths,
+} from "../src/secrets.ts";
 import type { Work } from "../src/active-work.ts";
 
 let sequence = 0;
@@ -48,6 +55,34 @@ test("credential heuristic distinguishes nested paths from credential components
   assert.throws(() => assertSafePath("packages/ghp_abcdefghijklmnopqrstuvwxyz123456/config.ts"), /possible credential/);
   assert.throws(() => assertSafe(`token=${"A".repeat(60)}`), /possible credential/);
 });
+
+test("known-path exemptions preserve prose without masking credential assignments or token substrings", () => {
+  const path = "platform/web/src/shared/protocol/helios-android-tooling.ts";
+  const nested = `${path}/fixture`;
+  const paths = [path, nested];
+  for (const text of [`Inspect ${path}`, `Keep \`${path}\` stable`, `Compare "${nested}" with (${path})`]) {
+    assert.doesNotThrow(() => assertSafeWithPaths(text, paths));
+    assert.equal(sanitizeAndClipWithPaths(text, paths, 1000), text);
+  }
+  assert.throws(() => assertSafeWithPaths(`Inspect ${path}`, []), /possible credential/);
+  for (const text of [
+    `prefix${path}`,
+    `${path}suffix`,
+    `token=${path}`,
+    `token=\`${path}\``,
+    JSON.stringify({ password: path }),
+    `${"A".repeat(50)}${path}`,
+  ]) {
+    assert.throws(() => assertSafeWithPaths(text, paths), /possible credential/);
+    const sanitized = sanitizeAndClipWithPaths(text, paths, 1000);
+    assert.match(sanitized, /\[REDACTED CREDENTIAL\]/);
+    assert.equal(sanitized.includes(path), false);
+  }
+  const unsafe = `packages/${"A".repeat(49)}0/config.ts`;
+  assert.throws(() => assertSafeWithPaths(`Inspect ${unsafe}`, [unsafe]), /possible credential/);
+  assert.throws(() => sanitizeAndClipWithPaths(unsafe, [unsafe], 1000), /possible credential/);
+});
+
 const toolResult = (
   content: string,
   isError = false,
@@ -209,9 +244,14 @@ test("preserves ordinary nested paths in compaction history and working set", ()
     user("Current task", "current"),
     assistant("Working"),
   ];
-  const result = build(entries, work({ handoff: { workingSet: [path], assumptions: [], acceptanceCriteria: [] } }));
+  const constraint = `Keep \`${path}\` compatible`;
+  const result = build(
+    entries,
+    work({ handoff: { workingSet: [path], assumptions: [], acceptanceCriteria: [] }, constraints: [constraint] }),
+  );
   assert.equal(result.details?.history.read[0]?.path, path);
-  assert.equal(occurrences(result.summary, path), 2);
+  assert.ok(result.summary.includes(constraint));
+  assert.equal(occurrences(result.summary, path), 3);
   assert.doesNotMatch(result.summary, /REDACTED CREDENTIAL/);
 });
 

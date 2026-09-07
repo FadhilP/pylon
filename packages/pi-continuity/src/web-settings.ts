@@ -5,7 +5,6 @@ import {
   DEFAULT_KEEP_RECENT_TOKENS,
   compactionReviewerMaxOutputTokens,
   compactionReviewTimeoutMs,
-  continuityPrompt,
   configPath,
   continuitySettingFields,
   loadConfig,

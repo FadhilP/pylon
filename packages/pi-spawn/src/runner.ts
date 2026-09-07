@@ -83,6 +83,12 @@ const emptyUsage = (): SpawnUsage => ({
 });
 const TEXT_LIMITS = { maxBytes: 50 * 1024, maxLines: 2000 };
 const ACTIVITY_LIMITS = { maxBytes: 2000, maxLines: 40 };
+const CONTINUITY_COMPACTION_INTERRUPTION = "pi-continuity-compaction-interruption";
+const expectsCompactionContinuation = (message: any): boolean =>
+  message?.stopReason === "aborted" &&
+  Array.isArray(message.diagnostics) &&
+  message.diagnostics.some((item: any) => item?.type === CONTINUITY_COMPACTION_INTERRUPTION);
+
 const activityInput = (value: unknown): string => {
   try {
     return truncateHead(JSON.stringify(value ?? {}), ACTIVITY_LIMITS).content;
@@ -227,7 +233,6 @@ type RunState = {
   cumulativeUsage?: SpawnUsage;
   contextTokens: number | null;
   effectiveState?: { model?: string; thinking?: string; contextLimit?: number };
-  streamedText: string;
   stderr: string;
   commandError: string;
   timedOut: boolean;
@@ -464,6 +469,7 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
     message_end: event => {
       if (event.message?.role !== "assistant") return;
       const message = event.message;
+      if (expectsCompactionContinuation(message)) settlement.expectContinuation();
       const item = message.usage ?? {};
       messages.push(message);
       setStreamedText(textContent(message));
@@ -558,7 +564,6 @@ export async function runSpawn(args: string[], options: RunSpawnOptions): Promis
     cumulativeUsage,
     contextTokens,
     effectiveState,
-    streamedText,
     stderr,
     commandError,
     timedOut,

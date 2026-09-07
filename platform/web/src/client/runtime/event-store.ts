@@ -184,6 +184,7 @@ const eventNames = [
   "session.status",
   "session.replaced",
   "session.unavailable",
+  "session.cleared",
   "stream.reset-required",
   "operational.pi-verify:lifecycle",
   "operational.pi-verify:result",
@@ -500,9 +501,9 @@ export class RuntimeEventStore {
   }
 
   async listSessions(input: SessionListQuery = {}, signal?: AbortSignal): Promise<SessionListSnapshot> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     const sessions = await this.api.sessions(input, signal);
-    if (!isSessionListSnapshot(sessions) || sessions.sessionGeneration !== runtime.sessionGeneration)
+    if (!isSessionListSnapshot(sessions) || sessions.sessionGeneration !== generation)
       throw new Error("Session list is stale or invalid");
     return sessions;
   }
@@ -871,11 +872,11 @@ export class RuntimeEventStore {
   }
 
   async addProject(): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "addProject",
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
@@ -1048,13 +1049,13 @@ export class RuntimeEventStore {
   }
 
   async newSession(projectId?: string, parentSessionId?: string): Promise<number> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     const accepted = await this.sendCommand({
       type: "newSession",
       ...(projectId ? { projectId } : {}),
       ...(parentSessionId ? { parentSessionId } : {}),
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
     return accepted.sessionGeneration;
   }
@@ -1349,24 +1350,24 @@ export class RuntimeEventStore {
   }
 
   async switchSession(sessionId: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     this.historyCache.delete(sessionId);
     const accepted = await this.sendCommand({
       type: "switchSession",
       sessionId,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
     await this.waitForRuntime(sessionId, accepted.sessionGeneration);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "deleteSession",
       sessionId,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
     try {
       clearDatabaseDrafts(localStorage, sessionId);
@@ -1376,66 +1377,66 @@ export class RuntimeEventStore {
   }
 
   async archiveSession(sessionId: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "archiveSession",
       sessionId,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
   async restoreSession(sessionId: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "restoreSession",
       sessionId,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
   async renameSession(sessionId: string, name: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "renameSession",
       sessionId,
       name,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
   async setSessionActive(sessionId: string, active: boolean): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "setSessionActive",
       sessionId,
       active,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
   async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "setSessionPinned",
       sessionId,
       pinned,
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
   async reorderActiveSession(sessionId: string, beforeSessionId?: string): Promise<void> {
-    const runtime = this.requireReadyRuntime();
+    const generation = this.requireConnectedGeneration();
     await this.sendCommand({
       type: "reorderActiveSession",
       sessionId,
       ...(beforeSessionId ? { beforeSessionId } : {}),
       commandId: commandId(),
-      expectedGeneration: runtime.sessionGeneration,
+      expectedGeneration: generation,
     });
   }
 
@@ -1591,6 +1592,13 @@ export class RuntimeEventStore {
     return runtime;
   }
 
+  private requireConnectedGeneration(): number {
+    const generation = this.snapshot.generation;
+    if (this.snapshot.connection !== "connected" || generation === undefined)
+      throw new Error("Runtime is not connected");
+    return generation;
+  }
+
   private historyWindow(runtime: RuntimeSnapshot): TranscriptWindowReadModel {
     const key = historyKey(runtime.sessionId, runtime.sessionGeneration);
     let segments = this.historyWindows.get(key);
@@ -1656,18 +1664,30 @@ export class RuntimeEventStore {
     const epoch = ++this.bootstrapEpoch;
     try {
       const boot = await this.api.bootstrap();
-      const issue = runtimeSnapshotValidationIssue(boot.runtime);
-      if (issue) {
-        const error = new Error(describeRuntimeSnapshotIssue(boot.runtime, issue));
-        error.name = issue.kind === "protocol" ? "ProtocolMismatchError" : "RuntimeSnapshotError";
-        throw error;
-      }
-      if (boot.protocolVersion !== PROTOCOL_VERSION || !Number.isSafeInteger(boot.sequence) || boot.sequence < 0) {
+      if (
+        boot.protocolVersion !== PROTOCOL_VERSION ||
+        !Number.isSafeInteger(boot.sequence) ||
+        boot.sequence < 0 ||
+        !Number.isSafeInteger(boot.sessionGeneration) ||
+        boot.sessionGeneration < 0
+      ) {
         const error = new Error(
           `Invalid bootstrap envelope: expected protocol ${PROTOCOL_VERSION}, received ${String(boot.protocolVersion)}.`,
         );
         error.name = boot.protocolVersion === PROTOCOL_VERSION ? "RuntimeSnapshotError" : "ProtocolMismatchError";
         throw error;
+      }
+      if (boot.runtime !== null) {
+        const issue = runtimeSnapshotValidationIssue(boot.runtime);
+        if (issue || boot.runtime.sessionGeneration !== boot.sessionGeneration) {
+          const error = new Error(
+            issue
+              ? describeRuntimeSnapshotIssue(boot.runtime, issue)
+              : "Bootstrap runtime generation does not match its envelope.",
+          );
+          error.name = issue?.kind === "protocol" ? "ProtocolMismatchError" : "RuntimeSnapshotError";
+          throw error;
+        }
       }
       const completionIds = boot.unseenCompletionSessionIds;
       if (!validCompletionSessionIds(completionIds)) {
@@ -1680,37 +1700,43 @@ export class RuntimeEventStore {
       this.bootstrapAttempts = 0;
       if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
       this.bootstrapRetry = undefined;
-      const runtime = restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId));
+      const runtime = boot.runtime
+        ? restoreCachedHistory(boot.runtime, this.historyCache.get(boot.runtime.sessionId))
+        : undefined;
       const connection = this.snapshot.connection === "loading" ? "loading" : "disconnected";
-      const queuedCommandIds = new Set((runtime.conversation.queue.items ?? []).map(item => item.commandId));
-      const retainedPending = (this.snapshot.pendingMessages ?? []).filter(
-        item =>
-          item.sessionId === runtime.sessionId &&
-          item.sessionGeneration === runtime.sessionGeneration &&
-          (item.state === "sending" || queuedCommandIds.has(item.commandId)),
-      );
-      const pendingMessages = reconcilePendingQueue(
-        retainedPending,
-        [],
-        runtime.conversation.queue.items ?? [],
-        runtime.sessionId,
-        runtime.sessionGeneration,
-      );
+      const queuedCommandIds = new Set((runtime?.conversation.queue.items ?? []).map(item => item.commandId));
+      const retainedPending = runtime
+        ? (this.snapshot.pendingMessages ?? []).filter(
+            item =>
+              item.sessionId === runtime.sessionId &&
+              item.sessionGeneration === runtime.sessionGeneration &&
+              (item.state === "sending" || queuedCommandIds.has(item.commandId)),
+          )
+        : [];
+      const pendingMessages = runtime
+        ? reconcilePendingQueue(
+            retainedPending,
+            [],
+            runtime.conversation.queue.items ?? [],
+            runtime.sessionId,
+            runtime.sessionGeneration,
+          )
+        : [];
       const unseenCompletions = completionRecord(completionIds);
       this.set({
         connection,
         runtime,
-        pendingUi: boot.pendingUi,
+        pendingUi: runtime ? boot.pendingUi : undefined,
         pendingMessages,
         sequence: boot.sequence,
-        generation: runtime.sessionGeneration,
+        generation: boot.sessionGeneration,
         sessionStatuses: this.snapshot.sessionStatuses,
         unseenCompletions,
         sessionWorkStartedAts: undefined,
         recovery: undefined,
         audioCues: [],
       });
-      this.openEvents(`${boot.runtime.sessionGeneration}:${boot.sequence}`);
+      this.openEvents(`${boot.sessionGeneration}:${boot.sequence}`);
     } catch (error) {
       if (epoch !== this.bootstrapEpoch) return;
       this.resetting = false;
@@ -1788,13 +1814,37 @@ export class RuntimeEventStore {
       this.reset();
       return;
     }
-    if (generation !== undefined && event.sessionGeneration > generation && event.type !== "session.replaced") {
+    if (
+      generation !== undefined &&
+      event.sessionGeneration > generation &&
+      event.type !== "session.replaced" &&
+      event.type !== "session.cleared"
+    ) {
       this.reset();
       return;
     }
 
     if (event.type === "session.replaced") {
       this.reset("loading", true);
+      return;
+    }
+    if (event.type === "session.cleared") {
+      this.set({
+        ...current,
+        runtime: undefined,
+        pendingUi: undefined,
+        historyWindow: undefined,
+        pendingMessages: [],
+        generation: event.sessionGeneration,
+        sequence: event.sequence,
+        agentActive: false,
+        sessionWorkStartedAts: undefined,
+        sessionTodoProgress: undefined,
+        treeChanging: false,
+        connection: "connected",
+        error: undefined,
+        audioCues: [],
+      });
       return;
     }
     if (event.type === "session.unavailable") {

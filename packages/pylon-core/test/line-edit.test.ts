@@ -66,6 +66,49 @@ test("numbered reads issue compact revisions and reject unseen or stale edits", 
   }
 });
 
+test("displayed empty lines are editable without granting coverage past a bounded read", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pylon-line-empty-"));
+  const path = join(cwd, "sample.txt");
+  try {
+    for (const ending of ["\n", "\r\n"]) {
+      await writeFile(path, `one${ending}two${ending}`);
+      const registered = tools();
+      const read = registered.get("read");
+      const edit = registered.get("edit");
+      const bounded = await invoke(read, { path, limit: 2 }, cwd);
+      await assert.rejects(
+        invoke(
+          edit,
+          { path, revision: revision(bounded), edits: [{ operation: "insert_before", line: 3, newText: "three" }] },
+          cwd,
+        ),
+        /not displayed/,
+      );
+      const full = await invoke(read, { path }, cwd);
+      await invoke(
+        edit,
+        { path, revision: revision(full), edits: [{ operation: "insert_before", line: 3, newText: "three" }] },
+        cwd,
+      );
+      assert.equal(await readFile(path, "utf8"), `one${ending}two${ending}three${ending}`);
+    }
+    for (const content of ["", "one\n"]) {
+      await writeFile(path, content);
+      const registered = tools();
+      const line = content.split("\n").length;
+      const read = await invoke(registered.get("read"), { path, offset: line, limit: 1 }, cwd);
+      await invoke(
+        registered.get("edit"),
+        { path, revision: revision(read), edits: [{ operation: "insert_before", line, newText: "last" }] },
+        cwd,
+      );
+      assert.equal(await readFile(path, "utf8"), `${content}last\n`);
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 test("one edit call resolves disjoint operations against the original snapshot", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pylon-line-batch-"));
   const path = join(cwd, "sample.txt");

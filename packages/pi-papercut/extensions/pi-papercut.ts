@@ -4,6 +4,8 @@ import { Type } from "typebox";
 import {
   capturePapercut,
   listPapercuts,
+  MAX_MESSAGE_LENGTH,
+  MAX_NOTE_LENGTH,
   mutatePapercut,
   PapercutMutationError,
   queryPapercuts,
@@ -25,7 +27,6 @@ const Lifecycle = StringEnum(LIFECYCLE_ACTIONS);
 const Action = StringEnum(["capture", "list", ...LIFECYCLE_ACTIONS] as const);
 
 const MAX_QUERY_LENGTH = 200;
-const MAX_MESSAGE_LENGTH = 500;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type ListStatus = PapercutStatus | "all";
@@ -372,7 +373,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
                   maxItems: 100,
                   uniqueItems: true,
                 }),
-                note: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+                note: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_NOTE_LENGTH })),
               },
               { additionalProperties: false },
             ),
@@ -382,7 +383,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
         message: Type.Optional(
           Type.String({
             minLength: 1,
-            maxLength: 500,
+            maxLength: MAX_MESSAGE_LENGTH,
             description:
               "For capture: what you were doing → what got in the way; optionally a tentative cause or improvement",
           }),
@@ -395,7 +396,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
         note: Type.Optional(
           Type.String({
             minLength: 1,
-            maxLength: 500,
+            maxLength: MAX_NOTE_LENGTH,
             description: "Required resolution for resolve; optional reason for dismiss",
           }),
         ),

@@ -5,9 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extension from "../extensions/pi-continuity.ts";
-import { saveConfig } from "../src/config.ts";
 import {
   archivalActivationDraft,
   emptyMemoryState,
@@ -16,13 +14,10 @@ import {
   isReviewRecord,
   serverNoteId,
   serverReviewId,
-  sha256,
-  type NotebookNote,
   type ReviewRecord,
 } from "../src/memory.ts";
-import type { ActivationDraft } from "../src/memory-activation.ts";
 import { writeJsonAtomic } from "../src/storage.ts";
-import { projectContext, worktreeFingerprint } from "../src/worktree.ts";
+import { projectContext } from "../src/worktree.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -32,63 +27,6 @@ after(async () => {
   if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   await rm(isolatedAgentDir, { recursive: true, force: true });
-});
-
-async function waitFor(predicate: () => boolean) {
-  for (let attempt = 0; attempt < 100 && !predicate(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(predicate(), true, "timed out waiting for asynchronous extension action");
-}
-
-const generatedWriteDraft = (): ActivationDraft => ({
-  classification: "grounded",
-  subscriptions: ["before_tool_call"],
-  predicate: {
-    all: [
-      { fact: "tool.name", op: "eq", value: "edit" },
-      { fact: "file.path", op: "matchesGlob", value: "src/generated/**" },
-    ],
-  },
-  delivery: "warn",
-  lifecycle: { activateUntil: "task_complete", rearmOn: ["context_compacted"] },
-  examples: {
-    positive: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/generated/client.ts" } }],
-    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "edit", "file.path": "src/source/client.ts" } }],
-  },
-});
-const formatCommandDraft = (): ActivationDraft => ({
-  classification: "grounded",
-  subscriptions: ["before_tool_call", "after_tool_result"],
-  predicate: {
-    all: [
-      { fact: "tool.name", op: "eq", value: "bash" },
-      { fact: "tool.command", op: "startsWith", value: "dart format" },
-    ],
-  },
-  delivery: "warn",
-  lifecycle: { activateUntil: "event_complete", rearmOn: [] },
-  examples: {
-    positive: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "dart format lib" } }],
-    hardNegative: [{ event: "before_tool_call", facts: { "tool.name": "bash", "tool.command": "echo dart format" } }],
-  },
-});
-const activatedNote = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
-  id: serverNoteId(),
-  scope: "user",
-  owner: "default",
-  trigger: "editing generated files",
-  guidance: "Edit the generator instead.",
-  authority: "user_instruction",
-  origin: "agent",
-  sourceRefs: [{ type: "direct_user_edit" }],
-  disposition: "eligible_advisory",
-  enforcementAuthority: "warning",
-  activationDraft: generatedWriteDraft(),
-  rawProposal: { trigger: "editing generated files", guidance: "Edit the generator instead." },
-  rewriteCharacter: "format_only",
-  revision: 1,
-  createdAt: "2025-01-01T00:00:00.000Z",
-  updatedAt: "2025-01-01T00:00:00.000Z",
-  ...overrides,
 });
 
 function runtime(initialActive = ["read", "edit", "continuity_update"]) {

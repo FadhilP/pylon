@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 import { findCutPoint, type CompactionResult, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Work } from "./active-work.ts";
-import { assertSafe, assertSafeWithPaths, sanitizeAndClip, sanitizePathAndClip } from "./secrets.ts";
+import {
+  assertSafe,
+  assertSafeWithPaths,
+  sanitizeAndClip as safe,
+  sanitizeAndClipWithPaths,
+  sanitizePathAndClip,
+} from "./secrets.ts";
 import { HANDOFF_ENTRY_TYPE } from "./run.ts";
 import { boundedArray, boundedString, filledString, integer, isSha256, oneOf, optional } from "./validate.ts";
 
@@ -264,10 +270,6 @@ function textContent(content: unknown): string {
     .join("\n");
 }
 
-function safe(value: string, max: number) {
-  return sanitizeAndClip(value, max);
-}
-
 function inline(value: string, max = 500) {
   return safe(value.replace(/\s+/g, " ").trim(), max);
 }
@@ -449,8 +451,8 @@ function recordsFor(
     add("Current Work", `Verification: ${inline(verification.state, 100)}${qualifiers ? ` (${qualifiers})` : ""}`, 960);
   }
   add("Current Work", `Plan: ${safe(work.planSummary || "(not specified)", 4_000)}`, 950);
-  for (const value of work.handoff?.workingSet ?? [])
-    add("Current Work", `Working set: ${inlinePath(value, 240)}`, 948);
+  const workingSet = (work.handoff?.workingSet ?? []).map(value => inlinePath(value, 240));
+  for (const value of workingSet) add("Current Work", `Working set: ${value}`, 948);
   for (const value of work.handoff?.assumptions ?? []) add("Current Work", `Assumption/gap: ${safe(value, 500)}`, 947);
   for (const value of work.handoff?.acceptanceCriteria ?? [])
     add("Current Work", `Acceptance: ${safe(value, 500)}`, 946);
@@ -476,7 +478,7 @@ function recordsFor(
 
   if (!work.constraints.length) add("Current Work", "Constraints: (none)", 900);
   for (const constraint of work.constraints.slice(0, 12))
-    add("Current Work", `Constraint: ${safe(constraint, 300)}`, 900);
+    add("Current Work", `Constraint: ${sanitizeAndClipWithPaths(constraint, workingSet, 300)}`, 900);
   for (const record of history.modified)
     add(
       "Best-effort Observed File Activity",

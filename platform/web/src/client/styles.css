@@ -436,7 +436,7 @@
   .app-error-toast button:hover { background: var(--surface-hover); color: var(--text); }
   .app-recovery-toast button { width: auto; height: auto; flex-basis: auto; padding: 3px 5px; color: var(--accent-text); font-size: 12px; }
   .agents-panel.has-selection > header { box-shadow: inset 3px 0 var(--agent-color); }
-  /* Agents panel layout. Keep these values in sync with prototypes/agent-panel-lane.html. */
+  /* Agents panel layout. */
   .agents-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; }
   .agents-filterbar { display: flex; min-height: 39px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
   .agents-filter-pills { display: flex; min-width: 0; gap: 2px; }
@@ -450,9 +450,7 @@
   .agent-turn-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 13px 14px 5px; }
   .agent-turn-group > header strong { font-size: 12px; font-weight: 620; }
   .agent-turn-group > header span { color: var(--text-muted); font-size: 12px; }
-  /* A run is a lane: the agent's colour on the edge, cost on the identity line,
-     and the tool-call track along the bottom rule with its totals riding on it.
-     Shared with the active-agents dock — see .agent-dock-entry. */
+  /* Shared lane styling for the agents panel and .agent-dock-entry. */
   .agent-lane { position: relative; }
   .agent-lane::before { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--agent-color, var(--line-strong)); content: ""; opacity: 0.85; }
   .agent-lane-base { position: absolute; right: 14px; bottom: 0; left: 16px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
@@ -467,8 +465,7 @@
   .agent-run-row:active { background: var(--surface-active); }
   .agent-run-name { display: flex; min-width: 0; align-items: baseline; gap: 7px; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
   .agent-run-name > .overview-orb-cell { align-self: center; }
-  /* The model gives up width first, then the chip, then the name; in a narrow
-     panel it drops out entirely rather than truncating three things at once. */
+  /* Shrink model, chip, then name; hide the model in narrow panels. */
   .agent-run-name em { flex: 0 100 auto; min-width: 0; overflow: hidden; color: var(--text-muted); font-size: 12px; font-style: normal; font-weight: 400; text-overflow: ellipsis; }
   @container (max-width: 340px) { .agent-run-name em { display: none; } }
   .agent-run-task { grid-column: 1 / -1; overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -500,13 +497,10 @@
   .archive-search { display: flex; min-height: 38px; align-items: center; gap: 8px; margin: 14px 16px 5px; padding: 0 4px 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-subtle); color: var(--text-muted); }
   .archive-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
   .archive-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
-  /* The filter rides inside the search field: same act, same control. A select,
-     not a row of buttons, because a busy machine has forty projects. */
   .archive-search select { max-width: 42%; flex: 0 0 auto; height: 26px; padding: 0 4px 0 9px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--text-muted); font-size: 11px; cursor: pointer; }
   .archive-search select:hover { color: var(--text-soft); }
   .archive-content { min-height: 220px; flex: 1; overflow: auto; padding: 4px 0 10px; }
-  /* The sidebar's project row, so it behaves the way that one taught: a
-     chevron, a name, and a count that stays on whether folded or not. */
+  /* Match sidebar project groups, keeping counts visible when collapsed. */
   .archive-group { position: sticky; z-index: 1; top: 0; display: grid; width: 100%; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 7px; height: 27px; padding: 0 16px; background: var(--surface-raised); color: var(--text-muted); font-size: 11px; text-align: left; }
   .archive-group:hover { background: var(--surface-hover); }
   .archive-group > svg { transition: transform var(--motion-fast) ease; }
@@ -517,8 +511,7 @@
   .archive-row > svg { color: var(--text-muted); }
   .archive-name { overflow: hidden; min-width: 0; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
   .archive-where { overflow: hidden; min-width: 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-  /* Each row is its own grid, so the last two columns are pinned to a width —
-     otherwise "5d ago" and "1mo ago" push the origin column out of line. */
+  /* Fixed time and action widths keep row columns aligned. */
   .archive-when { width: 58px; color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
   .archive-restore { display: inline-flex; min-width: 74px; min-height: 23px; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-raised); color: var(--text-soft); font-size: 11.5px; }
   .archive-restore:hover:not(:disabled) { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
@@ -1328,11 +1321,7 @@
     to { transform: rotate(360deg); }
   }
 }
-/* Everything below was appended outside the layer stack, where it outranked
-   every layer regardless of specificity. It keeps that precedence — several
-   of these rules deliberately override @layer layout — but as a declared
-   layer rather than by falling out of the cascade, so the order is visible
-   at the top of the file and a new rule cannot silently outrank the rest. */
+/* Keep these overrides after layout in the declared layer order. */
 @layer views {
 .inspector-description { padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .inspector-scroll { min-height: 0; flex: 1; overflow: auto; padding: 6px 12px; scrollbar-color: var(--line-strong) transparent; }
@@ -1703,17 +1692,11 @@
 .tool-call-io pre.is-error { color: var(--red); }
 .tool-call-empty { display: flex; min-height: 34px; align-items: center; gap: 7px; padding-left: 2px; color: var(--text-muted); font-size: 12px; }
 
-/* ---- Run seams ----
-   Compaction, retries and failed requests are not messages, so they are not
-   cards: each is a rule across the transcript with the state orb on it, the
-   label riding the left and the consequence in mono on the right. In flight
-   the rule itself carries the motion, which is why none of these needs a
-   spinner, a tinted slab or a progress bar any more. */
+/* Run seams: inline markers for compaction, retries, and failed requests. */
 .seam { --seam-line: color-mix(in srgb, var(--line) 85%, transparent); display: grid; width: 100%; grid-template-columns: 22px auto minmax(24px, 1fr) auto; align-items: center; gap: 10px; padding: 3px 0; color: var(--text-soft); text-align: left; }
 .transcript-column > .seam, .transcript-column > .seam-block { width: min(760px, max(100% - 48px, 88%)); flex: 0 0 auto; align-self: flex-start; }
 .seam-label { flex: 0 0 auto; font-size: 12px; font-weight: 620; }
-/* Text sits a shade below the centre of its own line box, so the marks that
-   flank it follow rather than floating above the words. */
+/* Align rail markers with the text's visual center. */
 .seam > .overview-orb-cell, .seam-rule, .seam-open svg { position: relative; top: 1px; }
 .seam-rule { height: 1px; background: var(--seam-line); }
 .seam-value { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -1956,23 +1939,13 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .generic-tool-row { display: grid; min-height: 46px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 12px; }
 .generic-tool-row + .generic-tool-row { border-top: 1px solid var(--line); }
 .generic-tool-row strong { overflow: hidden; font: 12px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
-/* ============================================================
-   Settings dialog. Packages and Hooks are both master/detail
-   workbenches nested inside the section nav, so at the old 1180px
-   that was three columns in a modal and the detail pane ended up
-   around 700px. Filling the viewport gives those panes real width.
-   It stays a dialog rather than a page so that opening settings
-   never loses the session behind it.
-   ============================================================ */
+/* Settings: master/detail panes in a modal that preserves session context. */
 .settings-backdrop { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 16px; background: rgb(7 9 12 / 64%); backdrop-filter: blur(4px); animation: backdrop-in var(--motion-standard) ease-out; }
-/* Not full height: a dialog that reaches the screen edges stops reading as
-   a dialog. It caps out once there is more room than the content needs, and
-   keeps a floor so short windows still show a usable slice of a long pane. */
+/* Cap dialog height while keeping short windows usable. */
 .settings-dialog { display: grid; width: min(1240px, 100%); height: min(900px, calc(100dvh - 96px)); min-height: min(540px, calc(100dvh - 32px)); grid-template-rows: 56px minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 24px 70px rgb(0 0 0 / 38%); animation: modal-in var(--motion-standard) var(--motion-ease-out); }
 .settings-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--line); }
 .settings-dialog > header > div { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
-/* The title and its subtitle share a baseline; the icon centres on the
-   title's cap height instead of sitting on that baseline. */
+/* Center the icon on the title, not the shared text baseline. */
 .settings-dialog > header > div > svg { align-self: center; flex: 0 0 auto; }
 .settings-dialog > header strong { font-size: 14px; font-weight: 650; }
 .settings-dialog > header span { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -2572,26 +2545,16 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .queue-actions button { width: 28px; justify-content: center; padding: 0; }
   .queue-actions button span { display: none; }
 }
-/* ==========================================================================
-   Navigation chrome.
-
-   Four altitudes, four regions: the scope rail is about the workspace, the
-   session strip is about which session, the surface tabs are about what
-   fills the pane, and the reference rail is about what is docked beside it.
-   Before this they shared a topbar, which is how Files ended up being two
-   things and the conversation ended up with two homes nobody had named.
-   ========================================================================== */
+/* Navigation regions: workspace rail, session strip, surface tabs, and reference rail. */
 .app-shell.has-scope-rail > .scope-rail { grid-row: 1 / -1; grid-column: 1; }
 .app-shell.has-scope-rail > .active-session-strip { grid-column: 3 / -1; }
 .app-shell.has-scope-rail > .session-workspace-lead { grid-column: 2; }
 .app-shell.sidebar-collapsed > .session-workspace-lead { display: none; }
 .app-shell.has-scope-rail > .sidebar { grid-column: 2; }
 .app-shell.has-scope-rail > .content-card { grid-column: 3; }
-/* The terminal drawer overlays the main area, so it tracks the content card
-   rather than the column it sat in back when the shell had no rail. */
+/* Align the terminal overlay with the content card. */
 .app-shell.has-scope-rail > .terminal-layer { grid-column: 3; }
-/* The Files surface renders its own shell rather than a .content-card, and it
-   spans columns by default — which without this puts it under the rail. */
+/* Keep the Files shell clear of the workspace rail. */
 .app-shell.has-scope-rail > .file-workspace-shell { grid-column: 2 / -1; }
 .app-shell.has-scope-rail > .file-workspace-shell.has-session-navigation { grid-column: 3; }
 .app-shell.has-scope-rail.sidebar-collapsed { grid-template-columns: var(--rail-width) 0 minmax(0, 1fr); }
@@ -2603,9 +2566,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .rail-item { position: relative; display: grid; width: 34px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: var(--radius-control); color: var(--text-muted); transition: background var(--motion-fast) var(--motion-ease-out), color var(--motion-fast) var(--motion-ease-out); }
 .rail-item:hover { background: var(--surface-hover); color: var(--text); }
 .rail-item.is-active { background: var(--surface-active); color: var(--accent-text); }
-/* The five session views have carried their own colour since they were
-   Inspector tabs; --rail-tone comes from the registry so the mapping lives in
-   one place rather than in a selector per view. */
+/* The registry supplies each view's color through --rail-tone. */
 .rail-item.is-active svg { color: var(--rail-tone, var(--accent-text)); }
 .inspector-header > div > svg, .inspector > header > div > svg { color: var(--rail-tone, var(--text-muted)); }
 .agents-panel.has-selection > header > div > svg { color: var(--agent-color); }
@@ -2628,8 +2589,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .surface-tab:disabled { cursor: default; opacity: 0.5; }
 .surface-tab > small { padding: 0 5px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 12px; }
 .surface-tab.is-live::after { content: ""; width: 5px; height: 5px; border-radius: 999px; background: var(--green); }
-/* The branch, not a crumb: the project and title already sit in the strip
-   tab directly above, so repeating them here said nothing new. */
+/* Show only the branch; the session strip already shows project and title. */
 .surface-branch { display: flex; align-items: center; gap: 6px; margin-left: auto; overflow: hidden; padding: 0 4px 5px; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-view-head { display: flex; min-height: 44px; align-items: center; gap: 9px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); }
 .workspace-view-head strong { font-size: 14px; font-weight: 640; }
@@ -2638,11 +2598,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .content-card.is-workspace-view { display: flex; flex-direction: column; }
 .workspace-view-body { flex: 1; min-height: 0; overflow-y: auto; }
 @media (max-width: 900px) {
-  /* Below this the rail lies down: a permanent column costs too much of a
-     narrow screen, and the strip and sidebar already stack. The children
-     carry explicit grid-column values, so collapsing the template is not
-     enough — they have to be moved back to the single column too, or they
-     create implicit tracks and the shell stays three columns wide. */
+  /* Reset child grid columns too; otherwise they create implicit tracks on narrow screens. */
   .app-shell.has-scope-rail, .app-shell.has-scope-rail.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--rail-width) 38px minmax(0, 1fr); }
   .app-shell.has-scope-rail > .scope-rail, .app-shell.has-scope-rail > .active-session-strip, .app-shell.has-scope-rail > .sidebar, .app-shell.has-scope-rail > .content-card { grid-column: 1; }
   .app-shell.has-scope-rail > .scope-rail { grid-row: 1; }
@@ -2656,27 +2612,20 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .scope-rail { height: var(--rail-width); flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); }
   .rail-push { margin-top: 0; margin-left: auto; }
   .rail-item::before { top: calc(100% + 6px); right: auto; left: 50%; transform: translateX(-50%); }
-  /* The reference rail lies down along the bottom edge instead of vanishing,
-     and scrolls sideways: seven items and their dividers do not fit 320px. */
+  /* Keep reference controls accessible in a horizontally scrolling bottom rail. */
   .workspace-layout, .workspace-layout.has-inspector { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .reference-rail { width: auto; height: var(--rail-width); flex-direction: row; gap: 2px; padding: 0 6px; overflow-x: auto; border-top: 1px solid var(--line); border-left: 0; overscroll-behavior-x: contain; scrollbar-width: none; }
   .reference-rail::-webkit-scrollbar { display: none; }
   .reference-rail hr { width: 0; height: 20px; flex: 0 0 auto; margin: 0 4px; border: 0; border-left: 1px solid var(--line-strong); }
   /* Labels go above the bottom rail, not below it, where they would sit off screen. */
   .reference-rail .rail-item::before { top: auto; right: auto; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); }
-  /* The panel stops short of the rail, so it never covers the control that
-     opened it and switching references stays one tap. */
+  /* Keep the inspector clear of the reference controls. */
   .workspace-layout > .inspector, .workspace-layout > .inspector-scrim { bottom: var(--rail-width); }
   .surface-branch { display: none; }
 }
-/* The Usage view is the app's page geometry (.page-grid) drawn in hairline
-   rules and LED cells: one bordered summary at the top, everything below it
-   separated by a rule. Category colours are pinned per dimension — the same
-   five the app assigns elsewhere — so a provider keeps its colour across the
-   chart, the summary bar and every table. */
+/* Usage category colors stay consistent across charts, summaries, and tables. */
 .usage-page { --c1: var(--accent); --c2: var(--amber); --c3: var(--green); --c4: var(--violet); --c5: var(--red); }
-/* Scope on the left, period on the right, one rule under it. It stays put while
-   a long table scrolls, because the range you chose must remain readable. */
+/* Keep scope and period controls visible while the table scrolls. */
 .usage-toolbar { position: sticky; z-index: 12; top: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 11px 0 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .usage-toolbar .push { margin-left: auto; }
 .usage-facet { position: relative; flex: 0 0 auto; }

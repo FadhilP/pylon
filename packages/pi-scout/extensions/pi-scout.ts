@@ -722,7 +722,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           "--thinking",
           thinking,
           "--system-prompt",
-          WEB_SCOUT_PROMPT,
+          systemPrompt,
         ];
         const run = await runChild(args, {
           cwd: ctx.cwd,

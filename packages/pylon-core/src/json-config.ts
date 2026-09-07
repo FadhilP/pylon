@@ -2,18 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-/**
- * Load/save for the per-package JSON config files under the agent directory.
- *
- * The read path fails soft on purpose: a config that is missing, unparseable, or
- * structurally wrong must never stop the agent from starting. Anything present but
- * invalid is renamed aside rather than deleted, so a hand-edited file can be recovered.
- */
-
-/**
- * Reads and validates a config. `parse` returns the accepted value, or undefined to
- * reject the file — a rejected (but present) file is quarantined before `fallback` is used.
- */
+/** Load a valid config or fall back, quarantining invalid files for recovery. */
 export async function loadJsonConfig<T>(
   path: string,
   parse: (value: any) => T | undefined,

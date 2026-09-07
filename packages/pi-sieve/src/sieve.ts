@@ -428,10 +428,7 @@ function validStructuredContent(blocks: TextBlock[], kind: Exclude<SieveKind, "p
   return true;
 }
 
-/**
- * Shrinks a structured result to the largest item count whose outbound and retained
- * forms both fit. `build` returns the projection for a given count, newest count first.
- */
+/** Return the largest item count whose outbound and retained projections both fit. */
 function shrinkUntilFits(
   itemCount: number,
   sourceChars: number,
@@ -560,11 +557,7 @@ function sliceRelationshipGraph(
 /** Where the retained text sits relative to the marker. Errors keep only their tail. */
 type SliceLayout = "head-tail" | "tail-only";
 
-/**
- * Fits `text` plus an inline marker into the outbound and retained budgets.
- * The marker names the omitted char count, so its own width shifts that count;
- * only the decimal width matters, so re-deriving it reaches a fixed point.
- */
+/** Fit text in both budgets, recalculating the omission count until its marker width stabilizes. */
 function sliceTextWithMarker(
   text: string,
   makeMarker: (omittedChars: number) => string,

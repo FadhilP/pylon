@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { saveJsonConfig } from "./json-config.ts";
 import { definePackageSettings, effectivePackageSettingValue, validPackageSettingValue } from "./package-settings.ts";
 
 export const pylonCoreSettings = definePackageSettings({
@@ -156,14 +157,6 @@ export async function loadConfig(path = configPath()): Promise<PylonCoreConfig> 
   }
 }
 
-export async function saveConfig(config: PylonCoreConfig, path = configPath()): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
+export function saveConfig(config: PylonCoreConfig, path = configPath()): Promise<void> {
+  return saveJsonConfig(config, path);
 }
