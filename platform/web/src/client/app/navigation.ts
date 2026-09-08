@@ -5,6 +5,8 @@ import {
   IconContrast,
   IconDatabase,
   IconFiles,
+  IconGitBranch,
+  IconGitCompare,
   IconGauge,
   IconLayoutDashboard,
   IconList,
@@ -45,6 +47,7 @@ export type NavContext = {
   timelineEnabled: boolean;
   memoryEnabled: boolean;
   papercutEnabled: boolean;
+  reviewAvailable?: boolean;
 };
 
 export type WorkspaceViewId = "sessions" | "archive" | "usage";
@@ -74,7 +77,7 @@ export const AMBIENT: AmbientDefinition[] = [
   { id: "terminal", label: "Terminal", icon: IconTerminal2 },
 ];
 
-export type SurfaceId = "chat" | "files" | "database" | "browser";
+export type SurfaceId = "chat" | "files" | "database" | "browser" | "review";
 
 export type SurfaceDefinition = {
   id: SurfaceId;
@@ -92,6 +95,7 @@ export type SurfaceDefinition = {
 export const SURFACES: SurfaceDefinition[] = [
   { id: "chat", label: "Chat", icon: IconMessageCircle },
   { id: "files", label: "Files", icon: IconFiles, requiresSession: true },
+  { id: "review", label: "Review", icon: IconGitCompare, requiresSession: true, available: context => context.surface === "review" || !!context.reviewAvailable },
   {
     id: "database",
     label: "Database",
@@ -156,6 +160,7 @@ export type ReferenceId =
   | "notes"
   | "tools"
   | "changes"
+  | "git"
   | "agents"
   | "compaction"
   | "attachment"
@@ -240,6 +245,7 @@ export const REFERENCES: ReferenceDefinition[] = [
     group: "session",
     tone: "var(--red)",
   },
+  { id: "git", label: "Git", description: "Branch state, commits, stashes and review.", icon: IconGitBranch, ariaId: "git-panel", group: "run", tone: "var(--accent)" },
   {
     // Named for what it shows rather than what it browses: the Files surface
     // is the explorer, this is the changed set and its diffs.

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import childProcess, { execFile } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,10 +49,118 @@ function gitOutput(cwd: string, args: string[]): Promise<string> {
   });
 }
 
+function gitOutputWithEnv(cwd: string, args: string[], env: Record<string, string>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, env: { ...process.env, ...env }, windowsHide: true }, (error, stdout) =>
+      error ? reject(error) : resolve(String(stdout).trim()),
+    );
+  });
+}
+
+async function fullWorktreeTree(cwd: string, unborn = false): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "pylon-worktree-expected-"));
+  try {
+    const env = { GIT_INDEX_FILE: join(directory, "index") };
+    await gitOutputWithEnv(cwd, unborn ? ["read-tree", "--empty"] : ["read-tree", "HEAD"], env);
+    await gitOutputWithEnv(cwd, ["add", "-A", "--", "."], env);
+    return await gitOutputWithEnv(cwd, ["write-tree"], env);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 async function initializeRepository(cwd: string): Promise<void> {
   await git(cwd, ["init", "-q"]);
   await appendFile(join(cwd, ".git", "config"), "\n[user]\n\temail = pylon@test.local\n\tname = Pylon\n");
 }
+
+test("checkout capture preserves bounded snapshots across index and worktree states", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-checkout-capture-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await writeFile(join(root, "deleted.txt"), "delete\n");
+    await writeFile(join(root, "renamed.txt"), "rename\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+
+    const assertCapture = async () => {
+      const expectedIndex = await gitOutput(root, ["write-tree"]);
+      const expectedWorktree = await fullWorktreeTree(root);
+      const captured = await captureCheckoutState(root);
+      assert.equal(captured.indexTree, expectedIndex);
+      assert.equal(captured.worktreeTree, expectedWorktree);
+      return captured;
+    };
+
+    const clean = await assertCapture();
+    assert.equal(clean.indexTree, await gitOutput(root, ["rev-parse", "HEAD^{tree}"]));
+    await writeFile(join(root, "tracked.txt"), "staged\n");
+    await git(root, ["add", "tracked.txt"]);
+    const staged = await assertCapture();
+    assert.equal(staged.indexTree, staged.worktreeTree, "a staged-only change is present in both views");
+
+    await writeFile(join(root, "tracked.txt"), "worktree\n");
+    const divergent = await assertCapture();
+    assert.notEqual(divergent.indexTree, divergent.worktreeTree, "index and worktree remain distinct");
+
+    await unlink(join(root, "deleted.txt"));
+    await rename(join(root, "renamed.txt"), join(root, "moved.txt"));
+    await assertCapture();
+    await writeFile(join(root, "untracked.txt"), "untracked\n");
+    await assertCapture();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkout capture skips clean staging and stages observed paths literally", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-checkout-bounded-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const original = childProcess.execFile;
+    const adds: string[][] = [];
+    const mock = t.mock.method(childProcess, "execFile", ((...args: any[]) => {
+      if (args[0] === "git" && args[1]?.[0] === "add" && args[2]?.cwd === root) adds.push(args[1]);
+      return (original as any)(...args);
+    }) as typeof childProcess.execFile);
+    syncBuiltinESMExports();
+    t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+
+    await captureCheckoutState(root);
+    assert.deepEqual(adds, [], "a clean checkout uses HEAD's tree without git add");
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+    await captureCheckoutState(root);
+    assert.deepEqual(adds, [["add", "-A", "--", ":(literal)tracked.txt"]]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("checkout capture handles a clean unborn repository without staging", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-checkout-unborn-"));
+  try {
+    await initializeRepository(root);
+    const clean = await captureCheckoutState(root);
+    assert.equal(clean.head, undefined);
+    assert.equal(clean.indexTree, await gitOutput(root, ["write-tree"]));
+    assert.equal(clean.worktreeTree, clean.indexTree);
+
+    await writeFile(join(root, "tracked.txt"), "staged\n");
+    await git(root, ["add", "tracked.txt"]);
+    await writeFile(join(root, "tracked.txt"), "worktree\n");
+    const divergent = await captureCheckoutState(root);
+    assert.equal(divergent.indexTree, await gitOutput(root, ["write-tree"]));
+    assert.equal(divergent.worktreeTree, await fullWorktreeTree(root, true));
+    assert.notEqual(divergent.indexTree, divergent.worktreeTree);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("worktree diff reports only changes made after a dirty baseline", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-turn-diff-"));
@@ -463,6 +572,69 @@ test("local workspace files report all uncommitted changes against HEAD", async 
     );
     assert.equal((await readWorkspaceFile({ cwd: root, path: "staged.txt", view: "base" })).text, "base");
     assert.match((await diffWorkspaceFile({ cwd: root, path: "unstaged.txt" })).text ?? "", /^-base$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace file collection keeps immutable baselines distinct and refreshes refs", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-workspace-listings-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "old.txt"), "old\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "old"]);
+    const oldTree = await gitOutput(root, ["rev-parse", "HEAD^{tree}"]);
+
+    await rm(join(root, "old.txt"));
+    await writeFile(join(root, "middle.txt"), "middle\n");
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-qm", "middle"]);
+    const middleTree = await gitOutput(root, ["rev-parse", "HEAD^{tree}"]);
+
+    await rm(join(root, "middle.txt"));
+    await writeFile(join(root, "current.txt"), "current\n");
+    await mkdir(join(root, "empty"));
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-qm", "current"]);
+
+    const original = childProcess.execFile;
+    let listings = 0;
+    const mock = t.mock.method(childProcess, "execFile", ((...args: any[]) => {
+      if (args[0] === "git" && args[1]?.[0] === "ls-tree" && args[1].includes("--name-only") && args[2]?.cwd === root) listings++;
+      return (original as any)(...args);
+    }) as typeof childProcess.execFile);
+    syncBuiltinESMExports();
+    t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+    const warmOld = await listWorkspaceFiles({ cwd: root, baselineTree: oldTree });
+    const warmOldAgain = await listWorkspaceFiles({ cwd: root, baselineTree: oldTree });
+    assert.equal(listings, 1, "an unchanged immutable baseline is enumerated only once");
+    for (const page of [warmOld, warmOldAgain]) {
+      assert.equal(page.files.find(file => file.path === "old.txt")?.status, "deleted");
+      assert.equal(page.files.find(file => file.path === "current.txt")?.status, "added");
+      assert.equal(page.files.find(file => file.path === "empty")?.kind, "directory");
+    }
+
+    const changedBaseline = await listWorkspaceFiles({ cwd: root, baselineTree: middleTree });
+    assert.equal(changedBaseline.files.some(file => file.path === "old.txt"), false);
+    assert.equal(changedBaseline.files.find(file => file.path === "middle.txt")?.status, "deleted");
+    assert.equal(changedBaseline.files.find(file => file.path === "current.txt")?.status, "added");
+
+    await git(root, ["replace", oldTree, middleTree]);
+    const replaced = await listWorkspaceFiles({ cwd: root, baselineTree: oldTree });
+    assert.equal(replaced.files.some(file => file.path === "old.txt"), false);
+    assert.equal(replaced.files.find(file => file.path === "middle.txt")?.status, "deleted");
+    await git(root, ["replace", "-d", oldTree]);
+    assert.equal((await listWorkspaceFiles({ cwd: root, baselineTree: oldTree })).files.find(file => file.path === "old.txt")?.status, "deleted");
+
+    await listWorkspaceFiles({ cwd: root, baselineTree: "HEAD" });
+    await rm(join(root, "current.txt"));
+    await writeFile(join(root, "refreshed.txt"), "refreshed\n");
+    await git(root, ["add", "-A"]);
+    await git(root, ["commit", "-qm", "refreshed"]);
+    const refreshedRef = await listWorkspaceFiles({ cwd: root, baselineTree: "HEAD" });
+    assert.equal(refreshedRef.files.some(file => file.path === "current.txt"), false);
+    assert.ok(refreshedRef.files.some(file => file.path === "refreshed.txt"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

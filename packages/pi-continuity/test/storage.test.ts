@@ -1,23 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readJson, readVersionedJson, updateJson } from "../src/storage.ts";
+import { readJson, readVersionedJson, updateJson, withFileLock } from "../src/storage.ts";
 
 test("concurrent JSON updates do not lose writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "continuity-update-"));
   try {
     const path = join(root, "state.json");
-    await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: 20 }, (_, value) =>
         updateJson<number[]>(path, [], items => [...items, value], Array.isArray),
       ),
     );
+    // Do not delete the fixture while other writers are still running after a rejection.
+    for (const result of results) if (result.status === "rejected") throw result.reason;
     const items = await readJson<number[]>(path, [], Array.isArray);
     assert.equal(items.length, 20);
     assert.equal(new Set(items).size, 20);
   } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+test("lock acquisition errors preserve their cause and never run the protected task", async t => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-lock-error-"));
+  const path = join(root, "state.json");
+  const failure = Object.assign(new Error("access denied"), { code: "EACCES" });
+  const makeDirectory = fs.mkdir;
+  const mocked = t.mock.method(fs, "mkdir", async (...args: Parameters<typeof fs.mkdir>) => {
+    if (args[0] === `${path}.lock`) throw failure;
+    return Reflect.apply(makeDirectory, fs, args);
+  });
+  syncBuiltinESMExports();
+  let ran = false;
+  try {
+    await assert.rejects(
+      withFileLock(path, async () => { ran = true; }),
+      { cause: failure },
+    );
+    assert.equal(ran, false);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
     await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
 });

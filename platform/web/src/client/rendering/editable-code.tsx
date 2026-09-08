@@ -163,8 +163,8 @@ export function EditableCode(props: Props) {
   const analyses = useRef<EditorAnalysisRequests>(undefined);
   const lastAnalysis = useRef<{ doc: EditorState["doc"]; input: EditorAnalysisInput }>(undefined);
   const [comparison, setComparison] = useState<{ text: string; indexText?: string; changes?: Map<number, GitLineChange> }>();
-  const gitChanges = comparison?.text === props.text && comparison.indexText === props.editing.gitIndexText
-    ? comparison.changes : undefined;
+  const comparisonCurrent = comparison?.text === props.text && comparison.indexText === props.editing.gitIndexText;
+  const gitChanges = comparisonCurrent ? comparison.changes : undefined;
   // A pending comparison is not a failure. Keep the last settled status until
   // its replacement arrives so typing cannot insert/remove chrome above the editor.
   const comparisonUnavailable = props.editing.gitIndexText !== undefined && comparison !== undefined &&
@@ -373,7 +373,8 @@ export function EditableCode(props: Props) {
         ...(editor.state.readOnly !== props.editing.readOnly
           ? [readOnly.current.reconfigure(EditorState.readOnly.of(props.editing.readOnly))]
           : []),
-        paintCode.of({ text: props.text, notes: props.notes, blocks, gitChanges }),
+        paintCode.of({ text: props.text, notes: props.notes, blocks, gitIndexText: props.editing.gitIndexText,
+          ...(comparisonCurrent || analysisError ? { gitChanges } : {}) }),
       ],
     });
   }, [
@@ -383,6 +384,9 @@ export function EditableCode(props: Props) {
     props.noteActionLine,
     props.blocks,
     props.editing.readOnly,
+    props.editing.gitIndexText,
+    comparisonCurrent,
+    analysisError,
     gitChanges,
   ]);
 

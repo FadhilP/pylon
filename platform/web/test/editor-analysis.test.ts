@@ -48,11 +48,46 @@ test("source notes disappear immediately on edits and cannot be repainted by sta
   const paint = paintCode.of({ text: "original", notes: [note], blocks: [], gitChanges: new Map([[1, { kind: "added" }]]) });
   state = state.update({ effects: paint }).state;
   assert.equal(state.field(paintedCode).notes.length, 1);
-  state = state.update({ changes: { from: 0, insert: "changed " } }).state;
+  state = state.update({ changes: { from: 0, insert: "changed\n" } }).state;
   assert.deepEqual(state.field(paintedCode).notes, []);
-  assert.equal(state.field(paintedCode).gitChanges, undefined);
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[2, { kind: "added" }]]);
   state = state.update({ effects: paint }).state;
   assert.deepEqual(state.field(paintedCode).notes, []);
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[2, { kind: "added" }]], "stale work cannot move mapped gutters back");
+});
+
+test("Git gutters survive pending paints but clear on index changes and settled unavailable results", () => {
+  let state = EditorState.create({ doc: "one\ntwo\nthree", extensions: [paintedCode] });
+  const paint = (git: object = {}, index = "index") => {
+    state = state.update({ effects: paintCode.of({ text: state.doc.toString(), notes: [], blocks: [], gitIndexText: index, ...git }) }).state;
+  };
+  paint({ gitChanges: new Map([[2, { kind: "modified" }]]) });
+  state = state.update({ changes: { from: 5, insert: "x" } }).state;
+  paint();
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[2, { kind: "modified" }]]);
+  state = state.update({ changes: { from: 0, insert: "new\n" } }).state;
+  paint();
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[3, { kind: "modified" }]]);
+  const line = state.doc.line(3);
+  state = state.update({ changes: { from: line.from, to: line.to + 1 } }).state;
+  assert.equal(state.field(paintedCode).gitChanges!.size, 0, "removed lines do not leave markers on their neighbors");
+  paint({ gitChanges: new Map([[1, { kind: "added" }]]) });
+  paint({}, "staged index");
+  assert.equal(state.field(paintedCode).gitChanges, undefined);
+  paint({ gitChanges: new Map([[1, { kind: "modified" }]]) }, "staged index");
+  paint({ gitChanges: undefined }, "staged index");
+  assert.equal(state.field(paintedCode).gitChanges, undefined);
+  paint({ gitChanges: new Map() }, "staged index");
+  assert.equal(state.field(paintedCode).gitChanges!.size, 0, "a completed clean comparison replaces provisional markers");
+});
+
+test("provisional deletion boundaries follow line splits and merge again on undo", () => {
+  let state = EditorState.create({ doc: "word", extensions: [paintedCode] });
+  state = state.update({ effects: paintCode.of({ text: "word", notes: [], blocks: [], gitChanges: new Map([[1, { kind: "deleted", edge: "both" }]]) }) }).state;
+  state = state.update({ changes: { from: 2, insert: "\n" } }).state;
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[1, { kind: "deleted", edge: "before" }], [2, { kind: "deleted", edge: "after" }]]);
+  state = state.update({ changes: { from: 2, to: 3 } }).state;
+  assert.deepEqual([...state.field(paintedCode).gitChanges!], [[1, { kind: "deleted", edge: "both" }]]);
 });
 
 

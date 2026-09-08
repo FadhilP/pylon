@@ -3,6 +3,9 @@ import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../.
 import { readWorkspaceEntry, mutateWorkspace } from "../workspace/workspace-mutations.ts";
 import type { WorkspaceEntry, WorkspaceGitIndex, WorkspaceMutationInput, WorkspaceMutationResult } from "../../shared/workspace/workspace-mutations.ts";
 import { readGitIndexText } from "../workspace/git-index.ts";
+import { readGitDetail, readGitState, readGitOperation, runGitAction } from "../workspace/git.ts";
+import { GitReadPool } from "../workspace/git-reads.ts";
+import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
 import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
@@ -13,7 +16,7 @@ import type {
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { unlink } from "node:fs/promises";
+import { realpath, unlink } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   createSessionWorktreeFromState,
@@ -403,6 +406,7 @@ export class RuntimeCoordinator implements PiDriver {
   private disposed = false;
   private readonly workspaceInventories = new WorkspaceInventories();
   private readonly fileHistoryReader = new FileHistoryReader();
+  private readonly gitReads = new GitReadPool();
   private annotationStore?: AnnotationStore;
   private noteStore(): AnnotationStore {
     if (!this.target || this.disposed) throw new Error("Runtime is unavailable");
@@ -801,6 +805,83 @@ export class RuntimeCoordinator implements PiDriver {
     return { sessionId: slot.id, sessionGeneration: generation, text };
   }
 
+  async workspaceGitState(signal?: AbortSignal): Promise<GitState & RuntimeHandle> {
+    const slot = this.selected();
+    const generation = this.generation;
+    await this.assertGitTrusted(slot);
+    const cwd = slot.driver.runtimeDetails().cwd;
+    const state = await this.gitReads.read(cwd, "state", () => readGitState(cwd), signal);
+    this.assertSelected(slot, generation, "reading Git state");
+    return { ...state, sessionId: slot.id, sessionGeneration: generation };
+  }
+
+  async workspaceGitDetail(query: GitDetailQuery, signal?: AbortSignal): Promise<GitDetail & RuntimeHandle> {
+    const slot = this.selected();
+    const generation = this.generation;
+    await this.assertGitTrusted(slot);
+    const cwd = slot.driver.runtimeDetails().cwd;
+    const detail = await this.gitReads.read(cwd, query, () => readGitDetail(cwd, query), signal);
+    this.assertSelected(slot, generation, "reading Git detail");
+    return { ...detail, sessionId: slot.id, sessionGeneration: generation };
+  }
+
+  private async gitAffectedSlots(slot: RuntimeSlot, indexOnly: boolean): Promise<RuntimeSlot[]> {
+    const canonical = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+    const root = await realpath(slot.driver.runtimeDetails().cwd);
+    const common = !indexOnly ? (await inspectGitWorkspace(root))?.commonDir : undefined;
+    const affected: RuntimeSlot[] = [];
+    for (const candidate of this.slots.values()) {
+      const cwd = await realpath(candidate.driver.runtimeDetails().cwd).catch(() => undefined);
+      if (candidate === slot || !cwd || canonical(cwd) === canonical(root)) { affected.push(candidate); continue; }
+      if (indexOnly) continue;
+      const other = this.registry().workspaceForSession(candidate.id)?.commonDir ??
+        (await inspectGitWorkspace(cwd).catch(() => undefined))?.commonDir;
+      // Unknown identity remains conservatively invalidated; known unrelated repositories do not.
+      if (!common || !other || canonical(common) === canonical(other)) affected.push(candidate);
+    }
+    return affected;
+  }
+
+  async gitAction(input: {
+    commandId: string;
+    sessionId: string;
+    expectedGeneration: number;
+    input: GitActionInput;
+  }): Promise<AcceptedCommand> {
+    return this.withLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      if (slot.id !== input.sessionId) throw new Error("workspace belongs to a different session");
+      await this.assertGitMutationSafe(slot);
+      this.assertSelected(slot, input.expectedGeneration, "preparing Git action");
+      const indexOnly = input.input.action === "stage" || input.input.action === "unstage";
+      const affected = await this.gitAffectedSlots(slot, indexOnly);
+      this.gitReads.invalidate();
+      let failed = false;
+      try {
+        await runGitAction(slot.driver.runtimeDetails().cwd, input.input);
+        this.assertSelected(slot, input.expectedGeneration, "running Git action");
+        return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        this.gitReads.invalidate();
+        // Even failed commands may mutate. Index-only changes cannot alter Apply's worktree delta.
+        for (const candidate of affected) {
+          this.invalidateWorkspaceInventory(candidate);
+          if (candidate.workspace) candidate.workspace.fileRevision = (candidate.workspace.fileRevision ?? 0) + 1;
+          candidate.workspaceRefreshRequest = (candidate.workspaceRefreshRequest ?? 0) + 1;
+        }
+        if (indexOnly && slot.workspace) this.publishWorkspace(slot, slot.id, input.expectedGeneration);
+        else {
+          const refresh = this.refreshWorkspace(slot, true);
+          if (failed) await refresh.catch(() => undefined);
+          else await refresh;
+        }
+      }
+    });
+  }
 
   async mutateWorkspace(input: WorkspaceMutationInput): Promise<WorkspaceMutationResult | void> {
     return this.withLifecycle(async () => {
@@ -957,6 +1038,9 @@ export class RuntimeCoordinator implements PiDriver {
     if (this.lifecycleBusy) throw new Error("another session operation is in progress");
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
+    await this.assertAgentGitReady(slot);
+    if (this.lifecycleBusy) throw new Error("another session operation is in progress");
+    this.assertSelected(slot, input.expectedGeneration, "queueing a prompt");
     slot.displayPendingPrompts ??= [];
     if (
       slot.queuedPrompts.some(item => item.commandId === input.commandId) ||
@@ -1980,6 +2064,7 @@ export class RuntimeCoordinator implements PiDriver {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    await this.gitReads.dispose();
     this.pickerAbort?.abort();
     this.pickerAbort = undefined;
     this.setupAbort?.abort();
@@ -2165,6 +2250,7 @@ export class RuntimeCoordinator implements PiDriver {
     const wasActive = slot.receivedInput || slot.pinned;
     slot.lastActivityAt = Date.now();
     try {
+      await this.assertAgentGitReady(slot);
       await slot.driver[kind]({ ...input, expectedGeneration: slot.innerGeneration });
     } catch (error) {
       await this.rollbackProvisional(slot);
@@ -3530,6 +3616,7 @@ export class RuntimeCoordinator implements PiDriver {
     this.addDisplayPendingPrompt(slot, queued);
     this.publishQueue(slot);
     try {
+      await this.assertAgentGitReady(slot);
       await slot.driver.prompt({
         commandId: queued.commandId,
         expectedGeneration: deliveryGeneration,
@@ -3634,6 +3721,47 @@ export class RuntimeCoordinator implements PiDriver {
       !slot.policyActivation &&
       slot.driver.canSleep()
     );
+  }
+
+  private async assertAgentGitReady(slot: RuntimeSlot): Promise<void> {
+    const workspace = await inspectGitWorkspace(slot.driver.runtimeDetails().cwd);
+    if (!workspace) return;
+    await this.assertGitTrusted(slot);
+    const operation = await readGitOperation(workspace.root);
+    if (operation) throw new Error(`Resolve or finish the ${operation.kind} in Git Review before starting another agent turn.`);
+  }
+
+  /** Git may run user hooks, filters, and helpers, so it requires a global idle barrier. */
+  private async assertGitMutationSafe(slot: RuntimeSlot): Promise<void> {
+    if (
+      [...this.slots.values()].some(candidate => !this.slotCanSleep(candidate)) ||
+      [...this.externalSpawnRuns.values()].some(run => run.state === "running" || run.state === "attention")
+    ) {
+      throw new Error("Git actions require every session and delegated run to be idle");
+    }
+    const registry = this.registry();
+    const record = registry.workspaceForSession(slot.id);
+    const projectId = record?.projectId ?? this.projectIdForSlot(slot);
+    const project = projectId ? registry.get(projectId) : undefined;
+    const sharesProjectCheckout =
+      record?.mode === "local" ||
+      record?.mode === "checkout" ||
+      (!record && project && resolve(slot.driver.runtimeDetails().cwd) === resolve(project.cwd));
+    if (projectId && sharesProjectCheckout && this.checkoutOwner(projectId, slot.id)) {
+      throw new Error("another session owns the project checkout");
+    }
+    await this.assertGitTrusted(slot);
+  }
+
+  private async assertGitTrusted(slot: RuntimeSlot): Promise<void> {
+    // Project resources can be explicitly untrusted. Git intentionally runs the
+    // user's configured hooks/filters/helpers, so honor that existing control.
+    if (slot.driver.listExtensions) {
+      const extensions = await slot.driver.listExtensions();
+      if (extensions.projectTrustRequired && !extensions.projectTrusted) {
+        throw new Error("Git inspection and actions require a trusted project");
+      }
+    }
   }
 
   private emitControlsChanged(slot: RuntimeSlot): void {

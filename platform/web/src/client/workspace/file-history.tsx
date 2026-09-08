@@ -50,7 +50,6 @@ export function FileHistoryViewer({
   const [scope, setScope] = useState<HistoryScope>("session");
   const [limit, setLimit] = useState(40);
   const [selected, setSelected] = useState(view === "base" && canCompare ? "baseline" : "live");
-  const [preview, setPreview] = useState(false);
   const [metadata, setMetadata] = useState<{ key: string; result: FileHistoryResult }>();
   const [loaded, setLoaded] = useState<{ key: string; result: FileHistoryResult }>();
   const [error, setError] = useState<string>();
@@ -84,7 +83,7 @@ export function FileHistoryViewer({
   ]);
   const history = metadata?.key === contextKey ? metadata.result : undefined;
   const historical = selected !== "live";
-  const historyView = preview ? "change" : view === "diff" ? "diff" : "file";
+  const historyView = view === "diff" ? "diff" : "file";
   const mutableAnchor =
     history?.baselineLabel === "HEAD" &&
     (selected === "baseline" || (historyView === "diff" && !selected.startsWith("git:")));
@@ -118,7 +117,6 @@ export function FileHistoryViewer({
             !response.stops.some(stop => stop.id === selection.current)
           ) {
             setSelected("live");
-            setPreview(false);
           }
         })
         .catch(reason => {
@@ -192,7 +190,6 @@ export function FileHistoryViewer({
 
   const pick = (id: string) => {
     setSelected(id);
-    if (id === "live" || id === "baseline") setPreview(false);
     if (view !== "diff") onView(id === "baseline" ? "base" : "current");
   };
   const closeVersionList = (restoreFocus = true) => {
@@ -377,10 +374,9 @@ export function FileHistoryViewer({
         <span>
           {canCompare && (
             <button
-              className={!preview && view === "base" ? "is-active" : ""}
+              className={view === "base" ? "is-active" : ""}
               disabled={history?.baselineAvailable === false}
               onClick={() => {
-                setPreview(false);
                 setSelected("baseline");
                 onView("base");
               }}>
@@ -389,9 +385,8 @@ export function FileHistoryViewer({
             </button>
           )}
           <button
-            className={!preview && view === "current" ? "is-active" : ""}
+            className={view === "current" ? "is-active" : ""}
             onClick={() => {
-              setPreview(false);
               if (selected === "baseline") setSelected("live");
               onView("current");
             }}>
@@ -402,7 +397,7 @@ export function FileHistoryViewer({
                 : "At this turn"
               : "Working copy"}
           </button>
-          <button className={!preview && view === "diff" ? "is-active" : ""} onClick={() => { setPreview(false); onView("diff"); }}>
+          <button className={view === "diff" ? "is-active" : ""} onClick={() => onView("diff")}>
             <IconGitCompare size={14} />
             Diff
           </button>
@@ -478,9 +473,6 @@ export function FileHistoryViewer({
             {current?.kind === "commit" && <code className="file-history-sha">{current.id.slice(4, 11)}</code>}
             {current?.createdAt && <time className="file-history-time" dateTime={current.createdAt}>{displayTimelineTime(current.createdAt)}</time>}
             {selectedCounts && <span className="file-history-counts"><b>+{selectedCounts.added}</b> <i>−{selectedCounts.removed}</i></span>}
-            <button className="primary-button file-history-show" disabled={!current} onClick={() => setPreview(value => !value)}>
-              {preview ? "Back to file" : "Show this change"}
-            </button>
             {history?.hasMore && <button className="secondary-button file-history-earlier" onClick={() => setLimit(value => Math.min(200, value + 40))}>Earlier commits</button>}
           </div>
           {(listError || history?.partial || (history && !checkpoints.length)) && (
@@ -496,7 +488,6 @@ export function FileHistoryViewer({
         view === "current" && liveEditor ? liveEditor : <FileContent value={value} view={view} targetLine={targetLine} onError={onError} />
       ) : (
         <>
-          {preview && <div className="file-history-notice file-history-preview" style={{ "--history-color": selectedColor } as CSSProperties}>Showing only this {current?.kind === "commit" ? "commit’s" : "turn’s"} change.</div>}
           {content && !content.attributionComplete && <div className="file-history-notice" role="status">Some line attribution is unavailable; unassigned lines are left blank.</div>}
           {error ? <div className="files-empty large" role="alert">{error}<button onClick={() => setRetry(value => value + 1)}>Retry</button></div>
           : !content ? <div className="files-empty large" role="status">Loading version…</div>
@@ -505,7 +496,7 @@ export function FileHistoryViewer({
           : <Suspense fallback={<div className="files-empty large">Rendering…</div>}><CodeViewer wrap key={result!.revision} mode={historyView === "file" ? "file" : "diff"} path={current?.path ?? path} text={content.text ?? ""} revision={result!.revision} annotationSource={{ kind: "historical", revision: `${selected}: ${result!.revision}` }} loadDiffFiles={loadDiffFiles} attribution={attribution} onSelectOwner={pick} /></Suspense>}
         </>
       )}
-      {canCompare && <details className="file-history-policy"><summary>About this history</summary><p>{history?.notice ?? "History is read-only. Live edits are not attributed to a saved turn."} Diff shows a selected checkpoint against the baseline, and a selected commit against its parent; Show this change is the individual selected change.</p></details>}
+      {canCompare && <details className="file-history-policy"><summary>About this history</summary><p>{history?.notice ?? "History is read-only. Live edits are not attributed to a saved turn."} Select a timeline stop to inspect that version. Diff shows a selected checkpoint against the baseline, and a selected commit against its parent.</p></details>}
     </>
   );
 }

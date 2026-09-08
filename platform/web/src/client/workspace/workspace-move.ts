@@ -31,6 +31,11 @@ export function moveDestination(path: string, folder: string): string {
   return folder ? `${folder}/${path.split("/").at(-1)}` : path.split("/").at(-1)!;
 }
 
+/** A file row belongs to its parent folder; a folder row is itself a destination. */
+export function workspaceDropFolder(path: string, directory: boolean): string {
+  return directory ? path : ancestors(path).at(-1) ?? "";
+}
+
 export function moveTargetError(path: string, folder: string, inventory: MoveInventory): string | undefined {
   if (!validWorkspacePath(path) || (folder && !validWorkspacePath(folder)) || !validWorkspacePath(moveDestination(path, folder)))
     return "Enter a valid workspace-relative folder, or / for workspace root.";

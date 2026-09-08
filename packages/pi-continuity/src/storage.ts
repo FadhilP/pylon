@@ -93,7 +93,7 @@ export async function withFileLock<T>(path: string, task: () => Promise<T>): Pro
       break;
     } catch (error: any) {
       if (error?.code !== "EEXIST" || attempt >= LOCK_WAIT_ATTEMPTS)
-        throw Error(`Unable to lock continuity state: ${path}`);
+        throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
       if (!(await removeStaleLock(lock))) await delay(LOCK_RETRY_MS);
     }
   }

@@ -13,6 +13,7 @@ const MAX_EMBEDDED_REPO_DEPTH = 4;
 interface CacheEntry {
   expiresAt: number;
   paths?: string[];
+  pending?: Promise<string[]>;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -44,13 +45,28 @@ function includeDirectories(paths: string[]): string[] {
 
 async function inventory(cwd: string): Promise<string[] | undefined> {
   const existing = cache.get(cwd);
+  if (existing?.pending) return existing.pending;
   if (existing && existing.expiresAt > Date.now()) return existing.paths;
 
-  const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.kind ? `${file.path}/` : file.path);
-  const paths = includeDirectories(files.slice(0, MAX_PATHS));
+  const entry: CacheEntry = { expiresAt: 0 };
+  cache.delete(cwd);
   if (cache.size >= MAX_CACHES) cache.delete(cache.keys().next().value!);
-  cache.set(cwd, { expiresAt: Date.now() + CACHE_MS, paths });
-  return paths;
+  cache.set(cwd, entry);
+  entry.pending = (async () => {
+    const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.kind ? `${file.path}/` : file.path);
+    return includeDirectories(files.slice(0, MAX_PATHS));
+  })().then(paths => {
+    if (cache.get(cwd) === entry) {
+      entry.paths = paths;
+      entry.expiresAt = Date.now() + CACHE_MS;
+      entry.pending = undefined;
+    }
+    return paths;
+  }, error => {
+    if (cache.get(cwd) === entry) cache.delete(cwd);
+    throw error;
+  });
+  return entry.pending;
 }
 
 async function gitFiles(cwd: string, depth = 0): Promise<string[] | undefined> {

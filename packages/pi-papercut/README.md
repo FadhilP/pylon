@@ -17,14 +17,18 @@ Reload Pi afterward. Package settings are available through Pylon Web.
 The `papercut` tool captures by default, lists records, and changes their lifecycle.
 
 ```ts
-papercut({ message: "Setup needed an undocumented retry; document the prerequisite." });
+papercut({ message: "README setup omits the build step; the documented test command fails on missing dist files until build runs. Document the prerequisite so the listed steps work on a fresh checkout." });
 papercut({ action: "list", status: "open" });
 papercut({ action: "resolve", ids: ["a1b2c3d4"], note: "Documented setup and added a regression test." });
 papercut({ action: "dismiss", ids: ["a1b2c3d4"], note: "Intentional platform behavior." });
 papercut({ action: "reopen", ids: ["a1b2c3d4"] });
 ```
 
-Capture one or two sentences about what was being attempted, what got in the way, and optionally a cause or improvement. It does not interrupt the current task. Messages are capped at 500 characters and likely credentials are rejected. Exact normalized duplicates of open records increment their occurrence count; closed records do not prevent a new capture.
+Capture only observed, actionable friction: name the affected command, file, or workflow, the obstacle and its impact, and a bounded improvement or observable condition for resolution. Write one issue in one or two factual sentences; distinguish suspected causes from observations. An exact fix is not required, but a maintainer must have enough evidence to act. If that evidence is missing, skip capture rather than inventing a cause or investigating just to create a note.
+
+This is not a place for venting, session narratives, ordinary tool limits, intentional safeguards, expected failures, agent/user mistakes, preferences, speculative improvements, product bugs, or already-tracked work. A retry, timeout, or failed command alone does not qualify. Avoid vague complaints such as “setup is frustrating” or “the tool made me retry.” Capture qualifying issues promptly without interrupting the current task.
+
+Messages are capped at 500 characters and likely credentials are rejected. Do not intentionally repeat known entries. Exact normalized duplicates of open records increment their occurrence count; closed records do not prevent a new capture.
 
 IDs are UUIDs or unique prefixes of at least four characters. Resolve/dismiss needs a note. One lifecycle operation can target several IDs; `actions` batches up to 20 `resolve`, `dismiss`, or `reopen` operations, up to 100 distinct records, in one atomic commit. A bad target changes nothing. Mark implementation friction resolved only after suitable verification.
 

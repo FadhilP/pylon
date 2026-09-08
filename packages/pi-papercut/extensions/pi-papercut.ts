@@ -353,10 +353,12 @@ export default function papercutExtension(pi: ExtensionAPI) {
     name: "papercut",
     label: "Papercut",
     description:
-      "Capture, list, or update the durable project papercut backlog. Omit action to capture. Supports unique ID prefixes, atomic same-action batches, atomic heterogeneous lifecycle actions, credential rejection, and bounded output.",
-    promptSnippet: "Capture or manage small, actionable project workflow frictions",
+      "Capture, list, or update the durable project papercut backlog of observed, actionable workflow issues—not complaints or a work log. Omit action to capture. Supports unique ID prefixes, atomic same-action batches, atomic heterogeneous lifecycle actions, credential rejection, and bounded output.",
+    promptSnippet: "Capture or manage observed workflow issues with a concrete resolution target",
     promptGuidelines: [
-      "Use papercut immediately when concrete non-blocking friction caused by the repository, tooling, or workflow makes work unnecessarily harder—for example an avoidable retry, undocumented setup step, flaky command, stale cache, misleading error, or non-obvious gotcha. In one or two sentences record what you were doing, what got in the way, and optionally a tentative cause or improvement; then continue the current task. Do not log actual bugs or tracked work, expected failures, user mistakes, generic preferences, speculative ideas, or intentionally repeat known entries; incidental recurrence is deduplicated automatically.",
+      "Use papercut only for observed, non-blocking repository, tooling, or workflow friction that a maintainer could act on. Before capturing, identify the affected command, file, or workflow, concrete evidence of the obstacle and its impact, and a bounded improvement or observable condition that would count as resolved. If you cannot supply these from available evidence, skip capture; do not invent a cause or investigate solely to produce a papercut. Once qualified, capture promptly and continue the current task.",
+      "Write each papercut as one actionable issue in one or two factual sentences: where/when it occurs, what happened and the avoidable cost, then what should change or how to recognize resolution. Separate observations from suspected causes; an exact fix is not required. Example: 'README setup omits the build step; running the documented test command on a fresh checkout fails on missing dist files until build runs. Document the build prerequisite so the listed steps work on a fresh checkout.' Do not submit vague complaints such as 'setup is frustrating' or 'the tool made me retry'.",
+      "Do not use papercut for venting, session narratives, ordinary tool limits or intentional safeguards, expected failures, agent/user mistakes, generic preferences, speculative improvements, product bugs or work already tracked by the current task or an existing issue. A retry, timeout, or failed command alone is not evidence of a fixable defect. Do not intentionally repeat known entries; incidental recurrence is deduplicated automatically.",
       "Use papercut to list or update stored papercuts when the user asks to inspect or resolve them. For implementation-related work, mark papercuts resolved only after suitable verification; use dismiss only when the friction should not be fixed.",
     ],
     executionMode: "sequential",
@@ -385,7 +387,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
             minLength: 1,
             maxLength: MAX_MESSAGE_LENGTH,
             description:
-              "For capture: what you were doing → what got in the way; optionally a tentative cause or improvement",
+              "For capture: affected command/file/workflow, observed obstacle and impact, and a bounded improvement or verifiable resolution condition; factual, not a complaint",
           }),
         ),
         status: Type.Optional(Status),

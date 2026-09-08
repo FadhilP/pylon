@@ -143,3 +143,121 @@ test("session changes apply from a worktree and Project folder without committin
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test("Git actions reject stale ownership and every active, queued, or delegated runtime", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-git-action-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "base\n");
+  await run("git", ["init"], { cwd });
+  await appendFile(join(cwd, ".git", "config"), "\n[user]\n\tname = Pylon Test\n\temail = pylon@test.local\n");
+  await run("git", ["add", "README.md"], { cwd });
+  await run("git", ["commit", "-m", "Initial"], { cwd });
+  const driver = new RuntimeCoordinator();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const slot = (driver as any).selected();
+    const state = await driver.workspaceGitState();
+    const action = (revision: string) => ({
+      commandId: "git-stage",
+      sessionId: slot.id,
+      expectedGeneration: state.sessionGeneration,
+      input: { action: "stage" as const, expectedRevision: revision, paths: ["new.txt"] },
+    });
+    await assert.rejects(driver.gitAction({ ...action(state.revision!), expectedGeneration: state.sessionGeneration - 1 }), /generation/i);
+    await assert.rejects(driver.gitAction({ ...action(state.revision!), sessionId: "wrong-session" }), /different session/);
+
+    const canSleep = slot.driver.canSleep.bind(slot.driver);
+    slot.driver.canSleep = () => false;
+    await assert.rejects(driver.gitAction(action(state.revision!)), /idle/i);
+    slot.driver.canSleep = canSleep;
+
+    slot.queuedPrompts.push({} as any);
+    await assert.rejects(driver.gitAction(action(state.revision!)), /idle/i);
+    slot.queuedPrompts.length = 0;
+    (driver as any).externalSpawnRuns.set("delegate", { state: "running" });
+    await assert.rejects(driver.gitAction(action(state.revision!)), /idle/i);
+    (driver as any).externalSpawnRuns.clear();
+    const listExtensions = slot.driver.listExtensions;
+    slot.driver.listExtensions = async () => ({ projectTrustRequired: true, projectTrusted: false });
+    await assert.rejects(driver.workspaceGitState(), /trusted project/);
+    await assert.rejects(driver.workspaceGitDetail({ kind: "file", path: "README.md", stage: "staged" }), /trusted project/);
+    await assert.rejects(driver.gitAction(action(state.revision!)), /trusted project/);
+    slot.driver.listExtensions = listExtensions;
+
+
+    await writeFile(join(cwd, "new.txt"), "new\n");
+    await assert.rejects(driver.gitAction(action(state.revision!)), /changed|refresh/i);
+    const current = await driver.workspaceGitState();
+    await driver.gitAction(action(current.revision!));
+    assert.match((await run("git", ["status", "--porcelain"], { cwd })).stdout, /^A  new\.txt$/m);
+    const head = (await run("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await writeFile(join(cwd, ".git", "MERGE_HEAD"), `${head}\n`);
+    let delivered = 0;
+    slot.driver.prompt = async () => { delivered++; throw new Error("Unexpected agent delivery"); };
+    const prompt = { commandId: "blocked-prompt", expectedGeneration: current.sessionGeneration, message: "do not deliver" };
+    await assert.rejects(driver.prompt(prompt), /Git Review|merge/);
+    await assert.rejects(driver.queuePrompt({ ...prompt, commandId: "blocked-queue" }), /Git Review|merge/);
+    assert.equal(delivered, 0);
+    assert.equal(slot.queuedPrompts.length, 0);
+    await rm(join(cwd, ".git", "MERGE_HEAD"));
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    await Promise.all(sessions.map(session => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("index actions publish invalidation without Apply scans; ref actions invalidate only related repositories", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-git-refresh-"));
+  const cwd = join(root, "workspace"), linked = join(root, "linked"), unrelated = join(root, "unrelated"), agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(unrelated), mkdir(agentDir)]);
+  const git = (...args: string[]) => run("git", args, { cwd });
+  await git("init"); await git("config", "user.name", "Test"); await git("config", "user.email", "test@example.test");
+  await writeFile(join(cwd, "a.txt"), "base\n"); await git("add", "."); await git("commit", "-m", "base");
+  await git("worktree", "add", "--detach", linked, "HEAD");
+  await run("git", ["init"], { cwd: unrelated });
+  const driver = new RuntimeCoordinator();
+  const peers: string[] = [];
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    await driver.snapshot(); // Bootstrap establishes the workspace read model before panel actions.
+    const internal = driver as any, slot = internal.selected();
+    const makePeer = (id: string, path: string) => {
+      const peer = { id, workspace: { ...slot.workspace, fileRevision: 0 }, driver: {
+        canSleep: () => true, runtimeDetails: () => ({ ...slot.driver.runtimeDetails(), cwd: path }),
+      } };
+      internal.slots.set(id, peer); peers.push(id); return peer;
+    };
+    const sibling = makePeer("linked-peer", linked), other = makePeer("unrelated-peer", unrelated);
+    let scans = 0;
+    const refresh = internal.refreshWorkspace.bind(internal);
+    internal.refreshWorkspace = async (...args: any[]) => { scans++; return refresh(...args); };
+    const events: any[] = [];
+    internal.listeners.add((event: any) => events.push(event));
+    await writeFile(join(cwd, "a.txt"), "changed\n");
+    const state = await driver.workspaceGitState();
+    const base = { commandId: "index-only", sessionId: slot.id, expectedGeneration: state.sessionGeneration };
+    await driver.gitAction({ ...base, input: { action: "stage", paths: ["a.txt"], expectedRevision: state.revision! } });
+    assert.equal(scans, 0, "stage must not await or schedule full Apply/baseline observations");
+    assert.equal(sibling.workspace.fileRevision, 0, "linked indexes are independent");
+    assert.equal(other.workspace.fileRevision, 0);
+    assert.ok(events.some(event => event.type === "workspace.revision" && event.workspace.fileRevision > 0));
+    assert.match((await git("diff", "--cached", "--name-only")).stdout, /a\.txt/);
+    const staged = await driver.workspaceGitState();
+    await driver.gitAction({ ...base, commandId: "new-ref", input: { action: "createBranch", name: "new-ref", expectedRevision: staged.revision!, confirmed: true } });
+    assert.ok(scans > 0);
+    assert.equal(sibling.workspace.fileRevision, 1, "shared refs invalidate linked worktrees");
+    assert.equal(other.workspace.fileRevision, 0, "unrelated projects retain their inventories");
+  } finally {
+    for (const id of peers) (driver as any).slots.delete(id);
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    await Promise.all(sessions.map(session => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});

@@ -15,6 +15,7 @@ const MAX_FILE_BYTES = 512 * 1024;
 const MAX_IGNORE_BYTES = 512 * 1024;
 const MAX_VISITED_ENTRIES = 100_000;
 const MAX_DEPTH = 128;
+const METADATA_CONCURRENCY = 8;
 
 export type FilesystemScan = { files: Map<string, string>; token: string };
 
@@ -41,6 +42,14 @@ function normalPath(path: string): string {
 
 async function lstatBigint(path: string): Promise<BigintStat> {
   return (await lstat(path, { bigint: true })) as BigintStat;
+}
+
+/** Settle the whole bounded batch before callers recurse or report failure. */
+async function metadataBatch(paths: readonly string[]): Promise<BigintStat[]> {
+  const results = await Promise.allSettled(paths.map(lstatBigint));
+  const failed = results.find(result => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+  return results.map(result => (result as PromiseFulfilledResult<BigintStat>).value);
 }
 
 function isSafeDescendant(root: string, path: string): boolean {
@@ -244,6 +253,29 @@ export async function scanFilesystem(
       ]);
     }
 
+    const pending: Array<{ path: string; absolute: string }> = [];
+    const collectBatch = async () => {
+      const batch = pending.splice(0);
+      const stats = await metadataBatch(batch.map(entry => entry.absolute));
+      checkDeadline(deadline);
+      for (let index = 0; index < batch.length; index++) {
+        const { path, absolute } = batch[index];
+        const stat = stats[index];
+        checkDeadline(deadline);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) {
+          if (depth >= MAX_DEPTH) throw new Error("filesystem directory depth limit exceeded");
+          await visit(absolute, path, depth + 1, scopes);
+          continue;
+        }
+        if (!stat.isFile() || !languageFor(path) || stat.size > BigInt(MAX_FILE_BYTES)) continue;
+        const fingerprint = filesystemFingerprint(stat);
+        preparedBytes += stat.size;
+        if (preparedBytes > BigInt(MAX_PREPARED_BYTES)) throw new Error("filesystem prepared source limit exceeded");
+        files.set(normalPath(path), fingerprint);
+      }
+    };
+
     // Stream entries so an oversized directory fails without first allocating its inventory.
     for await (const entry of await opendir(directory)) {
       checkDeadline(deadline);
@@ -252,40 +284,35 @@ export async function scanFilesystem(
       const matchPath = entry.isDirectory() ? `${path}/` : path;
       if (hardExcluded(path, excluded) || ignoredBy(scopes, matchPath)) continue;
 
-      const absolute = join(directory, entry.name);
-      const stat = await lstatBigint(absolute);
-      checkDeadline(deadline);
-      if (stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) {
-        if (depth >= MAX_DEPTH) throw new Error("filesystem directory depth limit exceeded");
-        await visit(absolute, path, depth + 1, scopes);
-        continue;
-      }
-      if (!stat.isFile() || !languageFor(path) || stat.size > BigInt(MAX_FILE_BYTES)) continue;
-      const fingerprint = filesystemFingerprint(stat);
-      preparedBytes += stat.size;
-      if (preparedBytes > BigInt(MAX_PREPARED_BYTES)) throw new Error("filesystem prepared source limit exceeded");
-      files.set(normalPath(path), fingerprint);
+      pending.push({ path, absolute: join(directory, entry.name) });
+      if (pending.length === METADATA_CONCURRENCY) await collectBatch();
     }
+    await collectBatch();
   };
 
   await visit(physicalRoot, "", 0, [{ directory: "", matcher: defaultMatcher }]);
   checkDeadline(deadline);
   // Recheck the metadata that formed the inventory and rules before returning a token.
-  for (const [path, fingerprint] of files) {
+  const pending: Array<readonly [string, string]> = [];
+  const verifyBatch = async () => {
+    const batch = pending.splice(0);
+    const stats = await metadataBatch(batch.map(([path]) => join(physicalRoot, path)));
     checkDeadline(deadline);
-    const absolute = join(physicalRoot, path);
-    // Parent directories were checked during traversal; content reads check components again.
-    const stat = await lstatBigint(absolute);
-    if (!stat.isFile() || stat.isSymbolicLink() || filesystemFingerprint(stat) !== fingerprint)
-      throw mutationError(path);
+    for (let index = 0; index < batch.length; index++) {
+      const [path, fingerprint] = batch[index];
+      const stat = stats[index];
+      if (!stat.isFile() || stat.isSymbolicLink() || filesystemFingerprint(stat) !== fingerprint)
+        throw mutationError(path);
+    }
+  };
+  for (const entries of [files, ignoreContents.map(([path, _content, fingerprint]) => [path, fingerprint] as const)]) {
+    for (const entry of entries) {
+      checkDeadline(deadline);
+      pending.push(entry);
+      if (pending.length === METADATA_CONCURRENCY) await verifyBatch();
+    }
   }
-  for (const [path, _content, fingerprint] of ignoreContents) {
-    checkDeadline(deadline);
-    const stat = await lstatBigint(join(physicalRoot, path));
-    if (!stat.isFile() || stat.isSymbolicLink() || filesystemFingerprint(stat) !== fingerprint)
-      throw mutationError(path);
-  }
+  await verifyBatch();
   checkDeadline(deadline);
   const hash = createHash("sha256");
   const add = (value: string | Buffer) => {

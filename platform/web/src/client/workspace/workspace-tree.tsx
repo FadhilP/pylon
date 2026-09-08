@@ -25,7 +25,7 @@ import {
 } from "./workspace-tree-model";
 import { setExplorerChangesOnly, setExplorerOpen, useExplorerState } from "./use-explorer-state";
 import { FileTypeIcon, FolderTypeIcon } from "../rendering/file-icons";
-import { WORKSPACE_ENTRY_DRAG_TYPE, workspaceDropDestination, workspaceMoveInventory, type WorkspaceDragSource } from "./workspace-move";
+import { WORKSPACE_ENTRY_DRAG_TYPE, workspaceDropDestination, workspaceDropFolder, workspaceMoveInventory, type WorkspaceDragSource } from "./workspace-move";
 import { selectWorkspacePaths, topLevelPaths } from "./workspace-selection";
 import { planFolderMove } from "./workspace-move";
 import type { MovePlan } from "./workspace-move-history";
@@ -369,7 +369,7 @@ function TreeRow({
       type="button"
       role="treeitem"
       data-path={node.path}
-      data-move-folder={node.directory ? node.path : undefined}
+      data-move-folder={workspaceDropFolder(node.path, node.directory)}
       draggable={!node.directory || movable}
       aria-expanded={node.directory ? open : undefined}
       aria-selected={selected}

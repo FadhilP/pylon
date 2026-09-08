@@ -1,5 +1,6 @@
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import type { WorkspaceEntry, WorkspaceGitIndex, WorkspaceMutationInput, WorkspaceMutationResult } from "../../shared/workspace/workspace-mutations.ts";
+import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
@@ -378,6 +379,9 @@ export interface PiDriver {
   workspaceEntry?(path: string, moveDestination?: string, includeGitIndex?: boolean): Promise<WorkspaceEntry>;
   workspaceGitIndex?(path: string): Promise<WorkspaceGitIndex>;
   mutateWorkspace?(input: WorkspaceMutationInput): Promise<WorkspaceMutationResult | void>;
+  workspaceGitState?(signal?: AbortSignal): Promise<GitState & RuntimeHandle>;
+  workspaceGitDetail?(query: GitDetailQuery, signal?: AbortSignal): Promise<GitDetail & RuntimeHandle>;
+  gitAction?(input: { commandId: string; sessionId: string; expectedGeneration: number; input: GitActionInput }): Promise<AcceptedCommand>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
   workspaceSearch?(input: WorkspaceSearchInput, send: (result: WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal): Promise<WorkspaceSearchResult>;
   workspaceSymbols?(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult>;

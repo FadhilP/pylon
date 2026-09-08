@@ -1,3 +1,4 @@
+import type { GitActionInput } from "../workspace/git.ts";
 import type { WorkspaceMutationInput } from "../workspace/workspace-mutations.ts";
 import type { GuardRuleOverrides } from "../settings/guard-policy.ts";
 import type {
@@ -64,6 +65,7 @@ export const COMMAND_NAMES = [
   "updateRuntimePolicy",
   "updateToolPolicy",
   "dismissCommandResult",
+  "gitAction",
 ] as const;
 
 interface CommandBase {
@@ -171,6 +173,7 @@ export type WebCommand =
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
   | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
   | ({ type: "mutateWorkspace" } & WorkspaceMutationInput & CommandBase)
+  | ({ type: "gitAction"; sessionId: string; input: GitActionInput } & CommandBase)
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
   | ({
       type: "updateRuntimePolicy";

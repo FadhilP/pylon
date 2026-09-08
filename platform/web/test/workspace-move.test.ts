@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { WorkspaceEntry, WorkspaceMutation } from "../src/shared/workspace/workspace-mutations.ts";
 import { WorkspaceDraftStore } from "../src/client/workspace/workspace-edit-state.ts";
-import { moveDestination, moveFolderSuggestions, moveTargetError, moveWorkspaceEntry, workspaceDropDestination, workspaceMoveInventory } from "../src/client/workspace/workspace-move.ts";
+import { moveDestination, moveFolderSuggestions, moveTargetError, moveWorkspaceEntry, planFolderMove, workspaceDropDestination, workspaceDropFolder, workspaceMoveInventory } from "../src/client/workspace/workspace-move.ts";
 
 const inventory = workspaceMoveInventory([
   { path: "src/file.ts" },
@@ -56,6 +56,21 @@ test("drops require a local source from the same session generation and a live d
   for (const folder of [undefined, "dest/file.ts", "unknown", "src", "dest", "vendor/module"])
     assert.equal(workspaceDropDestination(source, "session:1", folder, inventory), undefined);
   assert.equal(workspaceDropDestination({ ...source, path: "removed/old.ts" }, "session:1", "empty", inventory), undefined);
+});
+
+test("file rows target their containing folder for dragged files, folders and mixed selections", () => {
+  const folder = workspaceDropFolder("occupied/src/child.ts", false);
+  const drop = (path: string, target: string) => workspaceDropDestination({ path, scope: "session:1" }, "session:1", target, inventory);
+  assert.equal(drop("src/file.ts", folder), "occupied/src/file.ts");
+  assert.equal(drop("src", folder), "occupied/src/src");
+  assert.deepEqual(planFolderMove(["src/file.ts", "empty"], folder, inventory), [
+    { path: "src/file.ts", destination: "occupied/src/file.ts" },
+    { path: "empty", destination: "occupied/src/empty" },
+  ]);
+  assert.equal(drop("src/nested", workspaceDropFolder("README.md", false)), "nested");
+  assert.equal(drop("src", workspaceDropFolder("empty", true)), "empty/src");
+  assert.equal(drop("src", workspaceDropFolder("src/nested/child.ts", false)), undefined);
+  assert.equal(drop("src/file.ts", workspaceDropFolder("dest/file.ts", false)), undefined);
 });
 
 const entry: WorkspaceEntry = {

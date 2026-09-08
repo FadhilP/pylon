@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../src/shared/workspace/annotations.ts";
 import type { WorkspaceMutationInput } from "../src/shared/workspace/workspace-mutations.ts";
+import type { GitActionInput, GitDetailQuery } from "../src/shared/workspace/git.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
@@ -217,6 +218,71 @@ test("workspace saves transport large text once and reject unsafe or stale reque
     assert.equal((await body(entry)).text, saved);
     assert.equal((await send({ ...command, commandId: "too-large", mutation: { ...command.mutation, text: "x".repeat(1024 * 1024 + 1) } })).status, 400);
     assert.equal(writes, 1);
+  } finally { abort.abort(); await running.close(); }
+});
+
+test("Git transport protects actions and cancels disconnected detail readers", { timeout: 10_000 }, async () => {
+  class GitDriver extends FakeDriver {
+    gitActions = 0;
+    pendingDetail?: { started(): void; cancelled(): void };
+    workspaceGitState() {
+      return Promise.resolve({
+        available: true, revision: "a".repeat(64), remotes: [], branches: [], files: [], history: [], stashes: [],
+        sessionId: "session-1", sessionGeneration: 1,
+      });
+    }
+    workspaceGitDetail(_query: GitDetailQuery, signal?: AbortSignal) {
+      if (this.pendingDetail) return new Promise<never>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => { this.pendingDetail!.cancelled(); reject(signal.reason); }, { once: true });
+        this.pendingDetail!.started();
+      });
+      return Promise.resolve({
+        revision: "a".repeat(64), files: [], unifiedDiff: "", sessionId: "session-1", sessionGeneration: 1,
+      });
+    }
+    gitAction(_input: { commandId: string; sessionId: string; expectedGeneration: number; input: GitActionInput }) {
+      this.gitActions++;
+      return Promise.resolve({ commandId: _input.commandId, sessionGeneration: 1, accepted: true } as const);
+    }
+  }
+  const driver = new GitDriver();
+  const running = await startIsolatedServer({ port: 0, development: false, driver });
+  const origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+  const tab = "git-tab";
+  const abort = new AbortController();
+  try {
+    assert.equal((await fetch(`${origin}/api/v1/workspace/git?sessionGeneration=1`)).status, 403);
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";")[0];
+    const csrf = String((await body(bootstrap)).csrfToken);
+    const headers = { cookie, "content-type": "application/json", "x-pylon-csrf": csrf, "x-pylon-tab-id": tab };
+    assert.equal((await fetch(`${origin}/api/v1/workspace/git?sessionGeneration=2`, { headers })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/workspace/git-detail?sessionGeneration=1&query=not-json`, { headers })).status, 400);
+    assert.equal((await body(await fetch(`${origin}/api/v1/workspace/git?sessionGeneration=1`, { headers }))).revision, "a".repeat(64));
+    const detail = encodeURIComponent(JSON.stringify({ kind: "history", ref: "HEAD" }));
+    assert.equal((await fetch(`${origin}/api/v1/workspace/git-detail?sessionGeneration=1&query=${detail}`, { headers })).status, 200);
+    const command = { type: "gitAction", commandId: "git-stage", expectedGeneration: 1, sessionId: "session-1",
+      input: { action: "stage", expectedRevision: "a".repeat(64), paths: ["file.ts"] } };
+    const send = (value: unknown, requestHeaders = headers) => fetch(`${origin}/api/v1/commands`, { method: "POST", headers: requestHeaders, body: JSON.stringify(value) });
+    assert.equal((await send(command, { ...headers, "x-pylon-csrf": "invalid" })).status, 403);
+    assert.equal((await send({ ...command, input: { ...command.input, expectedRevision: "bad" } })).status, 400);
+    assert.equal((await send(command)).status, 409); // A mutating command needs an SSE-owned tab.
+    const events = await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:0`, { headers: { cookie }, signal: abort.signal });
+    await events.body!.getReader().read();
+    assert.equal((await send(command)).status, 200);
+    assert.equal((await send(command)).status, 200);
+    assert.equal(driver.gitActions, 1, "Git actions use command idempotency");
+    let started!: () => void, cancelled!: () => void;
+    const began = new Promise<void>(resolve => { started = resolve; });
+    const stopped = new Promise<void>(resolve => { cancelled = resolve; });
+    driver.pendingDetail = { started, cancelled };
+    const readAbort = new AbortController();
+    const request = fetch(`${origin}/api/v1/workspace/git-detail?sessionGeneration=1&query=${detail}`, { headers, signal: readAbort.signal });
+    const rejected = assert.rejects(request, /abort/i);
+    await began;
+    readAbort.abort();
+    await rejected;
+    await stopped;
   } finally { abort.abort(); await running.close(); }
 });
 

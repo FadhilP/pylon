@@ -862,8 +862,14 @@ export function SessionRow({
           </button>
           <button
             type="button"
-            disabled={unavailable || session.pinned}
-            title={session.pinned ? "Unpin before deactivating" : undefined}
+            disabled={unavailable || session.pinned || (!sleeping && session.runtimeState !== "idle")}
+            title={
+              session.pinned
+                ? "Unpin before deactivating"
+                : !sleeping && session.runtimeState !== "idle"
+                  ? "Wait for the session to become idle before deactivating"
+                  : undefined
+            }
             onClick={() => {
               onCloseMenu();
               onSetActive(session, sleeping);

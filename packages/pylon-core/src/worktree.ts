@@ -1105,11 +1105,50 @@ export async function captureCheckoutState(cwd: string, validateForMutation = fa
   const workspace = await inspectGitWorkspace(cwd);
   if (!workspace) throw Error("Workspace is not a Git checkout.");
   if (validateForMutation) await assertSafeCheckout(workspace);
-  const indexTree = validateForMutation
-    ? await git(workspace.root, ["write-tree"])
-    : await currentIndexTree(workspace.root);
-  const worktreeTree = await currentTree(workspace.root, workspace.head);
-  return { ...workspace, indexTree, worktreeTree };
+
+  // Observe the same set of paths that currentTree will stage. A second observation
+  // below makes the cheap clean path safe when the index or worktree changes mid-capture.
+  for (let attempt = 0; attempt <= snapshotRetryDelaysMs.length; attempt++) {
+    const rawStatus = await git(workspace.root, [
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "-z",
+      "--untracked-files=all",
+    ]);
+    const status = parseWorktreeStatus(rawStatus);
+    const observedHead = await head(workspace.root);
+    if (status.head !== (observedHead ?? "(initial)") || observedHead !== workspace.head) {
+      if (attempt === snapshotRetryDelaysMs.length) break;
+      await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
+      continue;
+    }
+
+    let indexTree: string;
+    let worktreeTree: string;
+    if (!status.dirty && workspace.head) {
+      // A clean index and worktree are both precisely HEAD's tree; avoid copying
+      // the index or invoking git add in the common case.
+      worktreeTree = indexTree = await git(workspace.root, ["rev-parse", `${workspace.head}^{tree}`]);
+    } else if (!status.dirty) {
+      // An unborn but genuinely empty checkout has no HEAD tree. Its empty index is
+      // the equivalent tree, and reading it does not stage ignored files.
+      worktreeTree = indexTree = await currentIndexTree(workspace.root);
+    } else {
+      [indexTree, worktreeTree] = await Promise.all([
+        currentIndexTree(workspace.root),
+        currentTree(workspace.root, workspace.head, status.paths),
+      ]);
+    }
+
+    const [latestStatus, latestHead] = await Promise.all([
+      git(workspace.root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
+      head(workspace.root),
+    ]);
+    if (latestStatus === rawStatus && latestHead === workspace.head) return { ...workspace, indexTree, worktreeTree };
+    if (attempt < snapshotRetryDelaysMs.length) await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
+  }
+  throw Error("Git checkout changed during capture.");
 }
 
 export async function createSessionWorktree(
@@ -1634,26 +1673,74 @@ async function scopeChanges(scope: WorkspaceScope): Promise<WorkspaceFile[]> {
   return files;
 }
 
+const MAX_CACHED_TREE_LISTINGS = 16;
+const MAX_CACHED_TREE_LISTING_CODE_UNITS = 2 * 1024 * 1024;
+const cachedTreeListings = new Map<string, string>();
+let cachedTreeListingCodeUnits = 0;
+
+/** Caches only immutable object listings; refs and failed commands always reach Git. */
+async function scopeTreeListing(root: string, object: string): Promise<string> {
+  if (!objectId.test(object)) return git(root, ["ls-tree", "-rz", "--name-only", object]);
+  // Replacement refs can change even a full object's effective contents (including child trees).
+  const replacements = () => git(root, ["for-each-ref", "--count=1", "--format=%(refname)", process.env.GIT_REPLACE_REF_BASE ?? "refs/replace/"]);
+  if (await replacements()) return git(root, ["ls-tree", "-rz", "--name-only", object]);
+  // Scope roots are realpaths from captureCheckoutState, so this is a canonical physical repository root.
+  const key = `${canonical(root)}\0${object}`;
+  if (cachedTreeListings.has(key)) {
+    const listing = cachedTreeListings.get(key)!;
+    cachedTreeListings.delete(key);
+    cachedTreeListings.set(key, listing);
+    return listing;
+  }
+  const listing = await git(root, ["ls-tree", "-rz", "--name-only", object]);
+  if (listing.length > MAX_CACHED_TREE_LISTING_CODE_UNITS || await replacements()) return listing;
+  // Another collector may have filled this key while Git was running.
+  const previous = cachedTreeListings.get(key);
+  if (previous !== undefined) {
+    cachedTreeListingCodeUnits -= previous.length;
+    cachedTreeListings.delete(key);
+  }
+  while (
+    cachedTreeListings.size >= MAX_CACHED_TREE_LISTINGS ||
+    cachedTreeListingCodeUnits + listing.length > MAX_CACHED_TREE_LISTING_CODE_UNITS
+  ) {
+    const oldestKey = cachedTreeListings.keys().next().value as string;
+    const oldestListing = cachedTreeListings.get(oldestKey)!;
+    cachedTreeListings.delete(oldestKey);
+    cachedTreeListingCodeUnits -= oldestListing.length;
+  }
+  cachedTreeListings.set(key, listing);
+  cachedTreeListingCodeUnits += listing.length;
+  return listing;
+}
+
 async function scopeListings(scope: WorkspaceScope): Promise<{ present: string[]; base: string[] }> {
   const gitlinksAt = (prefix: string) => scope.levels.get(prefix) ?? new Set<string>();
   // Each repository level only strips its own direct gitlink entries; nested submodule contents stay inventoried flat.
-  const present = splitNul(
-    await git(scope.current.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]),
-  ).filter(path => !gitlinksAt("").has(path));
-  const base = splitNul(await git(scope.current.root, ["ls-tree", "-rz", "--name-only", scope.baseline])).filter(
-    path => !gitlinksAt("").has(path),
-  );
+  const [currentListing, baseListing] = await Promise.allSettled([
+    git(scope.current.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]),
+    scopeTreeListing(scope.current.root, scope.baseline),
+  ]);
+  if (currentListing.status === "rejected") throw currentListing.reason;
+  if (baseListing.status === "rejected") throw baseListing.reason;
+  const present = splitNul(currentListing.value).filter(path => !gitlinksAt("").has(path));
+  const base = splitNul(baseListing.value).filter(path => !gitlinksAt("").has(path));
   for (const node of scope.submodules) {
     const prefix = `${node.path}/`;
     const links = gitlinksAt(node.path);
+    const [nestedPresent, nestedBase] = await Promise.allSettled([
+      git(node.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]),
+      scopeTreeListing(node.root, node.baselineTree).catch(() => ""),
+    ]);
+    if (nestedPresent.status === "rejected") throw nestedPresent.reason;
+    if (nestedBase.status === "rejected") throw nestedBase.reason;
     present.push(
-      ...splitNul(await git(node.root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]))
+      ...splitNul(nestedPresent.value)
         .filter(path => !links.has(path))
         .map(path => `${prefix}${path}`),
     );
-    const nestedBase = await git(node.root, ["ls-tree", "-rz", "--name-only", node.baselineTree]).catch(() => "");
     base.push(
-      ...splitNul(nestedBase)
+      ...splitNul(nestedBase.value)
         .filter(path => !links.has(path))
         .map(path => `${prefix}${path}`),
     );
@@ -1745,24 +1832,31 @@ export async function collectWorkspaceFiles(options: {
 }): Promise<WorkspaceFileInventory> {
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
   const scope = await workspaceScope(options.cwd, options.baselineTree);
-  const { present, base } = await scopeListings(scope);
-  const changed = new Map((await scopeChanges(scope)).map(file => [file.path, file]));
+  const [listings, changes, directories] = await Promise.allSettled([
+    scopeListings(scope),
+    scopeChanges(scope),
+    workspaceDirectories(scope.current.root, scope.markers),
+  ]);
+  if (listings.status === "rejected") throw listings.reason;
+  if (changes.status === "rejected") throw changes.reason;
+  if (directories.status === "rejected") throw directories.reason;
+  const { present, base } = listings.value;
+  const changed = new Map(changes.value.map(file => [file.path, file]));
   const files = [...new Set([...present, ...base])].map(safeRelativePath);
   // Registered-but-empty submodules stay visible as non-selectable folders instead of disappearing.
   const folders = new Set(
     scope.markers.filter(marker => !files.some(path => path === marker || path.startsWith(`${marker}/`))),
   );
-  const directories = await workspaceDirectories(scope.current.root, scope.markers);
   const representedDirectories = new Set<string>();
   for (const path of [...files, ...folders]) {
     const parts = path.split("/");
     for (let length = 1; length < parts.length; length++) representedDirectories.add(parts.slice(0, length).join("/"));
   }
-  const directoryPaths = new Set(directories.paths.filter(path => !representedDirectories.has(path)));
+  const directoryPaths = new Set(directories.value.paths.filter(path => !representedDirectories.has(path)));
   const allPaths = [...new Set([...files, ...folders, ...directoryPaths])]
     .filter(path => !query || path.toLocaleLowerCase().includes(query))
     .sort((left, right) => Number(changed.has(right)) - Number(changed.has(left)) || left.localeCompare(right));
-  const truncated = directories.truncated || allPaths.length > MAX_WORKSPACE_FILES;
+  const truncated = directories.value.truncated || allPaths.length > MAX_WORKSPACE_FILES;
   const paths = allPaths.slice(0, MAX_WORKSPACE_FILES);
   return {
     revision: scope.revision,

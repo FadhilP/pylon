@@ -1,6 +1,7 @@
 import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/settings/keyboard";
 import { validAnnotation, type AnnotationList, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations";
 import type { WorkspaceMutation, WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
+import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git";
 import { useSyncExternalStore } from "react";
 import { isDatabaseCommandResult, clearDatabaseDrafts } from "../database/database-workspace";
 import type { GuardRuleOverrides } from "../../shared/settings/guard-policy";
@@ -94,7 +95,7 @@ import {
 } from "../../shared/protocol/validation";
 import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "./history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
-import { drainWorkspaceFiles, workspaceInventoryCacheState } from "../workspace/workspace-file-pages";
+import { WorkspaceInventoryLoads, workspaceInventoryCacheState } from "../workspace/workspace-file-pages";
 import {
   liveToolMessage,
   replaceConversationMessage,
@@ -271,6 +272,7 @@ export class RuntimeEventStore {
   private readonly historyCache = new Map<string, CachedHistory>();
   private readonly invalidatedHistoryGenerations = new Map<string, number>();
   private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
+  private readonly workspaceInventoryLoads = new WorkspaceInventoryLoads();
   private readonly historyWindows = new Map<string, HistorySegment[]>();
   private readonly historyWindowRevisions = new Map<string, number>();
   private readonly mergedHistoryWindows = new Map<string, { revision: number; window: TranscriptWindowReadModel }>();
@@ -299,6 +301,7 @@ export class RuntimeEventStore {
   }
   dispose(): void {
     this.disposed = true;
+    this.workspaceInventoryLoads.clear();
     window.removeEventListener("focus", this.refreshKeyboardOnFocus);
     this.source?.close();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
@@ -697,52 +700,48 @@ export class RuntimeEventStore {
     publish: (files: WorkspaceFileReadModel[], truncated: boolean) => void,
     progress: (loaded: number, total: number) => void,
   ): Promise<CachedWorkspaceInventory> {
+    signal.throwIfAborted();
     const runtime = this.requireReadyRuntime();
+    const { sessionId, sessionGeneration: generation } = runtime;
+    const mode = runtime.workspace?.mode;
     const revision = `${runtime.workspace?.revision ?? ""}:${runtime.workspace?.fileRevision ?? 0}`;
-    const cached = this.workspaceInventories.get(runtime.sessionId);
-    const cacheState = cached
-      ? workspaceInventoryCacheState(cached, {
-          generation: runtime.sessionGeneration,
-          mode: runtime.workspace?.mode,
-          revision,
-        })
-      : "hidden";
+    const metadata = { generation, mode, revision };
+    const checkCurrent = () => {
+      const current = this.snapshot.runtime;
+      if (this.disposed || this.snapshot.connection !== "connected" || !current?.ready ||
+        current.sessionId !== sessionId || current.sessionGeneration !== generation ||
+        current.workspace?.mode !== mode ||
+        `${current.workspace?.revision ?? ""}:${current.workspace?.fileRevision ?? 0}` !== revision)
+        throw new Error("Workspace files belong to a stale workspace");
+    };
+    checkCurrent();
+    const cached = this.workspaceInventories.get(sessionId);
+    const cacheState = cached ? workspaceInventoryCacheState(cached, metadata) : "hidden";
     if (!refresh && cached && cacheState !== "hidden") {
       // Keep this session's last known tree visible while its current generation loads.
       publish(cached.files, cached.truncated);
+      checkCurrent();
+      signal.throwIfAborted();
       if (cacheState === "fresh") {
         progress(cached.files.length, cached.files.length);
         return cached;
       }
     }
-    let truncated = false;
-    const files = await drainWorkspaceFiles(
-      cursor => this.workspaceFiles("", cursor, signal, refresh && !cursor),
-      signal,
-      (next, value) => {
-        truncated = value;
-        publish(next, value);
+    const result = await this.workspaceInventoryLoads.load({
+      key: JSON.stringify([sessionId, generation, mode, revision]),
+      refresh, signal, checkCurrent, publish, progress,
+      previous: cacheState === "hidden" ? undefined : cached?.files,
+      fetchPage: (cursor, producerSignal) => this.workspaceFiles("", cursor, producerSignal, refresh && !cursor),
+      complete: value => {
+        checkCurrent();
+        this.workspaceInventories.delete(sessionId);
+        this.workspaceInventories.set(sessionId, { ...metadata, ...value, expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS });
+        while (this.workspaceInventories.size > MAX_CACHED_SESSIONS)
+          this.workspaceInventories.delete(this.workspaceInventories.keys().next().value!);
       },
-      progress,
-    );
-    const current = this.snapshot.runtime;
-    if (current?.sessionId !== runtime.sessionId || current.sessionGeneration !== runtime.sessionGeneration) {
-      throw new Error("Workspace files belong to a previous session");
-    }
-    const inventory = {
-      generation: runtime.sessionGeneration,
-      mode: runtime.workspace?.mode,
-      revision,
-      expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS,
-      files,
-      truncated,
-    };
-    this.workspaceInventories.delete(runtime.sessionId);
-    this.workspaceInventories.set(runtime.sessionId, inventory);
-    while (this.workspaceInventories.size > MAX_CACHED_SESSIONS) {
-      this.workspaceInventories.delete(this.workspaceInventories.keys().next().value!);
-    }
-    return inventory;
+    });
+    checkCurrent();
+    return { ...metadata, ...result, expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS };
   }
 
   terminalUrl(generation: number): string {
@@ -770,7 +769,51 @@ export class RuntimeEventStore {
     return result;
   }
 
+  async workspaceGitState(signal?: AbortSignal): Promise<GitState & { sessionId: string; sessionGeneration: number }> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.workspaceGitState(runtime.sessionGeneration, signal);
+    const current = this.requireReadyRuntime();
+    if (
+      current.sessionId !== runtime.sessionId ||
+      current.sessionGeneration !== runtime.sessionGeneration ||
+      result.sessionId !== runtime.sessionId ||
+      result.sessionGeneration !== runtime.sessionGeneration
+    ) {
+      throw new Error("Git state belongs to a previous session.");
+    }
+    return result;
+  }
 
+  async workspaceGitDetail(
+    query: GitDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<GitDetail & { sessionId: string; sessionGeneration: number }> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.workspaceGitDetail(runtime.sessionGeneration, query, signal);
+    const current = this.requireReadyRuntime();
+    if (
+      current.sessionId !== runtime.sessionId ||
+      current.sessionGeneration !== runtime.sessionGeneration ||
+      result.sessionId !== runtime.sessionId ||
+      result.sessionGeneration !== runtime.sessionGeneration
+    ) {
+      throw new Error("Git detail belongs to a previous session.");
+    }
+    return result;
+  }
+
+  async gitAction(input: GitActionInput, sessionId: string, generation: number): Promise<AcceptedCommand> {
+    const runtime = this.requireReadyRuntime();
+    if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation)
+      throw new Error("Session changed; reopen the Git action.");
+    return this.sendCommand({
+      type: "gitAction",
+      commandId: commandId(),
+      expectedGeneration: generation,
+      sessionId,
+      input,
+    });
+  }
   async mutateWorkspace(mutation: WorkspaceMutation, sessionId: string, generation: number): Promise<AcceptedCommand> {
     const runtime = this.requireReadyRuntime();
     if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the action.");
@@ -1631,7 +1674,7 @@ export class RuntimeEventStore {
 
   private async sendCommand(command: WebCommand): Promise<AcceptedCommand> {
     try {
-      return await this.api.command(command);
+      return await (command.type === "gitAction" ? this.api.gitAction(command) : this.api.command(command));
     } catch (error) {
       if (
         (command.type === "updateContinuityMemory" ||

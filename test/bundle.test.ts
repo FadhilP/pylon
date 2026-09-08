@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
+import { promisify } from "node:util";
 import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
 import pylon from "../packages/pylon-core/extensions/pylon-core.ts";
 import continuity from "../packages/pi-continuity/extensions/pi-continuity.ts";
@@ -33,6 +35,83 @@ test("package runner bounds concurrency and preserves result order", async () =>
   });
   assert.equal(peak, 2);
   assert.deepEqual(results, [30, 5, 20, 1]);
+});
+
+test("package verification shares its bounded pool with web and preserves phase failures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-package-runner-"));
+  try {
+    const names = ["a", "b", "c", "d"];
+    await Promise.all(
+      ["scripts", "platform/web", ...names.map(name => `packages/${name}`)].map(path =>
+        mkdir(join(root, path), { recursive: true }),
+      ),
+    );
+    for (const file of ["run-packages.mjs", "run-packages-lib.mjs"])
+      await copyFile(new URL(`../scripts/${file}`, import.meta.url), join(root, "scripts", file));
+    const npmCli = join(root, "npm.mjs");
+    const eventsFile = join(root, "events.jsonl");
+    await writeFile(
+      npmCli,
+      `
+      import { appendFileSync } from "node:fs";
+      import { basename } from "node:path";
+      const name = basename(process.cwd()), script = process.argv[3];
+      const emit = kind => appendFileSync(process.env.RUNNER_EVENTS, JSON.stringify({ kind, name, script }) + "\\n");
+      emit("start");
+      setTimeout(() => {
+        emit("finish");
+        process.exit(name + ":" + script === process.env.RUNNER_FAIL ? 7 : 0);
+      }, 20);
+    `,
+    );
+    for (const scenario of [
+      { web: true, fail: "" },
+      { web: true, fail: "a:check" },
+      { web: true, fail: "web:verify" },
+      { web: false, fail: "" },
+    ]) {
+      await writeFile(eventsFile, "");
+      const run = promisify(execFile)(
+        process.execPath,
+        [join(root, "scripts", "run-packages.mjs"), "verify", ...(scenario.web ? ["--web"] : [])],
+        { env: { ...process.env, npm_execpath: npmCli, RUNNER_EVENTS: eventsFile, RUNNER_FAIL: scenario.fail } },
+      );
+      if (scenario.fail) await assert.rejects(run, { code: 7 });
+      else await run;
+      const events = (await readFile(eventsFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      const active = new Set<string>();
+      const checked = new Set<string>();
+      const started: string[] = [];
+      for (const event of events) {
+        const key = `${event.name}:${event.script}`;
+        if (event.kind === "start") {
+          assert.ok(!active.has(key));
+          active.add(key);
+          started.push(key);
+          assert.ok(active.size <= Math.min(4, availableParallelism()));
+          if (event.script !== "check") assert.equal(checked.size, names.length);
+        } else {
+          assert.ok(active.delete(key));
+          if (event.script === "check") checked.add(event.name);
+        }
+      }
+      assert.equal(active.size, 0);
+      assert.equal(new Set(started).size, started.length, "each job executes once");
+      const tests = started.filter(key => !key.endsWith(":check"));
+      if (scenario.fail === "a:check") assert.deepEqual(tests, []);
+      else {
+        assert.deepEqual(
+          new Set(tests),
+          new Set([...(scenario.web ? ["web:verify"] : []), ...names.map(name => `${name}:test`)]),
+        );
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
 });
 
 class Bus {

@@ -23,15 +23,16 @@ export type IndexedRepository = RepositorySnapshot & { prefix: string };
 export type PreparedFile = {
   path: string;
   language: string;
-  content: string;
   hash: string;
   size: number;
   dirty: boolean;
   fingerprint?: string;
   verifiedAt?: number;
-  /** Omitted only when the persisted content hash already matches. */
-  symbols?: SymbolRow[];
-};
+} & ({ content: string; symbols: SymbolRow[] } | {
+  /** Metadata-only result: valid only while the persisted hash still matches. */
+  content?: undefined;
+  symbols?: undefined;
+});
 
 export function parseNul(value: string): string[] {
   return value.split("\0").filter(Boolean);
@@ -267,19 +268,19 @@ export class RepositoryScanner {
       }
       if (fingerprint !== undefined) this.remainingTime();
       if (data.includes(0)) return undefined;
-      const content = data.toString("utf8");
       const hash = createHash("sha256").update(data).digest("hex");
-      return {
+      const metadata = {
         path: path.replaceAll("\\", "/"),
         language,
-        content,
         size,
         fingerprint,
         verifiedAt: fingerprint === undefined ? undefined : Date.now(),
         dirty,
         hash,
-        symbols: hash === previousHash ? undefined : extractSymbols(content, language),
       };
+      if (hash === previousHash) return metadata;
+      const content = data.toString("utf8");
+      return { ...metadata, content, symbols: extractSymbols(content, language) };
     } catch (error: any) {
       if (error?.code === "ENOENT" && fingerprint === undefined) return undefined;
       throw error;

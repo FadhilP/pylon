@@ -53,6 +53,96 @@ test("non-Git searches reconcile edits, renames, exclusions and deletions", asyn
   }
 });
 
+test("queries join accepted refreshes while explicit refreshes, rebuilds and prune retain queue order", async t => {
+  const f = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const calls: boolean[] = [];
+  let fail = false;
+  t.mock.method(f.index as any, "refreshNow", async (rebuild = false) => {
+    calls.push(rebuild);
+    await gate;
+    if (fail) throw new Error("refresh failed");
+  });
+  try {
+    const background = f.index.refresh();
+    assert.equal(f.index.ensureFresh(), background);
+    const followup = f.index.refresh();
+    assert.equal(f.index.ensureFresh(), followup);
+    const rebuild = f.index.rebuild();
+    assert.equal(f.index.ensureFresh(), rebuild);
+    const prune = f.index.prune();
+    const afterPrune = f.index.ensureFresh();
+    assert.notEqual(afterPrune, rebuild);
+    release();
+    await Promise.all([background, followup, rebuild, prune, afterPrune]);
+    assert.deepEqual(calls, [false, false, true, false]);
+    await f.index.ensureFresh();
+    assert.equal(calls.length, 5, "completed refreshes are not a freshness shortcut");
+    fail = true;
+    const failed = f.index.refresh();
+    assert.equal(f.index.ensureFresh(), failed);
+    await assert.rejects(failed, /refresh failed/);
+    fail = false;
+    await f.index.ensureFresh();
+    assert.equal(calls.length, 7);
+  } finally { release(); await f.close(); }
+});
+
+test("hash-equal files retain content and symbols without decoding, while rebuild decodes again", async t => {
+  const f = await fixture();
+  const bytes = Buffer.from("export function decodeOnlyChanged() {}\n");
+  try {
+    const source = join(f.root, "file.ts");
+    await writeFile(source, bytes);
+    await f.index.refresh();
+    const toString = Buffer.prototype.toString;
+    let decodes = 0;
+    const mock = t.mock.method(Buffer.prototype, "toString", function (this: Buffer, ...args: Parameters<Buffer["toString"]>) {
+      if ((!args[0] || args[0] === "utf8") && this.equals(bytes)) decodes++;
+      return toString.apply(this, args);
+    });
+    try {
+      await writeFile(source, bytes);
+      assert.equal((await f.index.searchSymbols(f.root, { query: "decodeOnlyChanged" })).length, 1);
+      assert.equal(decodes, 0);
+      assert.equal((await f.index.searchCode(f.root, { query: "decodeOnlyChanged" })).length, 1);
+      await f.index.rebuild();
+      assert.equal(decodes, 1);
+    } finally { mock.mock.restore(); }
+  } finally { await f.close(); }
+});
+
+test("a metadata-only apply mismatch retries with full content instead of corrupting persisted rows", async t => {
+  const f = await fixture();
+  try {
+    const source = join(f.root, "file.ts");
+    const content = "export function retainedContent() {}\n";
+    await writeFile(source, content);
+    await f.index.refresh();
+    await writeFile(source, content);
+    const db = new DatabaseSync(f.path);
+    try {
+      const scanner = (f.index as any).scanner;
+      const original = scanner.prepareAll.bind(scanner);
+      let attempts = 0;
+      t.mock.method(scanner, "prepareAll", async (...args: any[]) => {
+        const result = await original(...args);
+        if (++attempts === 1) {
+          assert.equal(result.prepared[0].content, undefined);
+          // Model a derived row changed without the generation protocol.
+          db.prepare("UPDATE files SET hash='unexpected',content='unexpected'").run();
+        } else assert.equal(result.prepared[0].content, content);
+        return result;
+      });
+      await f.index.refresh();
+      assert.equal(attempts, 2);
+      assert.equal((db.prepare("SELECT content FROM files").get() as any).content, content);
+      assert.equal((db.prepare("SELECT count(*) AS n FROM code_fts WHERE code_fts MATCH 'retainedContent'").get() as any).n, 1);
+    } finally { db.close(); }
+  } finally { await f.close(); }
+});
+
 test("metadata hits avoid preparation; same-content edits update fingerprints without rewriting symbols", async () => {
   const f = await fixture();
   try {

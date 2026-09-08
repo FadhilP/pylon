@@ -42,7 +42,6 @@
 .file-history-counts b { color: var(--green); font-weight: inherit; }
 .file-history-counts i { color: var(--red); font-style: normal; }
 .file-history-info .overview-state-label { flex: 0 0 auto; font: 12px var(--mono); }
-.file-history-show.primary-button { min-height: 25px; flex: 0 0 auto; padding: 0 9px; font-size: 11px; }
 .file-history-earlier.secondary-button { min-height: 25px; flex: 0 0 auto; padding: 0 9px; font-size: 11px; }
 .file-history-version-list { position: fixed; z-index: 30; width: min(360px, calc(100vw - 24px)); max-height: min(320px, calc(100vh - 24px)); overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow); }
 .file-history-version-list button { display: grid; width: 100%; grid-template-columns: 11px minmax(0, 1fr) auto auto auto; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 6px; color: var(--text-soft); text-align: left; font-size: 12px; }
@@ -53,7 +52,6 @@
 .file-history-version-list .overview-state-label { font: 10.5px var(--mono); }
 .file-history-notice { display: flex; min-height: 24px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 4px 10px; color: var(--text-muted); font-size: 11px; }
 .file-history-notice button { text-decoration: underline; }
-.file-history-preview { min-height: 32px; border-bottom: 1px solid var(--line); border-left: 3px solid var(--history-color); background: var(--surface-subtle); color: var(--text-soft); }
 .file-history-policy { flex: 0 0 auto; min-width: 0; max-height: min(30vh, 180px); overflow: auto; padding: 5px 10px; border-top: 1px solid var(--line); background: var(--surface); color: var(--text-muted); font-size: 11px; line-height: 1.5; }
 .file-history-policy summary { width: fit-content; cursor: pointer; }
 .file-history-policy summary:hover { color: var(--text); }

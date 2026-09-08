@@ -272,7 +272,11 @@ export class WorkspaceIndex {
       }
       for (const file of files) {
         const current = findFile.get(repoId, file.path) as { id: number; hash: string; dirty: number } | undefined;
-        if (current?.hash === file.hash && file.symbols === undefined) {
+        if (file.content === undefined) {
+          if (current?.hash !== file.hash) {
+            db.exec("ROLLBACK");
+            return false;
+          }
           if (current.dirty !== Number(file.dirty)) updateDirty.run(Number(file.dirty), current.id);
           updateFingerprint.run(file.fingerprint ?? null, file.verifiedAt ?? null, current.id);
           continue;
@@ -336,6 +340,7 @@ export class WorkspaceIndex {
     forceFull: boolean,
   ): Promise<RepositorySnapshot> {
     const db = this.database();
+    let retryContent = false;
     for (let attempt = 0; attempt < 3; attempt++) {
       const snapshot = attempt === 0 ? repository : await this.scanner.snapshotAt(repository.root);
       const state = db
@@ -347,7 +352,7 @@ export class WorkspaceIndex {
         )
         .get(repoId) as { head: string; indexed_at?: number; source_mode: string; policy: string; generation: number };
       const filesystem = snapshot.filesystem;
-      const reconstruct = forceFull || (filesystem !== undefined && state.policy !== FILESYSTEM_POLICY);
+      const reconstruct = forceFull || retryContent || (filesystem !== undefined && state.policy !== FILESYSTEM_POLICY);
       const full =
         reconstruct ||
         !state.indexed_at ||
@@ -419,6 +424,8 @@ export class WorkspaceIndex {
       const verified = await this.scanner.snapshotAt(snapshot.root);
       if (!sameSnapshot(snapshot, verified)) continue;
       if (this.apply(repoId, prepared, [...new Set(removals)], verified, state.generation)) return verified;
+      // A competing writer (or missing metadata-only target) requires full preparation.
+      retryContent = true;
     }
     throw new Error(`pi-discover repository changed repeatedly while indexing: ${repository.root}`);
   }
@@ -483,19 +490,26 @@ export class WorkspaceIndex {
     throw new Error(`pi-discover workspace changed repeatedly while indexing: ${this.scanner.root}`);
   }
 
-  refresh(): Promise<void> {
-    const next = this.pending.then(() => this.refreshNow());
+  private queueRefresh(rebuild = false): Promise<void> {
+    const next = this.pending.then(() => this.refreshNow(rebuild)).finally(() => {
+      if (this.freshening === next) this.freshening = undefined;
+    });
     this.pending = next.catch(() => undefined);
+    this.freshening = next;
     return next;
+  }
+
+  refresh(): Promise<void> {
+    return this.queueRefresh();
   }
 
   rebuild(): Promise<void> {
-    const next = this.pending.then(() => this.refreshNow(true));
-    this.pending = next.catch(() => undefined);
-    return next;
+    return this.queueRefresh(true);
   }
 
   prune(): Promise<{ removedWorkspaces: number; removedRepositories: number; removedFiles: number }> {
+    // Queries accepted after maintenance must refresh after that queue barrier.
+    this.freshening = undefined;
     const next = this.pending.then(async () => {
       const db = this.database();
       const workspaces = db.prepare("SELECT id,root FROM workspaces").all() as Array<{ id: number; root: string }>;
@@ -538,18 +552,9 @@ export class WorkspaceIndex {
     return next;
   }
 
-  async ensureFresh(): Promise<void> {
-    if (this.freshening) return this.freshening;
-    let current!: Promise<void>;
-    current = (async () => {
-      try {
-        await this.refresh();
-      } finally {
-        if (this.freshening === current) this.freshening = undefined;
-      }
-    })();
-    this.freshening = current;
-    return current;
+  ensureFresh(): Promise<void> {
+    // Join any accepted refresh, including background work, but never reuse a settled result.
+    return this.freshening ?? this.refresh();
   }
 
   private async ready(): Promise<void> {

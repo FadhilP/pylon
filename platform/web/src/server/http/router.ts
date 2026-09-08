@@ -1,4 +1,5 @@
 import { validWorkspacePath } from "../../shared/workspace/workspace-mutations.ts";
+import { validGitDetailQuery } from "../../shared/workspace/git.ts";
 import { validAnnotationMutation, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
@@ -165,6 +166,10 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/search") return await this.workspaceSearch(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/index")
         return await this.workspaceGitIndex(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/git")
+        return await this.workspaceGitState(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/git-detail")
+        return await this.workspaceGitDetail(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/entry")
         return await this.workspaceEntry(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/file")
@@ -1106,6 +1111,61 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
+  private async gitRead<T>(response: ServerResponse, load: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const closed = () => { if (!response.writableEnded) controller.abort(); };
+    response.once("close", closed);
+    try { return await load(controller.signal); }
+    finally { response.off("close", closed); }
+  }
+
+  private async workspaceGitState(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("sessionGeneration"));
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
+    if (!this.driver.workspaceGitState) throw httpError(404, "Git workspace is unavailable");
+    const result = await this.gitRead(response, signal => this.driver.workspaceGitState!(signal));
+    const runtime = this.projection.snapshot();
+    if (
+      result.sessionGeneration !== this.journal.sessionGeneration ||
+      result.sessionId !== runtime.sessionId
+    ) {
+      throw httpError(409, "session changed while reading Git state");
+    }
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
+  private async workspaceGitDetail(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("sessionGeneration"));
+    const values = url.searchParams.getAll("query");
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (values.length !== 1 || values[0].length > 8_192) throw httpError(400, "invalid Git detail query");
+    let query: unknown;
+    try {
+      query = JSON.parse(values[0]);
+    } catch {
+      throw httpError(400, "invalid Git detail query");
+    }
+    if (!validGitDetailQuery(query)) throw httpError(400, "invalid Git detail query");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
+    if (!this.driver.workspaceGitDetail) throw httpError(404, "Git detail is unavailable");
+    const detailQuery = query;
+    const result = await this.gitRead(response, signal => this.driver.workspaceGitDetail!(detailQuery, signal));
+    const runtime = this.projection.snapshot();
+    if (
+      result.sessionGeneration !== this.journal.sessionGeneration ||
+      result.sessionId !== runtime.sessionId
+    ) {
+      throw httpError(409, "session changed while reading Git detail");
+    }
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
 
   private async workspaceFile(
     request: IncomingMessage,
@@ -1566,6 +1626,9 @@ export class ServerTransport {
       case "mutateWorkspace":
         if (!this.driver.mutateWorkspace) return Promise.reject(httpError(409, "workspace editing is unavailable"));
         return this.driver.mutateWorkspace(command).then(result => ({ ...accepted(command.expectedGeneration), ...(result ? { savedVersion: result.savedVersion } : {}) }));
+      case "gitAction":
+        if (!this.driver.gitAction) return Promise.reject(httpError(409, "Git actions are unavailable"));
+        return this.driver.gitAction(command);
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings)
           return Promise.reject(httpError(409, "worktree settings are unavailable"));

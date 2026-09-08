@@ -1,6 +1,7 @@
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations";
 import type { KeyboardSettings, Keymap } from "../../shared/settings/keyboard";
 import type { WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
+import type { GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type {
@@ -338,6 +339,30 @@ export class ApiClient {
     }));
   }
 
+  async workspaceGitState(
+    generation: number,
+    signal?: AbortSignal,
+  ): Promise<GitState & { sessionId: string; sessionGeneration: number }> {
+    const query = new URLSearchParams({ sessionGeneration: String(generation) });
+    return json<GitState & { sessionId: string; sessionGeneration: number }>(await fetch(`/api/v1/workspace/git?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal,
+    }));
+  }
+
+  async workspaceGitDetail(
+    generation: number,
+    detail: GitDetailQuery,
+    signal?: AbortSignal,
+  ): Promise<GitDetail & { sessionId: string; sessionGeneration: number }> {
+    const query = new URLSearchParams({ sessionGeneration: String(generation), query: JSON.stringify(detail) });
+    return json<GitDetail & { sessionId: string; sessionGeneration: number }>(await fetch(`/api/v1/workspace/git-detail?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal,
+    }));
+  }
+
+  async gitAction(command: Extract<WebCommand, { type: "gitAction" }>): Promise<AcceptedCommand> {
+    return this.command(command);
+  }
   async workspaceFile(
     generation: number,
     path: string,

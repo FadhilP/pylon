@@ -39,21 +39,51 @@ async function trees(repository: RepositoryState) {
   }
 }
 
+type FingerprintTrees = Pick<RepositorySnapshot, "indexTree" | "worktreeTree">;
+
+async function headTrees(repository: RepositoryState): Promise<FingerprintTrees> {
+  const tree = await git(repository.root, ["rev-parse", `${repository.head}^{tree}`]);
+  return { indexTree: tree, worktreeTree: tree };
+}
+
+async function fingerprintTrees(repositories: RepositoryState[], statuses: string[]): Promise<FingerprintTrees[]> {
+  const values = new Array<FingerprintTrees>(repositories.length);
+  const groups = new Map<string, number[]>();
+  for (let index = 0; index < repositories.length; index++) {
+    const key = canonical(repositories[index]!.commonDir);
+    groups.set(key, [...(groups.get(key) ?? []), index]);
+  }
+  const batches = [...groups.values()];
+  let next = 0;
+  // Keep linked worktrees (which share an object store and index locks) serial,
+  // while limiting independent dirty-tree construction to two repositories.
+  await Promise.all(
+    Array.from({ length: Math.min(2, batches.length) }, async () => {
+      while (next < batches.length) {
+        const batch = batches[next++]!;
+        for (const index of batch) {
+          const repository = repositories[index]!;
+          values[index] = statuses[index] ? await trees(repository) : await headTrees(repository);
+        }
+      }
+    }),
+  );
+  return values;
+}
+
 export async function worktreeFingerprint(cwd: string): Promise<string | undefined> {
   try {
     const { repositories } = await preflight(cwd),
       statuses = await Promise.all(
         repositories.map(repository => git(repository.root, ["status", "--porcelain=v1", "--untracked-files=all"])),
-      );
-    if (statuses.every(status => !status))
-      return repositories.map(({ prefix, root, head }) => `${prefix}\n${root}\n${head}\nclean`).join("\n");
-    const values = await Promise.all(
-      repositories.map(async repository => ({ repository, ...(await trees(repository)) })),
-    );
+      ),
+      values = await fingerprintTrees(repositories, statuses);
+    // Always use content identities. A repository whose status changes without
+    // changing either tree (for example a dirty submodule marker) remains stable.
     return values
       .map(
-        ({ repository, indexTree, worktreeTree }) =>
-          `${repository.prefix}\n${repository.root}\n${repository.head}\n${indexTree}\n${worktreeTree}`,
+        ({ indexTree, worktreeTree }, index) =>
+          `${repositories[index]!.prefix}\n${repositories[index]!.root}\n${repositories[index]!.head}\n${indexTree}\n${worktreeTree}`,
       )
       .join("\n");
   } catch {

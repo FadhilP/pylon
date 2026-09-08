@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { appendFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -103,4 +105,39 @@ test("filesystem reads reject a file changed after inventory", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("metadata work overlaps within a fixed bound and drains started checks on failure", async t => {
+  const root = await workspace();
+  try {
+    for (let index = 0; index < 24; index++) await put(root, `${index}.ts`);
+    const original = fs.lstat;
+    let active = 0, peak = 0, started = 0, failedAt = 0;
+    let fail = false;
+    const mock = t.mock.method(fs, "lstat", (async (...args: Parameters<typeof fs.lstat>) => {
+      const source = String(args[0]).endsWith(".ts");
+      if (!source) return original(...args);
+      started++;
+      peak = Math.max(peak, ++active);
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        if (fail && !failedAt) {
+          failedAt = started;
+          throw new Error("metadata unavailable");
+        }
+        return await original(...args);
+      } finally { active--; }
+    }) as typeof fs.lstat);
+    syncBuiltinESMExports();
+    try {
+      assert.equal((await scanFilesystem(root, undefined, 5_000)).files.size, 24);
+      assert.equal(peak, 8);
+      assert.equal(active, 0);
+      fail = true;
+      started = 0;
+      await assert.rejects(scanFilesystem(root, undefined, 5_000), /metadata unavailable/);
+      assert.equal(active, 0, "no metadata work outlives the failed scan");
+      assert.equal(started, failedAt, "no more batches start after a failure");
+    } finally { mock.mock.restore(); syncBuiltinESMExports(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

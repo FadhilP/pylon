@@ -58,6 +58,11 @@ const BrowserPanel = lazy(() => import("../browser/browser-panel").then(module =
 const DatabasePanel = lazy(() => import("../database/database-panel").then(module => ({ default: module.DatabasePanel })));
 const FilesPanel = lazy(() => import("../workspace/files-panel").then(module => ({ default: module.FilesPanel })));
 const FileWorkspace = lazy(() => import("../workspace/file-workspace").then(module => ({ default: module.FileWorkspace })));
+import { useGitWorkspace } from "../workspace/git-controller";
+import type { GitDetailQuery } from "../../shared/workspace/git";
+const GitPanel = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitPanel })));
+const ReviewSurface = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.ReviewSurface })));
+const GitDialogs = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitDialogs })));
 import type { FileView } from "../workspace/files-panel";
 import type { FileWorkspaceContentStore } from "../workspace/file-workspace";
 import { SearchPopup } from "../workspace/search-popup";
@@ -201,6 +206,7 @@ export function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
   const [surface, setSurface] = useState<SurfaceId>("chat");
+  const [reviewDismissed, setReviewDismissed] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [fileNavigation, setFileNavigation] = useState<FileNavigation>("explorer");
   const [selectedCompaction, setSelectedCompaction] = useState<SelectedCompaction>();
@@ -341,6 +347,8 @@ export function App() {
       ? Boolean(continuitySettings.memoryReviewer?.model)
       : undefined;
   const stateqlEnabled = activePackages.has("pi-stateql");
+  const git = useGitWorkspace(live, reference === "git" || surface === "review");
+  const reviewAvailable = !reviewDismissed && (!!live.runtime?.workspace?.changedCount || !!git.state?.files.length || !!git.state?.operation);
   const navContext = useMemo<NavContext>(
     () => ({
       surface,
@@ -350,8 +358,9 @@ export function App() {
       timelineEnabled,
       memoryEnabled,
       papercutEnabled,
+      reviewAvailable,
     }),
-    [surface, stateqlEnabled, browserAvailable, browserActive, timelineEnabled, memoryEnabled, papercutEnabled],
+    [surface, stateqlEnabled, browserAvailable, browserActive, timelineEnabled, memoryEnabled, papercutEnabled, reviewAvailable],
   );
   const rightPanelWidth = panelWidths[panelWidthSlot(reference).key];
   const shellModeClass = surfaceDefinition(surface).shellClass;
@@ -925,7 +934,7 @@ export function App() {
   };
 
   const setSessionActive = async (session: SessionSummary, active: boolean) => {
-    if (sessionBusy || sessionDeleting) return;
+    if (sessionBusy || sessionDeleting || (!active && session.runtimeState !== "idle")) return;
     setSessionBusy(session.id);
     try {
       await runtimeStore.setSessionActive(session.id, active);
@@ -1212,6 +1221,7 @@ export function App() {
    * else while it was docked, in which case that choice stands.
    */
   const changeSurface = (next: SurfaceId) => {
+    if (next === "review") setReviewDismissed(false);
     const sessionId = live.runtime?.sessionId;
     if (sessionId) {
       if (next === "browser") browserSurfaceSessions.current.add(sessionId);
@@ -1231,6 +1241,11 @@ export function App() {
     }
   };
   changeSurfaceRef.current = changeSurface;
+  const openGitReview = (query?: GitDetailQuery) => { git.select(query); changeSurface("review"); setReference(null); };
+  const openGitFile = (path: string, view: FileView = "current") => {
+    setRequestedFile({ path, view, sessionId: live.runtime?.sessionId, requestId: Date.now() });
+    changeSurface("files");
+  };
   useEffect(() => {
     if (live.pendingUi?.surface === "database" && live.pendingUi.owned) changeSurfaceRef.current("database");
   }, [live.pendingUi?.requestId, live.pendingUi?.owned]);
@@ -1325,7 +1340,9 @@ export function App() {
    */
   const sidebarVisible = workspaceView ? true : surface !== "files" || fileNavigation === "sessions";
   const surfaceMain =
-    surface === "database" ? (
+    surface === "review" ? (
+      <ReviewSurface key={`review:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`} live={live} git={git} onClose={() => { setReviewDismissed(true); changeSurface("files"); }} onOpenFile={openGitFile} />
+    ) : surface === "database" ? (
       <DatabasePanel
         key={`database:${live.runtime?.sessionId ?? "loading"}`}
         live={live}
@@ -1582,6 +1599,18 @@ export function App() {
           onClose={() => setReference(null)}
         />
       )}
+      {reference === "git" && <GitPanel key={`git:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`} live={live} git={git}
+        onClose={() => setReference(null)} onReview={openGitReview} onOpenFile={openGitFile}
+        onApply={live.runtime?.workspace?.canApplyChanges ? () => {
+          setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! });
+          reviewChanges();
+        } : undefined}
+        onHandoff={live.runtime?.workspace?.canMoveToWorktree ? () => { void runtimeStore.handoffSession("worktree").catch(error => reportError(error, "Could not move to worktree")); } : undefined}
+        onCheckout={live.runtime?.workspace?.mode === "local" ? branch => {
+          setSidebarAction({ key: `git-checkout-${branch}`, title: "Switch branch?", description: `Switch this Local workspace to ${branch}. Git will refuse to overwrite conflicting local work.`, confirmLabel: "Switch branch", busyLabel: "Switching…", onConfirm: () => {
+            void runtimeStore.checkoutBranch(branch).then(() => setSidebarAction(undefined)).catch(error => reportError(error, "Could not switch branch"));
+          } });
+        } : undefined} />}
       {reference === "changes" && (
         <FilesPanel
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
@@ -1633,6 +1662,7 @@ export function App() {
 
   return (
     <AnnotationProvider sessionId={live.runtime?.sessionId ?? ""} generation={live.runtime?.sessionGeneration ?? 0} onOpen={() => setReference("notes")}>
+    {git.confirmation && <DeferredPanel><GitDialogs git={git} /></DeferredPanel>}
     <div
       ref={appShellRef}
       className={`app-shell has-scope-rail has-session-strip ${
@@ -2545,8 +2575,14 @@ function ActiveSessionStrip({
           <button
             role="menuitem"
             type="button"
-            disabled={busy || menuSession.pinned}
-            title={menuSession.pinned ? "Unpin before deactivating" : undefined}
+            disabled={busy || menuSession.pinned || (!sleeping && menuSession.runtimeState !== "idle")}
+            title={
+              menuSession.pinned
+                ? "Unpin before deactivating"
+                : !sleeping && menuSession.runtimeState !== "idle"
+                  ? "Wait for the session to become idle before deactivating"
+                  : undefined
+            }
             onClick={() => closeAndRun(session => onSetActive(session, sleeping))}>
             <IconPower size={14} />
             {sleeping ? "Activate" : "Deactivate"}

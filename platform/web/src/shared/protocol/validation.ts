@@ -1,5 +1,6 @@
 import { validWorkspaceMutation } from "../workspace/workspace-mutations.ts";
 import { validGuardRules } from "../settings/guard-policy.ts";
+import { validGitActionInput } from "../workspace/git.ts";
 import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";
@@ -875,6 +876,9 @@ function commandPolicyError(value: Record<string, unknown>, type: string): strin
 function commandControlsError(value: Record<string, unknown>, type: string): string | undefined {
   if (type === "mutateWorkspace" && (!identifier(value.sessionId) || !validWorkspaceMutation(value.mutation))) {
     return "invalid workspace operation";
+  }
+  if (type === "gitAction" && (!identifier(value.sessionId) || !validGitActionInput(value.input))) {
+    return "invalid Git action";
   }
   if (type === "dismissCommandResult" && !identifier(value.resultId)) {
     return "invalid command result";
