@@ -15,6 +15,7 @@ import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
 import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
 
+import { WorkspaceInventories } from "../src/server/pi/workspace-inventory.ts";
 const run = promisify(execFile);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pylon-coordinator-agent-"));
@@ -165,6 +166,38 @@ test("model catalog refresh reports provider failures", async () => {
     else process.env.PI_OFFLINE = previousOffline;
   }
 });
+
+test("private annotation storage is scoped by the selected server session and rejects lifecycle races", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-annotation-coordinator-"));
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  internal.target = { agentDir: root };
+  internal.generation = 1;
+  internal.selectedId = "first";
+  for (const id of ["first", "second"]) internal.slots.set(id, {
+    id, target: { projectId: "project" }, driver: { runtimeDetails: () => ({ cwd: root }) },
+  });
+  try {
+    const request = { sessionId: "first", expectedGeneration: 1 };
+    const initial = await coordinator.annotationNotes(request);
+    const note = { id: "00000000-0000-4000-8000-000000000001", scope: initial.scope, version: 1,
+      path: "file.ts", from: 1, to: 1, body: "Private draft", code: "source", kind: "historical" as const, revision: "snapshot" };
+    await coordinator.mutateAnnotation({ ...request, id: note.id, note });
+    await assert.rejects(coordinator.annotationNotes({ ...request, expectedGeneration: 2 }), /stale/);
+    internal.lifecycleBusy = true;
+    await assert.rejects(coordinator.mutateAnnotation({ ...request, id: note.id, expectedVersion: 1 }), /changing/);
+    internal.lifecycleBusy = false;
+    assert.equal((await coordinator.annotationNotes(request)).notes.length, 1);
+    internal.selectedId = "second"; internal.generation = 2;
+    await assert.rejects(coordinator.annotationNotes({ ...request, expectedGeneration: 2 }), /Session/);
+    const second = { sessionId: "second", expectedGeneration: 2 };
+    assert.deepEqual((await coordinator.annotationNotes(second)).notes, []);
+    await assert.rejects(coordinator.mutateAnnotation({ ...second, id: note.id, note }), /scope/);
+  } finally {
+    internal.slots.clear(); await coordinator.dispose(); await rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("project and session policies defer effective changes until a running turn settles", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-deferred-policy-"));
@@ -2663,4 +2696,88 @@ test("extension package commands require a project only for project scope", () =
     ok: false,
     error: "invalid extension package project",
   });
+});
+
+function inventoryHarness() {
+  const internal = new RuntimeCoordinator() as any;
+  let baselineTree = "baseline";
+  let cwd = process.cwd();
+  internal.projectRegistry = { workspaceForSession: () => ({ baselineTree }) };
+  internal.refreshWorkspace = async () => {};
+  const slots = ["one", "two"].map(id => ({
+    id, innerGeneration: 1, workspace: { gitAvailable: true },
+    driver: { runtimeDetails: () => ({ cwd }) },
+  }));
+  for (const slot of slots) internal.slots.set(slot.id, slot);
+  const inventories: WorkspaceInventories = internal.workspaceInventories;
+  const read = inventories.read.bind(inventories);
+  const batches: string[][] = [];
+  let scans = 0;
+  let collectDelta = async (paths: string[]) => {
+    batches.push(paths);
+    return { revision: "delta", upserted: [], removed: [], reconcileRequired: false };
+  };
+  inventories.read = (key, context, refresh) => read(key, {
+    ...context,
+    collect: async () => ({ revision: `scan ${++scans}`, files: [], truncated: false }),
+    collectDelta: paths => collectDelta(paths),
+  }, refresh);
+  return {
+    internal, slots, batches, scans: () => scans,
+    setBaseline: (value: string) => { baselineTree = value; },
+    setCwd: (value: string) => { cwd = value; },
+    setDelta: (value: typeof collectDelta) => { collectDelta = value; },
+  };
+}
+
+test("Phase 2 tool hints survive a new turn and are consumed by another slot sharing the inventory", async () => {
+  const { internal, slots: [one, two], batches, scans } = inventoryHarness();
+  await internal.workspaceInventory(one, false);
+  internal.trackWorkspaceEvent(one, {}, "agent_start");
+  internal.trackWorkspaceEvent(one, { toolCallId: "edit", toolName: "edit", args: { path: "a.ts" } }, "tool_execution_start");
+  internal.trackWorkspaceEvent(one, { toolCallId: "edit", isError: false }, "tool_execution_end");
+  internal.trackWorkspaceEvent(one, {}, "agent_start");
+  await internal.workspaceInventory(two, false);
+  assert.deepEqual(batches, [["a.ts"]]);
+  assert.equal(scans(), 1);
+
+  internal.trackWorkspaceEvent(one, { toolCallId: "shell", toolName: "bash" }, "tool_execution_start");
+  internal.trackWorkspaceEvent(one, { toolCallId: "shell", isError: false }, "tool_execution_end");
+  internal.trackWorkspaceEvent(one, {}, "agent_start");
+  await internal.workspaceInventory(two, false);
+  assert.equal(scans(), 2);
+
+  internal.trackWorkspaceEvent(one, { files: Array.from({ length: 101 }, (_, i) => ({ path: `${i}.ts` })) }, "worktree_summary");
+  await internal.workspaceInventory(two, false);
+  assert.equal(scans(), 3);
+  assert.equal(batches.length, 1);
+});
+
+test("Phase 2 rejects commits after runtime, root, baseline, or disposal context changes", async () => {
+  for (const change of ["baseline", "cwd", "generation", "slot", "disposed"]) {
+    const harness = inventoryHarness();
+    const { internal, slots: [slot] } = harness;
+    await internal.workspaceInventory(slot, false);
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    harness.setDelta(async () => {
+      await gate;
+      return { revision: "obsolete", upserted: [], removed: [], reconcileRequired: false };
+    });
+    internal.addTouchedPath(slot, "a.ts");
+    const reading = internal.workspaceInventory(slot, false);
+    if (change === "baseline") harness.setBaseline("new baseline");
+    if (change === "cwd") harness.setCwd(join(process.cwd(), "another-root"));
+    if (change === "generation") slot.innerGeneration++;
+    if (change === "slot") internal.slots.set(slot.id, { ...slot });
+    if (change === "disposed") internal.disposed = true;
+    finish();
+    await assert.rejects(reading, /obsolete context/, change);
+
+    harness.setBaseline("baseline");
+    harness.setCwd(process.cwd());
+    internal.slots.set(slot.id, slot);
+    internal.disposed = false;
+    assert.equal((await internal.workspaceInventory(slot, false)).revision, "scan 2", change);
+  }
 });

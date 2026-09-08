@@ -28,7 +28,6 @@ export type IsolatedWorktree = {
   parentBaseline: WorktreeSnapshot;
   workerHead: string;
   isolationVerified: true;
-  releaseTransaction: () => void;
 };
 
 const transactionQueues = new Map<string, Promise<void>>();
@@ -51,6 +50,19 @@ async function acquireTransaction(key: string, signal?: AbortSignal): Promise<()
     release();
     if (transactionQueues.get(key) === tail) transactionQueues.delete(key);
   };
+}
+
+async function withRepositoryTransaction<T>(
+  key: string,
+  task: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const release = await acquireTransaction(key, signal);
+  try {
+    return await task();
+  } finally {
+    release();
+  }
 }
 
 function failure(label: string, result: { code: number; stderr: string }): Error {
@@ -184,7 +196,6 @@ export async function createIsolatedWorktree(exec: Exec, cwd: string, signal?: A
       parentBaseline,
       workerHead: workerHeadResult.stdout.trim(),
       isolationVerified: true,
-      releaseTransaction,
     };
   } catch (error) {
     if (added && workerRoot)
@@ -192,8 +203,9 @@ export async function createIsolatedWorktree(exec: Exec, cwd: string, signal?: A
         () => {},
       );
     if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true }).catch(() => {});
-    releaseTransaction();
     throw error;
+  } finally {
+    releaseTransaction();
   }
 }
 
@@ -223,15 +235,17 @@ export async function parentChangesSinceBaseline(exec: Exec, isolated: IsolatedW
 
 export async function applyWorkerPatch(exec: Exec, isolated: IsolatedWorktree, patch: string): Promise<void> {
   if (!patch) return;
-  const parentChanges = await parentChangesSinceBaseline(exec, isolated);
-  if (parentChanges.length)
-    throw new Error(`Parent changed immediately before patch apply: ${parentChanges.join(", ")}`);
-  const patchPath = join(isolated.temporaryRoot, "worker.patch");
-  await writeFile(patchPath, patch, { mode: 0o600 });
-  const apply = await exec("git", ["-C", isolated.parentRoot, "apply", "--binary", "--whitespace=nowarn", patchPath], {
-    timeout: 60_000,
+  await withRepositoryTransaction(isolated.parentRoot, async () => {
+    const parentChanges = await parentChangesSinceBaseline(exec, isolated);
+    if (parentChanges.length)
+      throw new Error(`Parent changed immediately before patch apply: ${parentChanges.join(", ")}`);
+    const patchPath = join(isolated.temporaryRoot, "worker.patch");
+    await writeFile(patchPath, patch, { mode: 0o600 });
+    const apply = await exec("git", ["-C", isolated.parentRoot, "apply", "--binary", "--whitespace=nowarn", patchPath], {
+      timeout: 60_000,
+    });
+    if (apply.code !== 0) throw failure("Unable to apply worker patch", apply);
   });
-  if (apply.code !== 0) throw failure("Unable to apply worker patch", apply);
 }
 
 export const STALE_PATCH_ARTIFACT_MS = 7 * 24 * 60 * 60 * 1000;
@@ -286,23 +300,23 @@ export async function cleanupSessionPatchArtifacts(paths: Iterable<string>): Pro
 }
 
 export async function removeIsolatedWorktree(exec: Exec, isolated: IsolatedWorktree): Promise<string[]> {
-  const warnings: string[] = [];
-  try {
-    const result = await exec(
-      "git",
-      ["-C", isolated.parentRoot, "worktree", "remove", "--force", isolated.workerRoot],
-      { timeout: 60_000 },
-    );
-    if (result.code !== 0) warnings.push(`worktree cleanup: ${result.stderr.trim() || `exit ${result.code}`}`);
-  } catch (error: any) {
-    warnings.push(`worktree cleanup: ${error?.message ?? String(error)}`);
-  }
-  try {
-    await rm(isolated.temporaryRoot, { recursive: true, force: true });
-  } catch (error: any) {
-    warnings.push(`temporary cleanup: ${error?.message ?? String(error)}`);
-  } finally {
-    isolated.releaseTransaction();
-  }
-  return warnings;
+  return withRepositoryTransaction(isolated.parentRoot, async () => {
+    const warnings: string[] = [];
+    try {
+      const result = await exec(
+        "git",
+        ["-C", isolated.parentRoot, "worktree", "remove", "--force", isolated.workerRoot],
+        { timeout: 60_000 },
+      );
+      if (result.code !== 0) warnings.push(`worktree cleanup: ${result.stderr.trim() || `exit ${result.code}`}`);
+    } catch (error: any) {
+      warnings.push(`worktree cleanup: ${error?.message ?? String(error)}`);
+    }
+    try {
+      await rm(isolated.temporaryRoot, { recursive: true, force: true });
+    } catch (error: any) {
+      warnings.push(`temporary cleanup: ${error?.message ?? String(error)}`);
+    }
+    return warnings;
+  });
 }

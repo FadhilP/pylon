@@ -1,3 +1,6 @@
+import { dispatchShortcut, isMacKeyboard, shortcutsBlocked } from "./keyboard-shortcuts";
+import { DEFAULT_KEYMAP, effectiveBinding, matchesBinding } from "../shared/keyboard";
+import { AnnotationChips, useAnnotations } from "./annotations";
 import {
   IconAlertTriangle,
   IconArrowBackUp,
@@ -372,6 +375,8 @@ export function ConversationPanel({
     setVisibleTurnIds(new Set());
     turnRefs.current.clear();
   }, [runtime?.sessionId, runtime?.sessionGeneration]);
+  const annotations = useAnnotations();
+  const hasNotes = !draftingOnly && Boolean(annotations?.picked.length);
   const connected = !draftingOnly && live.connection === "connected" && runtime?.ready === true && projectAvailable;
   const streaming = runtime?.conversation.streaming === true;
   const running = Boolean(runtime?.conversation.workStartedAt);
@@ -379,7 +384,7 @@ export function ConversationPanel({
   const queuedItems = runtime?.conversation.queue.items ?? [];
   const pendingUi = live.pendingUi?.surface === "database" ? undefined : live.pendingUi;
   const composerBlocked = !draftingOnly && Boolean(pendingUi);
-  const hasDraft = Boolean(message.trim() || images.length || files.length);
+  const hasDraft = Boolean(message.trim() || images.length || files.length || hasNotes);
   const sending = submitting && !edit && !undo && !fork;
   const planAvailable =
     controls?.commands?.some(command => command.name === "plan" && command.source === "extension") === true;
@@ -639,8 +644,8 @@ export function ConversationPanel({
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const value = message.trim();
-    if (draftingOnly || (!value && images.length === 0 && files.length === 0) || !connected || composerBlocked) return;
-    const loginProvider = !images.length && !files.length ? loginCommandProvider(value) : null;
+    if (draftingOnly || submitting || (!value && images.length === 0 && files.length === 0 && !hasNotes) || !connected || composerBlocked) return;
+    const loginProvider = !hasNotes && !images.length && !files.length ? loginCommandProvider(value) : null;
     if (loginProvider !== null) {
       onOpenLogin?.(loginProvider);
       updateMessage("");
@@ -648,18 +653,22 @@ export function ConversationPanel({
     }
     setSubmitting(true);
     try {
+      const prepared = hasNotes ? await annotations!.prepare(value) : undefined;
+      if (hasNotes && !prepared) return;
+      if (hasNotes) annotations!.assertSession();
       await runtimeStore.sendMessage(
-        value,
+        prepared?.text ?? value,
         images.map(({ data, mimeType }) => ({ data, mimeType })),
         files.map(({ name, text, size, mimeType }) => ({ name, text, size, ...(mimeType ? { mimeType } : {}) })),
         planMode,
       );
+      if (prepared) annotations!.clearSubmitted(prepared.notes);
       updateMessage("");
       setImages([]);
       setFiles([]);
       setPlanMode(false);
-    } catch {
-      /* Store exposes the command error in the live connection state. */
+    } catch (error) {
+      runtimeStore.reportError(`${error instanceof Error ? error.message : "Unable to send message"}${hasNotes ? " If delivery is uncertain, check chat and the queue before sending again." : ""}`);
     } finally {
       setSubmitting(false);
     }
@@ -915,7 +924,8 @@ export function ConversationPanel({
     }
   };
   const onPromptKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (draftingOnly) return;
+    if (draftingOnly || shortcutsBlocked(event.nativeEvent)) return;
+    const canSend = connected && !composerBlocked && !submitting && hasDraft && !!controls?.model;
     const activeSuggestions = suggestions.length ? suggestions : fileSuggestions;
     if (activeSuggestions.length) {
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -927,9 +937,8 @@ export function ConversationPanel({
         return;
       }
       if (
-        event.key === "Enter" &&
-        !event.shiftKey &&
-        !event.nativeEvent.isComposing &&
+        canSend &&
+        matchesBinding(event.nativeEvent, effectiveBinding(live.keyboardSettings?.keymap ?? DEFAULT_KEYMAP, "send"), isMacKeyboard()) &&
         suggestions.length &&
         slashMatch &&
         isExactSlashCommandSelection(slashMatch[1]!, suggestions[suggestionIndex]?.name)
@@ -938,7 +947,7 @@ export function ConversationPanel({
         event.currentTarget.form?.requestSubmit();
         return;
       }
-      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.nativeEvent.isComposing) {
+      if ((event.key === "Enter" || event.key === "Tab") && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         if (suggestions.length) chooseSuggestion(suggestionIndex);
         else chooseFileSuggestion(suggestionIndex);
@@ -950,9 +959,17 @@ export function ConversationPanel({
         return;
       }
     }
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    event.currentTarget.form?.requestSubmit();
+    dispatchShortcut(event.nativeEvent, "composer", {
+      send: () => { if (!canSend) return false; event.currentTarget.form?.requestSubmit(); },
+      newline: () => {
+        // Keep native Enter insertion (and its undo history) when no extra modifier is needed.
+        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey) return false;
+        const input = event.currentTarget;
+        const start = input.selectionStart;
+        updateMessage(`${input.value.slice(0, start)}\n${input.value.slice(input.selectionEnd)}`);
+        requestAnimationFrame(() => { if (input.isConnected) input.setSelectionRange(start + 1, start + 1); });
+      },
+    });
   };
   return (
     <section className="conversation-panel" aria-label="Live conversation">
@@ -1351,6 +1368,7 @@ export function ConversationPanel({
         {files.length > 0 && (
           <FileStrip files={files} onRemove={id => setFiles(current => current.filter(item => item.id !== id))} />
         )}
+        {!draftingOnly && <AnnotationChips disabled={submitting} />}
         <label className="sr-only" htmlFor="runtime-prompt">
           Message
         </label>
@@ -1542,7 +1560,7 @@ function RetainedUiDialog({ request }: { request: RuntimeStoreSnapshot["pendingU
     return () => window.clearTimeout(timer);
   }, [request, displayed]);
 
-  if (!displayed || displayed.payload.context === "provider-auth") return null;
+  if (!displayed || displayed.payload.context === "provider-auth" || displayed.surface === "database") return null;
   return (
     <div className={exiting ? "ui-request-motion is-exiting" : "ui-request-motion"}>
       <UiDialog key={displayed.requestId} request={displayed} />

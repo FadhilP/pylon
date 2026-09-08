@@ -1177,6 +1177,9 @@ export class RuntimeProjection {
         method: method as UiRequestReadModel["method"],
         payload: browserValue(payload) as Record<string, unknown>,
         ...(raw.surface === "database" ? { surface: "database" as const } : {}),
+        ...(typeof raw.operationId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(raw.operationId)
+          ? { operationId: raw.operationId }
+          : {}),
         owned: false,
         ownershipAvailable: false,
         ...(typeof raw.timeoutSeconds === "number"

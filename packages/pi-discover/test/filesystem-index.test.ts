@@ -288,3 +288,39 @@ test("file mutation after inventory never publishes partial preparation", async 
     await f.close();
   }
 });
+
+test("navigation symbol queries rank camel initials between prefixes and substrings without changing agent queries", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(
+      join(f.root, "symbols.ts"),
+      [
+        "export function bWT() {}",
+        "export function bWTExtra() {}",
+        "export function buildWorkspaceTree() {}",
+        "export function xbWT() {}",
+        "export type DEFAULT_EXPLORER_STATE = {};",
+      ].join("\n"),
+    );
+    const navigate = await f.index.searchSymbols(f.root, { query: "bWT", navigation: true, limit: 3 });
+    assert.deepEqual(
+      navigate.map(row => row.name),
+      ["bWT", "bWTExtra", "buildWorkspaceTree"],
+    );
+    assert.equal(navigate.moreAvailable, true);
+    assert.deepEqual(
+      (await f.index.searchSymbols(f.root, { query: "bWT" })).map(row => row.name),
+      ["bWT", "bWTExtra", "xbWT"],
+    );
+    assert.equal(
+      (await f.index.searchSymbols(f.root, { query: "des", navigation: true }))[0].name,
+      "DEFAULT_EXPLORER_STATE",
+    );
+    const browse = await f.index.searchSymbols(f.root, { query: "", navigation: true, limit: 2 });
+    assert.equal(browse.length, 2);
+    assert.equal(browse.moreAvailable, true);
+    await assert.rejects(f.index.searchSymbols(f.root, { query: "" }), /non-whitespace/);
+  } finally {
+    await f.close();
+  }
+});

@@ -34,6 +34,8 @@ export interface UiRequest {
   timeoutSeconds?: number;
   expiresAt?: string;
   surface?: "database";
+  /** Browser operation that originated this prompt; never contains credential material. */
+  operationId?: string;
 }
 
 export type ProviderAuthPrompt = { signal?: AbortSignal } & (
@@ -67,13 +69,13 @@ export interface StateQLCredentialRequest {
   connection?: {
     id: string;
     name: string;
-    driver: "sqlite" | "postgres" | "mysql" | "mongodb";
+    driver: "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
     database: string;
     readOnly: boolean;
   };
 }
 export interface StateQLPasswordTarget {
-  driver: "postgres" | "mysql" | "mongodb";
+  driver: "postgres" | "mysql" | "mongodb" | "redis";
   username: string;
   hostname: string;
   port: number;
@@ -163,6 +165,7 @@ interface CredentialDialogInput {
   neutral: undefined;
   surface?: "database";
   dialogOptions?: ExtensionUIDialogOptions;
+  operationId?: string;
 }
 
 function requiredText(value: unknown, label: string, maximum: number): string {
@@ -178,7 +181,7 @@ function safeMetadata(value: string, maximum: number): string {
     .replace(/[\u0000-\u001f\u007f]/gu, " ");
 }
 
-function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | "mongodb" | undefined {
+function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | "mongodb" | "redis" | undefined {
   if (/[\u0000-\u001f\u007f]/u.test(value)) return undefined;
   const sqlitePath = /^sqlite:(?!\/\/)(.*)$/iu.exec(value)?.[1];
   if (sqlitePath?.trim() && sqlitePath !== ":memory:") return "sqlite";
@@ -188,7 +191,7 @@ function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | 
       ? "mysql"
       : /^mongodb(?:\+srv)?:\/\//iu.test(value)
         ? "mongodb"
-        : undefined;
+        : /^rediss?:\/\//iu.test(value) ? "redis" : undefined;
   if (!driver) return undefined;
   try {
     const url = new URL(value);
@@ -209,7 +212,7 @@ function validateCredentialValue(request: StateQLCredentialRequest, value: strin
             ? "complete MongoDB connection URL"
             : request.connection?.driver === "sqlite"
               ? "explicit sqlite:<path> source"
-              : "complete PostgreSQL/MySQL/MongoDB URL or explicit sqlite:<path> source";
+              : "complete PostgreSQL/MySQL/MongoDB/Redis URL or explicit sqlite:<path> source";
     throw new Error(`StateQL credential must use the expected source format: ${expected}`);
   }
 }
@@ -240,7 +243,7 @@ function validateCredentialRequest(
   if (request.connection) {
     const driver = request.connection.driver;
     if (
-      !(["sqlite", "postgres", "mysql", "mongodb"] as const).includes(driver) ||
+      !(["sqlite", "postgres", "mysql", "mongodb", "redis"] as const).includes(driver) ||
       typeof request.connection.readOnly !== "boolean"
     ) {
       throw new Error("StateQL credential connection metadata is invalid");
@@ -289,7 +292,7 @@ function validatePasswordTarget(
   request: StateQLCredentialRequest,
   target: StateQLPasswordTarget,
 ): { target: StateQLPasswordTarget; identity: string } {
-  if (!target || typeof target !== "object" || !["postgres", "mysql", "mongodb"].includes(target.driver)) {
+  if (!target || typeof target !== "object" || !["postgres", "mysql", "mongodb", "redis"].includes(target.driver)) {
     throw new Error("StateQL password target is invalid");
   }
   if (request.connection && request.connection.driver !== target.driver) {
@@ -383,6 +386,7 @@ class StateQLCredentialBroker {
     generation: number,
     raw: StateQLCredentialRequest,
     surface?: "database",
+    operationId?: string,
   ): Promise<string | undefined> {
     const { request } = validateCredentialRequest(sessionId, raw);
     if (
@@ -393,7 +397,7 @@ class StateQLCredentialBroker {
       const saved = await this.credentialVault.resolve(request.reference, undefined, request.signal);
       if (saved !== undefined) return saved;
     }
-    const value = await this.request(sessionId, generation, request, undefined, undefined, surface);
+    const value = await this.request(sessionId, generation, request, undefined, undefined, surface, operationId);
     if (value !== undefined && request.source === "credential_ref" && this.credentialVault) {
       if (await this.credentialVault.save(request.reference, undefined, value, request.signal)) {
         this.invalidCredentialReferences.delete(request.reference);
@@ -441,6 +445,7 @@ class StateQLCredentialBroker {
     rawPasswordTarget?: StateQLPasswordTarget,
     passwordTimeoutMs?: number,
     surface?: "database",
+    operationId?: string,
   ): Promise<string | undefined> {
     if (!this.isCurrent(generation)) return Promise.resolve(undefined);
     const { request, identity } = validateCredentialRequest(sessionId, raw);
@@ -469,6 +474,7 @@ class StateQLCredentialBroker {
       identity.target,
       request.access,
       surface,
+      operationId,
     ]);
     let flight = this.flights.get(flightKey);
     if (!flight) {
@@ -491,6 +497,7 @@ class StateQLCredentialBroker {
         passwordTarget?.target,
         passwordTimeoutMs,
         surface,
+        operationId,
         controller.signal,
       ).finally(() => {
         activeFlight.settled = true;
@@ -545,6 +552,7 @@ class StateQLCredentialBroker {
     passwordTarget: StateQLPasswordTarget | undefined,
     passwordTimeoutMs: number | undefined,
     surface: "database" | undefined,
+    operationId: string | undefined,
     signal: AbortSignal,
   ): Promise<string | undefined> {
     const target = request.connection
@@ -595,6 +603,7 @@ class StateQLCredentialBroker {
       },
       neutral: undefined,
       ...(surface ? { surface } : {}),
+      ...(operationId ? { operationId } : {}),
       dialogOptions: { signal, ...(passwordTimeoutMs !== undefined ? { timeout: passwordTimeoutMs } : {}) },
     });
     if (!value || !this.isCurrent(generation) || signal.aborted) return undefined;
@@ -705,14 +714,19 @@ export class RemoteUiBridge {
     this.credentialBroker.setCredentialVault(vault);
   }
 
-  context(sessionId: string, sessionGeneration: number, surface?: "database"): ExtensionUIContext {
-    if (this.disposed) return new GenerationUiContext(this, sessionId, sessionGeneration, surface);
+  context(
+    sessionId: string,
+    sessionGeneration: number,
+    surface?: "database",
+    operationId?: string,
+  ): ExtensionUIContext {
+    if (this.disposed) return new GenerationUiContext(this, sessionId, sessionGeneration, surface, operationId);
     if (this.activeGeneration !== sessionGeneration) {
       if (this.activeGeneration !== undefined) this.cancelGeneration(this.activeGeneration);
       this.activeGeneration = sessionGeneration;
       this.state = emptyState();
     }
-    return new GenerationUiContext(this, sessionId, sessionGeneration, surface);
+    return new GenerationUiContext(this, sessionId, sessionGeneration, surface, operationId);
   }
 
   async requestStateQLCredential(
@@ -720,9 +734,10 @@ export class RemoteUiBridge {
     sessionGeneration: number,
     request: StateQLCredentialRequest,
     surface?: "database",
+    operationId?: string,
   ): Promise<string | undefined> {
     if (this.disposed) return undefined;
-    return this.credentialBroker.requestCredential(sessionId, sessionGeneration, request, surface);
+    return this.credentialBroker.requestCredential(sessionId, sessionGeneration, request, surface, operationId);
   }
 
   async requestStateQLPassword(
@@ -732,6 +747,7 @@ export class RemoteUiBridge {
     target: StateQLPasswordTarget,
     options?: StateQLPasswordDialogOptions,
     surface?: "database",
+    operationId?: string,
   ): Promise<string | undefined> {
     if (this.disposed) return undefined;
     const password = await this.credentialBroker.request(
@@ -741,6 +757,7 @@ export class RemoteUiBridge {
       target,
       validatePasswordTimeout(options),
       surface,
+      operationId,
     );
     if (password !== undefined && options?.remember) {
       await this.credentialBroker.rememberPassword(
@@ -816,6 +833,7 @@ export class RemoteUiBridge {
     questions?: QuestionnaireQuestion[];
     dialogOptions?: ExtensionUIDialogOptions;
     surface?: "database";
+    operationId?: string;
   }): Promise<T> {
     const { dialogOptions } = input;
     if (
@@ -838,6 +856,7 @@ export class RemoteUiBridge {
       payload: input.payload,
       createdAt: new Date().toISOString(),
       ...(input.surface ? { surface: input.surface } : {}),
+      ...(input.operationId ? { operationId: input.operationId } : {}),
       ...(timeoutMs ? { timeoutSeconds: Math.ceil(timeoutMs / 1_000) } : {}),
       ...(timeoutMs ? { expiresAt: new Date(Date.now() + timeoutMs).toISOString() } : {}),
     };
@@ -1052,10 +1071,11 @@ class GenerationUiContext implements ExtensionUIContext {
     private readonly sessionId: string,
     private readonly generation: number,
     private readonly surface?: "database",
+    private readonly operationId?: string,
   ) {}
 
   requestStateQLCredential(request: StateQLCredentialRequest): Promise<string | undefined> {
-    return this.bridge.requestStateQLCredential(this.sessionId, this.generation, request, this.surface);
+    return this.bridge.requestStateQLCredential(this.sessionId, this.generation, request, this.surface, this.operationId);
   }
 
   requestStateQLPassword(
@@ -1063,7 +1083,7 @@ class GenerationUiContext implements ExtensionUIContext {
     target: StateQLPasswordTarget,
     options?: StateQLPasswordDialogOptions,
   ): Promise<string | undefined> {
-    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target, options, this.surface);
+    return this.bridge.requestStateQLPassword(this.sessionId, this.generation, request, target, options, this.surface, this.operationId);
   }
 
   invalidateStateQLPassword(request: StateQLCredentialRequest, target: StateQLPasswordTarget): void {
@@ -1092,6 +1112,7 @@ class GenerationUiContext implements ExtensionUIContext {
       neutral: undefined,
       options: offered,
       ...(this.surface ? { surface: this.surface } : {}),
+      ...(this.operationId ? { operationId: this.operationId } : {}),
       dialogOptions: opts,
     });
   }
@@ -1105,6 +1126,7 @@ class GenerationUiContext implements ExtensionUIContext {
       neutral: false,
       ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
+      ...(this.operationId ? { operationId: this.operationId } : {}),
     });
   }
 
@@ -1116,6 +1138,7 @@ class GenerationUiContext implements ExtensionUIContext {
       payload: { title: bounded(title), placeholder: placeholder && bounded(placeholder) },
       neutral: undefined,
       ...(this.surface ? { surface: this.surface } : {}),
+      ...(this.operationId ? { operationId: this.operationId } : {}),
       dialogOptions: opts,
     });
   }
@@ -1129,6 +1152,7 @@ class GenerationUiContext implements ExtensionUIContext {
       neutral: undefined,
       ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
+      ...(this.operationId ? { operationId: this.operationId } : {}),
     });
   }
 
@@ -1151,6 +1175,7 @@ class GenerationUiContext implements ExtensionUIContext {
       questions: offered,
       ...(this.surface ? { surface: this.surface } : {}),
       dialogOptions: opts,
+      ...(this.operationId ? { operationId: this.operationId } : {}),
     });
   }
 

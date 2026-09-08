@@ -1,3 +1,4 @@
+import { AnnotationProvider } from "./annotations";
 import {
   IconArchive,
   IconCopy,
@@ -53,12 +54,16 @@ import { BrowserPanel } from "./browser-panel";
 import { DatabasePanel } from "./database-panel";
 import { FilesPanel, type FileView } from "./files-panel";
 import { FileWorkspace, type FileWorkspaceContentStore } from "./file-workspace";
+import { SearchPopup } from "./search-popup";
+import { openSearch } from "./workspace-search";
+import { KEY_COMMANDS } from "../shared/keyboard";
+import { shortcutLabel, shortcutsBlocked, useGlobalShortcuts, type ShortcutHandlers } from "./keyboard-shortcuts";
 import type { FileWorkspaceState } from "../shared/file-workspace-state";
 import { SessionReference, type ViewId } from "./inspector";
 import { ReferencePanel, ReferenceRail, ScopeRail, SurfaceTabs } from "./app-chrome";
 
 /** Reference views that render a session view body inside the shared panel. */
-const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory", "tools"];
+const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory", "tools", "notes"];
 import { UsageView } from "./usage-view";
 import {
   clampPanelWidth,
@@ -141,6 +146,15 @@ const DEFAULT_LEFT_PANEL_WIDTH = 280;
 const TERMINAL_HEIGHT_KEY = "pylon-terminal-height";
 const DEFAULT_TERMINAL_HEIGHT = 280;
 
+function currentSessionLiveFields() {
+  const current = runtimeStore.getSnapshot();
+  return {
+    states: current.sessionStatuses,
+    workStartedAts: current.sessionWorkStartedAts,
+    todoProgress: current.sessionTodoProgress,
+  };
+}
+
 function leftPanelWidth(value: number): number {
   const maximum = Math.min(520, window.innerWidth * 0.45);
   return Math.round(Math.max(220, Math.min(maximum, value)));
@@ -169,8 +183,8 @@ function useMediaQuery(query: string) {
 export function App() {
   const composerDrafts = useComposerDrafts();
   const [workspaceView, setWorkspaceView] = useState<ActiveWorkspaceView>(null);
-  const [theme, setTheme] = useTheme();
-  const [syntaxTheme, setSyntaxTheme] = useSyntaxTheme();
+  const [theme, setTheme, resolvedTheme] = useTheme();
+  const [syntaxTheme, setSyntaxTheme] = useSyntaxTheme(resolvedTheme);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
@@ -344,11 +358,7 @@ export function App() {
     });
   };
   const applySessionList = (result: SessionListSnapshot, appliedQuery = query.trim()) => {
-    const liveFields = {
-      states: live.sessionStatuses,
-      workStartedAts: live.sessionWorkStartedAts,
-      todoProgress: live.sessionTodoProgress,
-    };
+    const liveFields = currentSessionLiveFields();
     const projectsWithLiveFields = result.projects.map(project => ({
       ...project,
       sessions: project.sessions.map(session => applySessionLiveFields(session, liveFields)),
@@ -658,13 +668,7 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (live.pendingUi?.owned) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setSidebarCollapsed(false);
-        if (mobile) setSidebarOpen(true);
-        requestAnimationFrame(() => searchRef.current?.focus());
-      }
+      if (live.pendingUi || shortcutsBlocked(event)) return;
       if (event.key === "Escape") {
         setSidebarOpen(false);
         if (workspaceView) setWorkspaceView(null);
@@ -958,7 +962,9 @@ export function App() {
         !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)
       )
         return;
-      setActiveSessions(result.activeSessions);
+      const liveFields = currentSessionLiveFields();
+      const updateSession = (session: SessionSummary) => applySessionLiveFields(session, liveFields);
+      setActiveSessions(result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
       const next = result.projects[0];
       if (!next) return;
       updateSessionPages(pages =>
@@ -967,8 +973,10 @@ export function App() {
             ? {
                 ...page,
                 sessions: [
-                  ...page.sessions,
-                  ...next.sessions.filter(session => !page.sessions.some(old => old.id === session.id)),
+                  ...page.sessions.map(updateSession),
+                  ...next.sessions
+                    .filter(session => !page.sessions.some(old => old.id === session.id))
+                    .map(updateSession),
                 ],
                 nextCursor: next.nextCursor,
               }
@@ -1002,10 +1010,13 @@ export function App() {
         !runtimeRequestStillCurrent(runtimeStore.getSnapshot(), runtime.sessionId, runtime.sessionGeneration)
       )
         return;
+      const liveFields = currentSessionLiveFields();
+      const updateSession = (session: SessionSummary) => applySessionLiveFields(session, liveFields);
       const next = result.projects[0];
       if (!next) return;
-      setActiveSessions(result.activeSessions);
-      updateSessionPages(pages => pages.map(page => (page.id === project.id ? next : page)));
+      const nextWithLiveFields = { ...next, sessions: next.sessions.map(updateSession) };
+      setActiveSessions(result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
+      updateSessionPages(pages => pages.map(page => (page.id === project.id ? nextWithLiveFields : page)));
     } catch (cause) {
       reportError(cause, "Unable to show fewer sessions");
     } finally {
@@ -1245,17 +1256,46 @@ export function App() {
   };
 
   const runAmbient = (id: AmbientId) => {
-    if (id === "theme") setTheme(theme === "dark" ? "light" : "dark");
+    if (id === "theme") setTheme(resolvedTheme === "dark" ? "light" : "dark");
     if (id === "settings") openSettings();
     if (id === "changelog") setChangelogOpen(true);
     if (id === "terminal") toggleTerminal();
   };
+  const [applyRequest, setApplyRequest] = useState<{ sessionId: string; revision: string }>();
+  const keyboardReady = live.connection === "connected" && !!live.runtime?.ready && !pendingSession;
+  const reviewChanges = () => { changeSurface("chat"); setReference("changes"); };
+  const keyboardHandlers: ShortcutHandlers = {
+    "find-file": keyboardReady ? () => openSearch("files") : undefined,
+    "find-text": keyboardReady ? () => openSearch("text") : undefined,
+    "find-symbol": keyboardReady ? () => openSearch("symbols") : undefined,
+    "last-tab": keyboardReady ? () => window.dispatchEvent(new CustomEvent("pylon:search")) : undefined,
+    sessions: () => { setSidebarCollapsed(false); if (mobile) setSidebarOpen(true); requestAnimationFrame(() => searchRef.current?.focus()); },
+    "new-session": live.connection === "connected" && currentProject && !sessionBusy && !sessionDeleting && !projectBusy && !pendingSession ? () => newSession(currentProject) : undefined,
+    "stop-turn": keyboardReady && live.runtime?.conversation.workStartedAt && !live.runtime.conversation.stopping ? () => runtimeStore.abort() : undefined,
+    archive: keyboardReady && activeSession && !sessionBusy && !sessionDeleting && !projectBusy ? () => setSidebarAction({
+      key: `archive-session-${activeSession.id}`, title: "Archive this session?", description: "The session will move to the archive. Saved history is retained.",
+      confirmLabel: "Archive session", busyLabel: "Archiving…", onConfirm: () => { void archiveSession(activeSession).then(() => setSidebarAction(undefined)); },
+    }) : undefined,
+    worktree: keyboardReady && live.runtime?.workspace?.canMoveToWorktree ? () => runtimeStore.handoffSession("worktree") : undefined,
+    terminal: keyboardReady && live.runtime?.projectAvailable !== false ? toggleTerminal : undefined,
+    changes: keyboardReady ? reviewChanges : undefined,
+    inspector: keyboardReady ? () => setReference(current => current ? null : "overview") : undefined,
+    theme: () => runAmbient("theme"),
+    settings: openSettings,
+    apply: keyboardReady && live.runtime?.workspace?.canApplyChanges && live.runtime.workspace.revision ? () => {
+      setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! }); reviewChanges();
+    } : undefined,
+    reindex: keyboardReady && live.runtime?.discoverIndex && live.runtime.discoverIndex.state !== "indexing" ? () => runtimeStore.rebuildDiscoverIndex() : undefined,
+  };
+  useGlobalShortcuts(keyboardHandlers, !!live.pendingUi);
+
   const branchLabel = pendingSession
     ? pendingSession.phase === "failed"
       ? "setup failed"
       : "workspace pending"
     : `${live.runtime?.gitBranch || "No Git branch"} · Turn ${live.runtime?.metrics.userMessages ?? 0}`;
   const topbar = (
+    <div className="workspace-search-surface-header">
     <SurfaceTabs
       surface={surface}
       context={navContext}
@@ -1264,6 +1304,9 @@ export function App() {
       branchLabel={branchLabel}
       onSurface={changeSurface}
     />
+      <button type="button" className="workspace-search-launcher" disabled={!live.runtime?.ready || Boolean(pendingSession)}
+        title={`Search workspace · Files: ${shortcutLabel("find-file")} · Text: ${shortcutLabel("find-text")}`} onClick={() => openSearch()}>Search</button>
+    </div>
   );
   /**
    * The sidebar, and so its scrim. A workspace view keeps it: the session list is
@@ -1537,6 +1580,8 @@ export function App() {
           live={live}
           projectId={activeSession?.projectId}
           requestedPath={requestedFile}
+          applyRequest={applyRequest}
+          onApplyRequestHandled={() => setApplyRequest(undefined)}
           onClose={() => setReference(null)}
           onExpand={(path, fileView) => {
             if (path)
@@ -1579,6 +1624,7 @@ export function App() {
   );
 
   return (
+    <AnnotationProvider sessionId={live.runtime?.sessionId ?? ""} generation={live.runtime?.sessionGeneration ?? 0} onOpen={() => setReference("notes")}>
     <div
       ref={appShellRef}
       className={`app-shell has-scope-rail has-session-strip ${
@@ -1595,7 +1641,7 @@ export function App() {
       </a>
       <ScopeRail
         workspaceView={workspaceView}
-        theme={theme}
+        theme={resolvedTheme}
         terminalOpen={terminalOpen}
         terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
         onWorkspaceView={openWorkspaceView}
@@ -1845,6 +1891,18 @@ export function App() {
         />
       )}
       <div className="terminal-layer">{terminalChrome}</div>
+      <SearchPopup live={live} onError={reportError}
+        onOpen={(path, line) => {
+          setRequestedFile({ path, line, view: "current", sessionId: live.runtime?.sessionId, requestId: Date.now() });
+          changeSurface("files");
+        }}
+        actions={[
+          { id: "files", label: "Open workspace files", run: () => changeSurface("files") },
+          ...KEY_COMMANDS.filter(command => command.scope === "global" && !["find-file", "find-text", "find-symbol", "last-tab"].includes(command.id)).map(command => ({
+            id: command.id, label: command.label, shortcut: shortcutLabel(command.id), disabled: !keyboardHandlers[command.id],
+            run: () => { const result = keyboardHandlers[command.id]?.(); return result instanceof Promise ? result : undefined; },
+          })),
+        ]} />
 
       {sidebarAction && (
         <ActionDialog
@@ -1948,6 +2006,7 @@ export function App() {
         />
       )}
     </div>
+    </AnnotationProvider>
   );
 }
 

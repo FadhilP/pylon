@@ -1,3 +1,5 @@
+import type { ColorTheme } from "./appearance.ts";
+
 export const SYNTAX_THEMES = [
   { id: "one-dark-pro", label: "One Dark Pro" },
   { id: "github-dark", label: "GitHub Dark" },
@@ -6,13 +8,37 @@ export const SYNTAX_THEMES = [
   { id: "github-light", label: "GitHub Light" },
 ] as const;
 
+export const SYNTAX_THEME_PREFERENCES = [{ id: "auto", label: "Auto" }, ...SYNTAX_THEMES] as const;
+
 export type SyntaxTheme = (typeof SYNTAX_THEMES)[number]["id"];
+export type SyntaxThemePreference = (typeof SYNTAX_THEME_PREFERENCES)[number]["id"];
 export interface SyntaxToken {
   content: string;
   className: string;
 }
 
+/** Runtime fallback when a syntax preference cannot be resolved. */
 export const DEFAULT_SYNTAX_THEME: SyntaxTheme = "one-dark-pro";
+/** New and reset syntax preferences follow the color theme. */
+export const DEFAULT_SYNTAX_THEME_PREFERENCE: SyntaxThemePreference = "auto";
+
+export function isSyntaxTheme(value: string | undefined | null): value is SyntaxTheme {
+  return SYNTAX_THEMES.some(theme => theme.id === value);
+}
+
+export function isSyntaxThemePreference(value: unknown): value is SyntaxThemePreference {
+  return value === "auto" || isSyntaxTheme(value as string | undefined | null);
+}
+
+export function readSyntaxThemePreference(value: unknown): SyntaxThemePreference {
+  return isSyntaxThemePreference(value) ? value : DEFAULT_SYNTAX_THEME_PREFERENCE;
+}
+
+export function resolveSyntaxTheme(preference: SyntaxThemePreference, colorTheme: ColorTheme): SyntaxTheme {
+  if (preference !== "auto") return preference;
+  return colorTheme === "dark" ? "one-dark-pro" : "github-light";
+}
+export const SYNTAX_THEME_KEY = "pylon-syntax-theme";
 
 type SyntaxRuntime = typeof import("./syntax-highlighting-runtime.ts");
 type Listener = () => void;
@@ -22,11 +48,6 @@ let runtime: SyntaxRuntime | undefined;
 let loading: Promise<void> | undefined;
 let revision = 0;
 const listeners = new Set<Listener>();
-
-export function isSyntaxTheme(value: string | undefined | null): value is SyntaxTheme {
-  return SYNTAX_THEMES.some(theme => theme.id === value);
-}
-
 export function setSyntaxTheme(theme: SyntaxTheme): void {
   if (theme === activeTheme) return;
   activeTheme = theme;

@@ -37,6 +37,7 @@ function defaultPort(protocol: string): string {
   if (protocol === "postgres:") return "5432";
   if (protocol === "mysql:") return "3306";
   if (protocol === "mongodb:") return "27017";
+  if (protocol === "redis:" || protocol === "rediss:") return "6379";
   return "";
 }
 
@@ -45,7 +46,7 @@ function connectionIdentity(source: string): string | undefined {
   try {
     const url = new URL(source);
     const protocol = normalizedProtocol(url.protocol.toLowerCase());
-    if (!["postgres:", "mysql:", "mongodb:", "mongodb+srv:"].includes(protocol) || !url.hostname || url.hash)
+    if (!["postgres:", "mysql:", "mongodb:", "mongodb+srv:", "redis:", "rediss:"].includes(protocol) || !url.hostname || url.hash)
       return undefined;
     const query = [...url.searchParams.entries()]
       .filter(([key]) => !SECRET_QUERY_KEYS.has(key.toLowerCase()))

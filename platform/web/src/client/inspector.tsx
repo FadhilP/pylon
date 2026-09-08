@@ -59,9 +59,10 @@ import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import type { ReferenceId } from "./navigation";
 import { useSyntaxHighlightingRevision } from "./use-chrome";
+import { AnnotationPanel } from "./annotations";
 
 /** The session-scoped reference views. The rail owns choosing between them. */
-export type ViewId = Extract<ReferenceId, "overview" | "policy" | "timeline" | "memory" | "tools">;
+export type ViewId = Extract<ReferenceId, "overview" | "policy" | "timeline" | "memory" | "tools" | "notes">;
 const CodeViewer = lazy(() => import("./code-viewer"));
 
 interface SessionReferenceProps {
@@ -87,6 +88,8 @@ export function SessionReference({
   onOpenMemoryReviewerSettings,
 }: SessionReferenceProps) {
   switch (view) {
+    case "notes":
+      return <AnnotationPanel key={`${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`} />;
     case "overview":
       return <Overview live={live} />;
     case "policy":
@@ -1704,7 +1707,8 @@ function TimelineDiff({ value }: { value?: TimelineCheckpointDiff }) {
   }
   return (
     <Suspense fallback={<div className="timeline-diff-empty">Rendering diff…</div>}>
-      <CodeViewer mode="diff" path={value.path} text={value.text} revision={value.checkpointId} />
+      <CodeViewer mode="diff" path={value.path} text={value.text} revision={value.checkpointId}
+        annotationSource={{ kind: "historical", revision: `Checkpoint ${value.checkpointId}` }} />
     </Suspense>
   );
 }

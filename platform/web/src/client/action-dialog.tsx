@@ -11,6 +11,7 @@ import {
 interface ActionDialogProps {
   title: string;
   description: string;
+  error?: string;
   confirmLabel: string;
   busyLabel: string;
   busy: boolean;
@@ -27,6 +28,7 @@ interface ActionDialogProps {
 export function ActionDialog({
   title,
   description,
+  error,
   confirmLabel,
   busyLabel,
   busy,
@@ -101,6 +103,7 @@ export function ActionDialog({
         </header>
         <div>
           <p id={descriptionId}>{description}</p>
+          {error && <p className="workspace-edit-error" role="alert">{error}</p>}
           {inputLabel && (
             <label className="action-dialog-field">
               {inputLabel}

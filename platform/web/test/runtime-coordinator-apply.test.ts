@@ -40,7 +40,22 @@ test("session changes apply from a worktree and Project folder without committin
     const slot = (driver as any).selected();
     await (driver as any).ensureDraftWorkspace(slot);
     await (driver as any).moveSelectedFromLocal(slot, projectIdForCwd(cwd), "worktree");
-    await writeFile(join(slot.driver.runtimeDetails().cwd, "README.md"), "base\nisolated\n");
+    const editable = await driver.workspaceEntry("README.md");
+    const mutation = { action: "save" as const, path: "README.md", expectedVersion: editable.version, text: "base\nisolated\n" };
+    await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration - 1, mutation }), /generation/i);
+    await assert.rejects(driver.mutateWorkspace({ sessionId: "wrong-session", expectedGeneration: editable.sessionGeneration, mutation }), /different session/);
+    const canSleep = slot.driver.canSleep.bind(slot.driver);
+    slot.driver.canSleep = () => false;
+    try {
+      await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation }), /idle/);
+    } finally { slot.driver.canSleep = canSleep; }
+    await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation });
+    assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\n");
+    assert.equal((await readFile(join(slot.driver.runtimeDetails().cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\nisolated\n");
+    const beforeFolder = (await driver.snapshot()).workspace?.fileRevision ?? 0;
+    await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation: { action: "createDirectory", path: "empty" } });
+    assert.ok(((await driver.snapshot()).workspace?.fileRevision ?? 0) > beforeFolder);
+    assert.ok((await driver.workspaceFiles({})).files.some(file => file.path === "empty" && file.kind === "directory"));
     await writeFile(join(cwd, "local.txt"), "keep local\n");
     const worktreeSnapshot = await driver.snapshot();
     assert.equal(worktreeSnapshot.workspace?.mode, "worktree");

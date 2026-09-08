@@ -46,6 +46,19 @@ function update(projectId: string | undefined, change: Partial<ExplorerState>): 
   listeners.forEach(listener => listener());
 }
 
+export function revealExplorerPath(projectId: string | undefined, path: string): void {
+  const current = (projectId && states.get(projectId)) || states.get(UNFILED) || DEFAULT_EXPLORER_STATE;
+  const parts = path.split("/").slice(0, -1);
+  update(projectId, { open: [...new Set([...current.open, ...parts.map((_, index) => parts.slice(0, index + 1).join("/"))])] });
+}
+
+export function reconcileExplorerPaths(projectId: string | undefined, path: string, destination?: string): void {
+  const current = (projectId && states.get(projectId)) || states.get(UNFILED) || DEFAULT_EXPLORER_STATE;
+  const affected = (candidate: string) => candidate === path || candidate.startsWith(`${path}/`);
+  update(projectId, { open: current.open.flatMap(candidate =>
+    affected(candidate) ? destination ? [destination + candidate.slice(path.length)] : [] : [candidate]) });
+}
+
 export function setExplorerOpen(projectId: string | undefined, open: Set<string>): void {
   update(projectId, { open: [...open] });
 }

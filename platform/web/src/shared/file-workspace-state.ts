@@ -68,3 +68,16 @@ export function closeFileTab(state: FileWorkspaceState, path: string): FileWorks
 export function closeChangedFileTabs(state: FileWorkspaceState): FileWorkspaceState {
   return state.changedPaths.reduce(closeFileTab, state);
 }
+
+/** Reconcile every descendant tab after a filesystem rename/move or deletion. */
+export function reconcileFileTabs(state: FileWorkspaceState, path: string, destination?: string): FileWorkspaceState {
+  const affected = (candidate: string) => candidate === path || candidate.startsWith(`${path}/`);
+  if (!destination) return state.openPaths.filter(affected).reduce(closeFileTab, state);
+  const moved = (candidate: string) => affected(candidate) ? destination + candidate.slice(path.length) : candidate;
+  return { ...state,
+    openPaths: [...new Set(state.openPaths.map(moved))],
+    changedPaths: [...new Set(state.changedPaths.map(moved))],
+    views: Object.fromEntries(Object.entries(state.views).map(([key, view]) => [moved(key), view])),
+    selectedPath: state.selectedPath ? moved(state.selectedPath) : undefined,
+  };
+}

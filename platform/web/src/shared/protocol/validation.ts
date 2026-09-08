@@ -1,3 +1,4 @@
+import { validWorkspaceMutation } from "../workspace-mutations.ts";
 import { validGuardRules } from "../guard-policy.ts";
 import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
@@ -872,6 +873,9 @@ function commandPolicyError(value: Record<string, unknown>, type: string): strin
 
 /** Validates model, thinking level, and session control commands. */
 function commandControlsError(value: Record<string, unknown>, type: string): string | undefined {
+  if (type === "mutateWorkspace" && (!identifier(value.sessionId) || !validWorkspaceMutation(value.mutation))) {
+    return "invalid workspace operation";
+  }
   if (type === "dismissCommandResult" && !identifier(value.resultId)) {
     return "invalid command result";
   }
@@ -1267,7 +1271,7 @@ export function isWorkspaceFilePage(value: unknown): value is WorkspaceFilePage 
       (file.binary === undefined || typeof file.binary === "boolean") &&
       (file.additions === undefined || (Number.isSafeInteger(file.additions) && (file.additions as number) >= 0)) &&
       (file.deletions === undefined || (Number.isSafeInteger(file.deletions) && (file.deletions as number) >= 0)) &&
-      (file.kind === undefined || file.kind === "submodule"),
+      (file.kind === undefined || file.kind === "submodule" || file.kind === "directory"),
   );
 }
 
@@ -1447,9 +1451,10 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
     connection !== null &&
     (!record(connection) ||
       !identifier(connection.connection_id) ||
+      (connection.alias !== undefined && !boundedString(connection.alias, 200)) ||
       !boundedString(connection.name, 500) ||
       connection.status !== "connected" ||
-      !["sqlite", "postgres", "mysql", "mongodb"].includes(String(connection.driver)) ||
+      !["sqlite", "postgres", "mysql", "mongodb", "redis"].includes(String(connection.driver)) ||
       !boundedString(connection.database, 500) ||
       typeof connection.read_only !== "boolean")
   )
@@ -1849,6 +1854,7 @@ function validWorkspaceSnapshot(workspace: unknown): boolean {
     typeof workspace.canMoveToWorktree !== "boolean" ||
     typeof workspace.canApplyChanges !== "boolean" ||
     (workspace.revision !== undefined && !boundedString(workspace.revision, 128)) ||
+    (workspace.fileRevision !== undefined && (!Number.isSafeInteger(workspace.fileRevision) || (workspace.fileRevision as number) < 0)) ||
     (workspace.setupState !== undefined && !["idle", "running", "failed"].includes(String(workspace.setupState))) ||
     (workspace.setupError !== undefined && !boundedString(workspace.setupError, 500)) ||
     (workspace.checkoutOwner !== undefined && !identifier(workspace.checkoutOwner)) ||

@@ -980,6 +980,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   let requests = 0;
+  let alias: unknown = "abcdefgh23";
   const probe: InlineExtension = {
     name: "pylon-stateql-probe",
     factory(pi) {
@@ -992,6 +993,8 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
             actor_id: value.sessionId,
             connection: {
               connection_id: "connection-1",
+              ...(alias === undefined ? {} : { alias }),
+              ignored: "not-public",
               name: "mongo-app",
               status: "connected",
               driver: "mongodb",
@@ -1048,6 +1051,9 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal(snapshot.session.name, "shared-workspace");
     assert.equal(snapshot.actor_id, handle.sessionId);
     assert.equal(snapshot.connection?.driver, "mongodb");
+    assert.equal(snapshot.connection?.connection_id, "connection-1");
+    assert.equal(snapshot.connection?.alias, "abcdefgh23");
+    assert.equal("ignored" in snapshot.connection!, false);
     assert.equal(snapshot.history[0]?.origin, "legacy");
     assert.equal(snapshot.history[0]?.command, "query");
     assert.equal(snapshot.history[0]?.sql, "SELECT id, email FROM users WHERE id = ?");
@@ -1055,6 +1061,13 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal("ignored" in snapshot, false);
     assert.equal("ignored" in snapshot.session, false);
     assert.equal("ignored" in snapshot.history[0]!, false);
+    alias = undefined;
+    const legacy = await driver.stateqlSnapshot(20);
+    assert.equal(legacy.connection?.connection_id, "connection-1");
+    assert.equal(legacy.connection?.alias, undefined);
+    for (alias of [null, "", "x".repeat(201), { value: "abcdefgh23" }]) {
+      await assert.rejects(driver.stateqlSnapshot(20), /invalid snapshot/);
+    }
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });

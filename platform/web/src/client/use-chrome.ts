@@ -1,30 +1,48 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
-  DEFAULT_SYNTAX_THEME,
-  getSyntaxHighlightingRevision,
-  isSyntaxTheme,
+  applyTheme,
+  DEFAULT_THEME,
+  readStoredPreference,
+  readStoredThemePreference,
+  rememberStoredPreference,
+  rememberThemePreference,
+  resolveTheme,
+  type ColorTheme,
+  type PreferenceStorage,
+  type Theme,
+} from "../shared/appearance";
+import {
+  DEFAULT_SYNTAX_THEME_PREFERENCE,
+  readSyntaxThemePreference,
+  resolveSyntaxTheme,
   setSyntaxTheme,
+  SYNTAX_THEME_KEY,
   subscribeSyntaxHighlighting,
-  type SyntaxTheme,
+  getSyntaxHighlightingRevision,
+  type SyntaxThemePreference,
 } from "../shared/syntax-highlighting";
 
-export type Theme = "light" | "dark" | "warm";
-/** What the theme falls back to, and what "reset to default" restores. */
-export const DEFAULT_THEME: Theme = "dark";
+export { DEFAULT_THEME, isTheme, type Theme } from "../shared/appearance";
 
-export function isTheme(value: unknown): value is Theme {
-  return value === "light" || value === "dark" || value === "warm";
-}
-
-const THEME_KEY = "pylon-theme";
-const THEME_COLORS: Record<Theme, string> = { dark: "#111318", light: "#e9eaec", warm: "#eee8dd" };
-const SYNTAX_THEME_KEY = "pylon-syntax-theme";
+const SYSTEM_COLOR_SCHEME = "(prefers-color-scheme: light)";
 
 /**
  * localStorage is unavailable in hardened browser contexts, so every read falls
  * back to a default and every write is best effort — the setting still applies
  * to the current page either way.
  */
+function storage(): PreferenceStorage | undefined {
+  try {
+    return localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function prefersLightColorScheme(): boolean {
+  return matchMedia(SYSTEM_COLOR_SCHEME).matches;
+}
+
 export function readStoredNumber(key: string, fallback: number): number {
   let stored = Number.NaN;
   try {
@@ -43,33 +61,50 @@ export function rememberSetting(key: string, value: string | number): void {
   }
 }
 
-function readInitialTheme(): Theme {
-  const theme = document.documentElement.dataset.theme;
-  return isTheme(theme) ? theme : DEFAULT_THEME;
-}
-
-/** Applies the theme to the document and the browser chrome, and remembers it. */
+/** Keeps a stored preference separate from the color applied to the document. */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(readInitialTheme);
+  const [theme, setTheme] = useState<Theme>(() => readStoredThemePreference(storage()));
+  const [prefersLight, setPrefersLight] = useState(prefersLightColorScheme);
+  const resolvedTheme = resolveTheme(theme, prefersLight);
+
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    rememberSetting(THEME_KEY, theme);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
+    if (theme !== "system") return;
+    const media = matchMedia(SYSTEM_COLOR_SCHEME);
+    const update = () => setPrefersLight(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
   }, [theme]);
-  return [theme, setTheme] as const;
-}
 
-function readInitialSyntaxTheme(): SyntaxTheme {
-  const theme = document.documentElement.dataset.syntaxTheme;
-  return isSyntaxTheme(theme) ? theme : DEFAULT_SYNTAX_THEME;
-}
-
-export function useSyntaxTheme() {
-  const [theme, setTheme] = useState<SyntaxTheme>(readInitialSyntaxTheme);
   useEffect(() => {
-    document.documentElement.dataset.syntaxTheme = theme;
-    setSyntaxTheme(theme);
-    rememberSetting(SYNTAX_THEME_KEY, theme);
+    applyTheme(resolvedTheme);
+  }, [resolvedTheme]);
+
+  useEffect(() => {
+    rememberThemePreference(storage(), theme);
+  }, [theme]);
+
+  return [theme, setTheme, resolvedTheme] as const;
+}
+
+function readInitialSyntaxTheme(): SyntaxThemePreference {
+  return readStoredPreference(
+    storage(),
+    SYNTAX_THEME_KEY,
+    readSyntaxThemePreference,
+    DEFAULT_SYNTAX_THEME_PREFERENCE,
+  );
+}
+
+export function useSyntaxTheme(colorTheme: ColorTheme) {
+  const [theme, setTheme] = useState<SyntaxThemePreference>(readInitialSyntaxTheme);
+  const resolvedTheme = resolveSyntaxTheme(theme, colorTheme);
+  useEffect(() => {
+    document.documentElement.dataset.syntaxTheme = resolvedTheme;
+    setSyntaxTheme(resolvedTheme);
+  }, [resolvedTheme]);
+  useEffect(() => {
+    rememberStoredPreference(storage(), SYNTAX_THEME_KEY, theme);
   }, [theme]);
   return [theme, setTheme] as const;
 }

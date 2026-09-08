@@ -273,6 +273,8 @@ export interface UiRequestReadModel {
   method: "select" | "confirm" | "input" | "editor" | "questionnaire";
   payload: Record<string, unknown>;
   surface?: "database";
+  /** Correlates a browser-initiated database setup operation with its secure UI prompt. */
+  operationId?: string;
   owned: boolean;
   ownershipAvailable: boolean;
   timeoutSeconds?: number;

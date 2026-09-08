@@ -1,3 +1,8 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../src/shared/annotations.ts";
+import type { WorkspaceMutationInput } from "../src/shared/workspace-mutations.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
@@ -26,7 +31,9 @@ import type {
   StateQLSnapshot,
   UsageQuery,
   UsageSnapshot,
+  WorkspaceFileHistory,
 } from "../src/shared/protocol/snapshots.ts";
+import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import { isStateQLCommandInput } from "../src/shared/protocol/validation.ts";
 import { ServerTransport } from "../src/server/http/router.ts";
 import { startPylonServer } from "../src/server/index.ts";
@@ -123,6 +130,94 @@ const snapshot: RuntimeSnapshot = {
   operational: initialOperational([], []),
   extensionUi: { notifications: [], statuses: [], widgets: [], editorText: "", editorRevision: 0 },
 };
+
+test("annotation APIs protect private drafts with tab, CSRF, session and generation guards", async () => {
+  let writes = 0;
+  const saved: AnnotationList = { scope: "server-owned-scope", sessionId: "session-1", sessionGeneration: 1, notes: [] };
+  class NotesDriver extends FakeDriver {
+    async annotationNotes(_input: AnnotationRequest) { return structuredClone(saved); }
+    async mutateAnnotation(input: AnnotationMutation) {
+      if (input.note?.scope !== saved.scope) throw Object.assign(new Error("scope mismatch"), { statusCode: 400 });
+      const previous = saved.notes.find(note => note.id === input.id);
+      if (previous?.version !== input.expectedVersion) throw Object.assign(new Error("stale note"), { statusCode: 409 });
+      saved.notes = input.note ? [input.note] : []; writes++; return structuredClone(saved);
+    }
+  }
+  const driver = new NotesDriver();
+  const running = await startIsolatedServer({ port: 0, development: false, driver });
+  const origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+  const tab = "annotation-tab";
+  const abort = new AbortController();
+  try {
+    assert.equal((await fetch(`${origin}/api/v1/annotations?generation=1&sessionId=session-1`)).status, 403);
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";")[0];
+    const csrf = String((await body(bootstrap)).csrfToken);
+    const headers = { cookie, "content-type": "application/json", "x-pylon-csrf": csrf, "x-pylon-tab-id": tab };
+    const input: AnnotationMutation = { sessionId: "session-1", expectedGeneration: 1, id: "00000000-0000-4000-8000-000000000001", note: {
+      id: "00000000-0000-4000-8000-000000000001", scope: saved.scope, version: 1, body: "Private review draft", path: "src/file.ts",
+      from: 1, to: 1, code: "private source", kind: "historical", revision: "commit:1",
+    } };
+    const send = (value: unknown, h = headers) => fetch(`${origin}/api/v1/annotations`, { method: "POST", headers: h, body: JSON.stringify(value) });
+    assert.equal((await send(input)).status, 409); // No SSE presence yet.
+    const events = await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:0`, { headers: { cookie }, signal: abort.signal });
+    await events.body!.getReader().read();
+    assert.equal((await send(input, { ...headers, "x-pylon-csrf": "invalid" })).status, 403);
+    assert.equal((await send({ ...input, sessionId: "another-session" })).status, 409);
+    assert.equal((await send({ ...input, expectedGeneration: 2 })).status, 409);
+    assert.equal((await send({ ...input, note: { ...input.note, path: "../escape" } })).status, 400);
+    assert.equal(writes, 0);
+    assert.equal((await send(input)).status, 200);
+    assert.equal((await send(input)).status, 409); // Ambiguous retries never overwrite.
+    assert.equal(writes, 1);
+    const read = await fetch(`${origin}/api/v1/annotations?generation=1&sessionId=session-1`, { headers });
+    assert.equal(read.headers.get("cache-control"), "no-store");
+    assert.equal(((await body(read)).notes as Array<{ body: string }>)[0].body, "Private review draft");
+    assert.deepEqual((await driver.snapshot()).conversation.messages, []); // Saving is not an agent prompt.
+    assert.equal((await fetch(`${origin}/api/v1/annotations?generation=1&sessionId=other`, { headers })).status, 409);
+  } finally { abort.abort(); await running.close(); }
+});
+
+test("workspace saves transport large text once and reject unsafe or stale requests before mutation", async () => {
+  let saved = "";
+  let writes = 0;
+  class EditingDriver extends FakeDriver {
+    async mutateWorkspace(input: WorkspaceMutationInput) {
+      if (input.mutation.action === "save") { saved = input.mutation.text; writes++; }
+    }
+    async workspaceEntry(path: string) {
+      return { sessionId: "session-1", sessionGeneration: 1, path, kind: "file" as const, entries: 1, version: "a".repeat(64), text: saved };
+    }
+  }
+  const running = await startIsolatedServer({ port: 0, development: false, driver: new EditingDriver() });
+  const origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+  const tab = "workspace-edit-tab";
+  const abort = new AbortController();
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";")[0];
+    const csrf = String((await body(bootstrap)).csrfToken);
+    const headers = { cookie, "content-type": "application/json", "x-pylon-csrf": csrf, "x-pylon-tab-id": tab };
+    const events = await fetch(`${origin}/api/v1/events?tabId=${tab}&cursor=1:0`, { headers: { cookie }, signal: abort.signal });
+    await events.body!.getReader().read();
+    const command = { type: "mutateWorkspace", commandId: "save-large", expectedGeneration: 1, sessionId: "session-1",
+      mutation: { action: "save", path: "large.txt", expectedVersion: "a".repeat(64), text: "x".repeat(512 * 1024) } };
+    const send = (input: unknown, requestHeaders = headers) => fetch(`${origin}/api/v1/commands`, { method: "POST", headers: requestHeaders, body: JSON.stringify(input) });
+    assert.equal((await send(command, { ...headers, "x-pylon-csrf": "invalid" })).status, 403);
+    assert.equal((await send({ ...command, expectedGeneration: 2 })).status, 409);
+    assert.equal((await send({ ...command, mutation: { action: "createFile", path: "../escape" } })).status, 400);
+    assert.equal(writes, 0);
+    assert.equal((await send(command)).status, 200);
+    assert.equal((await send(command)).status, 200);
+    assert.equal(writes, 1);
+    assert.equal(saved, command.mutation.text);
+    const entry = await fetch(`${origin}/api/v1/workspace/entry?generation=1&path=large.txt`, { headers: { cookie, "x-pylon-tab-id": tab } });
+    assert.equal(entry.status, 200);
+    assert.equal((await body(entry)).text, saved);
+    assert.equal((await send({ ...command, commandId: "too-large", mutation: { ...command.mutation, text: "x".repeat(1024 * 1024 + 1) } })).status, 400);
+    assert.equal(writes, 1);
+  } finally { abort.abort(); await running.close(); }
+});
 
 test("StateQL HTTP command validation accepts native Mongo commands and rejects irrelevant or oversized payloads", () => {
   const read = {
@@ -221,6 +316,7 @@ class FakeDriver implements PiDriver {
   papercutMutations: PapercutMutationInput[] = [];
   usageDays: number[] = [];
   usageQueries: UsageQuery[] = [];
+  fileHistoryQueries: FileHistoryQuery[] = [];
   deferDialog = false;
   dialogMethod: "confirm" | "questionnaire" = "confirm";
   private pendingDialog?: DriverEvent;
@@ -273,6 +369,21 @@ class FakeDriver implements PiDriver {
       sessionGeneration: this.current.sessionGeneration,
       available: true,
       paths: ["src/index.ts"],
+    });
+  }
+  fileHistory(input: FileHistoryQuery): Promise<WorkspaceFileHistory> {
+    this.fileHistoryQueries.push(input);
+    return Promise.resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: this.current.sessionGeneration,
+      path: input.path,
+      revision: "revision-1",
+      stops: [],
+      sessionAvailable: true,
+      baselineAvailable: true,
+      partial: false,
+      hasMore: false,
+      view: input.view,
     });
   }
   listSessions(): Promise<SessionListSnapshot> {
@@ -810,8 +921,19 @@ async function rawStatus(url: string, headers: Record<string, string>, setHost =
   });
 }
 
+async function startIsolatedServer(options: Parameters<typeof startPylonServer>[0]) {
+  const agentDir = mkdtempSync(join(tmpdir(), "pylon-web-transport-"));
+  try {
+    const running = await startPylonServer({ ...options, agentDir });
+    return { ...running, async close() {
+      try { await running.close(); } finally { rmSync(agentDir, { recursive: true, force: true }); }
+    } };
+  } catch (error) { rmSync(agentDir, { recursive: true, force: true }); throw error; }
+}
+
+
 test("local server rejects foreign Host before API and asset routing", async () => {
-  const running = await startPylonServer({ port: 0, development: false, driver: new FakeDriver() });
+  const running = await startIsolatedServer({ port: 0, development: false, driver: new FakeDriver() });
   const port = (running.server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
   try {
@@ -827,7 +949,7 @@ test("local server rejects foreign Host before API and asset routing", async () 
 });
 
 test("terminal upgrade rejects unauthenticated and stale sessions before spawning", async () => {
-  const running = await startPylonServer({ port: 0, development: false, driver: new FakeDriver() });
+  const running = await startIsolatedServer({ port: 0, development: false, driver: new FakeDriver() });
   const port = (running.server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
   const tab = "terminal-security-tab";
@@ -1000,6 +1122,64 @@ test("bootstrap represents a cleared session selection without a fake runtime", 
     await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
   }
 });
+
+test("keyboard preferences are sessionless, CSRF protected, replayable and reject stale browser writes", async () => {
+  const driver = new FakeDriver();
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`] });
+  const stream = new AbortController();
+  const timeout = setTimeout(() => stream.abort(), 5_000);
+  try {
+    driver.emitCleared();
+    const connect = async (tab: string) => {
+      const response = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+      const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0];
+      const boot = await body(response);
+      assert.equal(boot.runtime, null);
+      assert.deepEqual(boot.keyboardSettings, { revision: 0, keymap: { preset: "pylon", overrides: {} } });
+      return { boot, headers: { cookie, "x-pylon-tab-id": tab, "x-pylon-csrf": String(boot.csrfToken), "content-type": "application/json" } };
+    };
+    const first = await connect("keyboard-first");
+    const second = await connect("keyboard-second");
+    const keymap: import("../src/shared/keyboard.ts").Keymap = { preset: "pylon", overrides: { theme: { kind: "chord", key: "F8", modifiers: [] } } };
+    const post = (headers: Record<string, string>, revision: number, map = keymap) => fetch(`${origin}/api/v1/settings/keyboard`, { method: "POST", headers, body: JSON.stringify({ revision, keymap: map }) });
+    assert.equal((await fetch(`${origin}/api/v1/settings/keyboard`)).status, 403);
+    assert.equal((await post({ ...first.headers, "x-pylon-csrf": "wrong" }, 0)).status, 403);
+    assert.equal((await post({ ...first.headers, "x-pylon-tab-id": "unknown" }, 0)).status, 403);
+    assert.equal((await post(first.headers, 0, { ...keymap, overrides: { theme: { kind: "chord", key: "T", modifiers: ["Mod"] } } })).status, 400);
+    const saved = await post(first.headers, 0);
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await body(saved), { revision: 1, keymap });
+    const stale = await post(second.headers, 0);
+    assert.equal(stale.status, 409);
+    assert.deepEqual((await body(stale)).current, { revision: 1, keymap });
+    const events = await fetch(`${origin}/api/v1/events?tabId=keyboard-second&cursor=${second.boot.sessionGeneration}:${second.boot.sequence}`, { headers: second.headers, signal: stream.signal });
+    const reader = events.body!.getReader();
+    let data = "";
+    const until = async (revision: number) => {
+      while (!data.includes(`\"revision\":${revision}`)) {
+        const chunk = await reader.read();
+        assert.equal(chunk.done, false);
+        data += new TextDecoder().decode(chunk.value);
+      }
+      assert.match(data, /event: keyboard.settings/);
+    };
+    await until(1); // The second browser replays a write made after its bootstrap cursor.
+    assert.equal((await post(second.headers, 1)).status, 200);
+    await until(2); // Live delivery uses the same channel.
+    driver.emitRuntime({ ...structuredClone(snapshot), sessionId: "next", sessionGeneration: 3 });
+    const after = await body(await fetch(`${origin}/api/v1/bootstrap`, { headers: first.headers }));
+    assert.deepEqual(after.keyboardSettings, { revision: 2, keymap });
+  } finally {
+    clearTimeout(timeout); stream.abort(); transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 
 test("bootstrap snapshots completions at its cursor and later completions replay", async () => {
   const driver = new FakeDriver();
@@ -1625,6 +1805,46 @@ test(
         ).status,
         400,
       );
+      const fileHistory = await fetch(
+        `${origin}/api/v1/workspace/history?generation=1&path=src%2Findex.ts&scope=all&limit=20&selected=checkpoint-1&view=diff`,
+        { headers: { cookie, "x-pylon-tab-id": tab } },
+      );
+      assert.equal(fileHistory.status, 200);
+      assert.deepEqual(driver.fileHistoryQueries.at(-1), {
+        path: "src/index.ts",
+        scope: "all",
+        limit: 20,
+        selected: "checkpoint-1",
+        view: "diff",
+      });
+      for (const query of [
+        "path=..%2Fsecret&generation=1",
+        "path=src%5Cindex.ts&generation=1",
+        "path=src%00index.ts&generation=1",
+        "path=src%0Aindex.ts&generation=1",
+        "path=src%2Findex.ts&generation=1&limit=201",
+        "path=src%2Findex.ts&generation=1&selected=not%2Fvalid",
+      ]) {
+        assert.equal(
+          (await fetch(`${origin}/api/v1/workspace/history?${query}`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
+          400,
+        );
+      }
+      assert.equal(
+        (await fetch(`${origin}/api/v1/workspace/history?path=src%2Findex.ts&generation=2`, {
+          headers: { cookie, "x-pylon-tab-id": tab },
+        })).status,
+        409,
+      );
+      const originalFileHistory = driver.fileHistory.bind(driver);
+      driver.fileHistory = async input => ({ ...(await originalFileHistory(input)), sessionGeneration: 2 });
+      assert.equal(
+        (await fetch(`${origin}/api/v1/workspace/history?path=src%2Findex.ts&generation=1`, {
+          headers: { cookie, "x-pylon-tab-id": tab },
+        })).status,
+        409,
+      );
+      driver.fileHistory = originalFileHistory;
       const stateql = await fetch(`${origin}/api/v1/stateql?generation=1&historyLimit=25`, {
         headers: { cookie, "x-pylon-tab-id": tab },
       });
@@ -2432,4 +2652,49 @@ test("dialog owner survives disconnect races and releases after reconnect grace"
     transport.dispose();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }
+});
+
+test("workspace search streams bounded results, rejects stale inputs and cancels disconnected consumers", { timeout: 15_000 }, async () => {
+  let calls = 0;
+  let disconnected!: () => void;
+  const aborted = new Promise<void>(resolve => { disconnected = resolve; });
+  class SearchDriver extends FakeDriver {
+    async workspaceSearch(input: import("../src/server/pi/pi-driver.ts").WorkspaceSearchInput,
+      send: (value: import("../src/shared/workspace-search.ts").WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal) {
+      calls++;
+      const result: import("../src/shared/workspace-search.ts").WorkspaceSearchResult = {
+        protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, engine: "grep", files: [],
+        truncated: false, inventoryTruncated: false, skipped: 0, timedOut: false, elapsedMs: 1,
+      };
+      await send(result);
+      if (input.query === "wait") await new Promise<void>(resolve => signal.addEventListener("abort", () => { disconnected(); resolve(); }, { once: true }));
+      return result;
+    }
+  }
+  const driver = new SearchDriver();
+  const running = await startIsolatedServer({ port: 0, development: false, driver });
+  const origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+  const tab = "workspace-search-tab";
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+    const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
+    await bootstrap.arrayBuffer();
+    const headers = { cookie, "x-pylon-tab-id": tab };
+    const denied = await fetch(`${origin}/api/v1/workspace/search?generation=1&q=hit`);
+    assert.equal(denied.status, 403);
+    const stale = await fetch(`${origin}/api/v1/workspace/search?generation=2&q=hit`, { headers });
+    assert.equal(stale.status, 409);
+    const invalid = await fetch(`${origin}/api/v1/workspace/search?generation=1&q=hit&regex=yes`, { headers });
+    assert.equal(invalid.status, 400);
+    assert.equal(calls, 0);
+    const response = await fetch(`${origin}/api/v1/workspace/search?generation=1&q=hit`, { headers });
+    const frames = (await response.text()).trim().split("\n").map(line => JSON.parse(line));
+    assert.deepEqual(frames.map(frame => frame.event), ["update", "done"]);
+    assert.equal(frames[1].result.engine, "grep");
+    const controller = new AbortController();
+    const pending = await fetch(`${origin}/api/v1/workspace/search?generation=1&q=wait`, { headers, signal: controller.signal });
+    await pending.body!.getReader().read();
+    controller.abort();
+    await aborted;
+  } finally { await running.close(); }
 });

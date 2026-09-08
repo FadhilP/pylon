@@ -1,5 +1,15 @@
 import {
+  annotationRange,
+  captureAnnotation,
+  sourceHash,
+  type Annotation,
+  type AnnotationSource,
+} from "../shared/annotations";
+import { AnnotationCard, AnnotationEditor, useAnnotations } from "./annotations";
+import {
   Component,
+  Fragment,
+  useId,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -9,6 +19,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  attributedOwner,
+  historyColor,
+  type CodeAttribution,
   diffRows,
   parseDiff,
   selectedText,
@@ -37,6 +50,9 @@ interface ViewerProps {
   showFileHeaders?: boolean;
   renderHeaderIcon?: (path: string) => ReactNode;
   scrollToFile?: { path: string; token: number };
+  attribution?: CodeAttribution;
+  onSelectOwner?: (id: string) => void;
+  annotationSource?: AnnotationSource;
 }
 
 type ViewerRow = { key: string; file: number; top: number; height: number } & (
@@ -78,12 +94,16 @@ function Viewer({
   mode,
   path,
   text,
+  revision,
   targetLine,
   loadDiffFiles,
   unifiedDiff,
   showFileHeaders,
   renderHeaderIcon,
   scrollToFile,
+  attribution,
+  onSelectOwner,
+  annotationSource,
 }: ViewerProps) {
   const root = useRef<HTMLDivElement>(null);
   const syntaxRevision = useSyntaxHighlightingRevision();
@@ -104,6 +124,72 @@ function Viewer({
   const [selection, setSelection] = useState<{ start: number; end: number }>();
   const drag = useRef<{ start: number; y: number } | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
+  const annotations = useAnnotations();
+  const placement = useId();
+  const release = useRef(annotations?.releaseEditor);
+  release.current = annotations?.releaseEditor;
+  useEffect(() => () => release.current?.(placement), [placement]);
+  const edit = annotations?.editor;
+  const draft = useMemo(() => {
+    if (!edit || edit.placement !== placement) return;
+    const file =
+      mode === "file" ? (edit.anchor.path === path ? 0 : -1) : files.findIndex(file => file.path === edit.anchor.path);
+    return file < 0 ? undefined : { file, anchor: edit.anchor };
+  }, [edit?.anchor, edit?.placement, placement, files, mode, path]);
+  const sourceIdentity = useMemo(
+    () => ({}),
+    [mode, path, text, revision, annotationSource?.kind, annotationSource?.revision],
+  );
+  const identity = useRef(sourceIdentity);
+  identity.current = sourceIdentity;
+  const [capturing, setCapturing] = useState(false);
+  const [openNotes, setOpenNotes] = useState<Set<string>>(new Set());
+  const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
+  const [hashed, setHashed] = useState<{
+    identity: object;
+    contents: typeof contents;
+    values: Record<number, string>;
+  }>();
+  const hashes = useMemo(
+    () => (hashed?.identity === sourceIdentity && hashed.contents === contents ? hashed.values : {}),
+    [hashed, sourceIdentity, contents],
+  );
+  const notePaths = (annotations?.notes ?? [])
+    .map(note => note.path)
+    .sort()
+    .join("\0");
+  useEffect(() => {
+    if (!annotationSource) return;
+    let active = true;
+    const sources =
+      mode === "file"
+        ? [[0, text] as const]
+        : Object.entries(contents).map(([index, full]) => [Number(index), full.newFile.contents] as const);
+    void Promise.all(sources.map(async ([index, source]) => [index, await sourceHash(source)] as const))
+      .then(values => {
+        if (active) setHashed({ identity: sourceIdentity, contents, values: Object.fromEntries(values) });
+      })
+      .catch(() => {
+        if (active) setError("Source fingerprint unavailable; notes cannot be matched safely.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [mode, text, contents, sourceIdentity, Boolean(annotationSource)]);
+  const matchingNotes = useMemo(() => {
+    const result = new Map<number, Annotation[]>();
+    if (!annotationSource) return result;
+    for (const note of annotations?.notes ?? []) {
+      const file = mode === "file" ? (note.path === path ? 0 : -1) : files.findIndex(file => file.path === note.path);
+      if (file < 0 || note.kind !== annotationSource.kind) continue;
+      const matches = note.hash
+        ? note.hash === hashes[file]
+        : annotationSource.kind === "historical" && note.revision === annotationSource.revision;
+      if (matches) result.set(file, [...(result.get(file) ?? []), note]);
+    }
+    for (const notes of result.values()) notes.sort((a, b) => a.from - b.from);
+    return result;
+  }, [annotations?.notes, annotationSource?.kind, annotationSource?.revision, files, mode, path, hashes]);
 
   useEffect(() => {
     mounted.current = true;
@@ -120,7 +206,7 @@ function Viewer({
       void loadSyntaxLanguage(language);
   }, [files, mode, path]);
 
-  const rows = useMemo(() => {
+  const sourceRows = useMemo(() => {
     const result: ViewerRow[] = [];
     let top = 8;
     const append = (file: number, key: string, row: CodeLine | ContextGap | { kind: "header"; text: string }) => {
@@ -148,11 +234,50 @@ function Viewer({
     return result;
   }, [files, mode, plainLines, showFileHeaders, collapsed, expanded, contents, Boolean(loadDiffFiles)]);
 
+  const markers = useMemo(() => {
+    const result = new Map<string, Annotation>();
+    for (const [file, notes] of matchingNotes) {
+      let next = 0;
+      const active = new Map<string, Annotation>();
+      for (const row of sourceRows) {
+        if (row.file !== file || row.kind === "gap" || row.kind === "header" || row.newLine === undefined) continue;
+        while (next < notes.length && notes[next].from <= row.newLine) {
+          const note = notes[next++];
+          active.set(note.id, note);
+        }
+        for (const [id, note] of active) if (note.to < row.newLine) active.delete(id);
+        const note = active.values().next().value;
+        if (note) result.set(row.key, note);
+      }
+    }
+    return result;
+  }, [sourceRows, matchingNotes]);
+  const inline = useMemo(() => {
+    const result = new Map<string, Annotation[]>();
+    for (const row of sourceRows) {
+      if (row.kind === "gap" || row.kind === "header" || row.kind === "deletion") continue;
+      const notes = (matchingNotes.get(row.file) ?? []).filter(
+        note => openNotes.has(note.id) && note.to === row.newLine,
+      );
+      if (notes.length || (draft?.file === row.file && draft.anchor.to === row.newLine)) result.set(row.key, notes);
+    }
+    return result;
+  }, [sourceRows, matchingNotes, openNotes, draft]);
+  const rows = useMemo(() => {
+    let offset = 0;
+    return sourceRows.map(row => {
+      const extra = inline.has(row.key) ? (cardHeights[row.key] ?? 260) : 0;
+      const next = { ...row, top: row.top + offset, height: row.height + extra };
+      offset += extra;
+      return next;
+    });
+  }, [sourceRows, inline, cardHeights]);
+
   const highlighted = useMemo(() => {
     const result = new Map<string, SyntaxToken[]>();
     if (mode === "file") {
       const tokens = syntaxTokens(text, sourceLanguage(path));
-      rows.forEach((row, index) => result.set(row.key, tokens[index]));
+      sourceRows.forEach((row, index) => result.set(row.key, tokens[index]));
       return result;
     }
     const fileTokens = files.map((file, fileIndex) => {
@@ -181,14 +306,14 @@ function Viewer({
       }
       return { oldTokens, newTokens };
     });
-    for (const row of rows) {
+    for (const row of sourceRows) {
       if (row.kind === "gap" || row.kind === "header" || row.kind === "note") continue;
       const file = fileTokens[row.file];
       const tokens = row.kind === "deletion" ? file.oldTokens.get(row.oldLine!) : file.newTokens.get(row.newLine!);
       if (tokens) result.set(row.key, tokens);
     }
     return result;
-  }, [files, rows, contents, mode, path, text, syntaxRevision]);
+  }, [files, sourceRows, contents, mode, path, text, syntaxRevision]);
 
   useLayoutEffect(() => {
     const element = root.current;
@@ -224,6 +349,50 @@ function Viewer({
     }
   };
 
+  useEffect(() => {
+    if (!annotationSource || !loadDiffFiles || mode !== "diff") return;
+    let active = true;
+    // Only annotated files need extra reads. Share the existing validated context loader.
+    void (async () => {
+      for (const [index, file] of files.entries()) {
+        if (!active) return;
+        if (!notePaths.split("\0").includes(file.path)) continue;
+        try {
+          await getContents(index);
+        } catch {
+          /* Notes remain available in the panel as captured snapshots. */
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [files, notePaths, Boolean(loadDiffFiles), Boolean(annotationSource)]);
+  useEffect(() => {
+    if (!matchingNotes.size || dragging || draft) return;
+    setExpanded(current => {
+      let next = current;
+      for (const [file, notes] of matchingNotes) {
+        if (!contents[file]) continue;
+        for (const gap of diffRows(files[file], undefined, contents[file])) {
+          if (gap.kind !== "gap") continue;
+          const end = Math.max(
+            0,
+            ...notes
+              .filter(note => note.to >= gap.newStart && note.from < gap.newStart + (gap.count ?? 0))
+              .map(note => Math.min(note.to - gap.newStart + 1, gap.count ?? 0)),
+          );
+          if (end <= (current[file]?.[gap.id]?.start ?? 0)) continue;
+          next = {
+            ...next,
+            [file]: { ...next[file], [gap.id]: { start: end, end: current[file]?.[gap.id]?.end ?? 0 } },
+          };
+        }
+      }
+      return next;
+    });
+  }, [matchingNotes, contents, files, dragging, draft]);
+
   const expand = async (file: number, gap: ContextGap, direction: "start" | "end" | "all") => {
     if (!loadDiffFiles || loading.has(file)) return;
     setLoading(current => new Set(current).add(file));
@@ -252,6 +421,9 @@ function Viewer({
     }
   };
 
+  useEffect(() => {
+    setSelection(undefined);
+  }, [sourceRows]);
   const navigatedLine = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (!targetLine) {
@@ -305,14 +477,33 @@ function Viewer({
   const metrics = useMemo(() => {
     let widest = 0;
     let lastLine = 0;
-    for (const row of rows) {
+    for (const row of sourceRows) {
       if (row.kind === "gap" || row.kind === "header" || row.kind === "note") continue;
       widest = Math.max(widest, row.text.replaceAll("\t", "  ").length);
       lastLine = Math.max(lastLine, row.oldLine ?? 0, row.newLine ?? 0);
     }
-    return { widest, gutter: String(lastLine).length + 3 };
-  }, [rows]);
+    return { widest, gutter: String(lastLine).length + (annotationSource ? 4 : 3) };
+  }, [sourceRows, Boolean(annotationSource)]);
 
+  const range = useMemo(
+    () => (selection ? annotationRange(sourceRows, selection.start, selection.end) : undefined),
+    [sourceRows, selection],
+  );
+  const pinnedIndices = useMemo(
+    () => sourceRows.flatMap((row, index) => (inline.has(row.key) ? [index] : [])),
+    [sourceRows, inline],
+  );
+  const unmatchedNotes = useMemo(
+    () =>
+      annotationSource && annotations
+        ? annotations.notes.filter(
+            note =>
+              note.kind === annotationSource.kind &&
+              (mode === "file" ? note.path === path : files.some(file => file.path === note.path)),
+          ).length - [...matchingNotes.values()].reduce((count, notes) => count + notes.length, 0)
+        : 0,
+    [annotations?.notes, annotationSource?.kind, mode, path, files, matchingNotes],
+  );
   if (mode === "diff" && !files.length) return <RawText text={unifiedDiff ?? text} />;
   const totalHeight = rows.length ? rows.at(-1)!.top + rows.at(-1)!.height + 8 : 36;
   const first = Math.max(0, rowAt(rows, viewport.top) - 12);
@@ -324,8 +515,63 @@ function Viewer({
     setSelection(current => ({ start: shift && current ? current.start : index, end: index }));
   };
 
+  const addNote = async () => {
+    if (!range || !annotationSource || !annotations || capturing) return;
+    setCapturing(true);
+    setError(undefined);
+    try {
+      const full =
+        mode === "file" ? text : loadDiffFiles ? (await getContents(range.file)).newFile.contents : undefined;
+      const anchor = await captureAnnotation(
+        range,
+        mode === "file" ? path : files[range.file].path,
+        annotationSource,
+        full,
+      );
+      annotations.assertSession();
+      if (identity.current !== sourceIdentity) throw new Error("Displayed source changed. Select the lines again.");
+      if (mounted.current) {
+        annotations.beginEdit(anchor, undefined, placement);
+        setSelection(undefined);
+      }
+    } catch (error) {
+      if (mounted.current) setError((error as Error).message);
+    } finally {
+      if (mounted.current) setCapturing(false);
+    }
+  };
+  // Expanded cards remain mounted offscreen so scrolling cannot discard an in-progress edit.
+  const visibleIndices = [
+    ...new Set([...Array.from({ length: last - first }, (_, offset) => first + offset), ...pinnedIndices]),
+  ].sort((a, b) => a - b);
+
   return (
     <div className="code-viewer-shell">
+      {annotationSource && annotations && (
+        <div className="annotation-toolbar">
+          <button
+            type="button"
+            disabled={!range || capturing || Boolean(draft) || !annotations.ready}
+            onClick={() => void addNote()}>
+            {capturing ? "Capturing…" : "Note selected lines"}
+          </button>
+          <button type="button" onClick={() => annotations.open()}>
+            Notes ({annotations.notes.length})
+          </button>
+          {annotations.editor && !draft && (
+            <button type="button" onClick={() => annotations.open()}>
+              Continue draft note
+            </button>
+          )}
+          <small>{range ? `${range.from}–${range.to}` : "Select new-side lines with the gutter or code"}</small>
+        </div>
+      )}
+      {unmatchedNotes > 0 && (
+        <div className="file-history-notice" role="status">
+          {unmatchedNotes} saved {unmatchedNotes === 1 ? "note is" : "notes are"} not matched to this source. Review the
+          original code in Notes; no notes have been moved.
+        </div>
+      )}
       {error && (
         <div className="code-viewer-error" role="alert">
           {error}
@@ -353,7 +599,20 @@ function Viewer({
           })
         }
         onPointerDown={event => {
-          if ((event.target as HTMLElement).closest("code")) setSelection(undefined);
+          const target = event.target as HTMLElement;
+          if (!target.closest(".code-viewer-line > code")) return;
+          if (!annotationSource || !annotations) {
+            setSelection(undefined);
+            return;
+          }
+          if (event.button !== 0) return;
+          const index = Number(target.closest("[data-row]")?.getAttribute("data-row"));
+          event.preventDefault();
+          drag.current = { start: event.shiftKey && selection ? selection.start : index, y: event.clientY };
+          setDragging(true);
+          root.current?.setPointerCapture(event.pointerId);
+          root.current?.focus({ preventScroll: true });
+          selectLine(index, event.shiftKey);
         }}
         onPointerMove={event => {
           if (drag.current) drag.current.y = event.clientY;
@@ -367,6 +626,7 @@ function Viewer({
           setDragging(false);
         }}
         onKeyDown={event => {
+          if ((event.target as HTMLElement).closest(".annotation-inline")) return;
           if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
             event.preventDefault();
             setSelection({ start: 0, end: rows.length - 1 });
@@ -393,16 +653,16 @@ function Viewer({
             root.current?.scrollTo({ top: rows[index].top + 20 - viewport.height });
         }}
         onCopy={event => {
-          if (!selection) return;
+          if (!selection || (event.target as HTMLElement).closest(".annotation-inline")) return;
           event.clipboardData.setData("text/plain", selectedText(rows, selectionStart, selectionEnd));
           event.preventDefault();
         }}>
         <div
           className="code-viewer-content"
           style={{ height: totalHeight, minWidth: `${metrics.widest + metrics.gutter + 2}ch` }}>
-          {rows.slice(first, last).map((row, offset) => {
-            const index = first + offset;
-            const style = { top: row.top, height: row.height };
+          {visibleIndices.map(index => {
+            const row = rows[index];
+            const style = { top: row.top, height: sourceRows[index].height };
             if (row.kind === "header") {
               const file = files[row.file];
               const additions = file.hunks.reduce(
@@ -513,25 +773,128 @@ function Viewer({
                   {row[side]}
                 </button>
               );
+            const owner = attributedOwner(row, attribution);
+            const note = markers.get(row.key);
             return (
-              <div
-                key={row.key}
-                className={`code-viewer-line is-${row.kind}${index >= selectionStart && index <= selectionEnd ? " is-selected" : ""}`}
-                style={style}
-                data-row={index}
-                role="group"
-                aria-label={`${row.kind === "deletion" ? "Deleted line" : row.kind === "addition" ? "Added line" : "Line"} ${row.newLine ?? row.oldLine}`}>
-                <span className="code-viewer-gutter" aria-hidden="true">
-                  {gutter(row.kind === "deletion" ? "oldLine" : "newLine")}
-                </span>
-                <code>
-                  <HighlightedLine line={row} tokens={highlighted.get(row.key)} />
-                </code>
-              </div>
+              <Fragment key={row.key}>
+                <div
+                  className={`code-viewer-line is-${row.kind}${index >= selectionStart && index <= selectionEnd ? " is-selected" : ""}${owner && owner.id === attribution?.selected ? " is-history-owner" : ""}`}
+                  style={{ ...style, ...(owner ? { "--history-color": historyColor(owner.id) } : {}) } as CSSProperties}
+                  data-row={index}
+                  role="group"
+                  aria-label={`${row.kind === "deletion" ? "Deleted line" : row.kind === "addition" ? "Added line" : "Line"} ${row.newLine ?? row.oldLine}`}>
+                  <span
+                    className={`code-viewer-gutter${attribution ? " has-attribution" : ""}`}
+                    aria-hidden={attribution || note || annotationSource ? undefined : true}>
+                    {note && (
+                      <button
+                        type="button"
+                        className={`annotation-edge${row.newLine === note.from ? " is-first" : ""}${row.newLine === note.to ? " is-last" : ""}`}
+                        title={`Note: ${note.body}`}
+                        aria-label={`Read note on lines ${note.from} to ${note.to}`}
+                        aria-expanded={openNotes.has(note.id)}
+                        onClick={() =>
+                          setOpenNotes(current => {
+                            const next = new Set(current);
+                            if (next.has(note.id)) next.delete(note.id);
+                            else next.add(note.id);
+                            return next;
+                          })
+                        }
+                      />
+                    )}
+                    {annotationSource &&
+                      annotations?.ready &&
+                      range?.file === row.file &&
+                      range.to === row.newLine &&
+                      !dragging &&
+                      !draft && (
+                        <button
+                          type="button"
+                          className="annotation-add"
+                          aria-label={`Create note on lines ${range.from} to ${range.to}`}
+                          title="Note selected lines"
+                          disabled={capturing}
+                          onClick={() => void addNote()}>
+                          +
+                        </button>
+                      )}
+                    {attribution && owner && (
+                      <button
+                        className="code-viewer-owner"
+                        type="button"
+                        disabled={!attribution.selectable.has(owner.id)}
+                        title={`${owner.author ? `${owner.author} · ` : ""}${owner.title}${attribution.selectable.has(owner.id) ? "" : " · outside loaded history"}`}
+                        aria-label={`Show ${owner.kind === "commit" ? "commit" : "checkpoint"}: ${owner.title}${owner.author ? ` by ${owner.author}` : ""}`}
+                        onClick={() => onSelectOwner?.(owner.id)}
+                      />
+                    )}
+                    {gutter(row.kind === "deletion" ? "oldLine" : "newLine")}
+                  </span>
+                  <code>
+                    <HighlightedLine line={row} tokens={highlighted.get(row.key)} />
+                  </code>
+                </div>
+                {inline.has(row.key) && (
+                  <AnnotationInline
+                    top={row.top + sourceRows[index].height}
+                    onHeight={height =>
+                      setCardHeights(current =>
+                        current[row.key] === height ? current : { ...current, [row.key]: height },
+                      )
+                    }>
+                    {draft?.file === row.file && draft.anchor.to === row.newLine && <AnnotationEditor key={edit?.id} />}
+                    {inline
+                      .get(row.key)!
+                      .filter(note => edit?.original?.id !== note.id || !draft)
+                      .map(note => (
+                        <AnnotationCard
+                          key={note.id}
+                          note={note}
+                          placement={placement}
+                          onClose={() =>
+                            setOpenNotes(current => {
+                              const next = new Set(current);
+                              next.delete(note.id);
+                              return next;
+                            })
+                          }
+                        />
+                      ))}
+                  </AnnotationInline>
+                )}
+              </Fragment>
             );
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AnnotationInline({
+  top,
+  onHeight,
+  children,
+}: {
+  top: number;
+  onHeight: (height: number) => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const report = useRef(onHeight);
+  report.current = onHeight;
+  useLayoutEffect(() => {
+    const element = ref.current!;
+    const update = () => report.current(Math.ceil(element.getBoundingClientRect().height));
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className="annotation-inline" style={{ top }}>
+      {children}
     </div>
   );
 }
@@ -559,7 +922,7 @@ function fileDescription(file: DiffFile): string {
   return `+${additions} −${deletions}`;
 }
 
-function HighlightedLine({ line, tokens }: { line: CodeLine; tokens?: SyntaxToken[] }) {
+export function HighlightedLine({ line, tokens }: { line: CodeLine; tokens?: SyntaxToken[] }) {
   let offset = 0;
   return (tokens ?? [{ content: line.text, className: "" }]).map((token, index) => {
     const start = offset;

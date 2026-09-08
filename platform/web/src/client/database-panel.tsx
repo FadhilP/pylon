@@ -1,7 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import "./database-workspace.css";
-import { IconDatabase, IconPlus, IconRefresh, IconX, IconChevronRight, IconTable } from "@tabler/icons-react";
-import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
+import {
+  IconDatabase,
+  IconPlus,
+  IconRefresh,
+  IconX,
+  IconChevronRight,
+  IconTable,
+  IconSearch,
+  IconPlayerStop,
+  IconCopy,
+  IconDeviceFloppy,
+  IconPlugOff,
+} from "@tabler/icons-react";
+import { parseStateQLPanelCommand, type StateQLCatalogObject } from "pi-stateql/stateql-command";
+import { DatabaseObjectBrowser } from "./database-object-browser";
 import type { StateQLCommandInput, StateQLCommandResult, StateQLSnapshot } from "../shared/protocol/snapshots";
 import {
   databaseCell,
@@ -12,22 +25,24 @@ import {
   clearDatabaseDrafts,
   type DatabaseQuery,
   type DatabaseResult,
+  type DatabaseDraft,
 } from "../shared/database-workspace";
 import { runtimeStore, type RuntimeStoreSnapshot } from "./runtime/event-store";
 import { UiDialog } from "./ui-dialog";
 import { DatabaseHistory } from "./database-history";
-import { DatabaseConnectDialog } from "./database-connect-dialog";
+import { DatabaseConnectDialog, type DatabaseProfileSetup } from "./database-connect-dialog";
 import { DatabaseResultGrid } from "./database-result-grid";
 import { DatabaseQueryEditor } from "./database-query-editor";
 
 interface QueryTab extends DatabaseQuery {
   params: string;
-  kind: "query" | "table";
+  kind: "query" | "table" | "object";
   table?: { schema?: string; name: string };
   sub: string;
   metadata?: Record<string, unknown>;
   result?: DatabaseResult;
   response?: StateQLCommandResult;
+  detached?: boolean;
   plan?: { handle: string; expires: string; text: string; params: string };
 }
 const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({ ...tab, params: "", kind: "query", sub: "data" });
@@ -42,26 +57,35 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const [height, setHeight] = useState(220);
   const [busy, setBusy] = useState("");
   const [busyTab, setBusyTab] = useState("");
-  const [connecting, setConnecting] = useState(false);
+  const [setup, setSetup] = useState<{ operationId: string; profile?: DatabaseProfileSetup }>();
   const [profiles, setProfiles] = useState<Array<{ profile: string; read_only: boolean }>>([]);
-  const [objects, setObjects] = useState<Array<{ schema?: string; name: string; type?: string }>>([]);
-  const [objectOffset, setObjectOffset] = useState<number | null>(null);
   const [transaction, setTransaction] = useState<Record<string, unknown>>();
   const [isolation, setIsolation] = useState("serializable");
   const [allowUnbounded, setAllowUnbounded] = useState(false);
   const [allowDestructive, setAllowDestructive] = useState(false);
-  const [forget, setForget] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [search, setSearch] = useState("");
+  const [profileRevision, setProfileRevision] = useState(0);
+  const [objectRevision, setObjectRevision] = useState(0);
+  const dirtyTabs = useRef(new Set<string>());
   const request = useRef<AbortController | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const savedScope = useRef("");
+  const refreshRevision = useRef(0);
   const scope = snapshot
     ? JSON.stringify([snapshot.actor_id, snapshot.session.session_id, snapshot.connection?.connection_id ?? "unbound"])
     : "";
   const ready = live.connection === "connected" && live.runtime?.ready === true;
   const connected = Boolean(snapshot?.connection);
-  const pending = live.pendingUi?.surface === "database" ? live.pendingUi : undefined;
+  const setupPending =
+    setup &&
+    live.pendingUi?.surface === "database" &&
+    live.pendingUi.operationId === setup.operationId &&
+    live.generation === live.runtime?.sessionGeneration
+      ? live.pendingUi
+      : undefined;
+  const pending = live.pendingUi?.surface === "database" && (!setup || !setupPending) ? live.pendingUi : undefined;
   const locked = !ready || Boolean(busy) || Boolean(live.pendingUi);
   const inTransaction = Boolean(snapshot?.transaction);
   const ownTransaction = snapshot?.transaction?.owner_actor_id === snapshot?.actor_id;
@@ -73,12 +97,14 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     .join("|");
 
   const refresh = async (signal?: AbortSignal) => {
+    const revision = ++refreshRevision.current;
     try {
       const next = await runtimeStore.stateqlSnapshot(100, signal);
-      if (!signal?.aborted) setSnapshot(next);
+      if (!signal?.aborted && revision === refreshRevision.current) setSnapshot(next);
       return next;
     } catch (cause) {
-      if (!signal?.aborted) setError(cause instanceof Error ? cause.message : "Database is unavailable.");
+      if (!signal?.aborted && revision === refreshRevision.current)
+        setError(cause instanceof Error ? cause.message : "Database is unavailable.");
     }
   };
   useEffect(() => {
@@ -87,6 +113,12 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     else setSnapshot(undefined);
     return () => controller.abort();
   }, [runtimeScope, ready, toolRevision]);
+  useEffect(() => {
+    request.current?.abort();
+    setSetup(undefined);
+    dirtyTabs.current.clear();
+    setTabs([]);
+  }, [runtimeScope]);
   useEffect(
     () => () => {
       request.current?.abort();
@@ -100,18 +132,19 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     request.current = null;
     setBusy("");
     setBusyTab("");
-    setObjects([]);
-    setObjectOffset(null);
     setTransaction(undefined);
     setIsolation(driver === "mongodb" ? "snapshot" : "serializable");
-    let draft;
+    let draft: DatabaseDraft | undefined;
     try {
       draft = readDatabaseDrafts(localStorage).find(item => item.scope === scope);
     } catch {
       setNotice("Browser storage is unavailable. Queries remain in memory.");
     }
-    setTabs(draft?.tabs.map(tabFromDraft) ?? []);
-    setActive(draft?.active ?? "history");
+    setTabs(current => [
+      ...current.filter(tab => dirtyTabs.current.has(tab.id)).map(tab => ({ ...tab, detached: true })),
+      ...(draft?.tabs.map(tabFromDraft) ?? []),
+    ]);
+    setActive(current => (dirtyTabs.current.has(current) ? current : (draft?.active ?? "history")));
     setHeight(draft?.height ?? 220);
   }, [scope]);
   useEffect(() => {
@@ -139,8 +172,16 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     return () => window.clearInterval(timer);
   }, [tabs.some(tab => Boolean(tab.plan))]);
 
-  const run = async (input: StateQLCommandInput, tabId = ""): Promise<StateQLCommandResult | undefined> => {
+  const run = async (
+    input: StateQLCommandInput,
+    tabId = "",
+    operationId?: string,
+  ): Promise<StateQLCommandResult | undefined> => {
     if (request.current || !ready) return;
+    if (["connect", "disconnect"].includes(input.command) && dirtyTabs.current.size) {
+      setError("Apply or discard pending table edits before changing connection.");
+      return;
+    }
     const parsed = parseStateQLPanelCommand(input);
     if (!parsed) {
       setError("Check the command and JSON parameters. The input exceeds the supported shape or limits.");
@@ -157,6 +198,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
         parsed,
         controller.signal,
         snapshotRef.current?.connection?.connection_id ?? null,
+        operationId,
       );
       if (controller.signal.aborted || startScope !== savedScope.current) return;
       if (response.status === "declined") setNotice("Operation declined. No command was submitted.");
@@ -183,6 +225,54 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
       }
       if (ready) await refresh();
     }
+  };
+  const setupCommand = async (input: StateQLCommandInput, operationId: string) => {
+    const response = await run(input, "", operationId);
+    if (response?.status === "completed" && response.response.ok) return response;
+    if (response?.status === "completed" && !response.response.ok)
+      throw new Error(`${response.response.error.code}: ${response.response.error.message}`);
+    if (response?.status === "declined") throw new Error("Operation declined. No command was submitted.");
+    throw new Error("Database setup did not complete. Try again.");
+  };
+  const closeSetup = () => {
+    request.current?.abort();
+    setSetup(undefined);
+  };
+  const submitSetup = async (input: StateQLCommandInput, action: "connect" | "save" | "save-connect") => {
+    if (!setup) return;
+    if (action === "connect") {
+      await setupCommand(input, setup.operationId);
+      setSetup(undefined);
+      return;
+    }
+    if (input.command !== "connect" && input.command !== "profile.update") throw new Error("Invalid setup command.");
+    const profileCommand: StateQLCommandInput =
+      input.command === "profile.update"
+        ? input
+        : {
+            command: "profile.add",
+            name: input.name!,
+            ...(input.target ? { target: input.target, remember: input.remember } : { secret_env: input.secret_env! }),
+            read_only: input.read_only,
+          };
+    await setupCommand(profileCommand, setup.operationId);
+    loadProfiles();
+    if (action === "save-connect") {
+      await setupCommand(
+        { command: "connect", profile: input.command === "profile.update" ? input.name : input.name! },
+        setup.operationId,
+      );
+    }
+    setSetup(undefined);
+  };
+  const removeSetupProfile = async (forgetCredential: boolean) => {
+    if (!setup?.profile) return;
+    await setupCommand(
+      { command: "profile.remove", name: setup.profile.name, forget_credential: forgetCredential },
+      setup.operationId,
+    );
+    loadProfiles();
+    setSetup(undefined);
   };
   const data = (response?: StateQLCommandResult): Record<string, unknown> | undefined =>
     response?.status === "completed" && response.response.ok && databaseRecord(response.response.data)
@@ -225,7 +315,16 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     setActive(id);
     return id;
   };
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      setError("Clipboard access failed.");
+    }
+  };
   const close = (id: string) => {
+    if (dirtyTabs.current.has(id) && !window.confirm("Discard pending table edits and close this tab?")) return;
+    dirtyTabs.current.delete(id);
     if (busyTab === id) request.current?.abort();
     const index = tabs.findIndex(tab => tab.id === id);
     setTabs(current => current.filter(tab => tab.id !== id));
@@ -235,12 +334,25 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     );
   };
   const execute = async (tab: QueryTab, action: "read" | "plan" | "stage" | "apply") => {
+    if (tab.detached) {
+      setError("This result belongs to a previous connection. Discard edits and reopen the table.");
+      return;
+    }
+    if (dirtyTabs.current.has(tab.id)) {
+      setError("Apply or discard pending table edits before reloading.");
+      return;
+    }
     let input: StateQLCommandInput;
     try {
       if (action === "apply") {
         if (!tab.plan || Date.parse(tab.plan.expires) <= Date.now()) return;
         input = { command: "apply", handle: tab.plan.handle };
       } else if (tab.kind === "table") input = { command: "table.read", table: tab.table!, limit: 1000 };
+      else if (tab.driver === "redis")
+        input = {
+          command: action === "read" ? "redis.query" : action === "plan" ? "redis.plan" : "redis.exec",
+          redis: JSON.parse(tab.text),
+        };
       else if (tab.driver === "mongodb")
         input = {
           command: action === "read" ? "mongo.query" : action === "plan" ? "mongo.plan" : "mongo.exec",
@@ -281,17 +393,37 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
       }),
     );
   };
-  const loadProfiles = async () => {
-    const value = data(await run({ command: "profile.list" }));
-    if (value && Array.isArray(value.profiles)) setProfiles(value.profiles as typeof profiles);
-  };
-  const loadObjects = async (offset = 0) => {
-    const value = data(await run({ command: "inspect", kind: "schema", offset }));
-    const list = value?.tables ?? value?.collections;
-    if (Array.isArray(list)) {
-      const next = list.filter(item => databaseRecord(item) && typeof item.name === "string") as typeof objects;
-      setObjects(current => (offset ? [...current, ...next] : next));
-      setObjectOffset(typeof value?.next_offset === "number" ? value.next_offset : null);
+  // Metadata requests do not recurse through run()/snapshot refresh or lock query controls.
+  const loadProfiles = () => setProfileRevision(value => value + 1);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (ready)
+      void runtimeStore
+        .stateqlCommand({ command: "profile.list" }, controller.signal)
+        .then(response => {
+          const value = data(response);
+          if (!controller.signal.aborted && Array.isArray(value?.profiles))
+            setProfiles(value.profiles as typeof profiles);
+        })
+        .catch(cause => {
+          if (!controller.signal.aborted) setError(String(cause));
+        });
+    return () => controller.abort();
+  }, [runtimeScope, ready, toolRevision, profileRevision]);
+  const openObject = async (object: StateQLCatalogObject) => {
+    if (["table", "view", "collection"].includes(object.kind)) {
+      const table = { name: object.name, ...(object.schema ? { schema: object.schema } : {}) };
+      const id = add("", table);
+      if (!id || dirtyTabs.current.has(id)) return;
+      const value = data(await run({ command: "table.read", table, limit: 1000 }, id));
+      if (value && isDatabaseResult(value))
+        update(id, { result: value, text: typeof value.query === "string" ? value.query : "" });
+    } else {
+      const id = add();
+      if (!id) return;
+      update(id, { kind: "object", title: object.name, saved: false, sub: "definition" });
+      const value = data(await run({ command: "object.describe", object }, id));
+      if (value) update(id, { metadata: value });
     }
   };
   const inspectTab = async (tab: QueryTab, sub: string) => {
@@ -361,11 +493,27 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
             Database
           </span>
           <span className="spacer" />
-          <button className="text-button" type="button" disabled={!ready} onClick={() => void refresh()}>
-            <IconRefresh size={14} />
-            Refresh
+          <button
+            className="icon-button"
+            type="button"
+            title="Refresh database"
+            aria-label="Refresh database"
+            disabled={!ready}
+            onClick={() => {
+              void refresh();
+              loadProfiles();
+              setObjectRevision(value => value + 1);
+            }}>
+            <IconRefresh size={16} />
           </button>
-          <button className="icon-button" type="button" aria-label="Close database" onClick={onClose}>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close database"
+            onClick={() => {
+              if (!dirtyTabs.current.size || window.confirm("Discard pending table edits and close database?"))
+                onClose();
+            }}>
             <IconX size={17} />
           </button>
         </header>
@@ -376,21 +524,34 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
             <span>{connected ? `${driver} / ${readOnly ? "read-only" : "read-write"}` : "Disconnected"}</span>
           </div>
           <span className="database-muted">{snapshot?.connection?.database}</span>
+          {snapshot?.connection?.alias && (
+            <button
+              type="button"
+              className="database-alias-chip"
+              title="Copy connection reference"
+              aria-label="Copy connection reference"
+              onClick={() => void copy(snapshot.connection!.alias!)}>
+              <code>{snapshot.connection.alias}</code>
+              <IconCopy size={13} />
+            </button>
+          )}
           <span className="spacer" />
           {connected && (
             <button
               type="button"
-              className="text-button"
+              className="icon-button"
+              title="Disconnect"
+              aria-label="Disconnect"
               disabled={locked || inTransaction}
               onClick={() => void run({ command: "disconnect" })}>
-              Disconnect
+              <IconPlugOff size={16} />
             </button>
           )}
           <button
             type="button"
             className="secondary-button"
             disabled={locked || inTransaction}
-            onClick={() => setConnecting(true)}>
+            onClick={() => setSetup({ operationId: crypto.randomUUID() })}>
             Connect
           </button>
         </section>
@@ -470,6 +631,17 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
         )}
         <div className="database-body">
           <aside className="stateql-objects" aria-label="Connections and objects">
+            <label className="table-search database-rail-search">
+              <IconSearch size={15} />
+              <span className="sr-only">Search connections and objects</span>
+              <input
+                type="search"
+                value={search}
+                maxLength={200}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Search…"
+              />
+            </label>
             <section>
               <header>
                 <span className="section-kicker">Connections</span>
@@ -482,44 +654,46 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                   <IconRefresh size={13} />
                 </button>
               </header>
-              {profiles.map(profile => (
-                <div className="database-profile" key={profile.profile}>
-                  <button
-                    type="button"
-                    className="database-object"
-                    disabled={locked || inTransaction}
-                    onClick={() => void run({ command: "connect", profile: profile.profile })}>
-                    <span className="overview-orb is-step" aria-hidden="true" />
-                    <span>{profile.profile}</span>
-                    <small>{profile.read_only ? "RO" : "RW"}</small>
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`Inspect ${profile.profile}`}
-                    disabled={locked}
-                    onClick={() =>
-                      void run({ command: "profile.show", name: profile.profile }).then(response => {
-                        const value = data(response);
-                        if (value) setNotice(JSON.stringify(value));
-                      })
-                    }>
-                    …
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`Remove ${profile.profile}`}
-                    disabled={locked}
-                    onClick={() =>
-                      void run({ command: "profile.remove", name: profile.profile, forget_credential: forget }).then(
-                        () => loadProfiles(),
-                      )
-                    }>
-                    ×
-                  </button>
-                </div>
-              ))}
+              {profiles
+                .filter(profile => profile.profile.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+                .map(profile => (
+                  <div className="database-profile" key={profile.profile}>
+                    <button
+                      type="button"
+                      className="database-object"
+                      disabled={locked || inTransaction}
+                      onClick={() => void run({ command: "connect", profile: profile.profile })}>
+                      <span className="overview-orb is-step" aria-hidden="true" />
+                      <span>{profile.profile}</span>
+                      <small>{profile.read_only ? "RO" : "RW"}</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label={`Edit ${profile.profile}`}
+                      disabled={locked}
+                      onClick={() =>
+                        void run({ command: "profile.show", name: profile.profile }).then(response => {
+                          const value = data(response);
+                          if (!databaseRecord(value)) return;
+                          setSetup({
+                            operationId: crypto.randomUUID(),
+                            profile: {
+                              name: profile.profile,
+                              ...(typeof value.target === "string" ? { target: value.target } : {}),
+                              ...(typeof value.secret_env === "string" ? { secretEnv: value.secret_env } : {}),
+                              ...(typeof value.read_only === "boolean"
+                                ? { readOnly: value.read_only }
+                                : { readOnly: profile.read_only }),
+                              hasCredential: typeof value.credential_ref === "string",
+                            },
+                          });
+                        })
+                      }>
+                      …
+                    </button>
+                  </div>
+                ))}
               {!profiles.length && (
                 <button type="button" className="database-object" disabled={locked} onClick={() => void loadProfiles()}>
                   Load saved connections
@@ -529,16 +703,10 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                 type="button"
                 className="database-object"
                 disabled={locked || inTransaction}
-                onClick={() => setConnecting(true)}>
+                onClick={() => setSetup({ operationId: crypto.randomUUID() })}>
                 <IconPlus size={14} />
                 New connection
               </button>
-              {profiles.length > 0 && (
-                <label className="database-check database-muted">
-                  <input type="checkbox" checked={forget} onChange={event => setForget(event.target.checked)} />
-                  Forget credential when removing
-                </label>
-              )}
             </section>
             <section>
               <header>
@@ -548,56 +716,24 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                   className="icon-button"
                   aria-label="Refresh objects"
                   disabled={locked || !connected || inTransaction}
-                  onClick={() => void loadObjects()}>
+                  onClick={() => setObjectRevision(value => value + 1)}>
                   <IconRefresh size={13} />
                 </button>
               </header>
-              {objectOffset !== null && (
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={locked || inTransaction}
-                  onClick={() => void loadObjects(objectOffset)}>
-                  Load more objects
-                </button>
-              )}
-              {!objects.length && (
-                <button
-                  type="button"
-                  className="database-object"
-                  disabled={locked || !connected || inTransaction}
-                  onClick={() => void loadObjects()}>
-                  Load database objects
-                </button>
-              )}
-              {[...new Set(objects.map(item => item.schema ?? (driver === "mongodb" ? "Collections" : "main")))].map(
-                schema => (
-                  <details className="database-object-group" key={schema} open>
-                    <summary>
-                      <IconChevronRight size={13} />
-                      {schema}
-                      <small>
-                        {
-                          objects.filter(
-                            item => (item.schema ?? (driver === "mongodb" ? "Collections" : "main")) === schema,
-                          ).length
-                        }
-                      </small>
-                    </summary>
-                    {objects
-                      .filter(item => (item.schema ?? (driver === "mongodb" ? "Collections" : "main")) === schema)
-                      .map(item => (
-                        <button
-                          className="database-object"
-                          type="button"
-                          key={item.name}
-                          onClick={() => add("", { name: item.name, ...(item.schema ? { schema: item.schema } : {}) })}>
-                          <IconTable size={14} />
-                          <span>{item.name}</span>
-                        </button>
-                      ))}
-                  </details>
-                ),
+              {snapshot?.connection ? (
+                <DatabaseObjectBrowser
+                  scope={`${runtimeScope}:${scope}`}
+                  driver={driver}
+                  connectionId={snapshot.connection.connection_id}
+                  search={search}
+                  disabled={!ready || inTransaction || Boolean(setup)}
+                  refreshKey={objectRevision}
+                  onOpen={object => {
+                    if (!locked) void openObject(object);
+                  }}
+                />
+              ) : (
+                <p className="database-muted">Connect to browse objects.</p>
               )}
             </section>
             <section>
@@ -730,14 +866,23 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                         value={tab.title}
                         onChange={event => update(tab.id, { title: event.target.value })}
                       />
-                      <label className="database-check">
-                        <input
-                          type="checkbox"
-                          checked={tab.saved}
-                          onChange={event => update(tab.id, { saved: event.target.checked })}
-                        />
-                        Save locally
-                      </label>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label="Save query in this browser"
+                        title="Save query in this browser"
+                        aria-pressed={tab.saved}
+                        onClick={() => update(tab.id, { saved: !tab.saved })}>
+                        <IconDeviceFloppy size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button"
+                        aria-label="Copy query"
+                        title="Copy query"
+                        onClick={() => void copy(tab.text)}>
+                        <IconCopy size={16} />
+                      </button>
                       <button
                         type="button"
                         className="text-button"
@@ -770,9 +915,13 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                     </>
                   ) : (
                     <>
-                      <strong className="mono">{[tab.table?.schema, tab.table?.name].filter(Boolean).join(".")}</strong>
+                      <strong className="mono">
+                        {tab.kind === "object"
+                          ? tab.title
+                          : [tab.table?.schema, tab.table?.name].filter(Boolean).join(".")}
+                      </strong>
                       <div className="database-segments" role="group" aria-label="Table view">
-                        {["data", "columns", "indexes", "constraints"].map(sub => (
+                        {(tab.kind === "table" ? ["data", "columns", "indexes", "constraints"] : []).map(sub => (
                           <button
                             type="button"
                             key={sub}
@@ -785,8 +934,22 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                       </div>
                     </>
                   )}
+                  {tab.detached && (
+                    <span role="alert">Previous connection · edits cannot be applied. Discard and reopen.</span>
+                  )}
+                  {tab.result && (
+                    <button
+                      type="button"
+                      className="database-alias-chip"
+                      title="Copy result reference"
+                      aria-label="Copy result reference"
+                      onClick={() => void copy(tab.result!.alias ?? tab.result!.result_id)}>
+                      <code>{tab.result.alias ?? tab.result.result_id}</code>
+                      <IconCopy size={13} />
+                    </button>
+                  )}
                   <span className="spacer" />
-                  {!inTransaction && connected && !readOnly && (
+                  {!inTransaction && connected && !readOnly && driver !== "redis" && (
                     <>
                       <select
                         aria-label="Transaction isolation"
@@ -813,7 +976,17 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                     </>
                   )}
                 </div>
-                {tab.kind === "table" && tab.sub !== "data" ? (
+                {tab.kind === "object" ? (
+                  <div className="database-metadata">
+                    <pre>
+                      {tab.metadata
+                        ? typeof tab.metadata.definition === "string"
+                          ? tab.metadata.definition
+                          : JSON.stringify(tab.metadata, null, 2)
+                        : "Loading definition…"}
+                    </pre>
+                  </div>
+                ) : tab.kind === "table" && tab.sub !== "data" ? (
                   <div className="database-metadata">
                     {tab.metadata ? (
                       Object.entries(tab.metadata).map(([key, value]) => (
@@ -858,7 +1031,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                         <div className="database-editor" style={{ height }}>
                           <DatabaseQueryEditor
                             text={tab.text}
-                            language={tab.driver === "mongodb" ? "json" : "sql"}
+                            language={tab.driver === "mongodb" || tab.driver === "redis" ? "json" : "sql"}
                             onChange={text => update(tab.id, { text })}
                             onRun={() => {
                               if (!locked && connected && !inTransaction) void execute(tab, "read");
@@ -897,7 +1070,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                       </>
                     )}
                     <div className="database-toolbar database-runbar">
-                      {tab.kind === "query" && tab.driver !== "mongodb" && (
+                      {tab.kind === "query" && tab.driver !== "mongodb" && tab.driver !== "redis" && (
                         <input
                           className="database-params"
                           aria-label="JSON parameters"
@@ -924,28 +1097,35 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                             onClick={() => void execute(tab, inTransaction ? "stage" : "plan")}>
                             {inTransaction ? "Stage write" : "Plan write"}
                           </button>
-                          <label className="database-check">
-                            <input
-                              type="checkbox"
-                              checked={allowUnbounded}
-                              onChange={event => {
-                                setAllowUnbounded(event.target.checked);
-                                setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
-                              }}
-                            />
-                            Unbounded
-                          </label>
-                          <label className="database-check">
-                            <input
-                              type="checkbox"
-                              checked={allowDestructive}
-                              onChange={event => {
-                                setAllowDestructive(event.target.checked);
-                                setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
-                              }}
-                            />
-                            Destructive
-                          </label>
+                          {tab.driver !== "redis" && (
+                            <details className="database-overflow">
+                              <summary>Write safety</summary>
+                              <div>
+                                <label className="database-check">
+                                  <input
+                                    type="checkbox"
+                                    checked={allowUnbounded}
+                                    onChange={event => {
+                                      setAllowUnbounded(event.target.checked);
+                                      setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
+                                    }}
+                                  />
+                                  Unbounded
+                                </label>
+                                <label className="database-check">
+                                  <input
+                                    type="checkbox"
+                                    checked={allowDestructive}
+                                    onChange={event => {
+                                      setAllowDestructive(event.target.checked);
+                                      setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
+                                    }}
+                                  />
+                                  Destructive
+                                </label>
+                              </div>
+                            </details>
+                          )}
                         </>
                       )}
                       {tab.kind === "table" && tab.text && (
@@ -954,8 +1134,13 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                         </button>
                       )}
                       {busyTab === tab.id && (
-                        <button type="button" className="text-button" onClick={() => request.current?.abort()}>
-                          Cancel
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title="Stop query"
+                          aria-label="Stop query"
+                          onClick={() => request.current?.abort()}>
+                          <IconPlayerStop size={16} />
                         </button>
                       )}
                       <span className="spacer" />
@@ -993,14 +1178,25 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                     )}
                     {tab.result ? (
                       <DatabaseResultGrid
-                        key={`${scope}:${tab.result.result_id}`}
+                        key={tab.result.result_id}
                         result={tab.result}
-                        scope={`${runtimeScope}:${scope}`}
-                        editable={tab.kind === "table" && !readOnly && !inTransaction}
-                        disabled={locked}
-                        onCommand={input => run(input, tab.id)}
+                        scope={runtimeScope}
+                        editable={tab.kind === "table" && !tab.detached && !readOnly && !inTransaction}
+                        disabled={locked || tab.detached}
+                        suspended={Boolean(tab.detached)}
+                        onDirtyChange={dirty => {
+                          if (dirty) dirtyTabs.current.add(tab.id);
+                          else dirtyTabs.current.delete(tab.id);
+                        }}
+                        onCommand={input => (tab.detached ? Promise.resolve(undefined) : run(input, tab.id))}
+                        onPlanChanges={updates =>
+                          tab.detached
+                            ? Promise.resolve(undefined)
+                            : run({ command: "table.plan.batch", updates }, tab.id)
+                        }
                         onSaved={() => {
-                          setNotice("Cell saved. Reloading table data.");
+                          dirtyTabs.current.delete(tab.id);
+                          setNotice("Changes saved. Reloading table data.");
                           void execute(tab, "read");
                         }}
                       />
@@ -1034,27 +1230,14 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
             Waiting for the runtime connection…
           </p>
         )}
-        {connecting && (
+        {setup && (
           <DatabaseConnectDialog
-            profiles={profiles.map(profile => profile.profile)}
-            onClose={() => setConnecting(false)}
-            onSubmit={(input, save) => {
-              setConnecting(false);
-              void (async () => {
-                if (save && input.command === "connect") {
-                  const response = await run({
-                    command: "profile.add",
-                    name: input.name!,
-                    ...(input.target
-                      ? { target: input.target, remember: input.remember }
-                      : { secret_env: input.secret_env }),
-                    read_only: input.read_only,
-                  });
-                  if (!data(response)) return;
-                  await run({ command: "connect", profile: input.name! });
-                } else await run(input);
-              })();
-            }}
+            profile={setup.profile}
+            pending={setupPending}
+            suspended={Boolean(live.pendingUi && !setupPending)}
+            onClose={closeSetup}
+            onSubmit={submitSetup}
+            onRemove={setup.profile ? removeSetupProfile : undefined}
           />
         )}
       </div>

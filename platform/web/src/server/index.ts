@@ -35,8 +35,9 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) throw new Error("invalid server port");
   const driver = options.driver ?? new RuntimeCoordinator();
   const repositoryRoot = options.repositoryRoot ?? resolve(webRoot, "../..");
+  const agentDir = resolve(options.agentDir ?? getAgentDir());
   await driver
-    .start({ cwd: options.cwd ?? repositoryRoot, repositoryRoot, agentDir: options.agentDir ?? getAgentDir() })
+    .start({ cwd: options.cwd ?? repositoryRoot, repositoryRoot, agentDir })
     .catch(async error => {
       await driver.dispose().catch(() => undefined);
       throw error;
@@ -80,7 +81,7 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("server did not expose a TCP address");
     allowedHost = host === "::1" ? `[::1]:${address.port}` : `${host}:${address.port}`;
-    transport = await ServerTransport.create(driver, { allowedHosts: [allowedHost] });
+    transport = await ServerTransport.create(driver, { allowedHosts: [allowedHost], keyboardSettingsPath: resolve(agentDir, "pylon-web/settings.sqlite") });
   } catch (error) {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await assets.close();
@@ -97,10 +98,11 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
     close() {
       return (closePromise ??= (async () => {
         server.off("upgrade", readyTransport.handleUpgrade);
-        readyTransport.dispose();
-        await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
-        await assets.close();
-        await driver.dispose();
+        try { readyTransport.dispose(); }
+        finally {
+          try { await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve()))); }
+          finally { try { await assets.close(); } finally { await driver.dispose(); } }
+        }
       })());
     },
   };

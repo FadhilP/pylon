@@ -19,6 +19,7 @@ import { recordTimelineOwner, startSessionGc } from "../src/session-gc.ts";
 import { findRunEntry, isRunEntry, runTimelineId, RUN_ENTRY_TYPE, type RunEntry } from "../src/run.ts";
 import { TIMELINE_STATE_VERSION, timelineStateSnapshot, type TimelineCheckpointFailureState } from "../src/state.ts";
 import { checkpointChanges, checkpointFileDiff, type TimelineChangeSet } from "../src/changes.ts";
+import { fileHistoryContext } from "../src/file-history.ts";
 import {
   CheckpointBrowser,
   type CheckpointBrowserItem,
@@ -391,6 +392,19 @@ export default function timelineExtension(
     await changesFor(id, bound);
     return checkpoints.changeBases.get(id) ?? undefined;
   };
+  const disposeHistoryRequest = pi.events.on("pi-timeline:history-context-request", (request: any) => {
+    if (request?.version !== 1 || request.sessionId !== session.id || typeof request.respond !== "function") return;
+    request.respond(
+      enabled
+        ? fileHistoryContext(
+            session.id,
+            lastCtx?.sessionManager.getBranch() ?? [],
+            checkpoints.records,
+            sessionBaseline?.snapshot,
+          )
+        : { sessionId: session.id, checkpoints: [], partial: false },
+    );
+  });
   const disposeFilesRequest = pi.events.on("pi-timeline:files-request", (request: any) => {
     if (
       request?.version !== 1 ||
@@ -1002,6 +1016,7 @@ export default function timelineExtension(
     disposeHeartbeatJobs();
     disposeFilesRequest();
     disposeDiffRequest();
+    disposeHistoryRequest();
     disposeRuntimePolicy();
     await mutations.checkpoint?.catch(() => {});
     mutations.checkpoint = undefined;
@@ -1106,6 +1121,9 @@ export default function timelineExtension(
     await flushAutomaticCheckpoint(ctx);
   });
   pi.on("session_tree", (_e, ctx) => {
+    lastCtx = ctx;
+    // Branch membership is part of read-only file history, even when the filesystem stays put.
+    publishState();
     if (suppressNextTreeWarning) {
       suppressNextTreeWarning = false;
       return;

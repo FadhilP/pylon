@@ -50,10 +50,14 @@ Pylon Web and independently installed Pi packages do **not** share an implied st
 | `<Pylon agent dir>/pylon-web/projects.json` | Pylon Web project registry, including project/session organization and runtime-policy records. |
 | `<Pylon agent dir>/pylon-web/packages.json` | Pylon Web enabled-package selection. |
 | `<Pylon agent dir>/pylon-web/hooks.json` | Pylon Web hook settings. |
+| `<Pylon agent dir>/pylon-web/annotations/notes.sqlite` | Server-owned, project/session-scoped code-note drafts. Shared across browsers using this Pylon server; independent of StateQL and never automatically injected into model context. |
 | Host Pi agent directory | Independently installed packages use the host Pi agent directory, normally `~/.pi/agent`, unless that host Pi is separately given `PI_CODING_AGENT_DIR`. This is not changed merely because Pylon Web uses `~/.pylon/agent`. |
 | StateQL platform data directory | StateQL uses its own platform data location; `STQL_HOME` overrides it. See [StateQL](../../packages/pi-stateql/README.md). |
 
 Pylon's default migration copies `~/.pi/agent` to `~/.pylon/agent` only when the target is absent. It does not delete the legacy directory or overwrite an existing Pylon target. If an automatic migration fails and legacy data exists, Pylon may use the legacy directory for that run and tells you to run `pylon migrate` later. `pylon migrate` retries the default-path copy; an explicit `PI_CODING_AGENT_DIR` is a separate choice.
+
+Saved code notes contain user-authored text and source excerpts in plaintext SQLite storage; this is not a credential vault. Restrict access to the agent-data directory. Include the annotations directory in backups with Pylon stopped; while running, SQLite may also use `-wal` and `-shm` sidecars. Deleting a session or project removes its notes. Unfinished editor text and attachment selections are page-local until explicitly saved/submitted.
+
 
 ## Backups, migration, and recovery
 

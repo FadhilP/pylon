@@ -1,3 +1,4 @@
+import { validAnnotationMutation, type AnnotationMutation, type AnnotationRequest } from "../../shared/annotations.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
@@ -10,7 +11,9 @@ import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { BootstrapSnapshot, StateQLCommandInput, UsageQuery } from "../../shared/protocol/snapshots.ts";
+import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope.ts";
+import type { WorkspaceSearchQuery, WorkspaceSymbolResult } from "../../shared/workspace-search.ts";
 import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
 import { decodeSessionCursor } from "../pi/session-index.ts";
 import { usageWindow } from "../pi/usage-aggregation.ts";
@@ -54,11 +57,20 @@ interface DialogOwner {
   lossTimer?: NodeJS.Timeout;
 }
 const MAX_COMMAND_BODY_BYTES = 42 * 1024 * 1024;
+const OPERATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+function validOperationId(value: unknown): value is string {
+  return typeof value === "string" && OPERATION_ID.test(value);
+}
+
+import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../keyboard-settings.ts";
+import { validateKeymap, type Keymap } from "../../shared/keyboard.ts";
 
 export interface ServerTransportOptions extends SecurityOptions {
   secureCookies?: boolean;
   dialogReconnectGraceMs?: number;
   terminalSpawn?: TerminalSpawn;
+  keyboardSettingsPath?: string;
 }
 
 /** HTTP/SSE adapter. It deliberately owns no Pi state beyond bounded projections. */
@@ -76,16 +88,21 @@ export class ServerTransport {
   private databaseCommand?: { tabId: string; controller: AbortController };
   private dialogOwner?: DialogOwner;
   private readonly tabLossTimers = new Map<string, NodeJS.Timeout>();
+  private readonly keyboardSettings: KeyboardSettingsStore;
+  private disposed = false;
 
   constructor(
     private readonly driver: PiDriver,
     initial: Awaited<ReturnType<PiDriver["snapshot"]>>,
     private readonly options: ServerTransportOptions,
   ) {
-    this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
-    this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
-    this.unsubscribe = driver.subscribe(event => this.onDriverEvent(event));
-    this.terminal = new TerminalServer(driver, this.sessions, options, options.terminalSpawn);
+    this.keyboardSettings = new KeyboardSettingsStore(options.keyboardSettingsPath ?? ":memory:");
+    try {
+      this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
+      this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
+      this.terminal = new TerminalServer(driver, this.sessions, options, options.terminalSpawn);
+      this.unsubscribe = driver.subscribe(event => this.onDriverEvent(event));
+    } catch (error) { this.keyboardSettings.close(); throw error; }
   }
 
   static async create(driver: PiDriver, options: ServerTransportOptions): Promise<ServerTransport> {
@@ -93,6 +110,9 @@ export class ServerTransport {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.keyboardSettings.close();
     this.unsubscribe();
     this.databaseCommand?.controller.abort();
     this.exportController?.abort();
@@ -141,14 +161,22 @@ export class ServerTransport {
         return await this.fileSuggestions(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/files")
         return await this.workspaceFiles(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/search") return await this.workspaceSearch(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/entry")
+        return await this.workspaceEntry(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/file")
         return await this.workspaceFile(request, response, url, false);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/symbols") return await this.workspaceSymbols(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/diff")
         return await this.workspaceFile(request, response, url, true);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/history")
+        return await this.workspaceHistory(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/timeline/files")
         return await this.timelineCheckpoint(request, response, url, false);
       if (request.method === "GET" && url.pathname === "/api/v1/timeline/diff")
         return await this.timelineCheckpoint(request, response, url, true);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/annotations")
+        return await this.annotations(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/queued-prompt")
         return await this.queuedPrompt(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/archives")
@@ -178,6 +206,8 @@ export class ServerTransport {
         return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-android-tooling")
         return await this.heliosAndroidTooling(request, response);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/keyboard")
+        return await this.keyboardPreferences(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands")
         return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/"))
@@ -222,6 +252,30 @@ export class ServerTransport {
     }
   }
 
+  private async annotations(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const mutation = request.method === "POST";
+    const tabId = mutation ? this.tab(request, this.mutatingSession(request)) : this.requireTab(request);
+    let input: AnnotationRequest | AnnotationMutation;
+    if (mutation) {
+      const body = await readJson(request);
+      if (!validAnnotationMutation(body)) throw httpError(400, "Invalid annotation mutation");
+      input = body;
+      if (![...this.clients].some(client => client.tabId === tabId)) throw httpError(409, "the browser tab must have an SSE connection");
+    } else {
+      input = { sessionId: url.searchParams.get("sessionId") ?? "", expectedGeneration: Number(url.searchParams.get("generation")) };
+    }
+    const runtime = this.projection.snapshot();
+    if (!runtime.ready || runtime.sessionId !== input.sessionId || input.expectedGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "Session changed or is unavailable. Reload notes.");
+    if (!this.driver.annotationNotes || !this.driver.mutateAnnotation) throw httpError(409, "Annotations are unavailable");
+    const result = mutation ? await this.driver.mutateAnnotation(input as AnnotationMutation) : await this.driver.annotationNotes(input);
+    if (result.sessionGeneration !== this.journal.sessionGeneration || result.sessionId !== this.projection.snapshot().sessionId)
+      throw httpError(409, "Session changed while accessing notes");
+    this.renew(tabId);
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, result);
+  }
+
   private bootstrap(request: IncomingMessage, response: ServerResponse): void {
     const session = this.session(request, response);
     const tabId = header(request.headers["x-pylon-tab-id"]);
@@ -242,10 +296,31 @@ export class ServerTransport {
       sessionGeneration: this.journal.sessionGeneration,
       csrfToken: session.csrfToken,
       runtime,
+      keyboardSettings: this.keyboardSettings.read(),
       unseenCompletionSessionIds: this.projection.unseenCompletionSessionIds(),
       ...(pending ? { pendingUi: pending } : {}),
     };
     this.send(response, 200, body);
+  }
+
+  private async keyboardPreferences(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    if (request.method === "GET") return this.send(response, 200, this.keyboardSettings.read());
+    this.mutatingSession(request);
+    const body = await readJson(request, 16 * 1024) as { revision?: unknown; keymap?: unknown } | null;
+    if (!body || typeof body !== "object" || Object.keys(body).some(key => !["revision", "keymap"].includes(key))
+      || !Number.isSafeInteger(body.revision) || (body.revision as number) < 0) throw httpError(400, "Invalid keyboard settings revision");
+    const problem = validateKeymap(body.keymap);
+    if (problem) throw httpError(400, problem);
+    try {
+      const saved = this.keyboardSettings.update(body.revision as number, body.keymap as Keymap);
+      this.publish("keyboard.settings", saved);
+      this.send(response, 200, saved);
+    } catch (error) {
+      if (error instanceof KeyboardRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
+      throw error;
+    }
   }
 
   private events(request: IncomingMessage, response: ServerResponse, url: URL): void {
@@ -423,7 +498,7 @@ export class ServerTransport {
     const command = parsed.value;
     if (
       !["prompt", "queuePrompt", "steer", "followUp", "editPrompt"].includes(command.type) &&
-      body.bytes > MAX_JSON_BODY_BYTES
+      body.bytes > (command.type === "mutateWorkspace" ? 6 * 1024 * 1024 + 4096 : MAX_JSON_BODY_BYTES)
     ) {
       throw httpError(413, "request body too large");
     }
@@ -672,7 +747,7 @@ export class ServerTransport {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw httpError(400, "invalid StateQL command request");
     const body = input as Record<string, unknown>;
-    if (Object.keys(body).some(key => key !== "generation" && key !== "input" && key !== "expectedConnectionId"))
+    if (Object.keys(body).some(key => key !== "generation" && key !== "input" && key !== "expectedConnectionId" && key !== "operationId"))
       throw httpError(400, "invalid StateQL command request");
     if (
       typeof body.generation !== "number" ||
@@ -689,6 +764,8 @@ export class ServerTransport {
         body.expectedConnectionId.length > 200)
     )
       throw httpError(400, "invalid database connection scope");
+    if (body.operationId !== undefined && !validOperationId(body.operationId))
+      throw httpError(400, "invalid database operation correlation");
     if (this.databaseCommand) throw httpError(409, "A database command is already running");
     if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlCommand) throw httpError(409, "StateQL commands are unavailable");
@@ -707,6 +784,7 @@ export class ServerTransport {
         body.input as StateQLCommandInput,
         controller.signal,
         body.expectedConnectionId as string | null | undefined,
+        body.operationId as string | undefined,
       );
     } finally {
       request.removeListener("aborted", cancel);
@@ -944,6 +1022,72 @@ export class ServerTransport {
     this.send(response, 200, result);
   }
 
+  private async workspaceSearch(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (!this.driver.workspaceSearch) throw httpError(404, "workspace search is unavailable");
+    const query = url.searchParams.get("q") ?? "";
+    const glob = url.searchParams.get("glob") ?? undefined;
+    const flag = (name: string) => { const value = url.searchParams.get(name); if (value !== null && value !== "0" && value !== "1") throw httpError(400, `invalid ${name}`); return value === "1"; };
+    if (!query || query.length > 2000 || /[\0\r\n]/.test(query) || glob && (glob.length > 500 || /[\0\r\n]/.test(glob))) throw httpError(400, "invalid workspace search query");
+    const input: WorkspaceSearchQuery = { query, regex: flag("regex"), caseSensitive: flag("caseSensitive"), wholeWord: flag("wholeWord"), touched: flag("touched"), ...(glob ? { glob } : {}) };
+    const controller = new AbortController();
+    request.once("aborted", () => controller.abort(new Error("Client disconnected")));
+    response.once("close", () => { if (!response.writableEnded) controller.abort(new Error("Client disconnected")); });
+    response.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+    const send = async (event: string, value: unknown) => {
+      if (controller.signal.aborted) return;
+      if (event !== "error" && generation !== this.journal.sessionGeneration) throw httpError(409, "session changed while searching workspace");
+      const line = JSON.stringify({ event, result: value }) + "\n";
+      if (!response.write(line)) await new Promise<void>((resolvePromise, reject) => {
+        const timer = setTimeout(() => controller.abort(new Error("Search consumer stalled")), 30_000);
+        const cleanup = () => { clearTimeout(timer); response.off("drain", drained); controller.signal.removeEventListener("abort", aborted); };
+        const drained = () => { cleanup(); resolvePromise(); };
+        const aborted = () => { cleanup(); reject(controller.signal.reason); };
+        response.once("drain", drained);
+        controller.signal.addEventListener("abort", aborted, { once: true });
+        if (controller.signal.aborted) aborted();
+      });
+    };
+    try {
+      const result = await this.driver.workspaceSearch({ ...input, expectedGeneration: generation }, value => send("update", value), controller.signal);
+      if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while searching workspace");
+      await send("done", result);
+    } catch (error) {
+      if (!controller.signal.aborted) await send("error", { error: error instanceof Error ? error.message.slice(0, 1000) : "Workspace search failed" });
+    } finally { response.end(); }
+  }
+
+  private async workspaceSymbols(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    const query = url.searchParams.get("q") ?? "";
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
+    if (query.length > 2000 || query.includes("\0")) throw httpError(400, "invalid workspace symbol query");
+    if (!this.driver.workspaceSymbols) throw httpError(404, "workspace symbols are unavailable");
+    const controller = new AbortController(); request.once("aborted", () => controller.abort());
+    response.once("close", () => { if (!response.writableEnded) controller.abort(); });
+    const result: WorkspaceSymbolResult = await this.driver.workspaceSymbols(query, controller.signal);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while searching symbols");
+    this.send(response, 200, result);
+  }
+
+
+  private async workspaceEntry(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    const path = url.searchParams.get("path") ?? "";
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!path || path.length > 500) throw httpError(400, "invalid workspace path");
+    if (!this.driver.workspaceEntry) throw httpError(404, "workspace editing is unavailable");
+    const entry = await this.driver.workspaceEntry(path);
+    if (entry.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while inspecting entry");
+    response.setHeader("cache-control", "no-store");
+    this.send(response, 200, entry);
+  }
+
   private async workspaceFile(
     request: IncomingMessage,
     response: ServerResponse,
@@ -971,6 +1115,47 @@ export class ServerTransport {
     const result = await method.call(this.driver, { path, view });
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while reading file");
+    this.send(response, 200, result);
+  }
+
+  private async workspaceHistory(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!this.driver.fileHistory) throw httpError(404, "workspace file history is unavailable");
+    const path = url.searchParams.get("path") ?? "";
+    const scope = url.searchParams.get("scope") ?? "session";
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 40 : Number(rawLimit);
+    const selected = url.searchParams.get("selected") ?? undefined;
+    const view = url.searchParams.get("view") ?? "file";
+    if (
+      !path ||
+      path.length > 500 ||
+      /[\0\r\n\\]/.test(path) ||
+      path.startsWith("/") ||
+      /^[A-Za-z]:/.test(path) ||
+      path.split("/").some(part => !part || part === "." || part === "..")
+    ) {
+      throw httpError(400, "invalid history path");
+    }
+    if (scope !== "session" && scope !== "all") throw httpError(400, "invalid history scope");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, "invalid history limit");
+    if (selected !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(selected))
+      throw httpError(400, "invalid history selection");
+    if (view !== "file" && view !== "diff" && view !== "change") throw httpError(400, "invalid history view");
+    const controller = new AbortController();
+    response.once("close", () => { if (!response.writableEnded) controller.abort(); });
+    const result = await this.driver.fileHistory({
+      path,
+      scope,
+      limit,
+      ...(selected ? { selected } : {}),
+      view,
+    } satisfies FileHistoryQuery, controller.signal);
+    if (result.sessionGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "session changed while loading file history");
     this.send(response, 200, result);
   }
 
@@ -1359,6 +1544,9 @@ export class ServerTransport {
         if (!this.driver.applySessionChanges)
           return Promise.reject(httpError(409, "applying session changes is unavailable"));
         return this.driver.applySessionChanges(command).then(result => accepted(result.sessionGeneration));
+      case "mutateWorkspace":
+        if (!this.driver.mutateWorkspace) return Promise.reject(httpError(409, "workspace editing is unavailable"));
+        return this.driver.mutateWorkspace(command).then(() => accepted(command.expectedGeneration));
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings)
           return Promise.reject(httpError(409, "worktree settings are unavailable"));

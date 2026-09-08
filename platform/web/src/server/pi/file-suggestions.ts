@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
-import { basename, join } from "node:path";
+import { join } from "node:path";
+import { rankFilePaths, validRelativePath } from "../../shared/file-search.ts";
+export { rankFilePaths } from "../../shared/file-search.ts";
 import { collectPlainWorkspaceFiles } from "pylon-core/src/worktree.ts";
 
 const CACHE_MS = 30_000;
@@ -29,45 +31,6 @@ export function invalidateFileSuggestions(cwd: string): void {
   cache.delete(cwd);
 }
 
-export function rankFilePaths(paths: string[], query: string): string[] {
-  const needle = query.trim().toLowerCase();
-  return paths
-    .flatMap(path => {
-      if (!validRelativePath(path)) return [];
-      if (!needle) return [{ path, rank: 5 }];
-      const lower = path.toLowerCase();
-      const name = basename(lower.endsWith("/") ? lower.slice(0, -1) : lower);
-      const rank =
-        name === needle
-          ? 0
-          : name.startsWith(needle)
-            ? 1
-            : lower.split("/").some(part => part.startsWith(needle))
-              ? 2
-              : lower.startsWith(needle)
-                ? 3
-                : lower.includes(needle)
-                  ? 4
-                  : -1;
-      return rank < 0 ? [] : [{ path, rank }];
-    })
-    .sort((left, right) => left.rank - right.rank || left.path.localeCompare(right.path))
-    .map(item => item.path);
-}
-
-function validRelativePath(path: string): boolean {
-  const normalized = path.endsWith("/") ? path.slice(0, -1) : path;
-  return (
-    path.length <= 500 &&
-    normalized.length > 0 &&
-    !normalized.startsWith("/") &&
-    !/^[A-Za-z]:/.test(normalized) &&
-    !normalized.includes("\\") &&
-    !normalized.includes("\0") &&
-    !normalized.split("/").some(part => part === "." || part === ".." || part === "")
-  );
-}
-
 function includeDirectories(paths: string[]): string[] {
   const entries = new Set(paths);
   for (const path of paths) {
@@ -83,7 +46,7 @@ async function inventory(cwd: string): Promise<string[] | undefined> {
   const existing = cache.get(cwd);
   if (existing && existing.expiresAt > Date.now()) return existing.paths;
 
-  const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.path);
+  const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.kind ? `${file.path}/` : file.path);
   const paths = includeDirectories(files.slice(0, MAX_PATHS));
   if (cache.size >= MAX_CACHES) cache.delete(cache.keys().next().value!);
   cache.set(cwd, { expiresAt: Date.now() + CACHE_MS, paths });

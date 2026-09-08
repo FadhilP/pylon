@@ -37,6 +37,7 @@ import {
   GUARD_RULE_LABELS,
 } from "../shared/guard-policy";
 import { defaultGlobalPolicy } from "../shared/policy-defaults";
+import { KeyboardSettingsPanel } from "./keyboard-settings";
 import type {
   ModelOptionReadModel,
   ProviderAuthReadModel,
@@ -56,7 +57,11 @@ import type {
   SkillListSnapshot,
   ToolExposureMode,
 } from "../shared/protocol/snapshots";
-import { DEFAULT_SYNTAX_THEME, SYNTAX_THEMES, type SyntaxTheme } from "../shared/syntax-highlighting";
+import {
+  DEFAULT_SYNTAX_THEME_PREFERENCE,
+  SYNTAX_THEME_PREFERENCES,
+  type SyntaxThemePreference,
+} from "../shared/syntax-highlighting";
 import { thinkingLabel } from "./format";
 import { ExtensionSettingsFields } from "./extension-settings-fields";
 import { HookSettingsFields } from "./hook-settings-fields";
@@ -83,8 +88,9 @@ export type SettingsTab =
   | "hooks"
   | "policy"
   | "notifications"
+  | "keyboard"
   | "appearance";
-/* Grouping the ten sections names the thing each one governs; the flat order
+/* Grouping the sections names the thing each one governs; the flat order
    below stays the roving-tabindex order, so it must match the visual order. */
 const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; icon: ReactNode }[] }[] = [
   {
@@ -111,7 +117,10 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
       { tab: "notifications", label: "Notifications", icon: <IconBell size={15} /> },
     ],
   },
-  { group: "Pylon", tabs: [{ tab: "appearance", label: "Appearance", icon: <IconContrast size={15} /> }] },
+  { group: "Pylon", tabs: [
+    { tab: "appearance", label: "Appearance", icon: <IconContrast size={15} /> },
+    { tab: "keyboard", label: "Keyboard", icon: <IconKey size={15} /> },
+  ] },
 ];
 const SETTINGS_TABS: SettingsTab[] = SETTINGS_NAV.flatMap(group => group.tabs.map(entry => entry.tab));
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -146,8 +155,8 @@ interface SettingsDialogProps {
   modelRefreshBusy: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
-  syntaxTheme: SyntaxTheme;
-  onSyntaxThemeChange: (theme: SyntaxTheme) => void;
+  syntaxTheme: SyntaxThemePreference;
+  onSyntaxThemeChange: (theme: SyntaxThemePreference) => void;
   onClose: () => void;
   onProviderLogin: (provider: string, authType: ProviderAuthType) => void;
   onProviderLogout: (provider: string) => void;
@@ -632,6 +641,9 @@ export function SettingsDialog({
                 )}
               </section>
             )}
+            <section id="settings-panel-keyboard" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-keyboard" hidden={Boolean(searchQuery.trim()) || activeTab !== "keyboard"}>
+              {activeTab === "keyboard" && !searchQuery.trim() && <KeyboardSettingsPanel />}
+            </section>
             <section
               id="settings-panel-providers"
               className="settings-pane"
@@ -1226,7 +1238,7 @@ export function SettingsDialog({
               <div className="settings-pane-header">
                 <div>
                   <h2>Appearance</h2>
-                  <p>Choose the color theme used throughout Pylon.</p>
+                  <p>Choose whether Pylon follows your system appearance or uses a fixed theme.</p>
                 </div>
               </div>
               <SettingsSectionHead
@@ -1238,8 +1250,8 @@ export function SettingsDialog({
               <SettingsSectionHead
                 label="Syntax theme"
                 className="settings-syntax-kicker"
-                changed={syntaxTheme !== DEFAULT_SYNTAX_THEME}
-                onReset={() => onSyntaxThemeChange(DEFAULT_SYNTAX_THEME)}
+                changed={syntaxTheme !== DEFAULT_SYNTAX_THEME_PREFERENCE}
+                onReset={() => onSyntaxThemeChange(DEFAULT_SYNTAX_THEME_PREFERENCE)}
               />
               <SyntaxThemeSelect value={syntaxTheme} onChange={onSyntaxThemeChange} />
             </section>
@@ -1353,7 +1365,7 @@ function ModelVisibilityControl({ model, hidden }: { model: ModelOptionReadModel
 function ColorThemeOptions({ theme, onChange }: { theme: Theme; onChange: (theme: Theme) => void }) {
   return (
     <div className="settings-theme-options" data-settings-search-target="color-theme">
-      {(["dark", "light", "warm"] as const).map(option => (
+      {(["system", "dark", "light", "warm"] as const).map(option => (
         <label key={option}>
           <input
             type="radio"
@@ -1374,12 +1386,18 @@ function ColorThemeOptions({ theme, onChange }: { theme: Theme; onChange: (theme
   );
 }
 
-function SyntaxThemeSelect({ value, onChange }: { value: SyntaxTheme; onChange: (theme: SyntaxTheme) => void }) {
+function SyntaxThemeSelect({
+  value,
+  onChange,
+}: {
+  value: SyntaxThemePreference;
+  onChange: (theme: SyntaxThemePreference) => void;
+}) {
   return (
     <label className="settings-syntax-theme" data-settings-search-target="code-highlighting">
       <span>Code highlighting</span>
-      <select value={value} onChange={event => onChange(event.target.value as SyntaxTheme)}>
-        {SYNTAX_THEMES.map(option => (
+      <select value={value} onChange={event => onChange(event.target.value as SyntaxThemePreference)}>
+        {SYNTAX_THEME_PREFERENCES.map(option => (
           <option value={option.id} key={option.id}>
             {option.label}
           </option>

@@ -4,6 +4,7 @@ import { formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-
 import {
   StateQL,
   type BatchCommand,
+  type CatalogObjectKind,
   type CredentialRequest,
   type Response,
   type StateQLActorOptions,
@@ -17,6 +18,7 @@ const COMMANDS = [
   "disconnect",
   "status",
   "profile.add",
+  "profile.update",
   "profile.list",
   "profile.show",
   "profile.remove",
@@ -27,6 +29,11 @@ const COMMANDS = [
   "mongo.query",
   "mongo.exec",
   "mongo.plan",
+  "redis.query",
+  "redis.exec",
+  "redis.plan",
+  "objects.list",
+  "object.describe",
   "show",
   "rows",
   "count",
@@ -65,12 +72,34 @@ const toolSchema = Type.Object(
       }),
     ),
     name: Type.Optional(
-      Type.String({ description: "connect/profile.add/profile.show/profile.remove/alias.set only", maxLength: 200 }),
+      Type.String({
+        description: "connect/profile.add/profile.update/profile.show/profile.remove/alias.set only",
+        maxLength: 200,
+      }),
     ),
     as: Type.Optional(Type.String({ description: "query/filter/mongo.query only: result alias", maxLength: 200 })),
     kind: Type.Optional(
-      StringEnum(["schema", "table", "columns", "indexes", "constraints"] as const, { description: "inspect only" }),
+      StringEnum(
+        [
+          "schema",
+          "table",
+          "columns",
+          "indexes",
+          "constraints",
+          "view",
+          "collection",
+          "function",
+          "trigger",
+          "enum",
+          "key",
+        ] as const,
+        { description: "inspect or objects.list only" },
+      ),
     ),
+    schema: Type.Optional(Type.String({ description: "objects.list/object.describe only", maxLength: 500 })),
+    search: Type.Optional(Type.String({ description: "objects.list only", maxLength: 200 })),
+    object: Type.Optional(Type.Any({ description: "object.describe only" })),
+    redis: Type.Optional(Type.Any({ description: "redis.query/redis.exec/redis.plan only" })),
     table: Type.Optional(Type.String({ description: "inspect only: optional qualified table name", maxLength: 500 })),
     mongo: Type.Optional(
       Type.Any({ description: "mongo.query/mongo.exec/mongo.plan only: bounded MongoDB native command" }),
@@ -79,11 +108,11 @@ const toolSchema = Type.Object(
       Type.Any({ description: "query/filter/exec/plan only: positional JSON array or named JSON object" }),
     ),
     cache: Type.Optional(StringEnum(["auto", "bypass", "require"] as const, { description: "query/mongo.query only" })),
-    read_only: Type.Optional(Type.Boolean({ description: "connect/profile.add only" })),
+    read_only: Type.Optional(Type.Boolean({ description: "connect/profile.add/profile.update only" })),
     secret_env: Type.Optional(
       Type.String({
         description:
-          "connect/profile.add only: environment variable whose value is the complete PostgreSQL/MySQL URL or explicit sqlite:<path> source; use instead of target",
+          "connect/profile.add/profile.update only: environment variable whose value is the complete PostgreSQL/MySQL URL or explicit sqlite:<path> source; use instead of target",
         pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
         maxLength: 200,
       }),
@@ -94,12 +123,10 @@ const toolSchema = Type.Object(
     allow_unbounded: Type.Optional(Type.Boolean({ description: "exec/plan/mongo.exec/mongo.plan only" })),
     allow_destructive: Type.Optional(Type.Boolean({ description: "exec/plan/mongo.exec/mongo.plan only" })),
     offset: Type.Optional(
-      Type.Integer({
-        description:
-          "rows only: zero-based start; when the complete truncated query preview is present, continue from preview_count instead of refetching offset 0",
-        minimum: 0,
-        maximum: 10_000,
-      }),
+      Type.Union(
+        [Type.Integer({ minimum: 0, maximum: 1_000_000 }), Type.String({ pattern: "^[0-9]{1,32}$", maxLength: 32 })],
+        { description: "rows/history offset or objects.list Redis cursor" },
+      ),
     ),
     limit: Type.Optional(Type.Integer({ description: "rows/history only", minimum: 1, maximum: 100 })),
     history_origin: Type.Optional(
@@ -107,6 +134,8 @@ const toolSchema = Type.Object(
         description: "history retrieval origin filter; does not change attribution",
       }),
     ),
+    history_category: Type.Optional(StringEnum(["statement", "introspection", "management"] as const)),
+    history_internal: Type.Optional(Type.Boolean()),
     isolation: Type.Optional(Type.String({ description: "transaction.begin only", maxLength: 50 })),
     timeout_ms: Type.Optional(
       Type.Integer({
@@ -121,8 +150,23 @@ const toolSchema = Type.Object(
 
 export type StateQLToolInput = Static<typeof toolSchema>;
 
-type RuntimeStateQL = Pick<StateQL, "close" | "executeCommand" | "snapshot"> &
-  Partial<Pick<StateQL, "readMaterialized" | "readTable" | "serializeResult" | "planTableUpdate">>;
+type StateQLCommandContext = { signal?: AbortSignal; origin?: "user" | "model" | "system" };
+type RuntimeStateQL = {
+  close(): void | Promise<void>;
+  executeCommand(command: BatchCommand, context?: StateQLCommandContext): Promise<Response<unknown>>;
+  snapshot(options?: {
+    historyLimit?: number;
+    historyCategory?: "statement" | "introspection" | "management";
+    historyInternal?: boolean;
+  }): StateQLSnapshot;
+  readMaterialized?: StateQL["readMaterialized"];
+  readTable?: StateQL["readTable"];
+  serializeResult?: StateQL["serializeResult"];
+  planTableUpdate?: StateQL["planTableUpdate"];
+  planTableUpdates?: StateQL["planTableUpdates"];
+  listObjects?: StateQL["listObjects"];
+  describeObject?: StateQL["describeObject"];
+};
 type Factory = (options: StateQLActorOptions) => RuntimeStateQL;
 
 interface Runtime {
@@ -132,7 +176,7 @@ interface Runtime {
 }
 
 interface StateQLPasswordTarget {
-  driver: "postgres" | "mysql" | "mongodb";
+  driver: "postgres" | "mysql" | "mongodb" | "redis";
   username: string;
   hostname: string;
   port: number;
@@ -190,7 +234,7 @@ interface PanelCommandRequest {
   respond(value: Promise<unknown>): void;
 }
 interface StateQLCommandUi extends StateQLCredentialHost {
-  confirm(title: string, message: string, options?: { timeout: number }): Promise<boolean>;
+  confirm(title: string, message: string, options?: { timeout: number; signal?: AbortSignal }): Promise<boolean>;
   setStatus?(key: string, text: string | undefined): void;
 }
 function commandUi(value: unknown): StateQLCommandUi | undefined {
@@ -215,6 +259,7 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   disconnect: [],
   status: [],
   "profile.add": ["name", "target", "read_only", "secret_env"],
+  "profile.update": ["name", "target", "read_only", "secret_env"],
   "profile.list": [],
   "profile.show": ["name"],
   "profile.remove": ["name"],
@@ -224,6 +269,11 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   exec: ["sql", "params", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
   "mongo.query": ["mongo", "cache", "as", "timeout_ms"],
   "mongo.exec": ["mongo", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
+  "redis.query": ["redis", "cache", "as", "timeout_ms"],
+  "redis.exec": ["redis", "replay", "idempotency_key", "timeout_ms"],
+  "redis.plan": ["redis", "timeout_ms"],
+  "objects.list": ["kind", "schema", "search", "offset", "limit", "timeout_ms"],
+  "object.describe": ["object", "timeout_ms"],
   show: ["handle"],
   rows: ["handle", "offset", "limit"],
   count: ["handle"],
@@ -237,7 +287,7 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   plan: ["sql", "params", "allow_unbounded", "allow_destructive", "timeout_ms"],
   "mongo.plan": ["mongo", "allow_unbounded", "allow_destructive", "timeout_ms"],
   apply: ["handle", "timeout_ms"],
-  history: ["limit", "history_origin"],
+  history: ["limit", "offset", "history_origin", "history_category", "history_internal"],
   receipt: ["handle"],
   doctor: [],
   capabilities: [],
@@ -246,12 +296,17 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
 const required: Partial<Record<StateQLToolInput["command"], readonly (keyof StateQLToolInput)[]>> = {
   "profile.add": ["name"],
   "profile.show": ["name"],
+  "profile.update": ["name"],
   "profile.remove": ["name"],
   query: ["sql"],
   filter: ["handle", "where"],
   exec: ["sql"],
   "mongo.query": ["mongo"],
   "mongo.exec": ["mongo"],
+  "redis.query": ["redis"],
+  "redis.exec": ["redis"],
+  "redis.plan": ["redis"],
+  "object.describe": ["object"],
   show: ["handle"],
   rows: ["handle"],
   count: ["handle"],
@@ -267,9 +322,11 @@ const required: Partial<Record<StateQLToolInput["command"], readonly (keyof Stat
 const CONFIRMED_COMMANDS = new Set<StateQLToolInput["command"]>([
   "connect",
   "profile.add",
+  "profile.update",
   "profile.remove",
   "exec",
   "mongo.exec",
+  "redis.exec",
   "apply",
   "transaction.commit",
   "transaction.rollback",
@@ -296,10 +353,19 @@ const PANEL_COMMANDS = new Set<StateQLPanelCommand["command"]>([
   "profile.list",
   "profile.show",
   "profile.add",
+  "profile.update",
   "profile.remove",
   "connect",
   "disconnect",
   "query",
+  "table.plan",
+  "table.plan.batch",
+  "table.read",
+  "objects.list",
+  "object.describe",
+  "redis.query",
+  "redis.exec",
+  "redis.plan",
   "history",
   "inspect",
   "exec",
@@ -427,7 +493,8 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
     const value = input[key];
     if (
       value !== undefined &&
-      (!Number.isSafeInteger(value) ||
+      (typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
         value < 0 ||
         value > (key === "limit" ? 100 : key === "offset" ? 10_000 : 2_147_483_647))
     )
@@ -462,10 +529,13 @@ function brokeredTarget(value: string): BrokeredTarget | undefined {
           ? "mysql"
           : url.protocol === "mongodb:" || url.protocol === "mongodb+srv:"
             ? "mongodb"
-            : undefined;
+            : url.protocol === "redis:" || url.protocol === "rediss:"
+              ? "redis"
+              : undefined;
     if (!driver || !url.username || url.password || !url.hostname || url.hash) return undefined;
     if ([...url.searchParams.keys()].some(key => ENDPOINT_QUERY_KEYS.has(key.toLowerCase()))) return undefined;
-    const defaultPort = driver === "postgres" ? "5432" : driver === "mysql" ? "3306" : "27017";
+    const defaultPort =
+      driver === "postgres" ? "5432" : driver === "mysql" ? "3306" : driver === "redis" ? "6379" : "27017";
     const port = Number(url.port || defaultPort);
     const database = url.pathname.replace(/^\//u, "");
     const prompt = {
@@ -524,6 +594,8 @@ function confirmationText(input: StateQLToolInput, brokered = false): string {
     }
     case "profile.add":
       return `Save StateQL profile “${input.name ?? ""}” in ${input.read_only === false ? "read-write" : "read-only"} mode? Credential values are not stored.`;
+    case "profile.update":
+      return `Update StateQL profile “${input.name ?? ""}”? Existing credential references are kept unless you replace the connection source.`;
     case "profile.remove":
       return `Remove StateQL profile “${input.name ?? ""}”? Existing database data is not changed.`;
     case "exec": {
@@ -738,7 +810,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       Promise.resolve().then(() => {
         if (request.signal?.aborted) throw new Error("StateQL snapshot request cancelled");
-        return current(request.sessionId).stateql.snapshot({ historyLimit });
+        return current(request.sessionId).stateql.snapshot({ historyLimit, historyInternal: false });
       }),
     );
   });
@@ -822,13 +894,12 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       (async () => {
         checkConnection();
-        const input =
-          command.command === "history" && command.history_origin === undefined
-            ? { ...command, history_origin: "user" as const }
-            : command;
+        const input = command;
         const remembers = "remember" in input && input.remember === true;
         const target =
-          (input.command === "connect" || input.command === "profile.add") && input.target && ui.requestStateQLPassword
+          (input.command === "connect" || input.command === "profile.add" || input.command === "profile.update") &&
+          input.target &&
+          ui.requestStateQLPassword
             ? brokeredTarget(input.target)
             : undefined;
         const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
@@ -838,12 +909,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             : 0;
         if (
           CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
-          (!target || insecureBrokeredConnect)
+          (!(target && (input.command === "connect" || remembers)) || insecureBrokeredConnect)
         ) {
           const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
           if (
             !(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target)), {
               timeout: passwordTimeoutMs,
+              ...(request.signal ? { signal: request.signal } : {}),
             }))
           ) {
             return { declined: true };
@@ -920,6 +992,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                   timeoutMs: input.timeout_ms,
                   origin: "user",
                 });
+              } else if (input.command === "table.plan.batch") {
+                if (!stateql.planTableUpdates) throw new Error("Batch row edits require the current StateQL package.");
+                response = await stateql.planTableUpdates(input.updates, {
+                  signal: request.signal,
+                  timeoutMs: input.timeout_ms,
+                  origin: "user",
+                });
               } else if (input.command === "table.read") {
                 if (!stateql.readTable) throw new Error("Table reads require the current StateQL package.");
                 response = await stateql.readTable(input.table, input.limit, {
@@ -927,8 +1006,28 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                   timeoutMs: input.timeout_ms,
                   origin: "user",
                 });
+              } else if (input.command === "objects.list") {
+                if (!stateql.listObjects) throw new Error("Catalog discovery requires the current StateQL package.");
+                response = await stateql.listObjects(
+                  {
+                    kind: input.kind,
+                    schema: input.schema,
+                    search: input.search,
+                    offset: input.offset,
+                    limit: input.limit,
+                  },
+                  { signal: request.signal, timeoutMs: input.timeout_ms },
+                );
+              } else if (input.command === "object.describe") {
+                if (!stateql.describeObject)
+                  throw new Error("Object descriptions require the current StateQL package.");
+                response = await stateql.describeObject(input.object, {
+                  signal: request.signal,
+                  timeoutMs: input.timeout_ms,
+                });
               } else {
-                const { offset: _offset, ...commandInput } = executionCommand as BatchCommand & { offset?: number };
+                const commandInput = { ...executionCommand };
+                if (commandInput.command === "inspect") delete (commandInput as { offset?: number }).offset;
                 response = await stateql.executeCommand(commandInput as BatchCommand, {
                   signal: request.signal,
                   origin: "user",
@@ -1118,7 +1217,12 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       if (requiresConfirmation) {
         if (!ctx.hasUI) throw new Error(`${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
-        if (!(await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), { timeout: passwordTimeoutMs }))) {
+        if (
+          !(await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), {
+            timeout: passwordTimeoutMs,
+            ...(signal ? { signal } : {}),
+          }))
+        ) {
           return {
             content: [{ type: "text" as const, text: "User declined the StateQL operation; nothing was executed." }],
             details: { command: input.command, declined: true },
@@ -1145,7 +1249,26 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
           let response: Response<unknown>;
           activeCredentialHost = host;
           try {
-            response = await active.stateql.executeCommand(executionCommand, { signal, origin: "model" });
+            if (command.command === "objects.list") {
+              if (!active.stateql.listObjects)
+                throw new Error("Catalog discovery requires the current StateQL package.");
+              response = await active.stateql.listObjects(
+                {
+                  kind: command.kind as CatalogObjectKind | undefined,
+                  schema: command.schema,
+                  search: command.search,
+                  offset: command.offset,
+                  limit: command.limit,
+                },
+                { signal, timeoutMs: command.timeout_ms },
+              );
+            } else if (command.command === "object.describe") {
+              if (!active.stateql.describeObject)
+                throw new Error("Object descriptions require the current StateQL package.");
+              response = await active.stateql.describeObject(command.object, { signal, timeoutMs: command.timeout_ms });
+            } else {
+              response = await active.stateql.executeCommand(executionCommand, { signal, origin: "model" });
+            }
           } catch (error) {
             if (reference) brokeredTargets.delete(reference);
             throw error;

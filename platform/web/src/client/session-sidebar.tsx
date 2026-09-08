@@ -1,3 +1,4 @@
+import { shortcutLabel } from "./keyboard-shortcuts";
 import {
   IconArchive,
   IconChevronRight,
@@ -280,9 +281,16 @@ export function SessionSidebar({
   const normalizedQuery = query.trim();
   const liveSessions = activeSessions.filter(isLiveSession);
   const sessionsForProject = (project: SessionProject) => {
-    if (!liveOnly) return project.sessions;
-    if (normalizedQuery) return project.sessions.filter(isLiveSession);
-    return liveSessions.filter(session => session.projectId === project.id);
+    if (liveOnly) {
+      if (normalizedQuery) return project.sessions.filter(isLiveSession);
+      return liveSessions.filter(session => session.projectId === project.id);
+    }
+    if (normalizedQuery) return project.sessions;
+    const listedIds = new Set(project.sessions.map(session => session.id));
+    return [
+      ...project.sessions,
+      ...liveSessions.filter(session => session.projectId === project.id && !listedIds.has(session.id)),
+    ].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
   };
   const displayedProjects = liveOnly
     ? visibleProjects.filter(project => sessionsForProject(project).length > 0)
@@ -398,7 +406,7 @@ export function SessionSidebar({
             onChange={event => onQuery(event.target.value)}
             placeholder="Search sessions"
           />
-          <kbd>Ctrl K</kbd>
+          {shortcutLabel("sessions") !== "Unbound" && <kbd>{shortcutLabel("sessions")}</kbd>}
         </label>
 
         <nav className="project-list">
@@ -735,7 +743,6 @@ export function SessionRow({
   const workStartedAt = session.workStartedAt ? Date.parse(session.workStartedAt) : Number.NaN;
   const working = !Number.isNaN(workStartedAt);
   const activity = formatSessionActivity(session.modifiedAt, session.workStartedAt, now);
-  const progress = currentSessionProgress(session);
   const state = completed ? "complete" : session.runtimeState;
   const stateLabel = completed ? "New response" : session.runtimeState;
   const parentTitle = session.runningUnderParentSessionId ? "View this running session through its parent" : undefined;
@@ -762,7 +769,7 @@ export function SessionRow({
       data-reorder-kind={reorderKind}
       data-reorder-id={reorderKind ? session.id : undefined}>
       {compact ? (
-        <button className={`session-link ${session.active ? "is-active" : ""}${progress ? " has-progress" : ""}`} {...linkProps}>
+        <button className={`session-link ${session.active ? "is-active" : ""}`} {...linkProps}>
           {stateIndicator}
           <strong
             className="session-compact-title"
@@ -772,7 +779,6 @@ export function SessionRow({
           <small className="session-compact-meta">
             {showProject ? session.cwdLabel : compactSessionActivity(activity)}
           </small>
-          <SessionProgress progress={progress} />
         </button>
       ) : (
         <button className={`session-link ${session.active ? "is-active" : ""}`} {...linkProps}>

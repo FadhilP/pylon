@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createTwoFilesPatch } from "diff";
 import {
+  attributedOwner,
+  type CodeAttribution,
   diffRows,
   loadDiffContents,
   parseDiff,
@@ -16,6 +18,42 @@ import { loadSyntaxLanguage, setSyntaxTheme, syntaxTokens } from "../src/shared/
 const patch = (before: string, after: string, context = 3) =>
   createTwoFilesPatch("a/example.ts", "b/example.ts", before, after, undefined, undefined, { context });
 const code = (rows: DiffRow[]) => rows.filter((row): row is CodeLine => row.kind !== "gap" && row.kind !== "note");
+
+test("attribution uses historical source coordinates for deleted and expanded unchanged lines", () => {
+  const before = "base\none\nkeep\n";
+  const after = "base\ntwo\nkeep\n";
+  const [file] = parseDiff(patch(before, after, 0));
+  const attribution: CodeAttribution = {
+    oldOwners: [null, "one", "older"],
+    newOwners: [null, "two", "older"],
+    owners: new Map(["one", "two", "older"].map(id => [id, { id, kind: "checkpoint", title: id }])),
+    selectable: new Set(["one", "two", "older"]),
+  };
+  const rows = code(
+    diffRows(
+      file,
+      { 0: { start: 10, end: 10 }, 1: { start: 10, end: 10 } },
+      { oldFile: { contents: before }, newFile: { contents: after } },
+    ),
+  );
+  assert.equal(
+    attributedOwner(
+      rows.find(row => row.kind === "deletion")!,
+      attribution,
+    )?.id,
+    "one",
+  );
+  assert.equal(
+    attributedOwner(
+      rows.find(row => row.kind === "addition")!,
+      attribution,
+    )?.id,
+    "two",
+  );
+  assert.equal(attributedOwner({ kind: "context", text: "keep", newLine: 3, oldLine: 3 }, attribution)?.id, "older");
+  assert.equal(attributedOwner({ kind: "context", text: "base", newLine: 1 }, attribution), undefined);
+  assert.equal(attributedOwner({ kind: "note", text: "No newline" }, attribution), undefined);
+});
 
 test("maps additions, deletions and no-newline markers to actual source lines", () => {
   for (const [before, after] of [

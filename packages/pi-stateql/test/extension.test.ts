@@ -767,10 +767,10 @@ test("panel command bridge forwards reads and writes with user attribution, filt
     return { claimed: () => claimed, response: () => response };
   };
 
-  const history = run({ command: "history", limit: 25 });
+  const history = run({ command: "history", limit: 25, offset: 7 });
   assert.equal(history.claimed(), true);
   assert.equal((await history.response()) && typeof (await history.response()), "object");
-  assert.deepEqual(value.instances[0].commands[0], { command: "history", limit: 25, history_origin: "user" });
+  assert.deepEqual(value.instances[0].commands[0], { command: "history", limit: 25, offset: 7 });
   assert.equal(value.instances[0].contexts[0]?.origin, "user");
   assert.equal(value.instances[0].options.actor, "pi-session");
 
@@ -810,6 +810,38 @@ test("panel command bridge forwards reads and writes with user attribution, filt
 
   await value.handlers.get("session_shutdown")![0]();
   assert.equal(value.events.get("pylon:stateql-command-request")?.length, 0);
+});
+
+test("panel bridge dispatches catalog and batch APIs and confirms Redis writes", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-command-request")![0];
+  const stateql = value.instances[0] as any;
+  let listed: unknown;
+  let batched: unknown;
+  stateql.listObjects = async (filter: unknown) => {
+    listed = filter;
+    return { ok: true, command_id: "catalog", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
+  };
+  stateql.planTableUpdates = async (updates: unknown) => {
+    batched = updates;
+    return { ok: true, command_id: "batch", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
+  };
+  const run = (command: unknown, confirm = async () => true) => new Promise<unknown>(resolve => handler({
+    version: 1, sessionId: "pi-session", command, signal: new AbortController().signal, claim: () => true,
+    ui: { requestStateQLCredential: async () => undefined, setStatus() {}, confirm }, respond: resolve,
+  }));
+  await run({ command: "objects.list", kind: "table", search: "users", offset: 2, limit: 10 });
+  assert.deepEqual(listed, { kind: "table", schema: undefined, search: "users", offset: 2, limit: 10 });
+  await run({ command: "table.plan.batch", updates: [{ row_token: "row", changes: { set: { active: true } } }] });
+  assert.deepEqual(batched, [{ row_token: "row", changes: { set: { active: true } } }]);
+  let confirmations = 0;
+  await run({ command: "redis.exec", redis: { command: "SET", args: ["key", "value"] } }, async () => {
+    confirmations++;
+    return false;
+  });
+  assert.equal(confirmations, 1);
+  assert.equal(stateql.commands.some((command: BatchCommand) => command.command === "redis.exec"), false);
+  await value.handlers.get("session_shutdown")![0]();
 });
 
 test("panel approval cannot execute against a replacement connection", async () => {

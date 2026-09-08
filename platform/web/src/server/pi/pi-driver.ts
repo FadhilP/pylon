@@ -1,3 +1,5 @@
+import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/annotations.ts";
+import type { WorkspaceEntry, WorkspaceMutationInput } from "../../shared/workspace-mutations.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
@@ -5,6 +7,7 @@ import type {
   HeliosAndroidToolingResult,
 } from "../../shared/protocol/helios-android-tooling.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
+import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace-search.ts";
 import type {
   ProviderAuthReadModel,
   QueueReadModel,
@@ -50,9 +53,11 @@ import type {
   TurnDiffResult,
   WorkspaceFileContent,
   WorkspaceFileDiff,
+  WorkspaceFileHistory,
   WorkspaceFilePage,
 } from "../../shared/protocol/snapshots.ts";
 import type { UiResponse } from "./remote-ui-context.ts";
+import type { FileHistoryContext, FileHistoryQuery } from "pylon-core/src/file-history.ts";
 
 export interface RuntimeTarget {
   cwd: string;
@@ -99,6 +104,10 @@ export interface WorkspaceFilesInput {
   cursor?: string;
   limit?: number;
   refresh?: boolean;
+}
+
+export interface WorkspaceSearchInput extends WorkspaceSearchQuery {
+  expectedGeneration?: number;
 }
 
 export interface WorkspaceFileInput {
@@ -356,6 +365,8 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   terminalTarget?(): TerminalTarget;
+  annotationNotes?(input: AnnotationRequest): Promise<AnnotationList>;
+  mutateAnnotation?(input: AnnotationMutation): Promise<AnnotationList>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
   conversationAttachment?(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent>;
   localImage?(input: LocalImageQuery): Promise<LocalImageContent>;
@@ -364,9 +375,15 @@ export interface PiDriver {
   fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList>;
   workspaceFiles?(input: WorkspaceFilesInput): Promise<WorkspaceFilePage>;
   workspaceFile?(input: WorkspaceFileInput): Promise<WorkspaceFileContent>;
+  workspaceEntry?(path: string): Promise<WorkspaceEntry>;
+  mutateWorkspace?(input: WorkspaceMutationInput): Promise<void>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
+  workspaceSearch?(input: WorkspaceSearchInput, send: (result: WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal): Promise<WorkspaceSearchResult>;
+  workspaceSymbols?(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult>;
   timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
+  fileHistory?(input: FileHistoryQuery, signal?: AbortSignal): Promise<WorkspaceFileHistory>;
+  fileHistoryContext?(): Promise<FileHistoryContext | undefined>;
   stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport>;
   stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
   stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage>;
@@ -374,6 +391,7 @@ export interface PiDriver {
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
+    operationId?: string,
   ): Promise<StateQLCommandResult>;
   papercutList?(
     status: PapercutStatusReadModel | "all",

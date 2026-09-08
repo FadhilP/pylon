@@ -2,33 +2,37 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./client/App";
 import "./client/styles.css";
-import { isTheme } from "./client/use-chrome";
 import {
-  DEFAULT_SYNTAX_THEME,
-  isSyntaxTheme,
+  applyTheme,
+  readStoredPreference,
+  readStoredThemePreference,
+  resolveTheme,
+  type PreferenceStorage,
+} from "./shared/appearance";
+import {
+  DEFAULT_SYNTAX_THEME_PREFERENCE,
+  readSyntaxThemePreference,
+  resolveSyntaxTheme,
   setSyntaxTheme,
   startSyntaxHighlighting,
+  SYNTAX_THEME_KEY,
 } from "./shared/syntax-highlighting";
 
-let savedTheme: string | null = null;
-try {
-  savedTheme = localStorage.getItem("pylon-theme");
-} catch {
-  /* Use the system theme when storage is unavailable. */
+function storage(): PreferenceStorage | undefined {
+  try {
+    return localStorage;
+  } catch {
+    return undefined;
+  }
 }
-document.documentElement.dataset.theme = isTheme(savedTheme)
-  ? savedTheme
-  : matchMedia("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
 
-let savedSyntaxTheme: string | null = null;
-try {
-  savedSyntaxTheme = localStorage.getItem("pylon-syntax-theme");
-} catch {
-  /* Use One Dark Pro when storage is unavailable. */
-}
-const syntaxTheme = isSyntaxTheme(savedSyntaxTheme) ? savedSyntaxTheme : DEFAULT_SYNTAX_THEME;
+const colorTheme = resolveTheme(readStoredThemePreference(storage()), matchMedia("(prefers-color-scheme: light)").matches);
+applyTheme(colorTheme);
+
+const syntaxTheme = resolveSyntaxTheme(
+  readStoredPreference(storage(), SYNTAX_THEME_KEY, readSyntaxThemePreference, DEFAULT_SYNTAX_THEME_PREFERENCE),
+  colorTheme,
+);
 document.documentElement.dataset.syntaxTheme = syntaxTheme;
 setSyntaxTheme(syntaxTheme);
 

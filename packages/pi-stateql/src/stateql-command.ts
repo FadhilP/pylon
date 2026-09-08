@@ -36,6 +36,10 @@ export type StateQLMongoCommand =
       options?: Record<string, unknown>;
     };
 
+export type StateQLRedisCommand = { command: string; args?: string[] };
+export type StateQLCatalogKind = "table" | "view" | "collection" | "function" | "trigger" | "enum" | "key";
+export type StateQLCatalogObject = { kind: StateQLCatalogKind; schema?: string; name: string; identity?: string };
+
 export type StateQLPanelCommand =
   | { command: "status" | "profile.list" | "disconnect" }
   | {
@@ -44,11 +48,34 @@ export type StateQLPanelCommand =
       changes: { set?: Record<string, unknown>; unset?: string[] };
       timeout_ms?: number;
     }
+  | {
+      command: "table.plan.batch";
+      updates: Array<{ row_token: string; changes: { set?: Record<string, unknown>; unset?: string[] } }>;
+      timeout_ms?: number;
+    }
+  | {
+      command: "objects.list";
+      kind?: StateQLCatalogKind;
+      schema?: string;
+      search?: string;
+      offset?: number | string;
+      limit?: number;
+      timeout_ms?: number;
+    }
+  | { command: "object.describe"; object: StateQLCatalogObject; timeout_ms?: number }
   | { command: "table.read"; table: { schema?: string; name: string }; limit?: number; timeout_ms?: number }
   | { command: "profile.show"; name: string }
   | { command: "profile.remove"; name: string; forget_credential?: boolean }
   | {
       command: "profile.add";
+      name: string;
+      target?: string;
+      secret_env?: string;
+      read_only?: boolean;
+      remember?: boolean;
+    }
+  | {
+      command: "profile.update";
       name: string;
       target?: string;
       secret_env?: string;
@@ -115,6 +142,21 @@ export type StateQLPanelCommand =
       timeout_ms?: number;
     }
   | {
+      command: "redis.query";
+      redis: StateQLRedisCommand;
+      cache?: "auto" | "bypass" | "require";
+      as?: string;
+      timeout_ms?: number;
+    }
+  | {
+      command: "redis.exec";
+      redis: StateQLRedisCommand;
+      replay?: boolean;
+      idempotency_key?: string;
+      timeout_ms?: number;
+    }
+  | { command: "redis.plan"; redis: StateQLRedisCommand; timeout_ms?: number }
+  | {
       command: "inspect";
       offset?: number;
       kind: "schema" | "table" | "columns" | "indexes" | "constraints";
@@ -126,7 +168,14 @@ export type StateQLPanelCommand =
   | { command: "transaction.commit"; handle?: string; timeout_ms?: number }
   | { command: "apply"; handle: string; timeout_ms?: number }
   | { command: "receipt"; handle: string }
-  | { command: "history"; limit?: number; history_origin?: StateQLCommandOrigin };
+  | {
+      command: "history";
+      limit?: number;
+      offset?: number;
+      history_origin?: StateQLCommandOrigin;
+      history_category?: "statement" | "introspection" | "management";
+      history_internal?: boolean;
+    };
 
 const MAX_JSON_BYTES = 32 * 1024;
 const MAX_JSON_DEPTH = 6;
@@ -139,6 +188,43 @@ const CACHE_POLICIES = new Set(["auto", "bypass", "require"]);
 const FORBIDDEN_MONGO_OPERATORS = new Set(["$out", "$merge", "$changeStream", "$where", "$function", "$accumulator"]);
 const UPDATE_PIPELINE_STAGES = new Set(["$addFields", "$set", "$project", "$unset", "$replaceRoot", "$replaceWith"]);
 const READ_OPERATIONS = new Set(["find", "aggregate"]);
+const CATALOG_KINDS = new Set<StateQLCatalogKind>([
+  "table",
+  "view",
+  "collection",
+  "function",
+  "trigger",
+  "enum",
+  "key",
+]);
+const HISTORY_CATEGORIES = new Set(["statement", "introspection", "management"]);
+const REDIS_DISALLOWED_COMMANDS = new Set([
+  "EVAL",
+  "EVALSHA",
+  "EVAL_RO",
+  "EVALSHA_RO",
+  "SCRIPT",
+  "FUNCTION",
+  "FCALL",
+  "FCALL_RO",
+  "ACL",
+  "CONFIG",
+  "MODULE",
+  "SHUTDOWN",
+  "DEBUG",
+  "MONITOR",
+  "CLIENT",
+  "COMMAND",
+  "INFO",
+  "FLUSHALL",
+  "FLUSHDB",
+  "KEYS",
+  "RENAME",
+  "RENAMENX",
+  "MOVE",
+  "MIGRATE",
+  "RESTORE",
+]);
 const WRITE_OPERATIONS = new Set([
   "insertOne",
   "insertMany",
@@ -153,9 +239,13 @@ const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> 
   status: [],
   "table.read": ["table", "limit", "timeout_ms"],
   "table.plan": ["row_token", "changes", "timeout_ms"],
+  "table.plan.batch": ["updates", "timeout_ms"],
+  "objects.list": ["kind", "schema", "search", "offset", "limit", "timeout_ms"],
+  "object.describe": ["object", "timeout_ms"],
   "profile.list": [],
   "profile.show": ["name"],
   "profile.add": ["name", "target", "secret_env", "read_only", "remember"],
+  "profile.update": ["name", "target", "secret_env", "read_only", "remember"],
   "profile.remove": ["name", "forget_credential"],
   connect: ["target", "secret_env", "profile", "name", "read_only", "remember", "timeout_ms"],
   disconnect: [],
@@ -165,6 +255,9 @@ const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> 
   "mongo.query": ["mongo", "cache", "as", "timeout_ms"],
   "mongo.exec": ["mongo", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
   "mongo.plan": ["mongo", "allow_unbounded", "allow_destructive", "timeout_ms"],
+  "redis.query": ["redis", "cache", "as", "timeout_ms"],
+  "redis.exec": ["redis", "replay", "idempotency_key", "timeout_ms"],
+  "redis.plan": ["redis", "timeout_ms"],
   inspect: ["kind", "table", "timeout_ms", "offset"],
   "transaction.begin": ["isolation"],
   "transaction.status": ["handle"],
@@ -172,7 +265,7 @@ const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> 
   "transaction.rollback": ["handle"],
   apply: ["handle", "timeout_ms"],
   receipt: ["handle"],
-  history: ["limit", "history_origin"],
+  history: ["limit", "offset", "history_origin", "history_category", "history_internal"],
 };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -399,6 +492,46 @@ function params(value: unknown): boolean {
   return value === undefined || boundedJsonContainer(value);
 }
 
+function tableChanges(value: unknown): boolean {
+  if (!plainRecord(value) || !hasOnlyKeys(value, ["set", "unset"])) return false;
+  const set = value.set;
+  const unset = value.unset;
+  if (set === undefined && unset === undefined) return false;
+  if (
+    set !== undefined &&
+    (!plainRecord(set) || !params(set) || Object.keys(set).some(name => !boundedString(name, 500)))
+  )
+    return false;
+  if (
+    unset !== undefined &&
+    (!Array.isArray(unset) ||
+      unset.length > 100 ||
+      !unset.every(name => boundedString(name, 500)) ||
+      new Set(unset).size !== unset.length)
+  )
+    return false;
+  return !unset || !set || !unset.some(name => Object.hasOwn(set, name));
+}
+
+function redisCommand(value: unknown): value is StateQLRedisCommand {
+  if (!plainRecord(value) || !hasOnlyKeys(value, ["command", "args"]) || !boundedString(value.command, 100))
+    return false;
+  const command = value.command.toUpperCase();
+  if (!/^[A-Z][A-Z0-9_]*$/u.test(command) || REDIS_DISALLOWED_COMMANDS.has(command)) return false;
+  if (
+    value.args !== undefined &&
+    (!Array.isArray(value.args) ||
+      value.args.length > 100 ||
+      !value.args.every(
+        arg => typeof arg === "string" && arg.length <= 64 * 1024 && !/[\u0000-\u001f\u007f]/u.test(arg),
+      ))
+  )
+    return false;
+  const args = value.args ?? [];
+  const cursor = command === "SCAN" ? args[0] : ["HSCAN", "SSCAN", "ZSCAN"].includes(command) ? args[1] : undefined;
+  return cursor === undefined || /^\d{1,32}$/u.test(cursor);
+}
+
 function sqlCommand(value: Record<string, unknown>, timeout: number, write: boolean): boolean {
   if (!boundedString(value.sql, 100_000) || !params(value.params) || !optionalTimeout(value.timeout_ms, timeout))
     return false;
@@ -427,13 +560,47 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
     case "table.plan":
       return (
         boundedString(value.row_token, 200) &&
-        plainRecord(value.changes) &&
-        hasOnlyKeys(value.changes, ["set", "unset"]) &&
-        (value.changes.set === undefined || (plainRecord(value.changes.set) && params(value.changes.set))) &&
-        (value.changes.unset === undefined ||
-          (Array.isArray(value.changes.unset) &&
-            value.changes.unset.length <= 100 &&
-            value.changes.unset.every(name => boundedString(name, 500)))) &&
+        tableChanges(value.changes) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "table.plan.batch":
+      return (
+        Array.isArray(value.updates) &&
+        value.updates.length >= 1 &&
+        value.updates.length <= 100 &&
+        boundedJsonContainer(value.updates) &&
+        value.updates.every(
+          update =>
+            plainRecord(update) &&
+            hasOnlyKeys(update, ["row_token", "changes"]) &&
+            boundedString(update.row_token, 200) &&
+            tableChanges(update.changes),
+        ) &&
+        new Set(value.updates.map(update => (update as Record<string, unknown>).row_token)).size ===
+          value.updates.length &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "objects.list":
+      return (
+        (value.kind === undefined ||
+          (typeof value.kind === "string" && CATALOG_KINDS.has(value.kind as StateQLCatalogKind))) &&
+        optionalString(value.schema, 500) &&
+        optionalString(value.search, 200) &&
+        (value.offset === undefined ||
+          (Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 1_000_000) ||
+          (typeof value.offset === "string" && /^\d{1,32}$/u.test(value.offset))) &&
+        (value.limit === undefined || positiveInteger(value.limit, 100)) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "object.describe":
+      return (
+        plainRecord(value.object) &&
+        hasOnlyKeys(value.object, ["kind", "schema", "name", "identity"]) &&
+        typeof value.object.kind === "string" &&
+        CATALOG_KINDS.has(value.object.kind as StateQLCatalogKind) &&
+        boundedString(value.object.name, 500) &&
+        optionalString(value.object.schema, 500) &&
+        optionalString(value.object.identity, 500) &&
         optionalTimeout(value.timeout_ms, maxTimeoutMs)
       );
     case "table.read":
@@ -461,6 +628,17 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
         optionalBoolean(value.remember) &&
         (value.remember !== true || value.target !== undefined)
       );
+    case "profile.update": {
+      const hasSource = value.target !== undefined || value.secret_env !== undefined;
+      return (
+        boundedString(value.name, 200) &&
+        (!hasSource || connectionSources(value, false)) &&
+        optionalBoolean(value.read_only) &&
+        optionalBoolean(value.remember) &&
+        (value.remember !== true || value.target !== undefined) &&
+        (hasSource || value.read_only !== undefined)
+      );
+    }
     case "connect":
       return (
         connectionSources(value, true) &&
@@ -502,6 +680,23 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
         commandBooleans(value, ["allow_unbounded", "allow_destructive"]) &&
         optionalTimeout(value.timeout_ms, maxTimeoutMs)
       );
+    case "redis.query":
+      return (
+        redisCommand(value.redis) &&
+        optionalString(value.as, 200) &&
+        (value.cache === undefined || (typeof value.cache === "string" && CACHE_POLICIES.has(value.cache))) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "redis.exec":
+      return (
+        redisCommand(value.redis) &&
+        commandBooleans(value, ["replay"]) &&
+        optionalString(value.idempotency_key, 500) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "redis.plan":
+      return redisCommand(value.redis) && optionalTimeout(value.timeout_ms, maxTimeoutMs);
+
     case "inspect":
       return (
         typeof value.kind === "string" &&
@@ -531,9 +726,14 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
     case "history":
       return (
         (value.limit === undefined || positiveInteger(value.limit, 100)) &&
+        (value.offset === undefined ||
+          (Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 1_000_000)) &&
         (value.history_origin === undefined ||
           (typeof value.history_origin === "string" &&
-            HISTORY_ORIGINS.has(value.history_origin as StateQLCommandOrigin)))
+            HISTORY_ORIGINS.has(value.history_origin as StateQLCommandOrigin))) &&
+        (value.history_category === undefined ||
+          (typeof value.history_category === "string" && HISTORY_CATEGORIES.has(value.history_category))) &&
+        optionalBoolean(value.history_internal)
       );
     default:
       return false;

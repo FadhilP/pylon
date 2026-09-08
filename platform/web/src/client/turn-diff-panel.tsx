@@ -100,6 +100,7 @@ export function TurnDiffPanel({
                   path={`turn:${entryId}`}
                   text={state.text}
                   revision={entryId}
+                  annotationSource={state.truncated ? undefined : { kind: "historical", revision: `Turn ${entryId}` }}
                   unifiedDiff={state.text}
                   showFileHeaders
                   renderHeaderIcon={path => <FileTypeIcon path={path} size={14} />}

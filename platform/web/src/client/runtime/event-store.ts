@@ -1,3 +1,6 @@
+import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/keyboard";
+import { validAnnotation, type AnnotationList, type AnnotationMutation, type AnnotationRequest } from "../../shared/annotations";
+import type { WorkspaceMutation, WorkspaceEntry } from "../../shared/workspace-mutations";
 import { useSyncExternalStore } from "react";
 import { isDatabaseCommandResult, clearDatabaseDrafts } from "../../shared/database-workspace";
 import type { GuardRuleOverrides } from "../../shared/guard-policy";
@@ -60,11 +63,14 @@ import type {
   VerifyPolicyReadModel,
   WorkspaceFileContent,
   WorkspaceFileDiff,
+  WorkspaceFileHistory,
   WorkspaceFilePage,
   WorkspaceFileReadModel,
   WorkspacePolicyMode,
 } from "../../shared/protocol/snapshots";
+import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
+import { isWorkspaceSearchResult, isWorkspaceSymbolResult, type WorkspaceSearchQuery, type WorkspaceSearchResult, type WorkspaceSymbolResult } from "../../shared/workspace-search";
 import {
   describeRuntimeSnapshotIssue,
   isArchiveListSnapshot,
@@ -112,6 +118,7 @@ export type { PendingMessageReadModel } from "../../shared/pending-messages";
 export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
   runtime?: RuntimeSnapshot;
+  keyboardSettings?: KeyboardSettings;
   pendingUi?: UiRequestReadModel;
   sequence: number;
   generation?: number;
@@ -148,6 +155,7 @@ const initial: RuntimeStoreSnapshot = {
   audioCues: [],
 };
 const eventNames = [
+  "keyboard.settings",
   "message.start",
   "message.update",
   "message.end",
@@ -286,10 +294,12 @@ export class RuntimeEventStore {
   start(): void {
     if (this.started) return;
     this.started = true;
+    window.addEventListener("focus", this.refreshKeyboardOnFocus);
     void this.bootstrap();
   }
   dispose(): void {
     this.disposed = true;
+    window.removeEventListener("focus", this.refreshKeyboardOnFocus);
     this.source?.close();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
     if (this.bootstrapRetry !== undefined) window.clearTimeout(this.bootstrapRetry);
@@ -316,6 +326,33 @@ export class RuntimeEventStore {
     delete unseenCompletions[sessionId];
     this.set({ ...this.snapshot, unseenCompletions });
   }
+
+  private receiveKeyboardSettings(value: unknown): void {
+    if (!isKeyboardSettings(value)) throw new Error("Invalid keyboard settings response");
+    if (value.revision <= (this.snapshot.keyboardSettings?.revision ?? -1)) return;
+    this.set({ ...this.snapshot, keyboardSettings: value });
+  }
+  private refreshKeyboardOnFocus = () => {
+    if (this.snapshot.connection === "connected") void this.refreshKeyboardSettings().catch(() => undefined);
+  };
+  async refreshKeyboardSettings(): Promise<void> {
+    const epoch = this.bootstrapEpoch;
+    const value = await this.api.keyboardSettings();
+    if (!this.disposed && epoch === this.bootstrapEpoch) this.receiveKeyboardSettings(value);
+  }
+  async saveKeyboardSettings(revision: number, keymap: Keymap): Promise<void> {
+    if (this.snapshot.connection !== "connected") throw new Error("Reconnect before changing keyboard settings");
+    const epoch = this.bootstrapEpoch;
+    try {
+      const value = await this.api.saveKeyboardSettings(revision, keymap);
+      if (this.disposed || epoch !== this.bootstrapEpoch) throw new Error("Connection changed; review keyboard settings before retrying");
+      this.receiveKeyboardSettings(value);
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 409) await this.refreshKeyboardSettings().catch(() => undefined);
+      throw error;
+    }
+  }
+
 
   async sendMessage(
     message: string,
@@ -594,6 +631,28 @@ export class RuntimeEventStore {
     return page;
   }
 
+  async workspaceSearch(input: WorkspaceSearchQuery, signal?: AbortSignal, onUpdate?: (result: WorkspaceSearchResult) => void): Promise<WorkspaceSearchResult> {
+    const runtime = this.requireReadyRuntime();
+    const sessionId = runtime.sessionId, generation = runtime.sessionGeneration;
+    const assertCurrent = (result: WorkspaceSearchResult) => {
+      const current = this.snapshot.runtime;
+      if (!isWorkspaceSearchResult(result) || result.protocolVersion !== PROTOCOL_VERSION || result.sessionGeneration !== generation || current?.sessionId !== sessionId || current.sessionGeneration !== generation || this.snapshot.connection !== "connected") throw new Error("Workspace search belongs to a previous session or is invalid");
+    };
+    const result = await this.api.workspaceSearch(input, generation, signal, update => { assertCurrent(update); onUpdate?.(update); });
+    assertCurrent(result);
+    return result;
+  }
+
+  async workspaceSymbols(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
+    const runtime = this.requireReadyRuntime();
+    const sessionId = runtime.sessionId, generation = runtime.sessionGeneration;
+    const result = await this.api.workspaceSymbols(query, generation, signal);
+    const current = this.snapshot.runtime;
+    if (!isWorkspaceSymbolResult(result) || result.protocolVersion !== PROTOCOL_VERSION || result.sessionGeneration !== generation || current?.sessionId !== sessionId || current.sessionGeneration !== generation || this.snapshot.connection !== "connected") throw new Error("Workspace symbols belong to a previous session or are invalid");
+    return result;
+  }
+
+
   async workspaceFiles(query = "", cursor?: string, signal?: AbortSignal, refresh = false): Promise<WorkspaceFilePage> {
     const runtime = this.requireReadyRuntime();
     const sessionId = runtime.sessionId;
@@ -609,6 +668,29 @@ export class RuntimeEventStore {
     return result;
   }
 
+  async workspaceHistory(input: FileHistoryQuery, signal?: AbortSignal): Promise<WorkspaceFileHistory> {
+    const runtime = this.requireReadyRuntime();
+    const sessionId = runtime.sessionId;
+    const generation = runtime.sessionGeneration;
+    const result = await this.api.workspaceHistory(generation, input, signal);
+    const current = this.snapshot.runtime;
+    if (
+      !result ||
+      typeof result !== "object" ||
+      result.path !== input.path ||
+      result.selected !== input.selected ||
+      result.view !== (input.selected ? input.view ?? "file" : undefined) ||
+      result.sessionGeneration !== generation ||
+      result.protocolVersion !== PROTOCOL_VERSION
+    ) {
+      throw new Error("Workspace file history is stale or invalid");
+    }
+    if (this.snapshot.connection !== "connected" || !current?.ready || current.sessionId !== sessionId || current.sessionGeneration !== generation) {
+      throw new Error("Workspace file history belongs to a previous session");
+    }
+    return result;
+  }
+
   async workspaceInventory(
     refresh: boolean,
     signal: AbortSignal,
@@ -616,7 +698,7 @@ export class RuntimeEventStore {
     progress: (loaded: number, total: number) => void,
   ): Promise<CachedWorkspaceInventory> {
     const runtime = this.requireReadyRuntime();
-    const revision = runtime.workspace?.revision;
+    const revision = `${runtime.workspace?.revision ?? ""}:${runtime.workspace?.fileRevision ?? 0}`;
     const cached = this.workspaceInventories.get(runtime.sessionId);
     const cacheState = cached
       ? workspaceInventoryCacheState(cached, {
@@ -667,6 +749,22 @@ export class RuntimeEventStore {
     return this.api.terminalUrl(generation);
   }
 
+  async workspaceEntry(path: string, sessionId: string, generation: number): Promise<WorkspaceEntry> {
+    const runtime = this.requireReadyRuntime();
+    if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the action.");
+    const entry = await this.api.workspaceEntry(generation, path);
+    const current = this.requireReadyRuntime();
+    if (current.sessionId !== sessionId || current.sessionGeneration !== generation || entry.sessionId !== sessionId || entry.sessionGeneration !== generation)
+      throw new Error("Entry belongs to a previous session.");
+    return entry;
+  }
+
+  async mutateWorkspace(mutation: WorkspaceMutation, sessionId: string, generation: number): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the action.");
+    await this.sendCommand({ type: "mutateWorkspace", commandId: commandId(), expectedGeneration: generation, sessionId, mutation });
+  }
+
   async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
     const runtime = this.requireReadyRuntime();
     const result = await this.api.workspaceFile(runtime.sessionGeneration, path, view);
@@ -688,6 +786,22 @@ export class RuntimeEventStore {
     }
     return result;
   }
+
+  async annotationNotes(input: AnnotationRequest, mutation?: AnnotationMutation): Promise<AnnotationList> {
+    const assert = () => {
+      const current = this.requireReadyRuntime();
+      if (current.sessionId !== input.sessionId || current.sessionGeneration !== input.expectedGeneration)
+        throw new Error("Session changed while accessing notes");
+    };
+    assert();
+    const result = mutation ? await this.api.mutateAnnotation(mutation) : await this.api.annotationNotes(input);
+    assert();
+    if (result.sessionId !== input.sessionId || result.sessionGeneration !== input.expectedGeneration ||
+      typeof result.scope !== "string" || !Array.isArray(result.notes) ||
+      !result.notes.every(note => validAnnotation(note) && note.scope === result.scope)) throw new Error("Invalid annotation response");
+    return result;
+  }
+
 
   async turnDiff(entryId: string): Promise<TurnDiffResult> {
     const runtime = this.requireReadyRuntime();
@@ -745,9 +859,10 @@ export class RuntimeEventStore {
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
+    operationId?: string,
   ): Promise<StateQLCommandResult> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.stateqlCommand(runtime.sessionGeneration, input, signal, expectedConnectionId);
+    const result = await this.api.stateqlCommand(runtime.sessionGeneration, input, signal, expectedConnectionId, operationId);
     const current = this.requireReadyRuntime();
     if (
       current.sessionGeneration !== runtime.sessionGeneration ||
@@ -1726,6 +1841,7 @@ export class RuntimeEventStore {
       this.set({
         connection,
         runtime,
+        keyboardSettings: isKeyboardSettings(boot.keyboardSettings) ? boot.keyboardSettings : undefined,
         pendingUi: runtime ? boot.pendingUi : undefined,
         pendingMessages,
         sequence: boot.sequence,
@@ -1821,6 +1937,13 @@ export class RuntimeEventStore {
       event.type !== "session.cleared"
     ) {
       this.reset();
+      return;
+    }
+
+    if (event.type === "keyboard.settings") {
+      if (!isKeyboardSettings(event.payload)) { this.reset(); return; }
+      this.receiveKeyboardSettings(event.payload);
+      this.set({ ...this.snapshot, sequence: event.sequence });
       return;
     }
 

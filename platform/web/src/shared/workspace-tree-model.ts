@@ -40,8 +40,8 @@ export function buildWorkspaceTree(files: WorkspaceFileReadModel[]): WorkspaceTr
 
   for (const file of files) {
     const parts = file.path.split("/");
-    // Registered submodules have no inventoried files, so they stay directory chains.
-    const folders = file.kind === "submodule" ? parts : parts.slice(0, -1);
+    // Explicit directories include empty folders and registered submodules.
+    const folders = file.kind ? parts : parts.slice(0, -1);
     let node = root;
     for (const part of folders) {
       node = descend(node, part);
@@ -49,7 +49,7 @@ export function buildWorkspaceTree(files: WorkspaceFileReadModel[]): WorkspaceTr
       node.deletions += file.deletions ?? 0;
       if (file.status) node.changedCount++;
     }
-    if (file.kind === "submodule") continue;
+    if (file.kind) continue;
     node.children.push({
       path: file.path,
       name: parts.at(-1)!,

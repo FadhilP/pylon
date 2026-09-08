@@ -7,6 +7,8 @@ export type IndexLifecycle = {
   scheduleRefresh(ctx?: { cwd?: string }): void;
   /** Handle a `pi-discover:index-action` rebuild request. */
   handleAction(request: any): void;
+  /** Handle a bounded request from Pylon for symbols in the active workspace. */
+  handleSymbolQuery(request: any): void;
   /** Run the `/discover-index` command. */
   runCommand(args: string, ctx: any): Promise<void>;
   healthLine(): string;
@@ -125,6 +127,28 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
         const failure = await withIndexing(() => indexFor(activeCwd).rebuild());
         if (failure) request.reject(new Error(failure));
         else request.resolve();
+      })().catch(error => request.reject(error));
+    },
+
+    handleSymbolQuery(request: any) {
+      if (
+        request?.version !== 1 ||
+        typeof request.cwd !== "string" ||
+        typeof request.query !== "string" ||
+        typeof request.acknowledge !== "function" ||
+        typeof request.resolve !== "function" ||
+        typeof request.reject !== "function"
+      )
+        return;
+      request.acknowledge();
+      void (async () => {
+        if (shuttingDown || !activeCwd || activeCwd !== request.cwd)
+          throw new Error("pi-discover index is unavailable for this workspace");
+        if (request.query.length > 2000 || /[\0\r\n]/.test(request.query)) throw new Error("Invalid symbol query");
+        const cwd = activeCwd;
+        const results = await indexFor(cwd).searchSymbols(cwd, { query: request.query, limit: 200, navigation: true });
+        if (shuttingDown || activeCwd !== cwd) throw new Error("Workspace changed during symbol search");
+        request.resolve({ symbols: results, moreAvailable: results.moreAvailable === true });
       })().catch(error => request.reject(error));
     },
 

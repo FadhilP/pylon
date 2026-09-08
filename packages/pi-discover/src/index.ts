@@ -116,6 +116,15 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
+/** Initials used only for the Web navigation query; ordinary symbol_search keeps its existing ranking. */
+function symbolInitials(value: unknown): string {
+  return String(value ?? "")
+    .split(/[_\-.]/)
+    .flatMap(part => (/^[A-Z0-9]+$/.test(part) ? [part[0]] : (part.match(/^[a-z]|[A-Z]/g) ?? [])))
+    .join("")
+    .toLowerCase();
+}
+
 async function directoryExists(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isDirectory();
@@ -152,6 +161,7 @@ export class WorkspaceIndex {
     if (this.db) return this.db;
     try {
       this.db = openIndexDatabase(this.path);
+      this.db.function("pylon_symbol_initials", { deterministic: true }, symbolInitials);
       return this.db;
     } catch (error) {
       this.db = undefined;
@@ -559,11 +569,11 @@ export class WorkspaceIndex {
 
   async searchSymbols(
     cwd: string,
-    options: { query: string; path?: string; language?: string; kind?: string; limit?: number },
+    options: { query: string; path?: string; language?: string; kind?: string; limit?: number; navigation?: boolean },
   ) {
     await this.ensureFresh();
     const query = options.query.trim();
-    if (!query) throw new Error("Symbol query must contain a non-whitespace token");
+    if (!query && !options.navigation) throw new Error("Symbol query must contain a non-whitespace token");
     const limit = options.limit ?? DEFAULT_SYMBOL_RESULTS;
     const target = limit + 1;
     const scope = this.scopedPath(cwd, options.path);
@@ -583,6 +593,17 @@ export class WorkspaceIndex {
         args: [query, `${escapeLike(query)}%`],
       },
     ];
+    if (options.navigation && query) {
+      const initials = `${escapeLike(query.toLowerCase())}%`;
+      stages.splice(2, 0, {
+        clause: "pylon_symbol_initials(s.name) LIKE ? ESCAPE '\\' AND s.name NOT LIKE ? ESCAPE '\\' COLLATE NOCASE",
+        args: [initials, `${escapeLike(query)}%`],
+      });
+      stages[3].clause += " AND pylon_symbol_initials(s.name) NOT LIKE ? ESCAPE '\\'";
+      stages[3].args.push(initials);
+    } else if (!query) {
+      stages.splice(0, stages.length, { clause: "1", args: [] });
+    }
     const rows: Array<Record<string, unknown>> = [];
     const seen = new Set<string>();
     for (const stage of stages) {

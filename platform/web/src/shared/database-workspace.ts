@@ -1,7 +1,7 @@
 import { PROTOCOL_VERSION } from "./protocol/envelope.ts";
 import type { StateQLCommandInput, StateQLCommandResult } from "./protocol/snapshots.ts";
 
-export type DatabaseDriver = "sqlite" | "postgres" | "mysql" | "mongodb";
+export type DatabaseDriver = "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
 export interface DatabaseQuery {
   id: string;
   title: string;
@@ -20,6 +20,7 @@ export interface DatabaseDraft {
 }
 export interface DatabaseResult {
   result_id: string;
+  alias?: string;
   rows: number;
   columns: Array<{ name: string; type: string }>;
   cached: boolean;
@@ -36,6 +37,7 @@ export function isDatabaseResult(value: unknown): value is DatabaseResult {
   return (
     databaseRecord(value) &&
     text(value.result_id) &&
+    (value.alias === undefined || (text(value.alias) && value.alias.length <= 200)) &&
     integer(value.rows) &&
     Array.isArray(value.columns) &&
     value.columns.length <= 100 &&
@@ -53,11 +55,14 @@ function validCommandData(command: StateQLCommandInput["command"], value: unknow
   switch (command) {
     case "query":
     case "mongo.query":
+    case "redis.query":
     case "table.read":
       return isDatabaseResult(value);
     case "plan":
     case "mongo.plan":
     case "table.plan":
+    case "redis.plan":
+    case "table.plan.batch":
       return (
         text(value.plan_id) &&
         text(value.owner_actor_id) &&
@@ -69,6 +74,7 @@ function validCommandData(command: StateQLCommandInput["command"], value: unknow
       );
     case "exec":
     case "mongo.exec":
+    case "redis.exec":
     case "receipt":
       return text(value.operation_id) && text(value.status) && typeof value.committed === "boolean";
     case "apply":
@@ -181,7 +187,7 @@ export function readDatabaseDrafts(storage: Pick<Storage, "getItem">): DatabaseD
             tab.title.length > 100 ||
             !text(tab.text) ||
             databaseBytes(tab.text) > 64 * 1024 ||
-            !["sqlite", "postgres", "mysql", "mongodb"].includes(String(tab.driver)) ||
+            !["sqlite", "postgres", "mysql", "mongodb", "redis"].includes(String(tab.driver)) ||
             tab.saved !== true
           )
             return false;

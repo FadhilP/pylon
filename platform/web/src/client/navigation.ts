@@ -152,6 +152,7 @@ export type ReferenceId =
   | "policy"
   | "timeline"
   | "memory"
+  | "notes"
   | "tools"
   | "changes"
   | "agents"
@@ -179,6 +180,7 @@ export type ReferenceDefinition = {
 };
 
 export const REFERENCES: ReferenceDefinition[] = [
+  { id: "notes", label: "Notes", description: "Private code notes to include in ordinary chat messages.", icon: IconBook, ariaId: "reference-notes", group: "conversation", tone: "var(--violet)" },
   {
     id: "chat",
     label: "Chat",

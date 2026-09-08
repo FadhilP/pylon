@@ -40,6 +40,12 @@ const READ_COMMANDS = new Set([
 const WRITE_COMMANDS = new Set(["exec", "mongo.exec", "apply", "transaction.commit", "transaction.rollback"]);
 const FAILED_OPERATION_STATES = new Set(["failed", "outcome_unknown"]);
 
+/** Keep infrastructure activity available for diagnostics without crowding statements. */
+export function isInternalStateQLActivity(item: Pick<StateQLActivityItem, "command">): boolean {
+  return item.command.startsWith("profile.") || item.command.startsWith("inspect.") ||
+    item.command.startsWith("objects.") || ["inspect", "rows", "show", "count", "columns", "history", "status", "doctor", "transaction.status"].includes(item.command);
+}
+
 function tagsFor(
   entry: StateQLHistoryEntryReadModel | undefined,
   result?: StateQLResult,

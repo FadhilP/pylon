@@ -1,3 +1,4 @@
+import type { KeyboardSettings } from "../keyboard.ts";
 import type { EffectiveGuardRules, GuardRuleOverrides } from "../guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type {
@@ -14,6 +15,7 @@ import type {
   VerifyOptionReadModel,
 } from "./events.ts";
 import type { StateQLMongoCommand, StateQLPanelCommand } from "pi-stateql/stateql-command";
+import type { FileHistoryResult } from "pylon-core/src/file-history.ts";
 
 export type FeatureAvailability = "available" | "unavailable";
 
@@ -120,6 +122,8 @@ export interface WorkspaceReadModel {
   gitAvailable: boolean;
   mode: "worktree" | "checkout" | "local" | "non-git";
   revision?: string;
+  /** Manual filesystem mutations, including empty directories and non-Git content. */
+  fileRevision?: number;
   changedCount: number;
   setupState?: "idle" | "running" | "failed";
   setupError?: string;
@@ -146,8 +150,8 @@ export interface WorkspaceFileReadModel {
   additions?: number;
   deletions?: number;
   binary?: boolean;
-  /** Registered submodule folders without inventoried files; rendered as non-selectable directories. */
-  kind?: "submodule";
+  /** Explicit directories (including empty ones) and registered submodule folders. */
+  kind?: "submodule" | "directory";
 }
 
 export interface WorkspaceFilePage {
@@ -172,6 +176,11 @@ export interface WorkspaceFileContent {
 
 export interface WorkspaceFileDiff extends WorkspaceFileContent {
   state: "available" | "binary" | "oversized";
+}
+
+export interface WorkspaceFileHistory extends FileHistoryResult {
+  protocolVersion: typeof PROTOCOL_VERSION;
+  sessionGeneration: number;
 }
 
 export interface TimelineCheckpointFileReadModel {
@@ -318,9 +327,10 @@ export interface StateQLSnapshot {
   actor_id: string;
   connection: {
     connection_id: string;
+    alias?: string;
     name: string;
     status: "connected";
-    driver: "sqlite" | "postgres" | "mysql" | "mongodb";
+    driver: "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
     database: string;
     read_only: boolean;
   } | null;
@@ -355,6 +365,7 @@ export interface BootstrapSnapshot {
   runtime: RuntimeSnapshot | null;
   unseenCompletionSessionIds: string[];
   pendingUi?: UiRequestReadModel;
+  keyboardSettings?: KeyboardSettings;
 }
 
 export interface LocalImageQuery {

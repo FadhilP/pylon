@@ -90,3 +90,15 @@ Guard rules control how Guard handles its supported risk categories; they are no
 ## Appearance
 
 **Appearance** selects the Pylon color theme and code syntax-highlighting theme. Syntax themes and languages load after startup, so highlighting can appear after the rest of the workspace.
+
+## Keyboard
+
+**Keyboard** records single key combinations or double Shift. Choose a browser-adapted Pylon, VS Code, or JetBrains preset, search by action/context/key, and filter overrides, unbound actions or browser costs. Record then **Apply shortcut**; Clear and per-action Reset save immediately. Preset replacement and resetting all overrides require confirmation. Escape cancels recording; Tab stops recording and retains normal focus navigation. Manual entry is available when a browser intercepts a key before recording can see it.
+
+Keyboard preferences are global to the agent-data directory, stored in `<agent-dir>/pylon-web/settings.sqlite` using native SQLite—not in Discover's rebuildable indexes or browser local storage. A missing override inherits the preset; an explicit unbound override stays unbound. Writes compare revisions atomically. Another window's edit is never silently overwritten: review its settings and retry. Connected tabs on the same server receive live updates; reconnecting or focusing a browser also refreshes preferences, including writes from another server using the same directory. Keyboard settings work without selecting a session. Persistence errors do not fall back to temporary settings or reset the database.
+
+Conflicts are checked in overlapping contexts on both Ctrl-primary and Cmd-primary platforms. Assigning a conflicting binding unbinds the previous action and offers Reassign or Leave unbound. Reset uses the same rules. Common browser/OS-reserved combinations are rejected on every save path; browser-cost warnings are not a guarantee of availability. Arbitrary multi-key sequences and literal desktop-IDE emulation are intentionally unsupported.
+
+Dialogs, shortcut recording, terminals and focused editors retain ownership. Search shortcuts also work in ordinary text inputs. Composer shortcuts respect suggestions and IME input; explorer shortcuts require tree focus. Unavailable actions do not consume shortcuts, and applying changes still opens the existing confirmation. The theme action remains light/dark only; Warm is selected in Appearance. Only the listed existing actions are configurable; this does not introduce new file or Git mutation workflows.
+
+Search popup previews use the selected syntax theme and lazy language grammars, with readable plain-text fallback. Search matches and baseline-added-line markers remain visible over the syntax colors.

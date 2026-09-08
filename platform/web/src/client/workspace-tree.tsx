@@ -1,3 +1,8 @@
+import { dispatchShortcut } from "./keyboard-shortcuts";
+import { useAnnotations } from "./annotations";
+import { createPortal } from "react-dom";
+import { validWorkspacePath } from "../shared/workspace-mutations";
+import type { WorkspaceTreeAction } from "./workspace-file-actions";
 import { IconChevronsDown, IconChevronsUp, IconCrosshair } from "@tabler/icons-react";
 import {
   useEffect,
@@ -38,6 +43,7 @@ export function WorkspaceTree({
   projectId,
   onClearQuery,
   children,
+  onFileAction,
 }: {
   files: WorkspaceFileReadModel[];
   selectedPath?: string;
@@ -49,7 +55,14 @@ export function WorkspaceTree({
   onClearQuery: () => void;
   /** Inventory notices — loading, empty, truncated — rendered under the rows. */
   children?: ReactNode;
+  onFileAction?: (action: WorkspaceTreeAction, path: string, directory: boolean) => void;
 }) {
+  const annotations = useAnnotations();
+  const noteCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const note of annotations?.notes ?? []) counts.set(note.path, (counts.get(note.path) ?? 0) + 1);
+    return counts;
+  }, [annotations?.notes]);
   const root = useMemo(() => buildWorkspaceTree(files), [files]);
   // Nothing expands on its own: the tree is exactly where this project last left it.
   const stored = useExplorerState(projectId);
@@ -60,6 +73,13 @@ export function WorkspaceTree({
   // twice still scrolls the second time.
   const [revealAt, setRevealAt] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ path: string; directory: boolean; x: number; y: number }>();
+  const openMenu = (path: string, x: number, y: number) => {
+    if (!onFileAction) return;
+    const row = rows.find(row => row.node.path === path)?.node;
+    if (path && (!validWorkspacePath(path) || row?.file?.status === "deleted" || files.some(file => file.kind === "submodule" && file.path === path))) return;
+    setMenu({ path, directory: !path || Boolean(row?.directory), x, y });
+  };
   const scrollToPath = (path: string) =>
     listRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: "nearest" });
   // The ancestor rows only exist after the expand has rendered, so the scroll waits for it.
@@ -116,7 +136,17 @@ export function WorkspaceTree({
 
   const focused = focusPath ?? selectedPath;
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (dispatchShortcut(event.nativeEvent, "explorer", {
+      reveal: () => { if (!selectedPath) return false; reveal(); },
+      collapse: () => { if (!open.size) return false; setExplorerOpen(projectId, new Set()); },
+    })) return;
     const at = rows.findIndex(row => row.node.path === focused);
+    if (onFileAction && (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) {
+      event.preventDefault();
+      const bounds = event.currentTarget.getBoundingClientRect();
+      openMenu(focused ?? "", bounds.left + 24, bounds.top + 24);
+      return;
+    }
     const move = (to: number) => {
       const row = rows[Math.max(0, Math.min(rows.length - 1, to))];
       if (!row) return;
@@ -158,9 +188,22 @@ export function WorkspaceTree({
   };
 
   return (
-    <div className="files-tree">
-      {hasFolders && (
+    <div className="files-tree" onContextMenu={event => {
+      if (!onFileAction) return;
+      event.preventDefault();
+      const path = (event.target as HTMLElement).closest<HTMLElement>("[data-path]")?.dataset.path ?? "";
+      openMenu(path, event.clientX, event.clientY);
+    }}>
+      {(hasFolders || onFileAction) && (
         <div className="files-toolbar">
+          {onFileAction && <>
+            <button type="button" aria-label="New file or folder at workspace root" onClick={event => {
+              const bounds = event.currentTarget.getBoundingClientRect(); openMenu("", bounds.left, bounds.bottom);
+            }}>New…</button>
+            <button type="button" aria-label={`Actions for ${focused || "workspace root"}`} onClick={event => {
+              const bounds = event.currentTarget.getBoundingClientRect(); openMenu(focused ?? "", bounds.left, bounds.bottom);
+            }}>Actions…</button>
+          </>}
           <button
             type="button"
             className="files-fold"
@@ -191,11 +234,12 @@ export function WorkspaceTree({
             key={node.path}
             node={node}
             depth={depth}
+            noteCount={noteCounts.get(node.path) ?? 0}
             open={open.has(node.path)}
             selected={node.path === selectedPath}
             focused={node.path === focused}
-            onToggle={() => toggle(node.path)}
-            onSelect={() => onSelect(node.path, Boolean(node.file?.status))}
+            onToggle={() => { setFocusPath(node.path); toggle(node.path); }}
+            onSelect={() => { setFocusPath(node.path); onSelect(node.path, Boolean(node.file?.status)); }}
           />
         ))}
         {children}
@@ -214,6 +258,8 @@ export function WorkspaceTree({
           {totals.changed} changed
         </button>
       </div>
+      {menu && onFileAction && <TreeActionMenu target={menu} onClose={() => setMenu(undefined)}
+        onAction={action => { setMenu(undefined); onFileAction(action, menu.path, menu.directory); }} />}
     </div>
   );
 }
@@ -226,6 +272,7 @@ function TreeRow({
   focused,
   onToggle,
   onSelect,
+  noteCount,
 }: {
   node: WorkspaceTreeNode;
   depth: number;
@@ -234,6 +281,7 @@ function TreeRow({
   focused: boolean;
   onToggle: () => void;
   onSelect: () => void;
+  noteCount: number;
 }) {
   const status = node.file?.status;
   // The rail sits at the panel's left edge, not in the indent, so it stacks into
@@ -265,6 +313,7 @@ function TreeRow({
         <FileTypeIcon path={node.path} size={15} />
       )}
       <span>{node.name}</span>
+      <em className="annotation-file-count" title={noteCount ? `${noteCount} saved notes` : undefined} aria-label={noteCount ? `${noteCount} saved notes` : undefined}>{noteCount || ""}</em>
       {node.file?.binary ? (
         <em className="files-stat is-binary">binary</em>
       ) : showCount ? (
@@ -275,4 +324,37 @@ function TreeRow({
       {rail && <i className={`files-rail ${rail}`} aria-hidden="true" />}
     </button>
   );
+}
+
+function TreeActionMenu({ target, onClose, onAction }: {
+  target: { path: string; directory: boolean; x: number; y: number };
+  onClose: () => void;
+  onAction: (action: WorkspaceTreeAction) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const outside = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node)) onClose(); };
+    document.addEventListener("pointerdown", outside);
+    return () => { document.removeEventListener("pointerdown", outside); if (previous?.isConnected) previous.focus(); };
+  }, []);
+  const actions: [WorkspaceTreeAction, string][] = [
+    ...(target.directory ? [["createFile", "New File"], ["createDirectory", "New Folder"]] as [WorkspaceTreeAction, string][] : []),
+    ...(target.path ? [["rename", "Rename"], ["move", "Move…"], ["delete", "Delete…"]] as [WorkspaceTreeAction, string][] : []),
+  ];
+  return createPortal(<div ref={ref} role="menu" aria-label={`Actions for ${target.path || "workspace root"}`}
+    className="workspace-tree-menu" style={{ left: Math.max(4, Math.min(target.x, window.innerWidth - 200)), top: Math.max(4, Math.min(target.y, window.innerHeight - 230)) }}
+    onKeyDown={event => {
+      if (event.key === "Escape" || event.key === "Tab") { event.preventDefault(); onClose(); }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        const buttons = [...(ref.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+        const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next]?.focus();
+      }
+    }}>
+    {actions.map(([action, label]) => <button key={action} type="button" role="menuitem" onClick={() => onAction(action)}>{label}</button>)}
+  </div>, document.body);
 }

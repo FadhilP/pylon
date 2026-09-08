@@ -37,6 +37,7 @@ import type {
 } from "../shared/protocol/snapshots";
 import { FileTypeIcon } from "./file-icons";
 import { WorkspaceTree } from "./workspace-tree";
+import { ExplorerSearch } from "./workspace-search";
 import { displayTime } from "./format";
 import { referenceDefinition } from "./navigation";
 import { copyText } from "./clipboard";
@@ -50,6 +51,8 @@ export function FilesPanel({
   live,
   projectId,
   requestedPath,
+  applyRequest,
+  onApplyRequestHandled,
   onClose,
   onExpand,
   onError,
@@ -57,6 +60,8 @@ export function FilesPanel({
   live: RuntimeStoreSnapshot;
   projectId?: string;
   requestedPath?: FileReference & { requestId: number; view?: FileView };
+  applyRequest?: { sessionId: string; revision: string };
+  onApplyRequestHandled?: () => void;
   onClose: () => void;
   onExpand?: (selectedPath?: string, view?: FileView) => void;
   onError: (error: unknown, fallback: string) => void;
@@ -78,6 +83,13 @@ export function FilesPanel({
   const copyReset = useRef<number | undefined>(undefined);
   const copyRevision = useRef(0);
   const requestRevision = useRef(0);
+
+  useEffect(() => {
+    if (!applyRequest) return;
+    if (applyRequest.sessionId === runtime?.sessionId && applyRequest.revision === runtime.workspace?.revision && runtime.workspace.canApplyChanges) setApplyOpen(true);
+    else onError(new Error("Workspace changed; review the latest changes before applying"), "Unable to open apply confirmation");
+    onApplyRequestHandled?.();
+  }, [applyRequest, runtime?.sessionId, runtime?.workspace?.revision, runtime?.workspace?.canApplyChanges]);
 
   useEffect(
     () => () => {
@@ -306,32 +318,38 @@ export function FilesPanel({
             ) : null}
           </div>
         )}
-        <label className="files-search">
-          <IconSearch size={15} />
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search files" />
-        </label>
         <div className={`files-panel-body${selectedPath ? "" : " is-list-only"}`}>
-          <WorkspaceTree
-            files={files}
-            selectedPath={selectedPath}
+          <ExplorerSearch
+            scope={`${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`}
             query={query}
-            projectId={projectId}
-            onClearQuery={() => setQuery("")}
-            onSelect={(path, changed) => {
+            onQuery={setQuery}
+            onOpen={(path, line) => {
               setSelectedPath(path);
-              setSelectedLine(undefined);
-              setView(changed ? "diff" : "current");
+              setSelectedLine(line);
+              setView("current");
             }}>
-            {inventoryLoading && !files.length && (
-              <span className={inventoryProgress ? "files-progress" : "files-empty"}>
-                {inventoryProgress
-                  ? `Loading ${inventoryProgress.loaded.toLocaleString()} of ${inventoryProgress.total.toLocaleString()} files…`
-                  : "Indexing workspace…"}
-              </span>
-            )}
-            {!inventoryLoading && !files.length && <span className="files-empty">No files found</span>}
-            {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
-          </WorkspaceTree>
+            <WorkspaceTree
+              files={files}
+              selectedPath={selectedPath}
+              query={query}
+              projectId={projectId}
+              onClearQuery={() => setQuery("")}
+              onSelect={(path, changed) => {
+                setSelectedPath(path);
+                setSelectedLine(undefined);
+                setView(changed ? "diff" : "current");
+              }}>
+              {inventoryLoading && !files.length && (
+                <span className={inventoryProgress ? "files-progress" : "files-empty"}>
+                  {inventoryProgress
+                    ? `Loading ${inventoryProgress.loaded.toLocaleString()} of ${inventoryProgress.total.toLocaleString()} files…`
+                    : "Indexing workspace…"}
+                </span>
+              )}
+              {!inventoryLoading && !files.length && <span className="files-empty">No files found</span>}
+              {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
+            </WorkspaceTree>
+          </ExplorerSearch>
           {selectedPath && (
             <div className="file-viewer">
               <>
@@ -620,6 +638,7 @@ export function FileContent({
         path={value.path}
         text={text}
         revision={value.revision}
+        annotationSource={value.state === "available" ? { kind: view === "base" ? "historical" : "current", revision: `${view === "base" ? "Baseline" : "Working copy"}: ${value.revision}` } : undefined}
         targetLine={targetLine}
         loadDiffFiles={loadDiffFiles}
       />

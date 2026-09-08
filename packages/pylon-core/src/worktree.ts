@@ -238,8 +238,8 @@ export interface WorkspaceFile {
   additions?: number;
   deletions?: number;
   binary?: boolean;
-  /** Registered submodule folders without inventoried files; clients render them as non-selectable folders. */
-  kind?: "submodule";
+  /** Explicit directories, including empty folders and registered submodules. */
+  kind?: "submodule" | "directory";
 }
 
 export interface WorkspaceFilePage {
@@ -1703,6 +1703,41 @@ export async function inspectTreeChanges(cwd: string, baselineTree: string, tree
   return changesBetween(cwd, baselineTree, tree);
 }
 
+/** Git does not track empty directories. Inventory them without walking ignored trees. */
+async function workspaceDirectories(root: string, submodules: string[]): Promise<{ paths: string[]; truncated: boolean }> {
+  const pending = [""];
+  const paths: string[] = [];
+  let scanned = 0;
+  while (pending.length && scanned < MAX_WORKSPACE_FILES) {
+    const candidates: string[] = [];
+    for (const parent of pending.splice(0, 50)) {
+      for (const entry of await readdir(join(root, parent), { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === ".git") continue;
+        const path = parent ? `${parent}/${entry.name}` : entry.name;
+        if (submodules.some(marker => path === marker || path.startsWith(`${marker}/`))) continue;
+        candidates.push(safeRelativePath(path));
+        if (++scanned >= MAX_WORKSPACE_FILES) break;
+      }
+      if (scanned >= MAX_WORKSPACE_FILES) break;
+    }
+    if (!candidates.length) continue;
+    const ignored = await new Promise<Set<string>>((resolve, reject) => {
+      const child = execFile("git", ["check-ignore", "--stdin", "-z"],
+        { cwd: root, maxBuffer: 8 * 1024 * 1024, timeout: 10_000, windowsHide: true },
+        (error, stdout, stderr) => {
+          if (error && error.code !== 1) reject(new Error(String(stderr || error.message)));
+          else resolve(new Set(splitNul(stdout)));
+        });
+      child.stdin?.on("error", () => undefined); // The exit callback reports process failures.
+      child.stdin?.end(candidates.join("\0") + "\0");
+    });
+    const visible = candidates.filter(path => !ignored.has(path));
+    paths.push(...visible);
+    pending.push(...visible);
+  }
+  return { paths, truncated: scanned >= MAX_WORKSPACE_FILES || pending.length > 0 };
+}
+
 export async function collectWorkspaceFiles(options: {
   cwd: string;
   baselineTree?: string;
@@ -1717,15 +1752,23 @@ export async function collectWorkspaceFiles(options: {
   const folders = new Set(
     scope.markers.filter(marker => !files.some(path => path === marker || path.startsWith(`${marker}/`))),
   );
-  const allPaths = [...new Set([...files, ...folders])]
+  const directories = await workspaceDirectories(scope.current.root, scope.markers);
+  const representedDirectories = new Set<string>();
+  for (const path of [...files, ...folders]) {
+    const parts = path.split("/");
+    for (let length = 1; length < parts.length; length++) representedDirectories.add(parts.slice(0, length).join("/"));
+  }
+  const directoryPaths = new Set(directories.paths.filter(path => !representedDirectories.has(path)));
+  const allPaths = [...new Set([...files, ...folders, ...directoryPaths])]
     .filter(path => !query || path.toLocaleLowerCase().includes(query))
     .sort((left, right) => Number(changed.has(right)) - Number(changed.has(left)) || left.localeCompare(right));
-  const truncated = allPaths.length > MAX_WORKSPACE_FILES;
+  const truncated = directories.truncated || allPaths.length > MAX_WORKSPACE_FILES;
   const paths = allPaths.slice(0, MAX_WORKSPACE_FILES);
   return {
     revision: scope.revision,
     files: paths.map(
-      path => changed.get(path) ?? (folders.has(path) ? { path, kind: "submodule" as const } : { path }),
+      path => directoryPaths.has(path) ? { path, kind: "directory" as const } :
+        changed.get(path) ?? (folders.has(path) ? { path, kind: "submodule" as const } : { path }),
     ),
     totalCount: paths.length,
     truncated,
@@ -1912,6 +1955,7 @@ export async function collectPlainWorkspaceFiles(options: {
   const root = await realpath(options.cwd);
   const query = (options.query ?? "").trim().toLocaleLowerCase().slice(0, 200);
   const paths: string[] = [];
+  const directories = new Set<string>();
   const pending = [root];
   let scanned = 0;
   while (pending.length && scanned <= MAX_WORKSPACE_FILES) {
@@ -1920,14 +1964,11 @@ export async function collectPlainWorkspaceFiles(options: {
       if (entry.name === ".git") continue;
       const absolute = resolve(directory, entry.name);
       if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) {
-        pending.push(absolute);
-        continue;
-      }
-      if (!entry.isFile()) continue;
+      if (!entry.isDirectory() && !entry.isFile()) continue;
       scanned++;
-      const path = relative(root, absolute).replaceAll("\\", "/");
-      if (!query || path.toLocaleLowerCase().includes(query)) paths.push(safeRelativePath(path));
+      const path = safeRelativePath(relative(root, absolute).replaceAll("\\", "/"));
+      if (entry.isDirectory()) { pending.push(absolute); directories.add(path); }
+      if (!query || path.toLocaleLowerCase().includes(query)) paths.push(path);
       if (scanned > MAX_WORKSPACE_FILES) break;
     }
   }
@@ -1935,7 +1976,7 @@ export async function collectPlainWorkspaceFiles(options: {
   const truncated = scanned > MAX_WORKSPACE_FILES || pending.length > 0;
   paths.length = Math.min(paths.length, MAX_WORKSPACE_FILES);
   const revision = createHash("sha256").update(paths.join("\0")).digest("base64url").slice(0, 24);
-  return { revision, files: paths.map(path => ({ path })), totalCount: paths.length, truncated };
+  return { revision, files: paths.map(path => directories.has(path) ? { path, kind: "directory" as const } : { path }), totalCount: paths.length, truncated };
 }
 
 export async function listPlainWorkspaceFiles(options: {

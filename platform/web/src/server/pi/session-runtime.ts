@@ -4,6 +4,7 @@ import { realpath, unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import type { WorkspaceSymbol, WorkspaceSymbolResult } from "../../shared/workspace-search.ts";
 import {
   activeAssistantEntryIds,
   appendToolDuration,
@@ -27,6 +28,7 @@ import { estimatedTokens, meterFromBranch } from "pylon-core/src/token-meter.ts"
 import { listSessionInventory, resolveUniqueSession, type SessionInventoryEntry } from "pylon-core/session-inventory";
 import { truncateUtf8 } from "pylon-core/src/utf8.ts";
 import { NAME_PROMPT } from "pylon-core/src/delegate-names.ts";
+import type { FileHistoryContext, HistoryCheckpoint, HistoryTree } from "pylon-core/src/file-history.ts";
 import {
   configPath as pylonCoreConfigPath,
   effectiveConfig as effectivePylonCoreConfig,
@@ -266,6 +268,53 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
       toolOverrides: {},
     },
     availableVerifyChecks: [],
+  };
+}
+
+function isHistoryTree(value: unknown, nested = false): value is HistoryTree {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const tree = value as Record<string, unknown>;
+  if (typeof tree.path !== "string" || typeof tree.tree !== "string" || typeof tree.head !== "string" ||
+    (tree.commonDir !== undefined && typeof tree.commonDir !== "string")) return false;
+  return tree.repositories === undefined || (!nested && Array.isArray(tree.repositories) &&
+    tree.repositories.length <= 100 && tree.repositories.every(repository => isHistoryTree(repository, true)));
+}
+
+function isHistoryCheckpoint(value: unknown): value is HistoryCheckpoint {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const checkpoint = value as Record<string, unknown>;
+  return (
+    typeof checkpoint.id === "string" &&
+    typeof checkpoint.title === "string" &&
+    typeof checkpoint.createdAt === "string" &&
+    ["passed", "failed", "unverified"].includes(String(checkpoint.verification)) &&
+    isHistoryTree(checkpoint.snapshot)
+  );
+}
+
+function asFileHistoryContext(value: unknown): FileHistoryContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const context = value as Record<string, unknown>;
+  const baseline = context.baseline;
+  const seed = context.seed;
+  const checkpoints = context.checkpoints;
+  if (
+    typeof context.sessionId !== "string" ||
+    typeof context.partial !== "boolean" ||
+    !Array.isArray(checkpoints) ||
+    checkpoints.length > 200 ||
+    !checkpoints.every(isHistoryCheckpoint) ||
+    (baseline !== undefined && !isHistoryTree(baseline)) ||
+    (seed !== undefined && !isHistoryTree(seed))
+  ) {
+    return undefined;
+  }
+  return {
+    sessionId: context.sessionId,
+    ...(baseline !== undefined ? { baseline } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+    checkpoints,
+    partial: context.partial,
   };
 }
 
@@ -521,6 +570,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
     connection: snapshot.connection
       ? {
           connection_id: snapshot.connection.connection_id,
+          ...(snapshot.connection.alias !== undefined ? { alias: snapshot.connection.alias } : {}),
           name: snapshot.connection.name,
           status: snapshot.connection.status,
           driver: snapshot.connection.driver,
@@ -1960,6 +2010,33 @@ export class SessionRuntime implements PiDriver {
     this.workspaceApplyTool.recordResult(result);
   }
 
+
+  async workspaceSymbols(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
+    const runtime = this.requireRuntime();
+    const generation = this.gate.generation;
+    signal?.throwIfAborted();
+    if (query.length > 2000 || /\0/.test(query)) throw new Error("Invalid workspace symbol query");
+    const value = await new Promise<any>((resolvePromise, reject) => {
+      let handled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const abort = () => { cleanup(); reject(signal?.reason ?? new Error("Workspace symbol search cancelled")); };
+      const cleanup = () => { if (timer) clearTimeout(timer); signal?.removeEventListener("abort", abort); };
+      signal?.addEventListener("abort", abort, { once: true });
+      timer = setTimeout(() => { cleanup(); reject(new Error("Workspace symbol search timed out")); }, 15_000);
+      this.eventBus.emit("pi-discover:symbol-query", {
+        version: 1, cwd: runtime.session.sessionManager.getCwd(), query: query.trim(),
+        acknowledge: () => { handled = true; },
+        resolve: (result: unknown) => { cleanup(); resolvePromise(result); },
+        reject: (error: unknown) => { cleanup(); reject(error); },
+      });
+      if (!handled) { cleanup(); reject(new Error("pi-discover symbol indexing is unavailable")); }
+    });
+    this.gate.assert(generation);
+    if (this.requireRuntime().session.sessionId !== runtime.session.sessionId) throw new Error("session changed while searching workspace symbols");
+    const symbols: WorkspaceSymbol[] = Array.isArray(value?.symbols) ? value.symbols.slice(0, 200).flatMap((item: any) => typeof item?.name === "string" && typeof item.kind === "string" && typeof item.path === "string" && Number.isSafeInteger(item.line) && Number.isSafeInteger(item.column) && typeof item.signature === "string" ? [{ name: item.name.slice(0, 500), kind: item.kind.slice(0, 100), path: item.path.slice(0, 500), line: item.line, column: item.column, signature: item.signature.slice(0, 1000) }] : []) : [];
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, symbols, moreAvailable: value?.moreAvailable === true };
+  }
+
   async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
     const runtime = this.requireRuntime();
     let response: Promise<any> | undefined;
@@ -2031,6 +2108,40 @@ export class SessionRuntime implements PiDriver {
       state: value.state,
       ...(typeof value.text === "string" ? { text: value.text.slice(0, 2 * 1024 * 1024) } : {}),
       ...(value.truncated === true ? { truncated: true } : {}),
+    };
+  }
+
+  async fileHistoryContext(): Promise<FileHistoryContext | undefined> {
+    const runtime = this.requireRuntime();
+    const sessionId = runtime.session.sessionId;
+    const generation = this.gate.generation;
+    this.gate.assert(generation);
+    let response: Promise<unknown> | undefined;
+    this.eventBus.emit("pi-timeline:history-context-request", {
+      version: 1,
+      sessionId,
+      respond: (value: unknown) => {
+        response ??= Promise.resolve(value);
+      },
+    });
+    if (!response) {
+      this.gate.assert(generation);
+      if (this.requireRuntime().session.sessionId !== sessionId)
+        throw new Error("session changed while loading file history context");
+      return undefined;
+    }
+    const value = await response;
+    this.gate.assert(generation);
+    if (this.requireRuntime().session.sessionId !== sessionId)
+      throw new Error("session changed while loading file history context");
+    const context = asFileHistoryContext(value);
+    if (!context) throw new Error("Timeline returned an invalid file history context");
+    if (context.sessionId !== sessionId) throw new Error("Timeline returned a file history context for another session");
+    const checkpoints = context.checkpoints.slice(-200);
+    return {
+      ...context,
+      checkpoints,
+      partial: context.partial || checkpoints.length !== context.checkpoints.length,
     };
   }
 
@@ -2187,12 +2298,19 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
+
   async stateqlCommand(
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
+    operationId?: string,
   ): Promise<StateQLCommandResult> {
     if (!isStateQLCommandInput(input)) throw new Error("StateQL command request is invalid");
+    if (
+      operationId !== undefined &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(operationId)
+    )
+      throw new Error("StateQL operation correlation is invalid");
     const runtime = this.requireRuntime();
     const controller = new AbortController();
     signal?.throwIfAborted();
@@ -2207,7 +2325,7 @@ export class SessionRuntime implements PiDriver {
       command: input,
       expectedConnectionId,
       signal: controller.signal,
-      ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database"),
+      ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database", operationId),
       claim: () => {
         if (claimed) return false;
         claimed = true;

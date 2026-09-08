@@ -1,3 +1,7 @@
+export { default as IconEye } from "@tabler/icons-react/dist/esm/icons/IconEye.mjs";
+export { default as IconEyeOff } from "@tabler/icons-react/dist/esm/icons/IconEyeOff.mjs";
+export { default as IconDeviceFloppy } from "@tabler/icons-react/dist/esm/icons/IconDeviceFloppy.mjs";
+export { default as IconPlugOff } from "@tabler/icons-react/dist/esm/icons/IconPlugOff.mjs";
 export { default as IconTable } from "@tabler/icons-react/dist/esm/icons/IconTable.mjs";
 export { default as IconActivityHeartbeat } from "@tabler/icons-react/dist/esm/icons/IconActivityHeartbeat.mjs";
 export { default as IconAdjustmentsHorizontal } from "@tabler/icons-react/dist/esm/icons/IconAdjustmentsHorizontal.mjs";

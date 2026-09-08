@@ -1,3 +1,4 @@
+import { KEY_COMMANDS } from "./keyboard.ts";
 import { GUARD_RISK_CATEGORIES, GUARD_RULE_DESCRIPTIONS, GUARD_RULE_LABELS } from "./guard-policy.ts";
 import type { ToolPolicyReadModel } from "./protocol/events.ts";
 import type {
@@ -18,6 +19,7 @@ export type SettingsSearchTab =
   | "hooks"
   | "policy"
   | "notifications"
+  | "keyboard"
   | "appearance";
 
 export type SettingsSearchControl =
@@ -231,8 +233,8 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
     tab: "appearance",
     section: "Appearance",
     label: "Color theme",
-    description: "Choose the color theme used throughout Pylon.",
-    keywords: "dark light warm",
+    description: "Choose whether Pylon follows your system appearance or uses a fixed theme.",
+    keywords: "system automatic auto dark light warm",
     control: { kind: "theme" },
   }),
   entry({
@@ -240,14 +242,18 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
     tab: "appearance",
     section: "Appearance",
     label: "Code highlighting",
-    description: "Choose the syntax highlighting theme.",
-    keywords: "syntax theme language",
+    description: "Choose a syntax highlighting theme or follow the color theme automatically.",
+    keywords: "syntax theme language auto automatic",
     control: { kind: "syntax-theme" },
   }),
 ];
 
 export function buildSettingsSearchIndex(input: SearchIndexInput): SettingsSearchEntry[] {
   const entries = [...STATIC_ENTRIES];
+  for (const command of KEY_COMMANDS) entries.push(entry({
+    id: `keyboard-${command.id}`, tab: "keyboard", section: "Keyboard", label: command.label,
+    description: `${command.scope} keyboard shortcut`, keywords: "hotkey keymap binding record preset reset", target: `keyboard-${command.id}`,
+  }));
 
   for (const provider of input.providers) {
     entries.push(

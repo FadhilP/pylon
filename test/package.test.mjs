@@ -107,7 +107,30 @@ test("packed package installs and launches its production web app", { timeout: 2
        try {
          const hits = await index.searchSymbols(project, { query: "packagedSymbol" });
          if (hits.length !== 1 || hits[0].path !== "source.ts") throw new Error("Installed filesystem indexing failed");
-       } finally { await index.close(); }`,
+       } finally { await index.close(); }
+       const smokeModule = join(packageRoot, "packages", "pi-stateql", "package-smoke.mjs");
+       await writeFile(smokeModule, 'export { StateQL } from "@fadhilp/stateql";');
+       const { StateQL } = await import(pathToFileURL(smokeModule).href);
+       const database = new StateQL({ home: join(project, "stateql"), session: "packaged-workspace" });
+       const checked = response => { if (!response.ok) throw new Error(response.error.code); return response.data; };
+       try {
+         checked(await database.connect(join(project, "data.sqlite"), { readOnly: false }));
+         checked(await database.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT)"));
+         checked(await database.exec("INSERT INTO items VALUES (1, 'one'), (2, 'two')"));
+         const catalog = checked(await database.listObjects({ kind: "table", limit: 10 }));
+         if (!catalog.objects.some(item => item.name === "items")) throw new Error("Packaged catalog discovery failed");
+         const result = checked(await database.readTable({ name: "items" }, 10));
+         const rows = database.readMaterialized(result.result_id);
+         if (!rows.row_tokens?.every(Boolean) || rows.row_tokens.length !== 2) throw new Error("Packaged row identity missing");
+         const plan = checked(await database.planTableUpdates(rows.row_tokens.map((row_token, i) => ({ row_token, changes: { set: { value: "updated-" + i } } }))));
+         const applied = checked(await database.apply(plan.plan_id));
+         if (applied.status !== "committed") throw new Error("Packaged batch did not commit");
+         const updated = checked(await database.readTable({ name: "items" }, 10));
+         if (!database.readMaterialized(updated.result_id).rows.every(row => row.value.startsWith("updated-"))) throw new Error("Packaged batch update failed");
+         const before = database.snapshot();
+         database.snapshot({ historyLimit: 1, historyInternal: false });
+         if (JSON.stringify(database.snapshot()) !== JSON.stringify(before)) throw new Error("Snapshot mutated database history");
+       } finally { database.close(); }`,
         packageRoot,
         project,
       ],

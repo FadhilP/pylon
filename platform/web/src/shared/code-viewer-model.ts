@@ -1,4 +1,27 @@
 import { applyPatch, diffWordsWithSpace, parsePatch, type StructuredPatch } from "diff";
+import type { FileHistoryOwner } from "pylon-core/src/file-history.ts";
+
+export interface CodeAttribution {
+  oldOwners?: readonly (string | null)[];
+  newOwners?: readonly (string | null)[];
+  owners: ReadonlyMap<string, FileHistoryOwner>;
+  selected?: string;
+  selectable: ReadonlySet<string>;
+}
+
+/** Diff deletions belong to the old snapshot, not the line now occupying that position. */
+export function attributedOwner(line: CodeLine, attribution?: CodeAttribution): FileHistoryOwner | undefined {
+  const number = line.kind === "deletion" ? line.oldLine : line.newLine;
+  const ids = line.kind === "deletion" ? attribution?.oldOwners : attribution?.newOwners;
+  const id = number === undefined ? undefined : ids?.[number - 1];
+  return id ? attribution?.owners.get(id) : undefined;
+}
+
+export function historyColor(id: string): string {
+  let hash = 0;
+  for (let index = 0; index < id.length; index++) hash = (Math.imul(hash, 31) + id.charCodeAt(index)) | 0;
+  return `hsl(${(hash >>> 0) % 360} var(--history-saturation, 55%) var(--history-lightness, 48%))`;
+}
 
 export interface DiffContents {
   oldFile: { contents: string };

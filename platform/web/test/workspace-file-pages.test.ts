@@ -61,7 +61,7 @@ test("workspace file pages accept registered submodule folder markers", () => {
     truncated: false,
   };
   assert.equal(isWorkspaceFilePage(page), true);
-  assert.equal(isWorkspaceFilePage({ ...page, files: [{ path: "vendor/library", kind: "directory" }] }), false);
+  assert.equal(isWorkspaceFilePage({ ...page, files: [{ path: "vendor/library", kind: "symlink" }] }), false);
 });
 
 test("workspace inventory cache is fresh only for a live matching revision", () => {

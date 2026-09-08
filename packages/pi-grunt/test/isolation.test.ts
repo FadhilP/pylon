@@ -142,19 +142,19 @@ test("worker commits remain part of the immutable-baseline patch", async () => {
   }
 });
 
-test("same-repository isolation transactions wait for cleanup", async () => {
+test("same-repository isolated worktrees can coexist before cleanup", { timeout: 10_000 }, async () => {
   const root = await repository();
   const first = await createIsolatedWorktree(exec, root);
-  let secondReady = false;
-  const secondPromise = createIsolatedWorktree(exec, root).then(value => {
-    secondReady = true;
-    return value;
-  });
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(secondReady, false);
-  await removeIsolatedWorktree(exec, first);
-  const second = await secondPromise;
-  await removeIsolatedWorktree(exec, second);
+  let second;
+  try {
+    second = await createIsolatedWorktree(exec, root);
+    assert.notEqual(second.workerRoot, first.workerRoot);
+    await access(first.workerRoot);
+    await access(second.workerRoot);
+  } finally {
+    if (second) await removeIsolatedWorktree(exec, second);
+    await removeIsolatedWorktree(exec, first);
+  }
 });
 
 test("apply rechecks parent state immediately before integration", async () => {
@@ -167,6 +167,62 @@ test("apply rechecks parent state immediately before integration", async () => {
     await assert.rejects(applyWorkerPatch(exec, isolated, worker.patch), /immediately before patch apply/);
   } finally {
     await removeIsolatedWorktree(exec, isolated);
+  }
+});
+
+test("concurrent integration serializes stale check and patch apply", { timeout: 10_000 }, async () => {
+  const root = await repository();
+  const first = await createIsolatedWorktree(exec, root);
+  const second = await createIsolatedWorktree(exec, root);
+  let releaseFirstApply = () => {};
+  try {
+    await writeFile(join(first.workerRoot, "first.txt"), "first\n");
+    await writeFile(join(second.workerRoot, "second.txt"), "second\n");
+    const [firstPatch, secondPatch] = await Promise.all([
+      collectWorkerPatch(exec, first),
+      collectWorkerPatch(exec, second),
+    ]);
+    let markFirstApplyStarted = () => {};
+    const firstApplyStarted = new Promise<void>(resolve => {
+      markFirstApplyStarted = resolve;
+    });
+    const holdFirstApply = new Promise<void>(resolve => {
+      releaseFirstApply = resolve;
+    });
+    const firstExec = async (command: string, args: string[]) => {
+      const result = await exec(command, args);
+      if (args.includes("apply")) {
+        markFirstApplyStarted();
+        await holdFirstApply;
+      }
+      return result;
+    };
+    const firstApply = applyWorkerPatch(firstExec, first, firstPatch.patch);
+    await firstApplyStarted;
+
+    let secondExecCalled = false;
+    const secondExec = async (command: string, args: string[]) => {
+      secondExecCalled = true;
+      return exec(command, args);
+    };
+    const secondApply = applyWorkerPatch(secondExec, second, secondPatch.patch).then(
+      () => undefined,
+      error => error,
+    );
+    assert.equal(secondExecCalled, false);
+
+    releaseFirstApply();
+    await firstApply;
+    const secondError = await secondApply;
+    assert.ok(secondError instanceof Error);
+    assert.match(secondError.message, /immediately before patch apply/);
+    assert.equal(secondExecCalled, true);
+    assert.equal((await readFile(join(root, "first.txt"), "utf8")).replace(/\r\n/g, "\n"), "first\n");
+    await assert.rejects(access(join(root, "second.txt")));
+  } finally {
+    releaseFirstApply();
+    await removeIsolatedWorktree(exec, second);
+    await removeIsolatedWorktree(exec, first);
   }
 });
 

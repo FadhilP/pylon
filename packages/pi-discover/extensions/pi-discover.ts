@@ -102,6 +102,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
     });
   });
   const disposeIndexActions = pi.events.on("pi-discover:index-action", index.handleAction);
+  const disposeSymbolQueries = pi.events.on("pi-discover:symbol-query", index.handleSymbolQuery);
 
   pi.on("session_start", async (_event, ctx) => {
     Object.assign(settings, await configuredSettings);
@@ -117,6 +118,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
     disposeChildCapability();
     disposeHealth();
     disposeIndexActions();
+    disposeSymbolQueries();
     index.publishUnavailable();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-discover" });
     discovery.clearSessionState();

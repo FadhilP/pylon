@@ -1,9 +1,15 @@
-import { IconArrowBackUp, IconFile, IconFiles, IconGitCompare, IconList, IconSearch, IconX } from "@tabler/icons-react";
+import { WorkspaceEditor } from "./workspace-editor";
+import { WorkspaceFileActions, type WorkspaceActionRequest, type WorkspaceTreeAction } from "./workspace-file-actions";
+import { workspaceDrafts } from "../shared/workspace-edit-state";
+import type { WorkspaceMutation } from "../shared/workspace-mutations";
+import { reconcileExplorerPaths, revealExplorerPath, setExplorerChangesOnly } from "./explorer-state";
+import { IconFiles, IconList, IconSearch } from "@tabler/icons-react";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type MutableRefObject,
   type ReactNode,
@@ -12,13 +18,16 @@ import {
 import type { FileReference } from "../shared/file-reference";
 import type { WorkspaceFileContent, WorkspaceFileDiff, WorkspaceFileReadModel } from "../shared/protocol/snapshots";
 import { FileContent, type FileView } from "./files-panel";
+import { FileHistoryViewer } from "./file-history";
 import { FileTypeIcon } from "./file-icons";
 import { WorkspaceTree } from "./workspace-tree";
+import { ExplorerSearch } from "./workspace-search";
 import {
   closeChangedFileTabs,
   closeFileTab,
   openFileTab,
   selectFileTab,
+  reconcileFileTabs,
   setFileTabView,
   workspaceStateForSession,
   type FileWorkspaceState,
@@ -69,6 +78,10 @@ export function FileWorkspace({
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
+  useSyncExternalStore(workspaceDrafts.subscribe, workspaceDrafts.snapshot);
+  const workspaceRevision = `${runtime?.workspace?.revision ?? ""}:${runtime?.workspace?.fileRevision ?? 0}`;
+  const mutationDisabled = live.connection !== "connected" || !runtime?.ready || Boolean(runtime.conversation.workStartedAt || runtime.conversation.streaming);
+  const [fileAction, setFileAction] = useState<WorkspaceActionRequest>();
   const canCompare =
     runtime?.workspace?.mode === "worktree" ||
     runtime?.workspace?.mode === "checkout" ||
@@ -100,6 +113,7 @@ export function FileWorkspace({
   useEffect(() => {
     setUi(workspaceStateForSession(stateStore.current, sessionId));
     setLoadedContent(undefined);
+    setFileAction(undefined);
     return () => {
       const stored = stateStore.current.get(sessionId);
       if (stored) stateStore.current.set(sessionId, closeChangedFileTabs(stored));
@@ -139,7 +153,7 @@ export function FileWorkspace({
       controller.abort();
       requestRevision.current++;
     };
-  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
+  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, workspaceRevision]);
 
   useEffect(() => {
     if (!requestedPath || !sessionId || (requestedPath.sessionId && requestedPath.sessionId !== sessionId)) return;
@@ -151,7 +165,7 @@ export function FileWorkspace({
   const validCachedContent =
     cachedContent &&
     cachedContent.generation === runtime?.sessionGeneration &&
-    cachedContent.revision === runtime?.workspace?.revision
+    cachedContent.revision === workspaceRevision
       ? cachedContent.value
       : undefined;
   const visibleContent = loadedContent && loadedContent.key === contentKey ? loadedContent.value : validCachedContent;
@@ -167,7 +181,7 @@ export function FileWorkspace({
     if (
       cached &&
       cached.generation === runtime?.sessionGeneration &&
-      cached.revision === runtime?.workspace?.revision
+      cached.revision === workspaceRevision
     ) {
       setLoadedContent({ key: contentKey, value: cached.value });
       setViewerLoading(false);
@@ -187,7 +201,7 @@ export function FileWorkspace({
     }
     const selectedSessionId = runtime.sessionId;
     const generation = runtime.sessionGeneration;
-    const revision = runtime.workspace?.revision;
+    const revision = workspaceRevision;
     let active = true;
     setLoadedContent(undefined);
     setViewerLoading(true);
@@ -230,7 +244,7 @@ export function FileWorkspace({
     runtime?.ready,
     runtime?.sessionId,
     runtime?.sessionGeneration,
-    runtime?.workspace?.revision,
+    workspaceRevision,
   ]);
 
   const currentFiles = useMemo(
@@ -242,8 +256,52 @@ export function FileWorkspace({
     updateUi(current => openFileTab(current, path, view, undefined, fromChanges));
   const selectOpenFile = (path: string) => updateUi(current => selectFileTab(current, path));
   const setSelectedView = (view: FileView) =>
-    updateUi(current => (current.selectedPath ? setFileTabView(current, current.selectedPath, view) : current));
-  const closeFile = (path: string) => updateUi(current => closeFileTab(current, path));
+    updateUi(current => {
+      if (!current.selectedPath) return current;
+      const next = setFileTabView(current, current.selectedPath, view);
+      return view === "current" ? { ...next, changedPaths: next.changedPaths.filter(path => path !== current.selectedPath) } : next;
+    });
+  const closeFile = (path: string) => {
+    if (workspaceDrafts.get(sessionId, path)?.saving) { onError(new Error("Wait for the file save to finish."), "Unable to close file"); return; }
+    if (workspaceDrafts.dirty(sessionId, path) && !window.confirm(`Discard unsaved edits to ${path} and close it?`)) return;
+    workspaceDrafts.remove(sessionId, path);
+    updateUi(current => closeFileTab(current, path));
+  };
+  const preparingAction = useRef(false);
+  const beginFileAction = async (action: WorkspaceTreeAction, path: string, directory: boolean) => {
+    if (!runtime || mutationDisabled || preparingAction.current) return;
+    preparingAction.current = true;
+    try {
+      if ((action === "rename" || action === "move" || action === "delete") && workspaceDrafts.dirty(sessionId, path))
+        throw new Error("Save or discard affected drafts before renaming, moving, or deleting.");
+      const entry = action === "rename" || action === "move" || action === "delete"
+        ? await runtimeStore.workspaceEntry(path, sessionId, runtime.sessionGeneration) : undefined;
+      setFileAction({ action, path, directory, entry, sessionId, generation: runtime.sessionGeneration });
+    } catch (error) { onError(error, "Unable to prepare file operation"); }
+    finally { preparingAction.current = false; }
+  };
+  const afterMutation = (mutation: WorkspaceMutation, targetSession: string) => {
+    // The server's file revision invalidates contents, even if its event precedes this response.
+    let next = workspaceStateForSession(stateStore.current, targetSession);
+    if (mutation.action === "move" || mutation.action === "delete") {
+      const destination = mutation.action === "move" ? mutation.destination : undefined;
+      workspaceDrafts.removeUnder(targetSession, mutation.path);
+      next = reconcileFileTabs(next, mutation.path, destination);
+      reconcileExplorerPaths(projectId, mutation.path, destination);
+      if (destination) revealExplorerPath(projectId, destination);
+    } else if (mutation.action === "createFile") {
+      next = openFileTab(next, mutation.path, "current");
+    }
+    if (mutation.action === "createFile" || mutation.action === "createDirectory") {
+      setExplorerChangesOnly(projectId, false);
+      revealExplorerPath(projectId, mutation.path);
+      next = { ...next, query: "" };
+    }
+    stateStore.current.set(targetSession, next);
+    if (runtimeStore.getSnapshot().runtime?.sessionId === targetSession) {
+      setUi(next);
+    }
+  };
   return (
     <section className={`file-workspace-shell${showExplorer ? "" : " has-session-navigation"}`}>
       {showExplorer && (
@@ -258,27 +316,23 @@ export function FileWorkspace({
               {/* the session list's count has a counterpart here, but only once
                   the inventory has actually arrived — 0 files while indexing is
                   a wrong answer, not an empty one */}
-              {currentFiles.length ? <small>{currentFiles.length.toLocaleString()} files</small> : undefined}
+              {currentFiles.length ? <small>{currentFiles.filter(file => !file.kind).length.toLocaleString()} files</small> : undefined}
             </span>
             <button className="panel-swap" type="button" onClick={onSessions}>
               <IconList size={14} />
               Sessions
             </button>
           </header>
-          <label className="files-search">
-            <IconSearch size={15} />
-            <input
-              value={currentUi.query}
-              onChange={event => updateUi(current => ({ ...current, query: event.target.value }))}
-              placeholder="Filter files"
-            />
-          </label>
+          <ExplorerSearch scope={`${sessionId}:${runtime?.sessionGeneration}`} query={currentUi.query}
+            onQuery={query => updateUi(current => ({ ...current, query }))}
+            onOpen={(path, line) => updateUi(current => openFileTab(current, path, "current", line))}>
           <WorkspaceTree
             files={currentFiles}
             selectedPath={currentUi.selectedPath}
             query={currentUi.query}
             projectId={projectId}
             onClearQuery={() => updateUi(current => ({ ...current, query: "" }))}
+            onFileAction={mutationDisabled ? undefined : (action, path, directory) => void beginFileAction(action, path, directory)}
             onSelect={(path, changed) => selectFile(path, changed ? "diff" : "current", changed)}>
             {inventoryLoading && !currentFiles.length && (
               <span className={inventoryProgress ? "files-progress" : "files-empty"}>
@@ -292,6 +346,7 @@ export function FileWorkspace({
               <span className="files-truncated">Showing first 10,000 files</span>
             )}
           </WorkspaceTree>
+          </ExplorerSearch>
         </aside>
       )}
 
@@ -315,7 +370,7 @@ export function FileWorkspace({
                     aria-selected={currentUi.selectedPath === path}
                     onClick={() => selectOpenFile(path)}>
                     <FileTypeIcon path={path} size={13} />
-                    <span>{path.split("/").at(-1) ?? path}</span>
+                    <span>{path.split("/").at(-1) ?? path}{workspaceDrafts.dirty(sessionId, path) ? " •" : ""}</span>
                   </button>
                   <button type="button" onClick={() => closeFile(path)} aria-label={`Close ${path}`}>
                     ×
@@ -325,47 +380,22 @@ export function FileWorkspace({
             </div>
             <section className="file-workspace-editor" aria-label="Open file">
               {currentUi.selectedPath ? (
-                <>
-                  <div className="file-viewer-toolbar">
-                    <code title={currentUi.selectedPath}>{currentUi.selectedPath}</code>
-                    <span>
-                      {canCompare && (
-                        <button
-                          className={currentUi.view === "base" ? "is-active" : ""}
-                          onClick={() => setSelectedView("base")}>
-                          <IconArrowBackUp size={14} />
-                          Baseline
-                        </button>
-                      )}
-                      <button
-                        className={currentUi.view === "current" ? "is-active" : ""}
-                        onClick={() =>
-                          setSelectedView(currentUi.view === "current" && canCompare ? "diff" : "current")
-                        }>
-                        <IconFile size={14} />
-                        Working copy
-                      </button>
-                      <button
-                        className={currentUi.view === "diff" ? "is-active" : ""}
-                        onClick={() => setSelectedView("diff")}>
-                        <IconGitCompare size={14} />
-                        Diff
-                      </button>
-                      <button
-                        className="icon-button"
-                        onClick={() => closeFile(currentUi.selectedPath!)}
-                        aria-label="Close file">
-                        <IconX size={14} />
-                      </button>
-                    </span>
-                  </div>
-                  <FileContent
-                    value={viewerLoading && !visibleContent ? undefined : visibleContent}
-                    view={currentUi.view}
-                    targetLine={currentUi.selectedLine}
-                    onError={onError}
-                  />
-                </>
+                <FileHistoryViewer
+                  key={`${sessionId}:${runtime?.sessionGeneration}:${currentUi.selectedPath}:${requestedPath?.requestId ?? ""}`}
+                  path={currentUi.selectedPath}
+                  live={live}
+                  canCompare={canCompare}
+                  view={currentUi.view}
+                  onView={setSelectedView}
+                  value={viewerLoading && !visibleContent ? undefined : visibleContent}
+                  targetLine={currentUi.selectedLine}
+                  onClose={() => closeFile(currentUi.selectedPath!)}
+                  onError={onError}
+                  liveEditor={<WorkspaceEditor sessionId={sessionId} generation={runtime!.sessionGeneration}
+                    path={currentUi.selectedPath} disabled={mutationDisabled}>
+                    <FileContent value={visibleContent} view="current" targetLine={currentUi.selectedLine} onError={onError} />
+                  </WorkspaceEditor>}
+                />
               ) : (
                 <div className="file-workspace-empty">
                   <IconFiles size={26} />
@@ -379,6 +409,8 @@ export function FileWorkspace({
           {sidePanel}
         </div>
       </main>
+      {fileAction && <WorkspaceFileActions key={`${fileAction.sessionId}:${fileAction.action}:${fileAction.path}`}
+        request={fileAction} onClose={() => setFileAction(undefined)} onMutation={afterMutation} />}
     </section>
   );
 }

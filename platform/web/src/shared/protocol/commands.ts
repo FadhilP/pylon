@@ -1,3 +1,4 @@
+import type { WorkspaceMutationInput } from "../workspace-mutations.ts";
 import type { GuardRuleOverrides } from "../guard-policy.ts";
 import type {
   DialogTimeoutSeconds,
@@ -58,6 +59,7 @@ export const COMMAND_NAMES = [
   "continuityPlanAction",
   "handoffSession",
   "applySessionChanges",
+  "mutateWorkspace",
   "updateProjectWorktreeSettings",
   "updateRuntimePolicy",
   "updateToolPolicy",
@@ -168,6 +170,7 @@ export type WebCommand =
       CommandBase)
   | ({ type: "handoffSession"; destination: "checkout" | "worktree" } & CommandBase)
   | ({ type: "applySessionChanges"; expectedRevision: string } & CommandBase)
+  | ({ type: "mutateWorkspace" } & WorkspaceMutationInput & CommandBase)
   | ({ type: "updateProjectWorktreeSettings"; projectId: string; setupCommand: string } & CommandBase)
   | ({
       type: "updateRuntimePolicy";

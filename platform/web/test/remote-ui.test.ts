@@ -125,6 +125,71 @@ test("StateQL credential references resolve from the OS vault and stale entries 
   assert.equal(await vault.resolve(reference), DATABASE_URL);
 });
 
+test("password setup persists only in the vault and cancelled setup saves nothing", async () => {
+  const values = new Map<string, string>();
+  const vault = new OsStateQLCredentialVault((_service, account) => ({
+    async setPassword(value) {
+      values.set(account, value);
+    },
+    async getPassword() {
+      return values.get(account);
+    },
+    async deleteCredential() {
+      return values.delete(account);
+    },
+  }));
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(structuredClone(request)));
+  bridge.setStateQLCredentialVault(vault);
+  bridge.context("session-1", 3);
+  const reference = createStateQLCredentialReference();
+  const target = "rediss://private@localhost/0";
+  const promptTarget = {
+    driver: "redis" as const,
+    username: "private",
+    hostname: "localhost",
+    port: 6379,
+    database: "0",
+  };
+  const request = stateqlRequest("read", {
+    reference: "PYLON_STATEQL_BROKERED_" + "A".repeat(48),
+    operation: "connect",
+    connection: undefined,
+    requestedReadOnly: true,
+  });
+  const pending = bridge.requestStateQLPassword(
+    "session-1",
+    3,
+    request,
+    promptTarget,
+    { timeoutMs: 0, remember: { reference, target } },
+    "database",
+    "setup-1",
+  );
+  const prompt = requests.at(-1)!;
+  bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: "p%@:/# Ü" });
+  assert.equal(await pending, "p%@:/# Ü");
+  const stored = await vault.resolve(reference, target);
+  assert.ok(stored);
+  assert.equal(decodeURIComponent(new URL(stored).password), "p%@:/# Ü");
+  assert.equal(await vault.resolve(reference, "redis://private@localhost/0"), undefined);
+  assert.equal(JSON.stringify({ requests, snapshot: bridge.snapshot() }).includes("p%@:/# Ü"), false);
+  assert.equal(prompt.operationId, "setup-1");
+  const abort = new AbortController();
+  const cancelledReference = createStateQLCredentialReference();
+  const cancelled = bridge.requestStateQLPassword(
+    "session-1",
+    3,
+    { ...request, signal: abort.signal },
+    { ...promptTarget, hostname: "other.example.com" },
+    { timeoutMs: 0, remember: { reference: cancelledReference, target: "rediss://private@other.example.com/0" } },
+  );
+  abort.abort();
+  assert.equal(await cancelled, undefined);
+  assert.equal(await vault.resolve(cancelledReference), undefined);
+  bridge.dispose();
+});
+
 test("provider auth prompts mark secrets without publishing their value", async () => {
   const requests: UiRequest[] = [];
   const bridge = new RemoteUiBridge(request => requests.push(request));
@@ -263,7 +328,7 @@ test("StateQL rejects password-only connection responses without retaining them"
   const pending = host.requestStateQLCredential(connectRequest);
   const prompt = requests.at(-1)!;
   bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: "password-only" });
-  await assert.rejects(pending, /complete PostgreSQL\/MySQL\/MongoDB URL or explicit sqlite:<path> source/);
+  await assert.rejects(pending, /StateQL credential must use the expected source format/);
   assert.equal(JSON.stringify({ requests, snapshot: bridge.snapshot() }).includes("password-only"), false);
 
   const retry = host.requestStateQLCredential(connectRequest);
