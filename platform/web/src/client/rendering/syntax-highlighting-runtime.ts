@@ -26,6 +26,11 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import type { GrammarState } from "shiki";
 import type { SyntaxTheme, SyntaxToken } from "./syntax-highlighting.ts";
 
+// Cold JavaScript-regex grammar compilation can consume Shiki's 500 ms default
+// on constrained workers and silently return partial tokens. Keep both paths on
+// the same finite budget so editor and preview highlighting remain equivalent.
+const TOKENIZE_TIME_LIMIT_MS = 2_000;
+
 const highlighter = createHighlighterCoreSync({
   themes: [oneDarkPro, githubDark, dracula, nord, githubLight],
   langs: [
@@ -91,7 +96,7 @@ export function highlightSyntax(text: string, language: string, theme: SyntaxThe
 export function syntaxTokens(text: string, language: string, theme: SyntaxTheme): SyntaxToken[][] | undefined {
   if (!loadedLanguages.has(language)) return;
   return highlighter
-    .codeToTokens(text, { lang: language, theme })
+    .codeToTokens(text, { lang: language, theme, tokenizeTimeLimit: TOKENIZE_TIME_LIMIT_MS })
     .tokens.map(line =>
       line.map(token => ({ content: token.content, className: tokenClasses(token.color, token.fontStyle) })),
     );
@@ -100,7 +105,7 @@ export function syntaxTokens(text: string, language: string, theme: SyntaxTheme)
 /** Stateful single-line tokenization for the editor worker; same engine, themes and classes as previews. */
 export function syntaxLine(text: string, language: string, theme: SyntaxTheme, grammarState?: GrammarState): { tokens: SyntaxToken[]; state?: GrammarState } {
   if (!loadedLanguages.has(language)) return { tokens: [{ content: text, className: "" }] };
-  const result = highlighter.codeToTokens(text, { lang: language, theme, grammarState });
+  const result = highlighter.codeToTokens(text, { lang: language, theme, grammarState, tokenizeTimeLimit: TOKENIZE_TIME_LIMIT_MS });
   return {
     tokens: result.tokens[0].map(token => ({ content: token.content, className: tokenClasses(token.color, token.fontStyle) })),
     state: result.grammarState,
