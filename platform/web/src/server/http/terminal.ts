@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import * as pty from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
-import type { PiDriver } from "../pi/pi-driver.ts";
+import type { PiDriver } from "../runtime/pi-driver.ts";
 import { requestAllowed, SessionStore, validCsrf, validTabId, type SecurityOptions } from "./security.ts";
 
 const MAX_INPUT_BYTES = 64 * 1024;

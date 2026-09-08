@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { SessionSummaryCache } from "../src/server/pi/session-summary-cache.ts";
+import { SessionSummaryCache } from "../src/server/sessions/session-summary-cache.ts";
 
 const message = JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }) + "\n";
 async function fixture(run: (root: string, paths: string[], cache: SessionSummaryCache) => Promise<void>) {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WorkspaceApplyTool } from "../src/server/pi/workspace-apply-tool.ts";
+import { WorkspaceApplyTool } from "../src/server/runtime/workspace-apply-tool.ts";
 
 function loadTool(bridge: WorkspaceApplyTool) {
   let registered: any;

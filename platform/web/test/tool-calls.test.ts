@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
-import type { PairedAgentActivity } from "../src/shared/agent-activity.ts";
-import { messageToolCallViews, pairedToolCallViews } from "../src/shared/tool-calls.ts";
+import type { PairedAgentActivity } from "../src/client/sessions/agent-activity.ts";
+import { messageToolCallViews, pairedToolCallViews } from "../src/client/conversation/tool-call-model.ts";
 
 const toolMessage = (tool: MessageReadModel["tool"], text = ""): MessageReadModel => ({
   id: "message",

@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { SessionRuntime } from "../src/server/pi/session-runtime.ts";
+import { SessionRuntime } from "../src/server/runtime/session-runtime.ts";
 
 const exec = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");

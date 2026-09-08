@@ -6,7 +6,7 @@ import {
   readDatabaseDrafts,
   saveDatabaseDraft,
   type DatabaseDraft,
-} from "../src/shared/database-workspace.ts";
+} from "../src/client/database/database-workspace.ts";
 
 test("query persistence isolates connection scopes and never retains live result or parameter data", () => {
   let raw = "";

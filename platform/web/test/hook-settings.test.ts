@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultHookSettings, HookSettingsStore } from "../src/server/pi/hook-settings.ts";
+import { defaultHookSettings, HookSettingsStore } from "../src/server/settings/hook-settings.ts";
 
 const settings = {
   sessionStart: { enabled: true, sources: [{ id: "start", name: "Start", kind: "text" as const, content: "hello" }] },

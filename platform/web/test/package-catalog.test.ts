@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PackageCatalog } from "../src/server/pi/package-catalog.ts";
+import { PackageCatalog } from "../src/server/packages/package-catalog.ts";
 
 async function addPackage(root: string, id: string, extension = "./extension.ts"): Promise<void> {
   const packageRoot = join(root, "packages", id);

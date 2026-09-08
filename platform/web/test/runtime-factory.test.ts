@@ -4,7 +4,7 @@ import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { createPylonRuntimeFactory } from "../src/server/pi/runtime-factory.ts";
+import { createPylonRuntimeFactory } from "../src/server/runtime/runtime-factory.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(os.tmpdir(), "pylon-prompt-"));

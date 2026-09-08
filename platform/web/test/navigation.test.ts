@@ -11,7 +11,7 @@ const vite = await createServer({
 });
 
 test("navigation", async t => {
-  const navigation = await vite.ssrLoadModule("/src/client/navigation.ts");
+  const navigation = await vite.ssrLoadModule("/src/client/app/navigation.ts");
   const {
     REFERENCES,
     SURFACES,

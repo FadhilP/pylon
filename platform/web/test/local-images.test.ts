@@ -9,7 +9,7 @@ import {
   LocalImageLoadError,
   MAX_LOCAL_IMAGE_BYTES,
   localImageExtension,
-} from "../src/server/pi/local-images.ts";
+} from "../src/server/runtime/local-images.ts";
 
 async function withTempDir(run: (directory: string) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "pylon-local-image-"));

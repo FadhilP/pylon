@@ -4,16 +4,16 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
-import { SessionSummaryCache } from "../src/server/pi/session-summary-cache.ts";
-import type { ProjectRegistry } from "../src/server/pi/project-registry.ts";
-import { SessionIndex } from "../src/server/pi/session-index.ts";
+import { SessionSummaryCache } from "../src/server/sessions/session-summary-cache.ts";
+import type { ProjectRegistry } from "../src/server/workspace/project-registry.ts";
+import { SessionIndex } from "../src/server/sessions/session-index.ts";
 import {
   aggregateUsage,
   modelRateLookup,
   usageWindow,
   type UsageIndexedSession,
-} from "../src/server/pi/usage-aggregation.ts";
-import { UsageHistoryAccumulator } from "../src/server/pi/usage-history.ts";
+} from "../src/server/usage/usage-aggregation.ts";
+import { UsageHistoryAccumulator } from "../src/server/usage/usage-history.ts";
 import { isUsageSnapshot } from "../src/shared/protocol/validation.ts";
 
 const at = "2026-03-20T12:00:00.000Z";

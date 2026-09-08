@@ -10,7 +10,7 @@ import {
   splitMatch,
   tallyNotes,
   type ChangelogRelease,
-} from "../src/shared/changelog.ts";
+} from "../src/client/settings/changelog.ts";
 
 /* Read, not imported: tsconfig.server.json covers test without resolveJsonModule. */
 const RELEASES = JSON.parse(

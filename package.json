@@ -89,8 +89,10 @@
     ]
   },
   "dependencies": {
-    "@fadhilp/stateql": "0.10.0",
+    "@fadhilp/stateql": "0.10.1",
+    "@napi-rs/keyring": "1.3.0",
     "@playwright/cli": "0.1.18",
+    "diff": "9.0.0",
     "ignore": "^7.0.8",
     "jiti": "^2.7.0",
     "node-pty": "^1.1.0",

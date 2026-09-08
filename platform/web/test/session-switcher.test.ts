@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applySessionLiveFields, groupSessionSwitcherSessions } from "../src/shared/session-list.ts";
+import { applySessionLiveFields, groupSessionSwitcherSessions } from "../src/client/sessions/session-list.ts";
 import type { SessionSummary } from "../src/shared/protocol/snapshots.ts";
 
 function session(id: string, projectId: string, name: string, modifiedAt = "2026-01-01T00:00:00.000Z"): SessionSummary {

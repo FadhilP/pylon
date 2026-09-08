@@ -10,7 +10,7 @@ import {
   usageDayKeys,
   usageFacetOptions,
   type UsageFilters,
-} from "../src/shared/usage-data.ts";
+} from "../src/client/usage/usage-data.ts";
 
 const filters = (project: string[] = [], provider: string[] = [], model: string[] = []): UsageFilters => ({
   project: new Set(project),

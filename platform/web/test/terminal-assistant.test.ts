@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { finalAssistant, reconcileFinalAssistant } from "../src/shared/terminal-assistant.ts";
+import { finalAssistant, reconcileFinalAssistant } from "../src/client/terminal/terminal-assistant.ts";
 
 const assistant = {
   id: "history-2",

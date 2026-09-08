@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { searchWorkspace } from "../src/server/pi/workspace-search.ts";
-import type { WorkspaceSearchQuery, WorkspaceSearchResult } from "../src/shared/workspace-search.ts";
+import { searchWorkspace } from "../src/server/workspace/workspace-search.ts";
+import type { WorkspaceSearchQuery, WorkspaceSearchResult } from "../src/shared/workspace/workspace-search.ts";
 
 const has = (name: string) => !spawnSync(name, ["--version"]).error;
 const engines = ["rg", "grep"] as const;

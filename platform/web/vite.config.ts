@@ -4,11 +4,12 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  worker: { format: "es" },
   resolve: {
     alias: [
       {
         find: /^@tabler\/icons-react$/,
-        replacement: fileURLToPath(new URL("./src/client/tabler-icons.mjs", import.meta.url)),
+        replacement: fileURLToPath(new URL("./src/client/ui/tabler-icons.mjs", import.meta.url)),
       },
     ],
   },

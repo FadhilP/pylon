@@ -6,7 +6,7 @@ import {
   parseGridJson,
   sortGridRows,
   type GridRow,
-} from "../src/shared/database-grid.ts";
+} from "../src/client/database/database-grid.ts";
 
 const columns = [
   { name: "id", type: "integer" },

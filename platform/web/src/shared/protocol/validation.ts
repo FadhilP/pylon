@@ -1,5 +1,5 @@
-import { validWorkspaceMutation } from "../workspace-mutations.ts";
-import { validGuardRules } from "../guard-policy.ts";
+import { validWorkspaceMutation } from "../workspace/workspace-mutations.ts";
+import { validGuardRules } from "../settings/guard-policy.ts";
 import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "./envelope.ts";

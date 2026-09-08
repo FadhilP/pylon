@@ -30,6 +30,7 @@ export type SessionSearchMode = "text" | "tools";
 export type SessionMatch = {
   sessionId: string;
   modifiedAt: string;
+  sessionName?: string;
   workspace: string;
   role: "user" | "assistant";
   text: string;
@@ -256,6 +257,15 @@ function messageCandidates(branch: SessionBranch): SessionCandidate[] {
   );
 }
 
+function sessionName(branch: SessionBranch): string | undefined {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index] as any;
+    if (entry?.type === "session_info")
+      return typeof entry.name === "string" ? entry.name.trim() || undefined : undefined;
+  }
+  return undefined;
+}
+
 function toolCandidates(
   branch: SessionBranch,
   options: { toolName?: string; includeResult?: boolean; includeChildCalls?: boolean; childToolName?: string },
@@ -357,6 +367,7 @@ export async function searchSessions(
     } catch {
       continue;
     }
+    const name = sessionName(branch);
     const candidates = mode === "tools" ? toolCandidates(branch, options) : messageCandidates(branch);
     for (const candidate of candidates) {
       abortIfCancelled();
@@ -382,6 +393,7 @@ export async function searchSessions(
         sessionId: info.id,
         modifiedAt: info.modified.toISOString(),
         workspace: basename(info.cwd) || "Unknown workspace",
+        ...(name ? { sessionName: cleanMetadata(name) } : {}),
         role: candidate.role,
         text: normalized.slice(0, MAX_EXCERPT_CHARS),
         ...(part

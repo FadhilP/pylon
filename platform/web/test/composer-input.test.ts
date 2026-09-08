@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isExactSlashCommandSelection, loginCommandProvider } from "../src/shared/composer-input.ts";
+import { isExactSlashCommandSelection, loginCommandProvider } from "../src/client/conversation/composer-input.ts";
 
 test("login composer command routes only exact login input and preserves an optional provider query", () => {
   assert.equal(loginCommandProvider("/login"), undefined);

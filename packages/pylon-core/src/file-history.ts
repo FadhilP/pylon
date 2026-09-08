@@ -45,6 +45,8 @@ export interface FileHistoryStop extends FileHistoryOwner {
   verification?: "passed" | "failed" | "unverified";
   /** Path at this revision; renames in committed history are followed. */
   path: string;
+  /** Unchanged session snapshots omitted before this checkpoint; null is a known Git gap of unknown size. */
+  skippedBefore?: number | null;
 }
 export interface FileHistoryContent {
   state: "available" | "deleted" | "binary" | "oversized" | "unavailable";
@@ -55,6 +57,8 @@ export interface FileHistoryContent {
   oldOwners?: (string | null)[];
   newOwners?: (string | null)[];
   owners: FileHistoryOwner[];
+  /** Line counts for this version's individual change, when its bounded textual patch is available. */
+  changes?: { added: number; removed: number };
   attributionComplete: boolean;
 }
 export interface FileHistoryResult {
@@ -66,6 +70,8 @@ export interface FileHistoryResult {
   baselineAvailable: boolean;
   baselineLabel?: "Session baseline" | "HEAD";
   partial: boolean;
+  /** Verified unchanged session checkpoints omitted after the final emitted checkpoint. */
+  skippedSessionTail?: number;
   hasMore: boolean;
   notice?: string;
   selected?: string;

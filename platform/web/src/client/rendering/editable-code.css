@@ -1,0 +1,20 @@
+/* CodeMirror owns input/layout; palette and gutter controls belong to CodeViewer. */
+.code-viewer.code-editor { display: flex; overflow: hidden; --line-tint: var(--viewer-bg); --number-color: var(--viewer-muted); }
+.code-editor .cm-editor { flex: 1; min-width: 0; min-height: 0; background: var(--viewer-bg); color: var(--viewer-fg); }
+.code-editor .cm-editor.cm-focused { outline: none; }
+.code-editor .cm-scroller { overflow: auto; font: inherit; line-height: 20px; }
+.code-editor .cm-content { padding: 8px 0; caret-color: var(--viewer-fg); }
+.code-editor .cm-line { padding: 0 1ch; }
+.code-editor .cm-cursor, .code-editor .cm-dropCursor { border-left-color: var(--viewer-fg); }
+.code-editor .cm-gutters { border: 0; background: var(--viewer-bg); color: var(--viewer-muted); }
+.code-editor .cm-gutterElement { padding: 0; }
+.code-editor .code-viewer-gutter { height: 20px; width: var(--viewer-gutter-width); }
+.code-editor .cm-activeLine { background: color-mix(in lab, var(--viewer-bg) var(--viewer-line-mix), var(--viewer-select)); }
+.code-editor .code-editor-selected-gutter { --line-tint: var(--viewer-select); --number-color: color-mix(in lab, var(--viewer-select) 75%, var(--viewer-mixer)); }
+.code-editor .cm-selectionBackground, .code-editor .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground { background: color-mix(in lab, var(--viewer-bg) 65%, var(--viewer-select)); }
+.code-editor .code-editor-note.annotation-inline { position: relative; left: calc(var(--viewer-scroll-left) - var(--viewer-gutter-width)); width: var(--viewer-width); white-space: normal; }
+.code-editor .code-viewer-gutter > .code-editor-git { position: absolute; inset: 0 auto 0 0; width: 3px; padding: 0; background: var(--viewer-add); forced-color-adjust: none; }
+.code-editor .code-viewer-gutter > .code-editor-git.is-modified { background: var(--viewer-select); }
+.code-editor .code-viewer-gutter > .code-editor-git.is-deleted { width: 6px; background: transparent; }
+.code-editor-git.is-deleted::before, .code-editor-git.is-deleted.is-both::after { position: absolute; left: 0; top: -4px; content: ""; width: 0; height: 0; border: 4px solid transparent; border-left: 6px solid var(--viewer-delete); }
+.code-editor-git.is-deleted.is-after::before, .code-editor-git.is-deleted.is-both::after { top: auto; bottom: -4px; }

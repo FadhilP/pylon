@@ -1,0 +1,19 @@
+.workspace-text-editor { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.workspace-edit-toolbar { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-height: 38px; padding: 5px 10px; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--text-soft); font-size: 12px; line-height: 1.4; }
+.workspace-edit-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.workspace-edit-toolbar .annotation-actions { margin-left: auto; }
+.workspace-edit-toolbar .primary-button, .workspace-edit-toolbar .secondary-button { width: auto; min-height: 26px; padding: 3px 9px; gap: 5px; font-size: 11.5px; }
+.workspace-edit-toolbar button:disabled { opacity: .45; cursor: default; }
+.workspace-edit-toolbar .primary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
+.workspace-edit-status, .workspace-edit-hint { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.workspace-edit-hint { margin-left: auto; }
+.workspace-edit-notice { flex: 0 0 auto; margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.workspace-text-input { flex: 1; min-height: 0; width: 100%; resize: none; padding: 12px 16px; border: 0; border-radius: 0; background: var(--code-bg); color: var(--text); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 13px; line-height: 1.6; tab-size: 2; white-space: pre; }
+.workspace-text-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.workspace-edit-error { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin: 0; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--red); background: var(--red-soft); font-size: 12px; line-height: 1.5; }
+.workspace-edit-error > span { flex: 1; min-width: 0; }
+.workspace-edit-error .secondary-button { min-height: 26px; font-size: 11.5px; }
+.workspace-tree-menu { position: fixed; z-index: 1200; display: flex; flex-direction: column; width: 192px; max-height: calc(100vh - 8px); overflow: auto; padding: 4px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text-soft); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow); }
+.workspace-tree-menu button { min-height: 29px; padding: 5px 9px; background: transparent; color: inherit; border: 0; border-radius: 3px; text-align: left; }
+.workspace-tree-menu button:hover, .workspace-tree-menu button:focus-visible { color: var(--text); background: var(--surface-hover); }
+.workspace-tree-menu button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

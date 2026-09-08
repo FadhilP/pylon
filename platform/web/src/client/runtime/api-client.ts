@@ -1,6 +1,6 @@
-import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/annotations";
-import type { KeyboardSettings, Keymap } from "../../shared/keyboard";
-import type { WorkspaceEntry } from "../../shared/workspace-mutations";
+import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations";
+import type { KeyboardSettings, Keymap } from "../../shared/settings/keyboard";
+import type { WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type {
@@ -42,8 +42,8 @@ import type {
   WorkspaceFilePage,
 } from "../../shared/protocol/snapshots";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
-import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace-search";
-import { readSearchStream } from "../../shared/workspace-search-stream";
+import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search";
+import { readSearchStream } from "./workspace-search-stream";
 
 const TAB_KEY = "pylon-tab-id";
 let memoryTabId: string | undefined;
@@ -322,9 +322,18 @@ export class ApiClient {
   }
 
 
-  async workspaceEntry(generation: number, path: string): Promise<WorkspaceEntry> {
+  async workspaceEntry(generation: number, path: string, moveDestination?: string, includeGitIndex = true): Promise<WorkspaceEntry> {
     const query = new URLSearchParams({ generation: String(generation), path });
+    if (moveDestination !== undefined) query.set("moveDestination", moveDestination);
+    if (!includeGitIndex) query.set("gitIndex", "false");
     return json<WorkspaceEntry>(await fetch(`/api/v1/workspace/entry?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin",
+    }));
+  }
+
+  async workspaceGitIndex(generation: number, path: string): Promise<WorkspaceGitIndex> {
+    const query = new URLSearchParams({ generation: String(generation), path });
+    return json<WorkspaceGitIndex>(await fetch(`/api/v1/workspace/index?${query}`, {
       headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin",
     }));
   }

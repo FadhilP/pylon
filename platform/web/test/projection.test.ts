@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentColorId } from "../src/shared/format.ts";
+import { agentColorId } from "../src/client/ui/session-format.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import type { ProviderAuthReadModel } from "../src/shared/protocol/events.ts";
@@ -12,9 +12,9 @@ import {
   projectConversationTurnIndex,
   projectMessages,
   RuntimeProjection,
-} from "../src/server/pi/projections.ts";
-import { initialOperational } from "../src/server/pi/operational-projections.ts";
-import { modelCatalogFacts } from "../src/server/pi/session-runtime.ts";
+} from "../src/server/runtime/projections.ts";
+import { initialOperational } from "../src/server/runtime/operational-projections.ts";
+import { modelCatalogFacts } from "../src/server/runtime/session-runtime.ts";
 import { isRuntimeSnapshot } from "../src/shared/protocol/validation.ts";
 
 function runtime(): RuntimeSnapshot {

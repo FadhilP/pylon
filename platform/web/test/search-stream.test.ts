@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readSearchStream } from "../src/shared/workspace-search-stream.ts";
+import { readSearchStream } from "../src/client/runtime/workspace-search-stream.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 
 const result = {

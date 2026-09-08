@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PromptAttachmentBridge, PROMPT_FILES_CUSTOM_TYPE } from "../src/server/pi/prompt-attachments.ts";
+import { PromptAttachmentBridge, PROMPT_FILES_CUSTOM_TYPE } from "../src/server/runtime/prompt-attachments.ts";
 
 test("prompt attachment bridge injects hidden file context exactly once", () => {
   const bridge = new PromptAttachmentBridge();

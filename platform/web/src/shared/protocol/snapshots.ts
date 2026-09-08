@@ -1,5 +1,5 @@
-import type { KeyboardSettings } from "../keyboard.ts";
-import type { EffectiveGuardRules, GuardRuleOverrides } from "../guard-policy.ts";
+import type { KeyboardSettings } from "../settings/keyboard.ts";
+import type { EffectiveGuardRules, GuardRuleOverrides } from "../settings/guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type {
   ConversationReadModel,

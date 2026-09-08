@@ -18,16 +18,16 @@ import {
   deleteSessionFile,
   SessionRuntime,
   terminalAgentError,
-} from "../src/server/pi/session-runtime.ts";
-import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
-import { PROMPT_IMAGE_ATTACHMENT_VERSION, promptFilesMessage } from "../src/server/pi/prompt-attachments.ts";
-import { mergeHistoryMessages } from "../src/shared/history-cache.ts";
+} from "../src/server/runtime/session-runtime.ts";
+import { encodeHistoryCursor } from "../src/server/runtime/projections.ts";
+import { PROMPT_IMAGE_ATTACHMENT_VERSION, promptFilesMessage } from "../src/server/runtime/prompt-attachments.ts";
+import { mergeHistoryMessages } from "../src/client/runtime/history-cache.ts";
 import type {
   DialogMethod,
   StateQLCredentialHost,
   StateQLCredentialRequest,
   UiRequest,
-} from "../src/server/pi/remote-ui-context.ts";
+} from "../src/server/runtime/remote-ui-bridge.ts";
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");

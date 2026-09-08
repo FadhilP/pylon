@@ -1,4 +1,5 @@
-import { validAnnotationMutation, type AnnotationMutation, type AnnotationRequest } from "../../shared/annotations.ts";
+import { validWorkspacePath } from "../../shared/workspace/workspace-mutations.ts";
+import { validAnnotationMutation, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { URL } from "node:url";
@@ -13,11 +14,11 @@ import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands
 import type { BootstrapSnapshot, StateQLCommandInput, UsageQuery } from "../../shared/protocol/snapshots.ts";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope.ts";
-import type { WorkspaceSearchQuery, WorkspaceSymbolResult } from "../../shared/workspace-search.ts";
-import type { DriverEvent, PiDriver } from "../pi/pi-driver.ts";
-import { decodeSessionCursor } from "../pi/session-index.ts";
-import { usageWindow } from "../pi/usage-aggregation.ts";
-import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from "../pi/projections.ts";
+import type { WorkspaceSearchQuery, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search.ts";
+import type { DriverEvent, PiDriver } from "../runtime/pi-driver.ts";
+import { decodeSessionCursor } from "../sessions/session-index.ts";
+import { usageWindow } from "../usage/usage-aggregation.ts";
+import { decodeHistoryCursor, decodeTurnIndexCursor, RuntimeProjection } from "../runtime/projections.ts";
 import { CommandIdempotency } from "../transport/commands.ts";
 import { EventJournal, eventCursor } from "../transport/event-journal.ts";
 import {
@@ -63,8 +64,8 @@ function validOperationId(value: unknown): value is string {
   return typeof value === "string" && OPERATION_ID.test(value);
 }
 
-import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../keyboard-settings.ts";
-import { validateKeymap, type Keymap } from "../../shared/keyboard.ts";
+import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../settings/keyboard-settings.ts";
+import { validateKeymap, type Keymap } from "../../shared/settings/keyboard.ts";
 
 export interface ServerTransportOptions extends SecurityOptions {
   secureCookies?: boolean;
@@ -162,6 +163,8 @@ export class ServerTransport {
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/files")
         return await this.workspaceFiles(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/search") return await this.workspaceSearch(request, response, url);
+      if (request.method === "GET" && url.pathname === "/api/v1/workspace/index")
+        return await this.workspaceGitIndex(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/entry")
         return await this.workspaceEntry(request, response, url);
       if (request.method === "GET" && url.pathname === "/api/v1/workspace/file")
@@ -1082,11 +1085,27 @@ export class ServerTransport {
       throw httpError(409, "stale session generation");
     if (!path || path.length > 500) throw httpError(400, "invalid workspace path");
     if (!this.driver.workspaceEntry) throw httpError(404, "workspace editing is unavailable");
-    const entry = await this.driver.workspaceEntry(path);
+    const moveDestination = url.searchParams.get("moveDestination") ?? undefined;
+    if (moveDestination !== undefined && (!moveDestination || moveDestination.length > 500)) throw httpError(400, "invalid move destination");
+    const entry = await this.driver.workspaceEntry(path, moveDestination, url.searchParams.get("gitIndex") !== "false");
     if (entry.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while inspecting entry");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, entry);
   }
+
+  private async workspaceGitIndex(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    this.requireTab(request);
+    const generation = Number(url.searchParams.get("generation"));
+    const path = url.searchParams.get("path") ?? "";
+    if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
+      throw httpError(409, "stale session generation");
+    if (!validWorkspacePath(path)) throw httpError(400, "invalid workspace path");
+    if (!this.driver.workspaceGitIndex) throw httpError(404, "workspace comparison is unavailable");
+    const result = await this.driver.workspaceGitIndex(path);
+    if (result.sessionGeneration !== this.journal.sessionGeneration) throw httpError(409, "session changed while reading index");
+    this.send(response, 200, result);
+  }
+
 
   private async workspaceFile(
     request: IncomingMessage,
@@ -1546,7 +1565,7 @@ export class ServerTransport {
         return this.driver.applySessionChanges(command).then(result => accepted(result.sessionGeneration));
       case "mutateWorkspace":
         if (!this.driver.mutateWorkspace) return Promise.reject(httpError(409, "workspace editing is unavailable"));
-        return this.driver.mutateWorkspace(command).then(() => accepted(command.expectedGeneration));
+        return this.driver.mutateWorkspace(command).then(result => ({ ...accepted(command.expectedGeneration), ...(result ? { savedVersion: result.savedVersion } : {}) }));
       case "updateProjectWorktreeSettings":
         if (!this.driver.updateProjectWorktreeSettings)
           return Promise.reject(httpError(409, "worktree settings are unavailable"));

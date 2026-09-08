@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../src/shared/annotations.ts";
-import type { WorkspaceMutationInput } from "../src/shared/workspace-mutations.ts";
+import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../src/shared/workspace/annotations.ts";
+import type { WorkspaceMutationInput } from "../src/shared/workspace/workspace-mutations.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
@@ -54,10 +54,10 @@ import type {
   RuntimeTarget,
   SetSessionControlsInput,
   UpdateHookSettingsInput,
-} from "../src/server/pi/pi-driver.ts";
-import type { UiResponse } from "../src/server/pi/remote-ui-context.ts";
-import { initialOperational } from "../src/server/pi/operational-projections.ts";
-import { encodeHistoryCursor } from "../src/server/pi/projections.ts";
+} from "../src/server/runtime/pi-driver.ts";
+import type { UiResponse } from "../src/server/runtime/remote-ui-bridge.ts";
+import { initialOperational } from "../src/server/runtime/operational-projections.ts";
+import { encodeHistoryCursor } from "../src/server/runtime/projections.ts";
 
 const snapshot: RuntimeSnapshot = {
   protocolVersion: PROTOCOL_VERSION,
@@ -184,6 +184,7 @@ test("workspace saves transport large text once and reject unsafe or stale reque
   class EditingDriver extends FakeDriver {
     async mutateWorkspace(input: WorkspaceMutationInput) {
       if (input.mutation.action === "save") { saved = input.mutation.text; writes++; }
+      return { savedVersion: "b".repeat(64) };
     }
     async workspaceEntry(path: string) {
       return { sessionId: "session-1", sessionGeneration: 1, path, kind: "file" as const, entries: 1, version: "a".repeat(64), text: saved };
@@ -207,8 +208,8 @@ test("workspace saves transport large text once and reject unsafe or stale reque
     assert.equal((await send({ ...command, expectedGeneration: 2 })).status, 409);
     assert.equal((await send({ ...command, mutation: { action: "createFile", path: "../escape" } })).status, 400);
     assert.equal(writes, 0);
-    assert.equal((await send(command)).status, 200);
-    assert.equal((await send(command)).status, 200);
+    assert.equal((await body(await send(command))).savedVersion, "b".repeat(64));
+    assert.equal((await body(await send(command))).savedVersion, "b".repeat(64), "idempotent retries return the same save receipt");
     assert.equal(writes, 1);
     assert.equal(saved, command.mutation.text);
     const entry = await fetch(`${origin}/api/v1/workspace/entry?generation=1&path=large.txt`, { headers: { cookie, "x-pylon-tab-id": tab } });
@@ -217,6 +218,38 @@ test("workspace saves transport large text once and reject unsafe or stale reque
     assert.equal((await send({ ...command, commandId: "too-large", mutation: { ...command.mutation, text: "x".repeat(1024 * 1024 + 1) } })).status, 400);
     assert.equal(writes, 1);
   } finally { abort.abort(); await running.close(); }
+});
+
+test("editable entry reads complete while optional Git comparison is still pending", { timeout: 10_000 }, async () => {
+  let release!: () => void;
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const comparisonStarted = new Promise<void>(resolve => { started = resolve; });
+  class EditingDriver extends FakeDriver {
+    async workspaceEntry(path: string, _destination?: string, includeGitIndex = true) {
+      if (includeGitIndex) await waiting;
+      return { sessionId: "session-1", sessionGeneration: 1, path, kind: "file" as const, entries: 1, version: "a".repeat(64), text: "editable now" };
+    }
+    async workspaceGitIndex() {
+      started(); await waiting;
+      return { sessionId: "session-1", sessionGeneration: 1, text: "indexed text" };
+    }
+  }
+  const running = await startIsolatedServer({ port: 0, development: false, driver: new EditingDriver() });
+  const origin = `http://127.0.0.1:${(running.server.address() as AddressInfo).port}`;
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": "optional-index" } });
+    const headers = { cookie: (bootstrap.headers.get("set-cookie") ?? "").split(";")[0], "x-pylon-tab-id": "optional-index" };
+    const index = fetch(`${origin}/api/v1/workspace/index?generation=1&path=file.ts`, { headers });
+    await comparisonStarted;
+    const entry = await fetch(`${origin}/api/v1/workspace/entry?generation=1&path=file.ts&gitIndex=false`, { headers });
+    assert.equal(entry.status, 200);
+    assert.equal((await body(entry)).text, "editable now");
+    assert.equal((await fetch(`${origin}/api/v1/workspace/index?generation=2&path=file.ts`, { headers })).status, 409);
+    assert.equal((await fetch(`${origin}/api/v1/workspace/index?generation=1&path=../outside`, { headers })).status, 400);
+    release();
+    assert.equal((await body(await index)).text, "indexed text");
+  } finally { release(); await running.close(); }
 });
 
 test("StateQL HTTP command validation accepts native Mongo commands and rejects irrelevant or oversized payloads", () => {
@@ -1145,7 +1178,7 @@ test("keyboard preferences are sessionless, CSRF protected, replayable and rejec
     };
     const first = await connect("keyboard-first");
     const second = await connect("keyboard-second");
-    const keymap: import("../src/shared/keyboard.ts").Keymap = { preset: "pylon", overrides: { theme: { kind: "chord", key: "F8", modifiers: [] } } };
+    const keymap: import("../src/shared/settings/keyboard.ts").Keymap = { preset: "pylon", overrides: { theme: { kind: "chord", key: "F8", modifiers: [] } } };
     const post = (headers: Record<string, string>, revision: number, map = keymap) => fetch(`${origin}/api/v1/settings/keyboard`, { method: "POST", headers, body: JSON.stringify({ revision, keymap: map }) });
     assert.equal((await fetch(`${origin}/api/v1/settings/keyboard`)).status, 403);
     assert.equal((await post({ ...first.headers, "x-pylon-csrf": "wrong" }, 0)).status, 403);
@@ -2659,10 +2692,10 @@ test("workspace search streams bounded results, rejects stale inputs and cancels
   let disconnected!: () => void;
   const aborted = new Promise<void>(resolve => { disconnected = resolve; });
   class SearchDriver extends FakeDriver {
-    async workspaceSearch(input: import("../src/server/pi/pi-driver.ts").WorkspaceSearchInput,
-      send: (value: import("../src/shared/workspace-search.ts").WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal) {
+    async workspaceSearch(input: import("../src/server/runtime/pi-driver.ts").WorkspaceSearchInput,
+      send: (value: import("../src/shared/workspace/workspace-search.ts").WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal) {
       calls++;
-      const result: import("../src/shared/workspace-search.ts").WorkspaceSearchResult = {
+      const result: import("../src/shared/workspace/workspace-search.ts").WorkspaceSearchResult = {
         protocolVersion: PROTOCOL_VERSION, sessionGeneration: 1, engine: "grep", files: [],
         truncated: false, inventoryTruncated: false, skipped: 0, timedOut: false, elapsedMs: 1,
       };

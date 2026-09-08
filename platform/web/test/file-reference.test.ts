@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseFileReference } from "../src/shared/file-reference.ts";
+import { parseFileReference } from "../src/client/workspace/file-reference.ts";
 
 test("parses workspace file references and source locations", () => {
   assert.deepEqual(parseFileReference("platform/web/src/client/App.tsx"), { path: "platform/web/src/client/App.tsx" });

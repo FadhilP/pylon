@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { FileHistoryReader, carryHistoryOwners } from "../src/server/pi/file-history.ts";
+import { FileHistoryReader, carryHistoryOwners } from "../src/server/workspace/file-history.ts";
 import type { FileHistoryContext, HistoryTree } from "pylon-core/src/file-history.ts";
 
 const exec = promisify(execFile);
@@ -62,6 +62,13 @@ test("session versions preserve dirty baseline, EOF bytes and deleted-line attri
     const file = await reader.read({ ...input, query: { path: "old name.txt", scope: "session", selected: "s:two" } });
     assert.equal(file.content?.text, "baseline\nkeep\npreexisting\nturn two");
     assert.deepEqual(file.content?.newOwners, [null, null, null, "s:two"]);
+    assert.deepEqual(file.content?.changes, { added: 1, removed: 1 });
+    const cumulative = await reader.read({
+      ...input,
+      query: { path: "old name.txt", scope: "session", selected: "s:two", view: "diff" },
+    });
+    assert.deepEqual(cumulative.content?.changes, { added: 1, removed: 1 });
+    assert.doesNotMatch(cumulative.content?.text ?? "", /-turn one/);
     const change = await reader.read({
       ...input,
       query: { path: "old name.txt", scope: "session", selected: "s:two", view: "change" },
@@ -310,6 +317,83 @@ test("gaps and truncated checkpoint windows never attribute earlier changes to a
     const old = await reader.read({ cwd: f.root, sessionId: "s", context: legacy, query });
     assert.deepEqual(old.content?.newOwners, [null, "s:last"]);
     assert.equal(old.partial, true);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+
+test("checkpoint gaps count only verified unchanged snapshots and report an unchanged tail", async () => {
+  const f = await fixture();
+  try {
+    const baseline = await f.tree();
+    await writeFile(join(f.root, "old name.txt"), "baseline\nchanged\n");
+    await f.git("add", ".");
+    const changed = await f.tree();
+    const context: FileHistoryContext = {
+      sessionId: "s",
+      baseline,
+      partial: false,
+      checkpoints: [
+        { id: "s:same-1", title: "Same", createdAt: "1", verification: "passed", snapshot: baseline },
+        { id: "s:same-2", title: "Same", createdAt: "2", verification: "passed", snapshot: baseline },
+        { id: "s:changed", title: "Changed", createdAt: "3", verification: "passed", snapshot: changed },
+        { id: "s:tail-1", title: "Same", createdAt: "4", verification: "passed", snapshot: changed },
+        { id: "s:tail-2", title: "Same", createdAt: "5", verification: "passed", snapshot: changed },
+      ],
+    };
+    const result = await new FileHistoryReader().read({
+      cwd: f.root,
+      sessionId: "s",
+      context,
+      query: { path: "old name.txt", scope: "session" },
+    });
+    assert.deepEqual(result.stops.map(stop => stop.id), ["s:changed"]);
+    assert.equal(result.stops[0].skippedBefore, 2);
+    assert.equal(result.skippedSessionTail, 2);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("unavailable snapshots do not invent checkpoint gaps or selected change counts", async () => {
+  const f = await fixture();
+  try {
+    const baseline = await f.tree();
+    await writeFile(join(f.root, "old name.txt"), "baseline\nchanged\n");
+    await f.git("add", ".");
+    const changed = await f.tree();
+    const context: FileHistoryContext = {
+      sessionId: "s",
+      baseline,
+      partial: false,
+      checkpoints: [
+        {
+          id: "s:missing",
+          title: "Missing",
+          createdAt: "1",
+          verification: "unverified",
+          snapshot: { ...baseline, tree: "1".repeat(40) },
+        },
+        { id: "s:changed", title: "Changed", createdAt: "2", verification: "passed", snapshot: changed },
+      ],
+    };
+    const reader = new FileHistoryReader();
+    const result = await reader.read({
+      cwd: f.root,
+      sessionId: "s",
+      context,
+      query: { path: "old name.txt", scope: "session" },
+    });
+    assert.deepEqual(result.stops.map(stop => stop.id), ["s:missing", "s:changed"]);
+    assert.equal(result.stops[1].skippedBefore, undefined);
+    const selected = await reader.read({
+      cwd: f.root,
+      sessionId: "s",
+      context,
+      query: { path: "old name.txt", scope: "session", selected: "s:changed" },
+    });
+    assert.equal(selected.content?.changes, undefined);
   } finally {
     await f.cleanup();
   }

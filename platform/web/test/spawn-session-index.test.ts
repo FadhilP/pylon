@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { SessionIndex } from "../src/server/pi/session-index.ts";
+import { SessionIndex } from "../src/server/sessions/session-index.ts";
 
 function persist(manager: SessionManager): void {
   manager.appendMessage({

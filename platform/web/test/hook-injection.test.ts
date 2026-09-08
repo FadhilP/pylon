@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HookInjectionBridge, SESSION_START_HOOK_CUSTOM_TYPE } from "../src/server/pi/hook-injection.ts";
+import { HookInjectionBridge, SESSION_START_HOOK_CUSTOM_TYPE } from "../src/server/runtime/hook-injection.ts";
 
 const settings = {
   sessionStart: {

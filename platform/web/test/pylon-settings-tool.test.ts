@@ -9,8 +9,8 @@ import {
   patchPackageSettings,
   PylonSettingsTool,
   type PylonSettingsPreview,
-} from "../src/server/pi/pylon-settings-tool.ts";
-import { SessionRuntime } from "../src/server/pi/session-runtime.ts";
+} from "../src/server/runtime/pylon-settings-tool.ts";
+import { SessionRuntime } from "../src/server/runtime/session-runtime.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 

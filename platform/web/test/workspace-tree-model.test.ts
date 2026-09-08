@@ -5,7 +5,7 @@ import {
   buildWorkspaceTree,
   subsequenceMatch,
   type WorkspaceTreeNode,
-} from "../src/shared/workspace-tree-model.ts";
+} from "../src/client/workspace/workspace-tree-model.ts";
 import type { WorkspaceFileReadModel } from "../src/shared/protocol/snapshots.ts";
 
 const files: WorkspaceFileReadModel[] = [

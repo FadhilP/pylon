@@ -5,7 +5,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["vite/client"],
     "allowJs": true,
-    "paths": { "@tabler/icons-react": ["./src/client/tabler-icons.mjs"] },
+    "paths": { "@tabler/icons-react": ["./src/client/ui/tabler-icons.mjs"] },
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "esModuleInterop": true,

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createJiti } from "jiti";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import type { KeyboardSettings } from "../src/shared/keyboard.ts";
+import type { KeyboardSettings } from "../src/shared/settings/keyboard.ts";
 
 // Exercise the actual client store; Jiti resolves its browser-style extensionless TS imports.
 test("keyboard SSE and HTTP replies share a revision gate; authoritative bootstrap invalidates old requests", async () => {

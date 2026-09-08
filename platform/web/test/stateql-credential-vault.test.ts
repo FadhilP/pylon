@@ -6,7 +6,7 @@ import {
   OsStateQLCredentialVault,
   stateqlCredentialFingerprint,
   type KeyringEntryFactory,
-} from "../src/server/pi/stateql-credential-vault.ts";
+} from "../src/server/database/stateql-credential-vault.ts";
 
 function fakeKeyring(values = new Map<string, string>()): { values: Map<string, string>; entry: KeyringEntryFactory } {
   return {

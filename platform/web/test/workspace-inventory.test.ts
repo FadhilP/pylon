@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { WorkspaceFileDelta } from "pylon-core/src/worktree.ts";
-import { WorkspaceInventories } from "../src/server/pi/workspace-inventory.ts";
+import { WorkspaceInventories } from "../src/server/workspace/workspace-inventory.ts";
 
 const snapshot = (revision: string) => ({ revision, files: [{ path: "a.ts" }], truncated: false });
 const delta = (revision: string): WorkspaceFileDelta => ({

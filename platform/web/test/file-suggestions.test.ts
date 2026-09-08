@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { suggestGitFiles } from "../src/server/pi/file-suggestions.ts";
+import { suggestGitFiles } from "../src/server/workspace/file-suggestions.ts";
 
 const exec = promisify(execFile);
 

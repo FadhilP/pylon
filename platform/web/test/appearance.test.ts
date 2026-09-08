@@ -8,13 +8,13 @@ import {
   resolveTheme,
   THEME_KEY,
   type PreferenceStorage,
-} from "../src/shared/appearance.ts";
+} from "../src/client/app/appearance.ts";
 import {
   DEFAULT_SYNTAX_THEME_PREFERENCE,
   readSyntaxThemePreference,
   resolveSyntaxTheme,
   SYNTAX_THEME_KEY,
-} from "../src/shared/syntax-highlighting.ts";
+} from "../src/client/rendering/syntax-highlighting.ts";
 
 function storage(): PreferenceStorage {
   const values = new Map<string, string>();

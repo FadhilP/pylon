@@ -4,13 +4,13 @@ import {
   promptCommandType,
   reconcilePendingQueue,
   type PendingMessageReadModel,
-} from "../src/shared/pending-messages.ts";
+} from "../src/client/runtime/pending-messages.ts";
 import {
   MAX_UNSEEN_COMPLETIONS,
   completionRecord,
   recordCompletion,
   validCompletionSessionIds,
-} from "../src/shared/session-completions.ts";
+} from "../src/shared/sessions/session-completions.ts";
 
 test("extension slash commands bypass the prompt queue while prompt and skill commands preserve ordering", () => {
   assert.equal(promptCommandType(true, false, "extension"), "prompt");

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { highlightSource, renderMarkdown } from "../src/shared/markdown.ts";
+import { highlightSource, renderMarkdown } from "../src/client/rendering/markdown.ts";
 import {
   getSyntaxHighlightingRevision,
   setSyntaxTheme,
   startSyntaxHighlighting,
-} from "../src/shared/syntax-highlighting.ts";
+} from "../src/client/rendering/syntax-highlighting.ts";
 
 test("renders safe plain code before deferred highlighting loads, then upgrades it", async () => {
   const source = 'const tag = "<script>";';

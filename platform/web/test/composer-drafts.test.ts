@@ -6,7 +6,7 @@ import {
   readComposerDrafts,
   writeComposerDrafts,
   type ComposerDraft,
-} from "../src/shared/composer-drafts.ts";
+} from "../src/client/conversation/composer-drafts.ts";
 
 function memoryStorage(initial?: string) {
   let value = initial ?? null;

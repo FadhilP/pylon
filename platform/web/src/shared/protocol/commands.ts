@@ -1,5 +1,5 @@
-import type { WorkspaceMutationInput } from "../workspace-mutations.ts";
-import type { GuardRuleOverrides } from "../guard-policy.ts";
+import type { WorkspaceMutationInput } from "../workspace/workspace-mutations.ts";
+import type { GuardRuleOverrides } from "../settings/guard-policy.ts";
 import type {
   DialogTimeoutSeconds,
   HookSettingsReadModel,
@@ -197,6 +197,8 @@ export interface AcceptedCommand {
   commandId: string;
   sessionGeneration: number;
   accepted: true;
+  /** Version of the confirmed bytes written by a workspace save. */
+  savedVersion?: string;
 }
 
 export interface QueuedPromptPayload {

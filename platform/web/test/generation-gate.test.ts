@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GenerationGate } from "../src/server/pi/generation-gate.ts";
+import { GenerationGate } from "../src/server/runtime/generation-gate.ts";
 
 test("generation gate rejects old callbacks through replacement", () => {
   const gate = new GenerationGate();

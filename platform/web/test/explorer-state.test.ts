@@ -7,7 +7,7 @@ import {
   readExplorerStates,
   writeExplorerStates,
   type ExplorerState,
-} from "../src/shared/explorer-state.ts";
+} from "../src/client/workspace/explorer-state.ts";
 
 function memoryStorage(initial?: string) {
   let value = initial ?? null;

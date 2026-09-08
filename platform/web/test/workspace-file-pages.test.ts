@@ -6,7 +6,7 @@ import {
   drainWorkspaceFiles,
   workspaceInventoryCacheIsFresh,
   workspaceInventoryCacheState,
-} from "../src/shared/workspace-file-pages.ts";
+} from "../src/client/workspace/workspace-file-pages.ts";
 import { isWorkspaceFilePage } from "../src/shared/protocol/validation.ts";
 
 test("workspace file pages drain, deduplicate, batch, and report truncation", async () => {

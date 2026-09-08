@@ -7,8 +7,8 @@ import {
   isPylonPackageSource,
   PiExtensionManager,
   validPiPackageSource,
-} from "../src/server/pi/pi-extension-manager.ts";
-import { PackageCatalog } from "../src/server/pi/package-catalog.ts";
+} from "../src/server/packages/pi-extension-manager.ts";
+import { PackageCatalog } from "../src/server/packages/package-catalog.ts";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "pylon-extensions-"));

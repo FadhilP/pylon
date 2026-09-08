@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { PackageSummary } from "../src/shared/protocol/snapshots.ts";
-import { buildSettingsSearchIndex, searchSettings } from "../src/shared/settings-search.ts";
+import { buildSettingsSearchIndex, searchSettings } from "../src/client/settings/settings-search.ts";
 
 type SearchInput = Parameters<typeof buildSettingsSearchIndex>[0];
 

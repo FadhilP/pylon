@@ -5,11 +5,11 @@ import {
   mergeHistoryMessages,
   mergeHistorySegments,
   restoreCachedHistory,
-} from "../src/shared/history-cache.ts";
+} from "../src/client/runtime/history-cache.ts";
 import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { initialOperational } from "../src/server/pi/operational-projections.ts";
+import { initialOperational } from "../src/server/runtime/operational-projections.ts";
 
 function messages(start: number, end: number): MessageReadModel[] {
   return Array.from({ length: end - start }, (_, offset) => ({

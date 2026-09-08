@@ -1,14 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./client/App";
-import "./client/styles.css";
+import { App } from "./client/app/app";
+import "./client/app/styles.css";
 import {
   applyTheme,
   readStoredPreference,
   readStoredThemePreference,
   resolveTheme,
   type PreferenceStorage,
-} from "./shared/appearance";
+} from "./client/app/appearance";
 import {
   DEFAULT_SYNTAX_THEME_PREFERENCE,
   readSyntaxThemePreference,
@@ -16,7 +16,7 @@ import {
   setSyntaxTheme,
   startSyntaxHighlighting,
   SYNTAX_THEME_KEY,
-} from "./shared/syntax-highlighting";
+} from "./client/rendering/syntax-highlighting";
 
 function storage(): PreferenceStorage | undefined {
   try {

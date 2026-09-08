@@ -1,9 +1,9 @@
-import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/keyboard";
-import { validAnnotation, type AnnotationList, type AnnotationMutation, type AnnotationRequest } from "../../shared/annotations";
-import type { WorkspaceMutation, WorkspaceEntry } from "../../shared/workspace-mutations";
+import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/settings/keyboard";
+import { validAnnotation, type AnnotationList, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations";
+import type { WorkspaceMutation, WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
 import { useSyncExternalStore } from "react";
-import { isDatabaseCommandResult, clearDatabaseDrafts } from "../../shared/database-workspace";
-import type { GuardRuleOverrides } from "../../shared/guard-policy";
+import { isDatabaseCommandResult, clearDatabaseDrafts } from "../database/database-workspace";
+import type { GuardRuleOverrides } from "../../shared/settings/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
@@ -70,7 +70,7 @@ import type {
 } from "../../shared/protocol/snapshots";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import type { PromptImage, PromptTextFile } from "../../shared/protocol/commands";
-import { isWorkspaceSearchResult, isWorkspaceSymbolResult, type WorkspaceSearchQuery, type WorkspaceSearchResult, type WorkspaceSymbolResult } from "../../shared/workspace-search";
+import { isWorkspaceSearchResult, isWorkspaceSymbolResult, type WorkspaceSearchQuery, type WorkspaceSearchResult, type WorkspaceSymbolResult } from "../../shared/workspace/workspace-search";
 import {
   describeRuntimeSnapshotIssue,
   isArchiveListSnapshot,
@@ -92,9 +92,9 @@ import {
   isWorkspaceFilePage,
   runtimeSnapshotValidationIssue,
 } from "../../shared/protocol/validation";
-import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "../../shared/history-cache";
+import { mergeHistorySegments, restoreCachedHistory, type CachedHistory } from "./history-cache";
 import { ApiClient, ApiHttpError } from "./api-client";
-import { drainWorkspaceFiles, workspaceInventoryCacheState } from "../../shared/workspace-file-pages";
+import { drainWorkspaceFiles, workspaceInventoryCacheState } from "../workspace/workspace-file-pages";
 import {
   liveToolMessage,
   replaceConversationMessage,
@@ -102,18 +102,18 @@ import {
   replaceToolActivity,
   settleRunningActivities,
   terminalActivityStatus,
-} from "../../shared/transcript";
-import { finalAssistant, reconcileFinalAssistant } from "../../shared/terminal-assistant";
-import { appendWebAudioCue, type WebAudioCue } from "../../shared/sound-cues";
+} from "../../shared/sessions/transcript";
+import { finalAssistant, reconcileFinalAssistant } from "../terminal/terminal-assistant";
+import { appendWebAudioCue, type WebAudioCue } from "../ui/sound-cues";
 import {
   pendingMessageId,
   promptCommandType,
   reconcilePendingQueue,
   type PendingMessageReadModel,
-} from "../../shared/pending-messages";
-import { completionRecord, recordCompletion, validCompletionSessionIds } from "../../shared/session-completions";
+} from "./pending-messages";
+import { completionRecord, recordCompletion, validCompletionSessionIds } from "../../shared/sessions/session-completions";
 
-export type { PendingMessageReadModel } from "../../shared/pending-messages";
+export type { PendingMessageReadModel } from "./pending-messages";
 
 export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
@@ -749,20 +749,32 @@ export class RuntimeEventStore {
     return this.api.terminalUrl(generation);
   }
 
-  async workspaceEntry(path: string, sessionId: string, generation: number): Promise<WorkspaceEntry> {
+  async workspaceEntry(path: string, sessionId: string, generation: number, moveDestination?: string, includeGitIndex = true): Promise<WorkspaceEntry> {
     const runtime = this.requireReadyRuntime();
     if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the action.");
-    const entry = await this.api.workspaceEntry(generation, path);
+    const entry = await this.api.workspaceEntry(generation, path, moveDestination, includeGitIndex);
     const current = this.requireReadyRuntime();
     if (current.sessionId !== sessionId || current.sessionGeneration !== generation || entry.sessionId !== sessionId || entry.sessionGeneration !== generation)
       throw new Error("Entry belongs to a previous session.");
+    if (moveDestination !== undefined && entry.moveDestination !== moveDestination) throw new Error("Move preflight is unavailable; reload or update the server.");
     return entry;
   }
 
-  async mutateWorkspace(mutation: WorkspaceMutation, sessionId: string, generation: number): Promise<void> {
+  async workspaceGitIndex(path: string, sessionId: string, generation: number): Promise<WorkspaceGitIndex> {
+    const runtime = this.requireReadyRuntime();
+    if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the file.");
+    const result = await this.api.workspaceGitIndex(generation, path);
+    const current = this.requireReadyRuntime();
+    if (current.sessionId !== sessionId || current.sessionGeneration !== generation || result.sessionId !== sessionId || result.sessionGeneration !== generation)
+      throw new Error("Comparison belongs to a previous session.");
+    return result;
+  }
+
+
+  async mutateWorkspace(mutation: WorkspaceMutation, sessionId: string, generation: number): Promise<AcceptedCommand> {
     const runtime = this.requireReadyRuntime();
     if (runtime.sessionId !== sessionId || runtime.sessionGeneration !== generation) throw new Error("Session changed; reopen the action.");
-    await this.sendCommand({ type: "mutateWorkspace", commandId: commandId(), expectedGeneration: generation, sessionId, mutation });
+    return this.sendCommand({ type: "mutateWorkspace", commandId: commandId(), expectedGeneration: generation, sessionId, mutation });
   }
 
   async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {

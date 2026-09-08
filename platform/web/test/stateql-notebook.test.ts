@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildStateQLActivity, filterStateQLActivity, selectStateQLActivity } from "../src/shared/stateql-notebook.ts";
+import { buildStateQLActivity, filterStateQLActivity, selectStateQLActivity } from "../src/client/database/stateql-notebook.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { StateQLSnapshot } from "../src/shared/protocol/snapshots.ts";
 

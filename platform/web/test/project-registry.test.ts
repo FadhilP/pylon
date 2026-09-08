@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_GUARD_RULES } from "../src/shared/guard-policy.ts";
-import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
-import { ProjectRegistry, projectIdForCwd } from "../src/server/pi/project-registry.ts";
+import { DEFAULT_GUARD_RULES } from "../src/shared/settings/guard-policy.ts";
+import { GENERAL_PROJECT_ID } from "../src/shared/sessions/general-session.ts";
+import { ProjectRegistry, projectIdForCwd } from "../src/server/workspace/project-registry.ts";
 
 test("General is a built-in local scope rooted outside the project list", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-general-"));

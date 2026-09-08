@@ -13,7 +13,7 @@ const packageRoot = dirname(require.resolve("material-icon-theme/package.json"))
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const iconDirectory = join(webRoot, "public", "file-icons");
-const mapFile = join(webRoot, "src", "shared", "file-icon-map.ts");
+const mapFile = join(webRoot, "src", "client", "rendering", "file-icon-map.ts");
 
 const manifest = generateManifest({});
 

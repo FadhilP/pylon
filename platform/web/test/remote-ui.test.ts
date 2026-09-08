@@ -5,11 +5,11 @@ import {
   type StateQLCredentialHost,
   type StateQLCredentialRequest,
   type UiRequest,
-} from "../src/server/pi/remote-ui-context.ts";
+} from "../src/server/runtime/remote-ui-bridge.ts";
 import {
   createStateQLCredentialReference,
   OsStateQLCredentialVault,
-} from "../src/server/pi/stateql-credential-vault.ts";
+} from "../src/server/database/stateql-credential-vault.ts";
 
 function stateqlRequest(
   access: "read" | "write" = "read",

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { access, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import registerScoutChildTools, {
   boundedSearch,
@@ -33,7 +33,7 @@ async function repository() {
   return root;
 }
 
-test("search paths cannot escape workspace", () => {
+test("workspacePath keeps contained tools within the workspace", () => {
   assert.equal(workspacePath("/workspace", "src"), "src");
   assert.throws(() => workspacePath("/workspace", "../secret"), /within workspace/);
 });
@@ -89,15 +89,39 @@ test("search_excerpt returns bounded cited context, contains paths, and falls ba
   );
   assert.ok(calls[0].args.includes("--sort"));
   assert.ok(calls[0].args.includes("path"));
+  assert.ok(calls[0].args.includes("--with-filename"));
+  assert.equal(calls[0].args.at(-1), "src");
   assert.ok(calls[1].args.includes("--include=*.ts"));
   assert.match(result.content[0].text, /src\/a\.ts:10:needle/);
   assert.equal(result.details.command, "grep");
-  await assert.rejects(
-    tools
-      .get("search_excerpt")
-      .execute("id", { pattern: "x", path: "../secret" }, undefined, undefined, { cwd: process.cwd() }),
-    /within workspace/,
+});
+
+test("search_excerpt searches absolute and traversed paths outside the workspace", async () => {
+  const tools = new Map<string, any>();
+  const searchedPaths: string[] = [];
+  registerScoutChildTools(
+    {
+      registerTool(tool: any) {
+        tools.set(tool.name, tool);
+      },
+      async exec(command: string, args: string[]) {
+        assert.equal(command, "rg");
+        const path = args.at(-1) ?? "";
+        searchedPaths.push(path);
+        return { stdout: `${path}:1:needle\n`, stderr: "", code: 0, killed: false };
+      },
+    } as any,
+    async command => command === "rg",
   );
+  const cwd = resolve("workspace");
+  const outside = resolve(cwd, "..", "external.txt");
+  const search = tools.get("search_excerpt");
+
+  const result = await search.execute("id", { pattern: "needle", path: outside }, undefined, undefined, { cwd });
+  await search.execute("id", { pattern: "needle", path: "../external.txt" }, undefined, undefined, { cwd });
+
+  assert.deepEqual(searchedPaths, [outside, outside]);
+  assert.match(result.content[0].text, /needle/);
 });
 
 test("search_excerpt does not treat an invalid path as a missing ripgrep executable", async () => {

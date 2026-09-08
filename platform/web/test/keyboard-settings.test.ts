@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
-import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../src/server/keyboard-settings.ts";
+import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../src/server/settings/keyboard-settings.ts";
 import {
   assignBinding,
   DEFAULT_KEYMAP,
@@ -17,7 +17,7 @@ import {
   type Binding,
   type Keymap,
   type KeyStroke,
-} from "../src/shared/keyboard.ts";
+} from "../src/shared/settings/keyboard.ts";
 
 const chord = (key: string, ...modifiers: ("Mod" | "Ctrl" | "Meta" | "Alt" | "Shift")[]): Binding => ({
   kind: "chord",
@@ -121,6 +121,12 @@ test("logical primary bindings match exact modifiers without swallowing IME, rep
   assert.equal(matchesBinding(stroke("+", { ctrlKey: true, shiftKey: true }), plus, false), true);
   assert.equal(matchesBinding(stroke("+", { metaKey: true, shiftKey: true }), plus, true), true);
   assert.equal(matchesBinding(stroke("+", { ctrlKey: true, shiftKey: true }), plus, true), false);
+  for (const [id, key] of [["copy-entry", "c"], ["cut-entry", "x"], ["paste-entry", "v"]] as const) {
+    const binding = effectiveBinding(DEFAULT_KEYMAP, id);
+    assert.equal(matchesBinding(stroke(key, { ctrlKey: true }), binding, false), true);
+    assert.equal(matchesBinding(stroke(key, { metaKey: true }), binding, true), true);
+    assert.equal(matchesBinding(stroke(key), binding, false), false);
+  }
   const key = chord("P", "Mod");
   for (const extra of [
     { altKey: true },

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyOperationalEvent, initialOperational } from "../src/server/pi/operational-projections.ts";
+import { applyOperationalEvent, initialOperational } from "../src/server/runtime/operational-projections.ts";
 
 test("Verify running lifecycle exposes active checks before they finish", () => {
   const startedAt = new Date(1_000).toISOString();

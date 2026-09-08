@@ -602,7 +602,13 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
         allMessagesText: "release decision",
       },
     ],
-    { chosen: [{ type: "message", message: { role: "user", content: "release decision" } }] },
+    {
+      chosen: [
+        { type: "session_info", name: "Older title" },
+        { type: "message", message: { role: "user", content: "release decision" } },
+        { type: "session_info", name: "Release planning" },
+      ],
+    },
   );
   registerSessionSearch({ registerTool: (tool: any) => tools.set(tool.name, tool) } as any, source);
   const tool = tools.get("search_sessions");
@@ -617,6 +623,7 @@ test("search_sessions runs without UI and reports bounded searches", async () =>
   );
   assert.equal(result.details.sessionId, "chosen");
   assert.equal(JSON.parse(result.content[0].text).matches[0].sessionId, "chosen");
+  assert.equal(JSON.parse(result.content[0].text).matches[0].sessionName, "Release planning");
 
   const cappedTools = new Map<string, any>();
   registerSessionSearch({ registerTool: (tool: any) => cappedTools.set(tool.name, tool) } as any, source, 200);

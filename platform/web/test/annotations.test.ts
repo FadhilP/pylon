@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { AnnotationStore } from "../src/server/pi/annotation-store.ts";
+import { AnnotationStore } from "../src/server/workspace/annotation-store.ts";
 import {
   AnnotationReads,
   persistAnnotation,
@@ -18,8 +18,8 @@ import {
   MAX_ANNOTATIONS,
   type Annotation,
   type AnnotationList,
-} from "../src/shared/annotations.ts";
-import { selectedText } from "../src/shared/code-viewer-model.ts";
+} from "../src/shared/workspace/annotations.ts";
+import { selectedText } from "../src/shared/workspace/code-viewer-model.ts";
 
 const note = (changes: Partial<Annotation> = {}): Annotation => ({
   id: randomUUID(),

@@ -7,15 +7,15 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
-import { GENERAL_PROJECT_ID } from "../src/shared/general-session.ts";
+import { GENERAL_PROJECT_ID } from "../src/shared/sessions/general-session.ts";
 import { validateCommand } from "../src/shared/protocol/validation.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
-import { initialOperational } from "../src/server/pi/operational-projections.ts";
-import { RuntimeCoordinator } from "../src/server/pi/runtime-coordinator.ts";
-import { projectIdForCwd, SessionIndex } from "../src/server/pi/session-index.ts";
-import { ProjectRegistry } from "../src/server/pi/project-registry.ts";
+import { initialOperational } from "../src/server/runtime/operational-projections.ts";
+import { RuntimeCoordinator } from "../src/server/runtime/runtime-coordinator.ts";
+import { projectIdForCwd, SessionIndex } from "../src/server/sessions/session-index.ts";
+import { ProjectRegistry } from "../src/server/workspace/project-registry.ts";
 
-import { WorkspaceInventories } from "../src/server/pi/workspace-inventory.ts";
+import { WorkspaceInventories } from "../src/server/workspace/workspace-inventory.ts";
 const run = promisify(execFile);
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 const isolatedAgentDir = await mkdtemp(join(tmpdir(), "pylon-coordinator-agent-"));
@@ -339,9 +339,11 @@ test("session selection publishes before its workspace refresh completes", async
   const refreshGate = new Promise<void>(resolve => {
     releaseRefresh = resolve;
   });
-  internal.refreshWorkspace = async (target: any) => {
+  internal.registry = () => ({ workspaceForSession: () => undefined });
+  internal.workspaceKey = () => "next";
+  internal.plainWorkspace = async () => {
     await refreshGate;
-    target.workspace = {
+    return {
       gitAvailable: false,
       mode: "non-git",
       changedCount: 0,
@@ -399,6 +401,82 @@ test("slot disposal waits for a background workspace refresh", async () => {
   assert.equal(driverDisposed, true);
 });
 
+test("save receipts release the lifecycle gate while a superseded workspace scan drains", { timeout: 15_000 }, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pylon-save-refresh-"));
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const model = { gitAvailable: false, mode: "non-git", changedCount: 0, canMoveToCheckout: false, canMoveToWorktree: false, canApplyChanges: false, fileRevision: 0 };
+  const slot = { id: "session", innerGeneration: 1, driver: { runtimeDetails: () => ({ cwd }) }, workspace: model };
+  internal.selectedId = slot.id;
+  internal.generation = 1;
+  internal.slots.set(slot.id, slot);
+  internal.registry = () => ({ workspaceForSession: () => undefined });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let scans = 0;
+  internal.plainWorkspace = async () => {
+    const scan = ++scans;
+    if (scan === 1) await gate;
+    return { ...model, revision: `scan-${scan}` };
+  };
+  const events: any[] = [];
+  coordinator.subscribe(event => events.push(event));
+  const refresh = internal.refreshWorkspace(slot, true);
+  try {
+    await writeFile(join(cwd, "file.txt"), "before");
+    const entry = await coordinator.workspaceEntry("file.txt", undefined, false);
+    const save = (expectedVersion: string, text: string) => coordinator.mutateWorkspace({ sessionId: slot.id, expectedGeneration: 1,
+      mutation: { action: "save", path: "file.txt", expectedVersion, text } });
+    const receipt = await save(entry.version, "first");
+    assert.ok(receipt?.savedVersion);
+    assert.equal(scans, 1, "saving finished without waiting for the held repository scan");
+    const next = await save(receipt.savedVersion, "second");
+    assert.ok(next?.savedVersion);
+    assert.equal(await readFile(join(cwd, "file.txt"), "utf8"), "second");
+    assert.equal((await coordinator.workspaceEntry("file.txt", undefined, false)).version, next.savedVersion);
+    assert.equal(slot.workspace.fileRevision, 2);
+    release();
+    await refresh;
+    assert.equal(scans, 2, "changes during the running scan are coalesced into one fresh pass");
+    assert.equal(slot.workspace.fileRevision, 2, "old scans never roll file revisions back");
+    assert.deepEqual(events.filter(event => event.type === "workspace.revision").map(event => event.workspace.revision), ["scan-2"]);
+  } finally { release(); await refresh; await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("workspace refresh rejects stale context and starts fresh work requested by publication", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let cwd = "first";
+  const model = { gitAvailable: false, mode: "non-git", changedCount: 0, canMoveToCheckout: false, canMoveToWorktree: false, canApplyChanges: false };
+  const slot: any = { id: "session", innerGeneration: 1, driver: { runtimeDetails: () => ({ cwd }) }, workspace: model };
+  internal.selectedId = slot.id; internal.generation = 1; internal.slots.set(slot.id, slot);
+  internal.registry = () => ({ workspaceForSession: () => undefined });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  internal.plainWorkspace = async (_slot: unknown, directory: string) => {
+    const call = ++calls;
+    if (call === 1) await gate;
+    return { ...model, revision: `${directory}-${call}` };
+  };
+  const events: any[] = [];
+  let followup: Promise<void> | undefined;
+  coordinator.subscribe(event => {
+    if (event.type !== "workspace.revision") return;
+    events.push(event);
+    if (events.length === 1) followup = internal.refreshWorkspace(slot, true);
+  });
+  const first = internal.refreshWorkspace(slot, true);
+  await Promise.resolve();
+  cwd = "second"; internal.generation++;
+  internal.refreshWorkspace(slot, true);
+  release(); await first; await followup;
+  assert.deepEqual(events.map(event => [event.sessionGeneration, event.workspace.revision]), [[2, "second-2"], [2, "second-3"]]);
+  internal.plainWorkspace = async () => { internal.slots.delete(slot.id); return { ...model, revision: "disposed" }; };
+  await internal.refreshWorkspace(slot, true);
+  assert.equal(slot.workspace.revision, "second-3", "a removed slot cannot commit a late scan");
+});
+
 function persistSession(session: SessionManager, name: string): void {
   session.appendSessionInfo(name);
   session.appendMessage({ role: "user", content: [{ type: "text", text: name }], timestamp: Date.now() });
@@ -449,6 +527,18 @@ test("session index pages projects, counts user messages, and searches unloaded 
     assert.equal(search.projects[0]?.sessions[0]?.id, second.getSessionId());
     assert.equal(search.projects[0]?.sessions[0]?.workStartedAt, workStartedAt);
     assert.deepEqual(search.projects[0]?.sessions[0]?.todoProgress, { completed: 1, total: 3 });
+
+    const exactIdSearch = await index.list({ query: second.getSessionId() }, options);
+    assert.deepEqual(
+      exactIdSearch.projects.flatMap(project => project.sessions).map(session => session.id),
+      [second.getSessionId()],
+    );
+    const partialIdSearch = await index.list({ query: second.getSessionId().slice(-8) }, options);
+    assert.ok(
+      partialIdSearch.projects
+        .flatMap(project => project.sessions)
+        .some(session => session.id === second.getSessionId()),
+    );
 
     const draft = {
       id: "draft-session",
@@ -2139,6 +2229,14 @@ test("runtime pool warm-switches without rebuilding and wakes sleeping sessions"
       false,
     );
     assert.equal((await driver.listArchived()).sessions[0]?.id, other.getSessionId());
+    assert.equal(
+      (await driver.listArchived({ query: other.getSessionId() })).sessions[0]?.id,
+      other.getSessionId(),
+    );
+    assert.equal(
+      (await driver.listArchived({ query: other.getSessionId().slice(-8) })).sessions[0]?.id,
+      other.getSessionId(),
+    );
     await driver.restoreSession({ sessionId: other.getSessionId(), expectedGeneration: archived.sessionGeneration });
     assert.equal((await driver.listArchived()).sessions.length, 0);
   } finally {

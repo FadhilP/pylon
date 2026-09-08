@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ModelOptionReadModel } from "../src/shared/protocol/events.ts";
-import { selectableModels, visibleModels } from "../src/shared/model-options.ts";
+import { selectableModels, visibleModels } from "../src/client/settings/model-options.ts";
 
 const models: ModelOptionReadModel[] = [
   { provider: "openai", id: "visible", name: "Visible" },

@@ -5,6 +5,7 @@ import {
   attributedOwner,
   type CodeAttribution,
   diffRows,
+  gitGutterChanges,
   loadDiffContents,
   parseDiff,
   selectedText,
@@ -12,12 +13,65 @@ import {
   validateDiffContents,
   type CodeLine,
   type DiffRow,
-} from "../src/shared/code-viewer-model.ts";
-import { loadSyntaxLanguage, setSyntaxTheme, syntaxTokens } from "../src/shared/syntax-highlighting.ts";
+} from "../src/shared/workspace/code-viewer-model.ts";
+import { loadSyntaxLanguage, setSyntaxTheme, syntaxTokens } from "../src/client/rendering/syntax-highlighting.ts";
+import { annotationRange, captureAnnotation, sourceHash } from "../src/shared/workspace/annotations.ts";
 
 const patch = (before: string, after: string, context = 3) =>
   createTwoFilesPatch("a/example.ts", "b/example.ts", before, after, undefined, undefined, { context });
 const code = (rows: DiffRow[]) => rows.filter((row): row is CodeLine => row.kind !== "gap" && row.kind !== "note");
+
+test("Git gutters compare the live draft to the index and clear when staged or undone", () => {
+  const index = "keep\nold\nanchor\ntail\n";
+  const draft = "keep\nnew\nanchor\nadded\ntail\n";
+  assert.deepEqual(
+    [...gitGutterChanges(index, draft)!],
+    [
+      [2, { kind: "modified" }],
+      [4, { kind: "added" }],
+    ],
+  );
+  assert.equal(gitGutterChanges(draft, draft)?.size, 0, "staging changes the comparison, not the draft");
+  assert.equal(gitGutterChanges(index, index)?.size, 0, "undo restores unchanged lines");
+  assert.deepEqual(
+    [...gitGutterChanges("", "one\ntwo\n")!],
+    [
+      [1, { kind: "added" }],
+      [2, { kind: "added" }],
+    ],
+  );
+  assert.deepEqual(
+    [...gitGutterChanges("old", "new\nextra\n")!],
+    [
+      [1, { kind: "modified" }],
+      [2, { kind: "modified" }],
+    ],
+  );
+  assert.deepEqual(
+    [...gitGutterChanges("last\n", "last")!],
+    [[1, { kind: "modified" }]],
+    "final newline changes affect the last real line",
+  );
+});
+
+test("Git deletion markers retain start, middle, EOF and empty-file boundaries; unavailable comparisons stay unknown", () => {
+  assert.deepEqual([...gitGutterChanges("gone\nkeep\n", "keep\n")!], [[1, { kind: "deleted", edge: "before" }]]);
+  assert.deepEqual(
+    [...gitGutterChanges("keep\ngone\ntail\n", "keep\ntail\n")!],
+    [[2, { kind: "deleted", edge: "before" }]],
+  );
+  assert.deepEqual([...gitGutterChanges("keep\ngone\n", "keep\n")!], [[1, { kind: "deleted", edge: "after" }]]);
+  assert.deepEqual([...gitGutterChanges("gone\n", "")!], [[1, { kind: "deleted", edge: "before" }]]);
+  assert.deepEqual(
+    [...gitGutterChanges("before\nkeep\nafter\n", "keep\n")!],
+    [[1, { kind: "deleted", edge: "both" }]],
+    "deletions on both sides of the only surviving line must not overwrite each other",
+  );
+  assert.equal(gitGutterChanges(undefined, "not necessarily added"), undefined);
+  assert.equal(gitGutterChanges("base", "x".repeat(1024 * 1024 + 1)), undefined);
+  assert.equal(gitGutterChanges("base", "line\n".repeat(20_001)), undefined);
+  assert.equal(gitGutterChanges("a\n".repeat(2001), "b\n".repeat(2001)), undefined);
+});
 
 test("attribution uses historical source coordinates for deleted and expanded unchanged lines", () => {
   const before = "base\none\nkeep\n";
@@ -118,14 +172,57 @@ test("expands context from both ends without duplicating lines or crossing the n
   );
 });
 
+test("added-file diffs capture notes from the new source and deleted-file diffs retain old context", async () => {
+  const text = "const value = 1;\nreturn value;\n";
+  const absent = { revision: "r1", state: "deleted" };
+  const available = { revision: "r1", state: "available", text };
+  const added = parseDiff(createTwoFilesPatch("/dev/null", "b/example.ts", "", text))[0];
+  const full = loadDiffContents({ revision: "r1", base: absent, current: available });
+  validateDiffContents(added, full);
+  const rows = code(diffRows(added, {}, full)).map(row => ({ ...row, file: 0 }));
+  const range = annotationRange(rows, 0, 1)!;
+  assert.deepEqual(range, { file: 0, from: 1, to: 2, code: "const value = 1;\nreturn value;" });
+  const captured = await captureAnnotation(
+    range,
+    added.path,
+    { kind: "current", revision: "r1" },
+    full.newFile.contents,
+  );
+  assert.equal(captured.path, "example.ts");
+  assert.equal(captured.hash, await sourceHash(text));
+  assert.equal(captured.code, range.code);
+
+  const deleted = parseDiff(createTwoFilesPatch("a/example.ts", "/dev/null", text, ""))[0];
+  const removed = loadDiffContents({ revision: "r1", base: available, current: absent });
+  validateDiffContents(deleted, removed);
+  const oldRows = code(diffRows(deleted, {}, removed));
+  assert.equal(selectedText(oldRows, 0, 1), range.code);
+  assert.equal(
+    annotationRange(
+      oldRows.map(row => ({ ...row, file: 0 })),
+      0,
+      1,
+    ),
+    undefined,
+  );
+  assert.throws(() => loadDiffContents({ revision: "r2", base: absent, current: available }), /Workspace changed/);
+  const changed = parseDiff(patch("previous\n", text))[0];
+  assert.throws(() => validateDiffContents(changed, full), /Workspace changed/);
+});
+
 test("rejects stale, unavailable and inconsistent context, including changes outside the hunks", () => {
   const available = { revision: "r1", state: "available", text: "old\n" };
   assert.deepEqual(loadDiffContents({ revision: "r1", base: available, current: available }).oldFile.contents, "old\n");
   assert.throws(() => loadDiffContents({ revision: "r2", base: available, current: available }), /Workspace changed/);
-  assert.throws(
-    () => loadDiffContents({ revision: "r1", base: { ...available, state: "oversized" }, current: available }),
-    /unavailable/,
-  );
+  for (const unavailable of [
+    { ...available, state: "oversized" },
+    { ...available, state: "binary" },
+    { ...available, text: undefined },
+    { ...available, truncated: true },
+  ]) {
+    assert.throws(() => loadDiffContents({ revision: "r1", base: unavailable, current: available }), /unavailable/);
+    assert.throws(() => loadDiffContents({ revision: "r1", base: available, current: unavailable }), /unavailable/);
+  }
   const before = "same\nold\ntail\n";
   const after = "same\nnew\ntail\n";
   const [file] = parseDiff(patch(before, after, 0));

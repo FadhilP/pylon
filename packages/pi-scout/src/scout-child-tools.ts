@@ -28,6 +28,15 @@ export function workspacePath(cwd: string, input = "."): string {
   return within || ".";
 }
 
+function searchPath(cwd: string, input = "."): string {
+  const clean = input.replace(/^@/, "") || ".";
+  const absolute = resolve(cwd, clean);
+  const within = relative(resolve(cwd), absolute);
+  const outside =
+    within === ".." || within.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(within);
+  return outside ? absolute : within || ".";
+}
+
 function fit(text: string, maxBytes: number): string {
   let value = text;
   while (Buffer.byteLength(value, "utf8") > maxBytes) value = value.slice(0, -1);
@@ -399,6 +408,7 @@ async function excerptSearch(
     "--color=never",
     "--sort",
     "path",
+    "--with-filename",
     "--max-columns=500",
     "--max-columns-preview",
     "--max-count",
@@ -470,13 +480,16 @@ export default function scoutChildToolsExtension(
     description: `Read-only text search returning deterministic line-numbered matching excerpts and context in one call. Output capped at ${formatSize(SCOUT_TOOL_MAX_BYTES)}; matching results beyond the cap are reported as omitted.`,
     promptSnippet: "Search text once and return bounded line-numbered matching excerpts with context",
     promptGuidelines: [
-      "Use search_excerpt for citation-ready evidence. Give a workspace-relative path or glob when known; refine a truncated search rather than repeating it. It tries rg and then grep without running shell commands.",
+      "Use search_excerpt for citation-ready evidence. Give a workspace-relative path when searching inside the workspace; absolute and traversal paths are supported when the task requires a readable local path outside it. Refine a truncated search rather than repeating it. It tries rg and then grep without running shell commands.",
     ],
     parameters: Type.Object(
       {
         pattern: Type.String({ minLength: 1, maxLength: 300, description: "Regular expression to search" }),
         path: Type.Optional(
-          Type.String({ maxLength: 500, description: "Workspace-relative file or directory; default ." }),
+          Type.String({
+            maxLength: 500,
+            description: "Relative or absolute local file or directory; relative paths resolve from the workspace; default .",
+          }),
         ),
         glob: Type.Optional(Type.String({ maxLength: 200, description: "Optional file glob, such as *.ts" })),
         context: Type.Optional(
@@ -489,7 +502,7 @@ export default function scoutChildToolsExtension(
       const result = await excerptSearch(
         pi,
         params.pattern,
-        workspacePath(ctx.cwd, params.path),
+        searchPath(ctx.cwd, params.path),
         params.glob,
         params.context ?? 2,
         signal,
