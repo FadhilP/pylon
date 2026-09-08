@@ -1,5 +1,22 @@
 [
   {
+    "version": "3.0.0",
+    "date": "Sep 8, 2026",
+    "title": "A complete workspace for code, Git, and data",
+    "summary": "Pylon 3.0 turns the web workspace into a full local development environment with guarded Git workflows, direct file editing, project-wide search and history, persistent code notes, richer database tools, and customizable keyboard controls.",
+    "notes": [
+      "Added a guarded Git workspace for status, staging, commits and amend, fetch, fast-forward pulls, non-forced pushes, stashes, branch creation, history review, merge, rebase, cherry-pick, revert, and structured conflict resolution with stale-state and confirmation checks.",
+      "Made supported UTF-8 working files directly editable with CodeMirror and incremental Shiki highlighting, unsaved draft and conflict handling, Git gutters, metadata-preserving saves, and confirmed file and folder creation, rename, move, and deletion.",
+      "Added bounded workspace text search, ranked file, symbol, and action search, a rebuilt icon-rich Explorer, and non-mutating file history with Timeline checkpoints, Git commits, diffs, rename tracking, and line attribution.",
+      "Added persistent project- and session-scoped code notes that capture selected source ranges, detect changed source, synchronize edits safely, and can be reviewed or attached explicitly to a chat prompt.",
+      "Expanded the Database surface with masked credential flows, OS-vault password storage, object browsing, statement history, aliases, result filtering and sorting, staged table edits, guarded batch writes, transactions, and bounded Redis operations, backed by StateQL 0.10.1.",
+      "Added global keyboard settings with Pylon, VS Code, and JetBrains presets, shortcut recording and manual entry, searchable actions, conflict handling, reserved-key validation, revision-safe persistence, and live cross-tab updates.",
+      "Refreshed project and session navigation with active-session ordering, pinning, activation controls, time-grouped search results, archive and restore workflows, and safer rename and deletion actions.",
+      "Extended Discover indexing to ordinary non-Git directories with bounded native filesystem scanning, nested ignore rules, transactional refreshes, explicit failure handling, and automatic Git-mode detection.",
+      "Enabled assistant responses to render validated local PNG, JPEG, WebP, and GIF files from absolute file URLs, with strict format checks, a 5 MB limit, and session-scoped access controls, while improving Continuity storage locking, session lists, Spawn compaction, search, and Git performance across large workspaces."
+    ]
+  },
+  {
     "version": "2.7.2",
     "date": "Sep 4, 2026",
     "title": "Safer branch switching and mathematical Markdown",

@@ -49,6 +49,28 @@ test("lock acquisition errors preserve their cause and never run the protected t
   }
 });
 
+test("transient Windows EPERM while creating a lock is retried", { skip: process.platform !== "win32" }, async t => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-lock-eperm-"));
+  const path = join(root, "state.json");
+  const lock = `${path}.lock`;
+  const transient = Object.assign(new Error("directory is being removed"), { code: "EPERM" });
+  const makeDirectory = fs.mkdir;
+  let lockAttempts = 0;
+  const mocked = t.mock.method(fs, "mkdir", async (...args: Parameters<typeof fs.mkdir>) => {
+    if (args[0] === lock && lockAttempts++ === 0) throw transient;
+    return Reflect.apply(makeDirectory, fs, args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(await updateJson<number[]>(path, [], items => [...items, 1], Array.isArray), [1]);
+    assert.equal(lockAttempts, 2);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 test("malformed versioned state is quarantined while missing state uses fallback", async () => {
   const root = await mkdtemp(join(tmpdir(), "continuity-versioned-"));
   try {

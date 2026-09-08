@@ -186,3 +186,27 @@ test("runtime inventory sharing preserves cache identity and rejects changes in 
     await vite.close();
   }
 });
+test("switching sessions keeps loaded transcript history available to the replacement bootstrap", async () => {
+  const vite = await createServer({
+    root: fileURLToPath(new URL("..", import.meta.url)),
+    server: { middlewareMode: true },
+    appType: "custom",
+  });
+  const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
+  const store = new RuntimeEventStore();
+  const cached = {
+    messages: [{ id: "history-0", role: "assistant", text: "earlier response", streaming: false }],
+    historyCursor: undefined,
+    historyRemaining: undefined,
+  };
+  store.snapshot = { connection: "connected", generation: 3 };
+  store.historyCache.set("target-session", cached);
+  store.sendCommand = async () => ({ sessionGeneration: 4 });
+  store.waitForRuntime = async () => {};
+  try {
+    await store.switchSession("target-session");
+    assert.strictEqual(store.historyCache.get("target-session"), cached);
+  } finally {
+    await vite.close();
+  }
+});

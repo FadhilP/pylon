@@ -1521,7 +1521,6 @@ export class RuntimeEventStore {
 
   async switchSession(sessionId: string): Promise<void> {
     const generation = this.requireConnectedGeneration();
-    this.historyCache.delete(sessionId);
     const accepted = await this.sendCommand({
       type: "switchSession",
       sessionId,

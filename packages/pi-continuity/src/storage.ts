@@ -80,6 +80,23 @@ export async function withFileLock<T>(path: string, task: () => Promise<T>): Pro
   for (let attempt = 0; ; attempt++) {
     try {
       await mkdir(lock, { mode: 0o700 });
+    } catch (error: any) {
+      if (attempt >= LOCK_WAIT_ATTEMPTS)
+        throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
+      if (error?.code === "EEXIST") {
+        if (!(await removeStaleLock(lock))) await delay(LOCK_RETRY_MS);
+        continue;
+      }
+      // Windows can report EPERM instead of EEXIST while another process is
+      // removing the lock directory. Retry acquisition, but never treat it as
+      // ownership or use it to remove a possibly live lock.
+      if (process.platform === "win32" && error?.code === "EPERM") {
+        await delay(LOCK_RETRY_MS);
+        continue;
+      }
+      throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
+    }
+    try {
       await writeFile(
         ownerFile(lock),
         JSON.stringify({
@@ -91,10 +108,9 @@ export async function withFileLock<T>(path: string, task: () => Promise<T>): Pro
         { mode: 0o600, flag: "wx" },
       );
       break;
-    } catch (error: any) {
-      if (error?.code !== "EEXIST" || attempt >= LOCK_WAIT_ATTEMPTS)
-        throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
-      if (!(await removeStaleLock(lock))) await delay(LOCK_RETRY_MS);
+    } catch (error) {
+      await rm(lock, { recursive: true, force: true }).catch(() => {});
+      throw Error(`Unable to initialize continuity state lock: ${path}`, { cause: error });
     }
   }
   try {
