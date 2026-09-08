@@ -3434,9 +3434,22 @@ export class SessionRuntime implements PiDriver {
     const shouldDisposeRuntime = this.runtimeDisposable;
     this.runtime = undefined;
     this.runtimeDisposable = false;
-    if (runtime && shouldDisposeRuntime) await runtime.dispose();
+    let failure: unknown;
+    if (runtime && shouldDisposeRuntime) {
+      try {
+        await runtime.dispose();
+      } catch (error) {
+        failure = error;
+      }
+    }
+    try {
+      await this.sessionIndex.close();
+    } catch (error) {
+      failure ??= error;
+    }
     this.gate.stop();
     this.listeners.clear();
+    if (failure) throw failure;
   }
 
   private installRuntimeHooks(runtime: AgentSessionRuntime): void {

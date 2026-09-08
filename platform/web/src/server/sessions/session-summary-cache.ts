@@ -224,7 +224,7 @@ function sameFingerprint(left: Fingerprint, right: Fingerprint): boolean {
   );
 }
 
-async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(
@@ -305,7 +305,7 @@ function ownerMarker(value: any): SessionOwner | undefined {
   return { id: value.ownerSessionId, file: value.ownerSessionFile };
 }
 
-async function parseSession(path: string, before: Fingerprint, retries = 1): Promise<CacheRecord | undefined> {
+async function parseSession(path: string, before: Fingerprint, retries = 1, metadataOnly = false): Promise<CacheRecord | undefined> {
   let header: any;
   let name: string | undefined;
   let messageCount = 0;
@@ -328,7 +328,7 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
       if (!header) {
         if (entry.type !== "session") return;
         header = entry;
-        usage = typeof entry.id === "string" && entry.id ? new UsageHistoryAccumulator(entry.id) : undefined;
+        usage = !metadataOnly && typeof entry.id === "string" && entry.id ? new UsageHistoryAccumulator(entry.id) : undefined;
         continue;
       }
       usage?.accept(entry);
@@ -340,6 +340,7 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
       const message = entry.message;
       if (!message || typeof message !== "object" || Array.isArray(message)) continue;
       if (message.role === "user") userMessageCount++;
+      if (metadataOnly) continue;
       if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) continue;
       const activity = typeof message.timestamp === "number" ? message.timestamp : Date.parse(entry.timestamp);
       if (Number.isFinite(activity)) lastActivityTime = Math.max(lastActivityTime ?? 0, activity);
@@ -350,7 +351,7 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
     }
     if (!header || typeof header.id !== "string" || !header.id || typeof header.timestamp !== "string") return;
     const after = fingerprint(await stat(path));
-    if (!sameFingerprint(before, after)) return retries > 0 ? parseSession(path, after, retries - 1) : undefined;
+    if (!sameFingerprint(before, after)) return retries > 0 ? parseSession(path, after, retries - 1, metadataOnly) : undefined;
     const owner = owners[0];
     const consistentOwner =
       owner &&
@@ -391,6 +392,26 @@ async function parseSession(path: string, before: Fingerprint, retries = 1): Pro
   }
 }
 
+/** Reads only summary metadata from a session transcript without opening an SDK session. */
+export async function readSessionMetadata(path: string, expectedSessionId: string): Promise<SessionFileMetadata | undefined> {
+  try {
+    const before = fingerprint(await stat(path));
+    const record = await parseSession(path, before, 1, true);
+    return record?.session.id === expectedSessionId ? hydrate(record).metadata : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface SessionSummaryCacheOptions {
+  /** Keep the historical awaited persistence behavior unless an owner opts in. */
+  deferredPersistence?: boolean;
+  /** Receives deferred persistence failures; they are always handled internally. */
+  onBackgroundError?: (error: unknown) => void;
+  /** Primarily useful to controlled hosts and tests; production uses one second. */
+  persistenceDelayMs?: number;
+}
+
 export class SessionSummaryCache {
   private readonly cachePath: string;
   private readonly sessionsRoot: string;
@@ -399,6 +420,13 @@ export class SessionSummaryCache {
   private loaded = false;
   private pending: Promise<void> = Promise.resolve();
   private dirty = false;
+  private readonly deferredPersistence: boolean;
+  private readonly persistenceDelayMs: number;
+  private readonly onBackgroundError: (error: unknown) => void;
+  /** Retained until its queued save starts, so updates cannot enqueue another writer. */
+  private saveTimer?: NodeJS.Timeout;
+  private closed = false;
+  private closePromise?: Promise<void>;
 
   private serialize<T>(work: () => Promise<T>): Promise<T> {
     const next = this.pending.then(work);
@@ -409,13 +437,17 @@ export class SessionSummaryCache {
     return next;
   }
 
-  constructor(agentDir: string) {
+  constructor(agentDir: string, options: SessionSummaryCacheOptions = {}) {
     this.cachePath = resolve(agentDir, "pylon-web", CACHE_FILE);
     // SessionManager follows PI_CODING_AGENT_DIR even when Pylon receives a distinct package/config directory.
     this.sessionsRoot = resolve(process.env.PI_CODING_AGENT_DIR || agentDir, "sessions");
+    this.deferredPersistence = options.deferredPersistence === true;
+    this.persistenceDelayMs = Math.max(0, options.persistenceDelayMs ?? 1_000);
+    this.onBackgroundError = options.onBackgroundError ?? (error => console.error("Session summary cache persistence failed", error));
   }
 
   scan(): Promise<IndexedSession[]> {
+    if (this.closed) return Promise.reject(new Error("session summary cache is closed"));
     return this.serialize(() => this.scanNow());
   }
 
@@ -454,7 +486,7 @@ export class SessionSummaryCache {
     this.records = next;
     this.unreadablePaths = unreadablePaths;
     this.dirty ||= changed;
-    if (this.dirty) await this.save();
+    await this.persistIfNeeded();
     return [...next.values()].map(hydrate);
   }
 
@@ -467,10 +499,11 @@ export class SessionSummaryCache {
   }
 
   refreshMany(targets: Array<{ sessionId: string; path: string }>): Promise<Array<IndexedSession | undefined>> {
+    if (this.closed) return Promise.reject(new Error("session summary cache is closed"));
     return this.serialize(async () => {
       const results: Array<IndexedSession | undefined> = [];
       for (const target of targets) results.push(await this.refreshOne(target.sessionId, target.path));
-      if (this.dirty) await this.save();
+      await this.persistIfNeeded();
       return results;
     });
   }
@@ -491,8 +524,9 @@ export class SessionSummaryCache {
       )
         return hydrate(cached);
       record = await parseSession(path, current);
-    } catch {
-      // Missing files remove the prior record for this session below.
+    } catch (error) {
+      // Permission/transient failures are not evidence that a source was deleted.
+      if (!["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code))) exists = true;
     }
     if (exists && !record) {
       this.unreadablePaths.add(key);
@@ -527,6 +561,59 @@ export class SessionSummaryCache {
     } catch {
       // Missing, corrupt, and outdated caches rebuild from source session files.
     }
+  }
+
+  private async persistIfNeeded(): Promise<void> {
+    if (!this.dirty) return;
+    if (!this.deferredPersistence) {
+      await this.save();
+      return;
+    }
+    if (this.closed || this.saveTimer) return;
+    const timer = setTimeout(() => {
+      void this.serialize(async () => {
+        // flush/close can invalidate a timer whose callback is already queued.
+        if (this.saveTimer !== timer) return;
+        this.saveTimer = undefined;
+        if (!this.closed && this.dirty) await this.save();
+      }).catch(error => this.reportBackgroundError(error));
+    }, this.persistenceDelayMs);
+    this.saveTimer = timer;
+    timer.unref?.();
+  }
+
+  private reportBackgroundError(error: unknown): void {
+    try {
+      this.onBackgroundError(error);
+    } catch {
+      // Reporting must not create another unhandled rejection.
+    }
+  }
+
+  /** Waits until every accepted mutation is persisted. */
+  flush(): Promise<void> {
+    if (this.closed) return this.closePromise!;
+    this.cancelScheduledSave();
+    return this.serialize(async () => {
+      this.cancelScheduledSave();
+      if (this.dirty) await this.save();
+    });
+  }
+
+  /** Stops future work and drains mutations accepted before close. */
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.cancelScheduledSave();
+    this.closePromise = this.serialize(async () => {
+      if (this.dirty) await this.save();
+    });
+    return this.closePromise;
+  }
+
+  private cancelScheduledSave(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
   }
 
   private async save(): Promise<void> {

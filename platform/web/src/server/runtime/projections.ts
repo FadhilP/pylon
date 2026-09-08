@@ -936,6 +936,10 @@ export class RuntimeProjection {
     }
   }
 
+  isReady(): boolean {
+    return this.runtime.ready;
+  }
+
   snapshot(): RuntimeSnapshot {
     return {
       ...this.runtime,
@@ -1468,6 +1472,7 @@ export class RuntimeProjection {
       text: "",
       streaming: true,
     };
+    const previous = current.text;
     const full = messageText(message);
     const incoming = text(raw.delta ?? raw.text);
     current.text = full || (current.text + incoming).slice(0, MAX_TEXT);
@@ -1475,8 +1480,11 @@ export class RuntimeProjection {
     this.messages.set(messageId, current);
     this.runtime.conversation.streaming = true;
     if (current.role === "assistant") this.latestAssistantMessageId = messageId;
+    // Thinking/tool-argument deltas may leave visible text unchanged.
+    if (current.text === previous) return;
     this.pendingUpdate = { id: messageId, text: current.text };
-    this.updateBytes += Buffer.byteLength(incoming || full);
+    // Native updates carry cumulative message.content, not a top-level delta.
+    this.updateBytes += Buffer.byteLength(current.text.startsWith(previous) ? current.text.slice(previous.length) : current.text);
     if (this.updateBytes >= MAX_PAYLOAD_TEXT) this.flush();
     else if (!this.updateTimer) {
       this.updateTimer = setTimeout(() => this.flush(), STREAM_FLUSH_MS);

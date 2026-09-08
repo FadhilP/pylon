@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   ancestors,
   buildWorkspaceTree,
+  deriveWorkspaceTree,
   subsequenceMatch,
   type WorkspaceTreeNode,
 } from "../src/client/workspace/workspace-tree-model.ts";
 import type { WorkspaceFileReadModel } from "../src/shared/protocol/snapshots.ts";
+import { selectWorkspacePaths } from "../src/client/workspace/workspace-selection.ts";
 
 const files: WorkspaceFileReadModel[] = [
   { path: "src/client/files-panel.tsx", status: "modified", additions: 35, deletions: 96 },
@@ -68,4 +70,21 @@ test("names every folder on the way to a file, outermost first", () => {
     "platform/web/src/client",
   ]);
   assert.deepEqual(ancestors("README.md"), []);
+});
+
+test("filtered tree derivations drop hidden selections without mutating remembered expansion", () => {
+  const root = buildWorkspaceTree(files);
+  const stored = new Set(["src", "src/client", "src/shared"]);
+  const all = deriveWorkspaceTree(root, files, "", stored, false);
+  const selected = ["src/client/App.tsx", "src/client/files-panel.tsx"];
+  for (const [query, changesOnly] of [["file", false], ["", true]] as const) {
+    const filtered = deriveWorkspaceTree(root, files, query, stored, changesOnly);
+    const expanded = deriveWorkspaceTree(root, files, query, filtered.expandable(stored), changesOnly);
+    const selection = selectWorkspacePaths(selected, selected[1], "src/shared/file-icon.ts", expanded.visiblePaths, { toggle: true, range: true });
+    assert.ok(!selection.paths.includes(selected[0]));
+    assert.ok(selection.paths.includes(selected[1]));
+    assert.ok(selection.paths.includes("src/shared/file-icon.ts"));
+  }
+  assert.deepEqual([...stored], ["src", "src/client", "src/shared"]);
+  assert.ok(all.rowByPath.has(selected[0]), "later filters must not modify a previous derivation");
 });

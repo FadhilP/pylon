@@ -19,6 +19,7 @@ import type { WorkspaceFileReadModel } from "../../shared/protocol/snapshots";
 import {
   ancestors,
   buildWorkspaceTree,
+  deriveWorkspaceTree,
   subsequenceMatch,
   type WorkspaceTreeNode,
 } from "./workspace-tree-model";
@@ -137,39 +138,14 @@ export function WorkspaceTree({
   }, [revealAt]);
 
   const trimmed = query.trim();
-  const passes = (node: WorkspaceTreeNode) =>
-    (!changesOnly || Boolean(node.file?.status)) && subsequenceMatch(trimmed, node.path);
-  // A childless directory is a registered submodule: it has no file to match on,
-  // so it stands or falls on its own path.
-  const anyVisible = (node: WorkspaceTreeNode): boolean =>
-    node.children.length
-      ? node.children.some(child => (child.directory ? anyVisible(child) : passes(child)))
-      : !changesOnly && subsequenceMatch(trimmed, node.path);
-
-  // Expand-all is bounded by the filter: only folders with something visible in
-  // them open, so a query or the change filter keeps it small.
-  const expandable = (node: WorkspaceTreeNode, into = new Set<string>()) => {
-    for (const child of node.children) {
-      if (!child.directory || !anyVisible(child)) continue;
-      into.add(child.path);
-      expandable(child, into);
-    }
-    return into;
-  };
-
-  const rows: { node: WorkspaceTreeNode; depth: number }[] = [];
-  const walk = (node: WorkspaceTreeNode, depth: number) => {
-    for (const child of node.children) {
-      if (!(child.directory ? anyVisible(child) : passes(child))) continue;
-      rows.push({ node: child, depth });
-      if (child.directory && open.has(child.path)) walk(child, depth + 1);
-    }
-  };
-  walk(root, 0);
-  const visiblePaths = rows.map(row => row.node.path);
-  const rowByPath = new Map(rows.map(row => [row.node.path, row.node]));
+  const tree = useMemo(
+    () => deriveWorkspaceTree(root, files, trimmed, open, changesOnly),
+    [root, files, trimmed, open, changesOnly],
+  );
+  const { rows, visiblePaths, rowByPath, totals } = tree;
   const selected = selection.paths.filter(path => rowByPath.has(path));
   const selectedSet = new Set(selected);
+
   const selectPaths = (path: string, toggle = false, range = false) => {
     setSelection(selectWorkspacePaths(selected, selection.anchor, path, visiblePaths, { toggle, range }));
     setFocusPath(path);
@@ -180,16 +156,6 @@ export function WorkspaceTree({
     if (node.directory) toggle(node.path);
     else onSelect(node.path, Boolean(node.file?.status));
   };
-
-  const visibleFiles = files.filter(file => (!changesOnly || file.status) && subsequenceMatch(trimmed, file.path));
-  const totals = visibleFiles.reduce(
-    (accumulated, file) => ({
-      additions: accumulated.additions + (file.additions ?? 0),
-      deletions: accumulated.deletions + (file.deletions ?? 0),
-      changed: accumulated.changed + (file.status ? 1 : 0),
-    }),
-    { additions: 0, deletions: 0, changed: 0 },
-  );
 
   const toggle = (path: string) => {
     const next = new Set(open);
@@ -294,7 +260,7 @@ export function WorkspaceTree({
           <button
             type="button"
             className="files-fold"
-            onClick={() => setExplorerOpen(projectId, anyOpen ? new Set() : expandable(root, new Set(open)))}>
+            onClick={() => setExplorerOpen(projectId, anyOpen ? new Set() : tree.expandable(open))}>
             {anyOpen ? <IconChevronsUp size={14} /> : <IconChevronsDown size={14} />}
             {anyOpen ? "Collapse all" : "Expand all"}
           </button>

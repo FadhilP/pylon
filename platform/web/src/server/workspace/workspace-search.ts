@@ -39,10 +39,11 @@ function safePath(path: string): boolean {
   );
 }
 
-async function containedRegular(root: string, path: string): Promise<boolean> {
+async function containedRegular(root: string, path: string, signal: AbortSignal, deadline: number): Promise<boolean> {
   try {
     let candidate = root;
     for (const part of path.split("/")) {
+      if (signal.aborted || Date.now() >= deadline) return false;
       candidate = resolve(candidate, part);
       if ((await lstat(candidate)).isSymbolicLink()) return false;
     }
@@ -183,13 +184,24 @@ export async function searchWorkspace(options: WorkspaceSearchOptions): Promise<
         timedOut = true;
         break;
       }
-      const file = files[at++];
-      if (!safePath(file.path) || !(await containedRegular(root, file.path))) {
-        skipped++;
-        continue;
+      // Validate a small lookahead concurrently, then consume in inventory order.
+      const candidates: WorkspaceFileReadModel[] = [];
+      let candidateSize = argumentSize;
+      while (at < files.length && candidates.length < Math.min(8, 32 - group.size) && candidateSize < 12_000) {
+        signal.throwIfAborted();
+        const file = files[at++];
+        if (!safePath(file.path)) { skipped++; continue; }
+        candidates.push(file);
+        candidateSize += file.path.length + 5;
       }
-      argumentSize += file.path.length + 5;
-      group.set(file.path, { path: file.path, changed: !!file.status, matches: [], capped: false });
+      const valid = await Promise.all(candidates.map(file => containedRegular(root, file.path, signal, deadline)));
+      signal.throwIfAborted();
+      if (Date.now() >= deadline) { timedOut = true; break; }
+      for (const [index, file] of candidates.entries()) {
+        if (!valid[index]) { skipped++; continue; }
+        argumentSize += file.path.length + 5;
+        group.set(file.path, { path: file.path, changed: !!file.status, matches: [], capped: false });
+      }
     }
     if (!group.size || timedOut) continue;
     const operands = [...group.keys()].map(path => `./${path}`);

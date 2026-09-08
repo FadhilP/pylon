@@ -72,6 +72,81 @@ export function buildWorkspaceTree(files: WorkspaceFileReadModel[]): WorkspaceTr
   return root;
 }
 
+export interface WorkspaceTreeRow {
+  node: WorkspaceTreeNode;
+  depth: number;
+}
+
+export interface WorkspaceTreeDerivation {
+  rows: WorkspaceTreeRow[];
+  visiblePaths: string[];
+  rowByPath: Map<string, WorkspaceTreeNode>;
+  totals: { additions: number; deletions: number; changed: number };
+  expandable(open: Set<string>): Set<string>;
+}
+
+/**
+ * Derives the filter-dependent view once. The visibility cache is shared by
+ * flattening and expand-all, which otherwise each walk every matching subtree.
+ */
+export function deriveWorkspaceTree(
+  root: WorkspaceTreeNode,
+  files: WorkspaceFileReadModel[],
+  query: string,
+  open: Set<string>,
+  changesOnly: boolean,
+): WorkspaceTreeDerivation {
+  const passes = (node: WorkspaceTreeNode) =>
+    (!changesOnly || Boolean(node.file?.status)) && subsequenceMatch(query, node.path);
+  const visibility = new Map<WorkspaceTreeNode, boolean>();
+  const anyVisible = (node: WorkspaceTreeNode): boolean => {
+    const cached = visibility.get(node);
+    if (cached !== undefined) return cached;
+    // A childless directory is a registered submodule: it has no file to
+    // match on, so it stands or falls on its own path.
+    const value = node.children.length
+      ? node.children.some(child => (child.directory ? anyVisible(child) : passes(child)))
+      : !changesOnly && subsequenceMatch(query, node.path);
+    visibility.set(node, value);
+    return value;
+  };
+  const rows: WorkspaceTreeRow[] = [];
+  const walk = (node: WorkspaceTreeNode, depth: number) => {
+    for (const child of node.children) {
+      if (!(child.directory ? anyVisible(child) : passes(child))) continue;
+      rows.push({ node: child, depth });
+      if (child.directory && open.has(child.path)) walk(child, depth + 1);
+    }
+  };
+  walk(root, 0);
+  const visiblePaths = rows.map(row => row.node.path);
+  const rowByPath = new Map(rows.map(row => [row.node.path, row.node]));
+  const totals = files.reduce(
+    (accumulated, file) => {
+      if ((!changesOnly || file.status) && subsequenceMatch(query, file.path)) {
+        accumulated.additions += file.additions ?? 0;
+        accumulated.deletions += file.deletions ?? 0;
+        if (file.status) accumulated.changed++;
+      }
+      return accumulated;
+    },
+    { additions: 0, deletions: 0, changed: 0 },
+  );
+  const expandable = (initial = new Set<string>()) => {
+    const into = new Set(initial);
+    const visit = (node: WorkspaceTreeNode) => {
+      for (const child of node.children) {
+        if (!child.directory || !anyVisible(child)) continue;
+        into.add(child.path);
+        visit(child);
+      }
+    };
+    visit(root);
+    return into;
+  };
+  return { rows, visiblePaths, rowByPath, totals, expandable };
+}
+
 /** Subsequence match, so "fic" finds "file-icon.ts". */
 export function subsequenceMatch(query: string, text: string): boolean {
   if (!query) return true;

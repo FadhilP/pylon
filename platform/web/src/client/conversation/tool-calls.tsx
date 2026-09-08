@@ -1,6 +1,6 @@
 /* Tool-call renderer shared by the transcript and agents drawer. */
 import { IconChevronDown } from "@tabler/icons-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { formatToolDuration } from "../ui/session-format";
 import {
   aggregateToolCallTiming,
@@ -31,7 +31,7 @@ function ToolCallDuration({ status, durationMs }: { status: ToolCallStatus; dura
 }
 
 export function ToolCallRow({ call }: { call: ToolCallView }) {
-  const inputPreview = call.input?.replace(/\s+/g, " ").trim();
+  const inputPreview = useMemo(() => call.input?.replace(/\s+/g, " ").trim(), [call.input]);
   return (
     <details className={`tool-call is-${call.status}`}>
       <summary>
@@ -44,21 +44,21 @@ export function ToolCallRow({ call }: { call: ToolCallView }) {
           <ToolCallDuration status={call.status} durationMs={call.durationMs} />
         </span>
       </summary>
-      <div className="tool-call-io">
-        <section>
-          <small>Arguments</small>
-          <pre>{call.input || "No input"}</pre>
-        </section>
-        <section>
-          <small>Result</small>
-          <pre className={call.status === "failed" ? "is-error" : undefined}>
-            {call.output || (call.status === "running" ? "Waiting for output…" : "No output")}
-          </pre>
-        </section>
-      </div>
+      <ToolCallOutput input={call.input} output={call.output} status={call.status} />
     </details>
   );
 }
+
+// Keep closed details mounted for browser find and disclosure state, but do not
+// reconcile their unchanged large text bodies on every stream/duration update.
+const ToolCallOutput = memo(function ToolCallOutput({ input, output, status }: Pick<ToolCallView, "input" | "output" | "status">) {
+  return <div className="tool-call-io">
+    <section><small>Arguments</small><pre>{input || "No input"}</pre></section>
+    <section><small>Result</small><pre className={status === "failed" ? "is-error" : undefined}>
+      {output || (status === "running" ? "Waiting for output…" : "No output")}
+    </pre></section>
+  </div>;
+});
 
 export function ToolCallList({ calls }: { calls: ToolCallView[] }) {
   return (

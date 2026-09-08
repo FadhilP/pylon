@@ -165,6 +165,10 @@ export function EditableCode(props: Props) {
   const [comparison, setComparison] = useState<{ text: string; indexText?: string; changes?: Map<number, GitLineChange> }>();
   const gitChanges = comparison?.text === props.text && comparison.indexText === props.editing.gitIndexText
     ? comparison.changes : undefined;
+  // A pending comparison is not a failure. Keep the last settled status until
+  // its replacement arrives so typing cannot insert/remove chrome above the editor.
+  const comparisonUnavailable = props.editing.gitIndexText !== undefined && comparison !== undefined &&
+    comparison.indexText === props.editing.gitIndexText && comparison.changes === undefined;
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView>(undefined);
   const current = useRef(props);
@@ -395,7 +399,7 @@ export function EditableCode(props: Props) {
   return (
     <>
       {analysisError && <div className="file-history-notice" role="status">Highlighting unavailable; plain-text editing is available.</div>}
-      {props.editing.gitIndexText !== undefined && !gitChanges && <div className="file-history-notice" role="status">Git gutters unavailable: comparison exceeds the size or time limit.</div>}
+      {comparisonUnavailable && <div className="file-history-notice" role="status">Git gutters unavailable: comparison exceeds the size or time limit.</div>}
       <div
         ref={host}
         className="code-viewer code-editor"

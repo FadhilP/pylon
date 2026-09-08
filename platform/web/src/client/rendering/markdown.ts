@@ -1,9 +1,37 @@
 import katex from "katex";
 import { Marked, Renderer, type MarkedExtension, type Tokens } from "marked";
 import { parseFileReference, type FileReference } from "../workspace/file-reference.ts";
-import { highlightSyntax } from "./syntax-highlighting.ts";
+import { getSyntaxHighlightingRevision, highlightSyntax } from "./syntax-highlighting.ts";
 import { sourceLanguage } from "./source-language.ts";
 export { sourceLanguage } from "./source-language.ts";
+
+/** Bound retained UTF-16 input and markup, including many tiny entries. */
+export class MarkdownRenderCache {
+  private readonly entries = new Map<string, string>();
+  private characters = 0;
+  constructor(private readonly capacity = 512 * 1024) {}
+
+  render(key: string, produce: () => string): string {
+    const cached = this.entries.get(key);
+    if (cached !== undefined) {
+      this.entries.delete(key);
+      this.entries.set(key, cached);
+      return cached;
+    }
+    const value = produce();
+    const size = key.length + value.length;
+    if (size > this.capacity) return value;
+    while (this.entries.size && (this.characters + size > this.capacity || this.entries.size >= 128)) {
+      const [oldKey, oldValue] = this.entries.entries().next().value!;
+      this.characters -= oldKey.length + oldValue.length;
+      this.entries.delete(oldKey);
+    }
+    this.entries.set(key, value);
+    this.characters += size;
+    return value;
+  }
+}
+const renderCache = new MarkdownRenderCache();
 
 function fileReferenceHref(reference: FileReference): string {
   return `${reference.path}:${reference.line}${reference.column === undefined ? "" : `:${reference.column}`}`;
@@ -130,7 +158,7 @@ function findMathStart(source: string): number | undefined {
 
 function renderMath(token: MathToken): string {
   try {
-    const math = katex.renderToString(token.text, {
+    const math = renderCache.render(`math:${token.displayMode}:${token.text}`, () => katex.renderToString(token.text, {
       displayMode: token.displayMode,
       maxExpand: 1_000,
       maxSize: 20,
@@ -138,7 +166,7 @@ function renderMath(token: MathToken): string {
       strict: "ignore",
       throwOnError: false,
       trust: false,
-    });
+    }));
     return token.displayMode ? `<span class="math-display">${math}</span>` : math;
   } catch {
     return escapeHtml(token.raw);
@@ -190,7 +218,8 @@ export function highlightSource(text: string, path: string, diffView = false): s
 }
 
 function highlightCode(text: string, language: string): string {
-  return highlightSyntax(text, language) ?? escapeHtml(text);
+  return renderCache.render(JSON.stringify(["code", getSyntaxHighlightingRevision(), language, text]),
+    () => highlightSyntax(text, language) ?? escapeHtml(text));
 }
 
 export function escapeHtml(value: string): string {

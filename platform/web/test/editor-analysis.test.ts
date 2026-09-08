@@ -96,6 +96,17 @@ test("local edits reuse the unaffected suffix; missing stack equality safely ret
   assert.equal(sameGrammarState(unknown as any, unknown as any), false);
 });
 
+test("unchanged documents reuse cached line offsets for viewport spans", () => {
+  const text = "const first = 1;\nconst second = 2;\n";
+  const cache = new IncrementalSyntax();
+  const tokens = cache.update(text, "typescript", theme);
+  const range = { from: text.indexOf("second"), to: text.length - 1 };
+  assert.deepEqual(cache.visible([range]), visibleSyntax(text, tokens, [range]));
+  // A repeated worker request has no grammar work and uses the cached offsets.
+  assert.equal(cache.update(text, "typescript", theme), tokens);
+  assert.deepEqual(cache.visible([range]), visibleSyntax(text, tokens, [range]));
+});
+
 test("viewport extraction clips tokens at UTF-16 boundaries without sending the rest of the document", () => {
   const text = 'const emoji = "😀";\r\nconst number = 123;\n';
   const cache = new IncrementalSyntax();

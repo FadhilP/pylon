@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createGridPublication,
   filterGridRows,
   groupGridChanges,
   parseGridJson,
@@ -81,4 +82,40 @@ test("draft grouping treats prototype-like database columns as ordinary values",
   assert.equal(Object.getPrototypeOf(update.changes.set), Object.prototype);
   assert.deepEqual(JSON.parse(JSON.stringify(update.changes.set)), JSON.parse('{"__proto__":{"polluted":true}}'));
   assert.equal(({} as Record<string, unknown>).polluted, undefined);
+});
+
+
+test("result publication shows the first page immediately and batches later pages", () => {
+  const publications: Array<{ rows: number[]; tokens: Array<string | null> }> = [];
+  const pending = createGridPublication<number>(
+    (publishedRows, publishedTokens) => publications.push({ rows: publishedRows, tokens: publishedTokens }),
+    { rowCadence: 3, timeCadence: 60_000 },
+  );
+  pending.append([1], ["one"], true);
+  pending.append([2], ["two"]);
+  pending.append([3], ["three"]);
+  assert.deepEqual(publications, [{ rows: [1], tokens: ["one"] }]);
+  pending.append([4], ["four"]);
+  assert.deepEqual(publications.at(-1), { rows: [1, 2, 3, 4], tokens: ["one", "two", "three", "four"] });
+  pending.append([5], ["five"]);
+  pending.flush();
+  assert.deepEqual(publications.at(-1), { rows: [1, 2, 3, 4, 5], tokens: ["one", "two", "three", "four", "five"] });
+  pending.dispose();
+});
+
+test("result publication has a bounded delay and disposal cancels pending publication", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seen: number[][] = [];
+  const pending = createGridPublication<number>(rows => seen.push(rows));
+  pending.append([1], [null], true);
+  pending.append([2], [null]);
+  t.mock.timers.tick(49);
+  assert.deepEqual(seen, [[1]]);
+  t.mock.timers.tick(1);
+  assert.deepEqual(seen, [[1], [1, 2]]);
+  pending.append([3], [null]);
+  pending.dispose();
+  t.mock.timers.tick(100);
+  pending.flush();
+  assert.equal(seen.length, 2);
 });

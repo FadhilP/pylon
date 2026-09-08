@@ -1,6 +1,6 @@
 import { gitGutterChanges } from "../../shared/workspace/code-viewer-model.ts";
 import { MAX_EDIT_BYTES } from "../../shared/workspace/workspace-mutations.ts";
-import { IncrementalSyntax, visibleSyntax } from "./incremental-syntax.ts";
+import { IncrementalSyntax } from "./incremental-syntax.ts";
 import { sourceLanguage } from "./source-language.ts";
 import { loadSyntaxLanguage, syntaxThemeTokenCss } from "./syntax-highlighting-runtime.ts";
 import type { EditorAnalysisRequest, EditorAnalysisResult } from "./editor-analysis.ts";
@@ -20,7 +20,7 @@ self.onmessage = async (event: MessageEvent<EditorAnalysisRequest>) => {
     if (!comparison || comparison.text !== request.text || comparison.indexText !== request.indexText) {
       comparison = { text: request.text, indexText: request.indexText, changes: gitGutterChanges(request.indexText, request.text) };
     }
-    result = { id: request.id, spans: visibleSyntax(request.text, tokens, request.ranges), changes: comparison.changes, css: syntaxThemeTokenCss };
+    result = { id: request.id, spans: syntax.visible(request.ranges), changes: comparison.changes, css: syntaxThemeTokenCss };
   } catch {
     result = { id: request.id, spans: [], error: true };
   }

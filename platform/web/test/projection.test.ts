@@ -2310,6 +2310,48 @@ test("projection coalesces cumulative stream updates on a readable cadence", t =
   projection.dispose();
 });
 
+test("long cumulative streams batch new bytes, ignore unchanged text, and flush before message end", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  t.after(() => projection.dispose());
+  const message = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+  const seed = "x".repeat(9_000);
+  projection.apply(session({ type: "message_start", message: message(seed) }));
+  const update = (text: string) => projection.apply(session({
+    type: "message_update", message: message(text), assistantMessageEvent: { type: "text_delta", delta: "y" },
+  }));
+  update(seed);
+  t.mock.timers.tick(100);
+  assert.equal(published.length, 1);
+  for (let index = 1; index <= 20; index++) update(seed + "y".repeat(index));
+  assert.equal(published.length, 1);
+  t.mock.timers.tick(50);
+  assert.equal(published.length, 2);
+  assert.equal(published[1].payload.text, seed + "y".repeat(20));
+  update(seed + "y".repeat(21));
+  projection.apply(session({ type: "message_end", message: message(seed + "y".repeat(21)) }));
+  assert.deepEqual(published.slice(-2).map(item => item.type), ["message.update", "message.end"]);
+  assert.equal(published.at(-1)?.payload.text, seed + "y".repeat(21));
+  t.mock.timers.tick(100);
+  assert.equal(published.length, 4);
+});
+
+test("large new text and non-prefix replacements still flush immediately", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  try {
+    projection.apply(session({ type: "message_start", message: { role: "assistant", content: [] } }));
+    const content = "é".repeat(4_096);
+    projection.apply(session({ type: "message_update", delta: content }));
+    assert.equal(published.at(-1)?.type, "message.update");
+    assert.equal(published.at(-1)?.payload.text, content);
+    projection.apply(session({ type: "message_update", message: { content: [{ type: "text", text: "z".repeat(8_192) }] } }));
+    assert.equal(published.length, 3);
+    assert.equal(published.at(-1)?.payload.text, "z".repeat(8_192));
+  } finally { projection.dispose(); }
+});
+
 test("projection disposal cancels delayed stream publication", t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const published: string[] = [];

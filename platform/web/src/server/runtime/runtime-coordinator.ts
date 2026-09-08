@@ -1987,11 +1987,28 @@ export class RuntimeCoordinator implements PiDriver {
     this.modelRefreshAbort?.abort();
     this.modelRefreshAbort = undefined;
     if (this.sleepTimer) clearInterval(this.sleepTimer);
-    for (const slot of [...this.slots.values()]) await this.disposeSlot(slot);
+    let failure: unknown;
+    for (const slot of [...this.slots.values()]) {
+      try {
+        await this.disposeSlot(slot);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    try {
+      await this.sessionIndex.close();
+    } catch (error) {
+      failure ??= error;
+    }
     this.listeners.clear();
     this.workspaceInventories.clear();
-    this.annotationStore?.close();
+    try {
+      this.annotationStore?.close();
+    } catch (error) {
+      failure ??= error;
+    }
     this.annotationStore = undefined;
+    if (failure) throw failure;
   }
 
   private async createSlot(target: RuntimeTarget): Promise<RuntimeSlot> {

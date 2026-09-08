@@ -42,4 +42,8 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
-void startSyntaxHighlighting();
+// Leave the first paint to React; explicit code-viewer requests can still load immediately.
+requestAnimationFrame(() => {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(() => void startSyntaxHighlighting(), { timeout: 1_000 });
+  else setTimeout(() => void startSyntaxHighlighting(), 0);
+});

@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
@@ -17,51 +17,17 @@ import type {
 } from "../../shared/protocol/snapshots.ts";
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "../workspace/project-registry.ts";
-import { SessionSummaryCache, type SessionFileMetadata } from "./session-summary-cache.ts";
+import {
+  mapLimit,
+  readSessionMetadata,
+  SessionSummaryCache,
+  type SessionFileMetadata,
+} from "./session-summary-cache.ts";
 import { aggregateUsage, type UsageRateLookup } from "../usage/usage-aggregation.ts";
 import type { PersistedUsageAtom } from "../usage/usage-history.ts";
 
 const REFRESH_MS = 60_000;
-const SPAWN_SESSION_MARKER = "pi-spawn-session";
 const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
-
-type SpawnOwner = { id: string; file: string };
-
-const boundedText = (value: unknown, max: number) =>
-  typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= max;
-const validHooks = (value: any) =>
-  value !== undefined &&
-  value !== null &&
-  typeof value === "object" &&
-  !Array.isArray(value) &&
-  (value.beforeAgentStart === undefined || boundedText(value.beforeAgentStart, 300 * 1024)) &&
-  (value.sessionStart === undefined ||
-    (boundedText(value.sessionStart?.customType, 128) && boundedText(value.sessionStart?.content, 300 * 1024)));
-
-function markerOwner(value: any): SpawnOwner | undefined {
-  if (
-    value?.version !== 1 ||
-    !boundedText(value.ownerSessionId, 128) ||
-    !boundedText(value.ownerSessionFile, 32_768) ||
-    typeof value.createdAt !== "string" ||
-    Number.isNaN(Date.parse(value.createdAt)) ||
-    (value.model !== undefined && !boundedText(value.model, 300)) ||
-    (value.hooks !== undefined && !validHooks(value.hooks))
-  )
-    return;
-  return { id: value.ownerSessionId, file: value.ownerSessionFile };
-}
-
-function readSpawnOwner(entries: ReturnType<SessionManager["getEntries"]>): SpawnOwner | undefined {
-  const owners = entries.flatMap(entry =>
-    entry.type === "custom" && entry.customType === SPAWN_SESSION_MARKER ? [markerOwner(entry.data)] : [],
-  );
-  const owner = owners[0];
-  return owner &&
-    owners.every(candidate => candidate?.id === owner.id && canonicalPath(candidate.file) === canonicalPath(owner.file))
-    ? owner
-    : undefined;
-}
 
 export { projectIdForCwd } from "../workspace/project-registry.ts";
 
@@ -116,22 +82,31 @@ export class SessionIndex {
   private scan?: Promise<void>;
   private cache?: SessionSummaryCache;
   private agentDir?: string;
+  private epoch = 0;
+  private retiring = new Set<Promise<void>>();
+  private retirementError?: unknown;
+  private closed = false;
+  private closePromise?: Promise<void>;
 
   constructor(
     private registry?: ProjectRegistry,
     agentDir = process.env.PI_CODING_AGENT_DIR,
   ) {
     this.agentDir = agentDir;
-    if (agentDir) this.cache = new SessionSummaryCache(agentDir);
+    if (agentDir) this.cache = this.createCache(agentDir);
   }
 
   setAgentDir(agentDir: string): void {
+    const previous = this.cache;
+    this.epoch++;
     this.agentDir = agentDir;
-    this.cache = new SessionSummaryCache(agentDir);
+    this.cache = this.closed ? undefined : this.createCache(agentDir);
+    if (previous) this.retire(previous);
     this.sessions = [];
     this.metadata.clear();
     this.usageBySession.clear();
     this.dirtySessions.clear();
+    this.scan = undefined;
     this.invalidate();
   }
 
@@ -228,7 +203,6 @@ export class SessionIndex {
     const labels = this.projectLabels(source, projectIdFor);
     const cursorId = input.cursor ? decodeSessionCursor(input.cursor) : undefined;
     const limit = Math.min(100, Math.max(1, input.limit ?? 10));
-    const projects: SessionProjectPage[] = [];
     const sessionLookup = this.sessionLookup();
     const projectEntries = registered
       ? registered
@@ -239,21 +213,14 @@ export class SessionIndex {
           )
           .map(project => [project.id, grouped.get(project.id) ?? [], project.label, project.cwd] as const)
       : [...grouped].slice(0, 100).map(([id, sessions]) => [id, sessions, labels.get(id), sessions[0]!.cwd] as const);
-    for (const [id, sessions, registeredLabel, cwd] of projectEntries) {
+    const pages = projectEntries.flatMap(([id, sessions, registeredLabel, cwd]) => {
       const offset = cursorId ? sessions.findIndex(session => session.id === cursorId) + 1 : 0;
-      if (cursorId && offset === 0) continue;
-      const page = sessions.slice(offset, offset + limit);
-      projects.push({
-        id,
-        label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
-        cwd,
-        totalCount: sessions.length,
-        sessions: page.map(session => this.summary(session, options, sessionLookup, projectIdFor, projectFor)),
-        ...(offset + page.length < sessions.length && page.length ? { nextCursor: encodeCursor(page.at(-1)!.id) } : {}),
-      });
-    }
+      return cursorId && offset === 0
+        ? []
+        : [{ id, sessions, registeredLabel, cwd, offset, page: sessions.slice(offset, offset + limit) }];
+    });
     const activeOrder = new Map((this.registry?.listActiveSessionOrder() ?? []).map((id, index) => [id, index]));
-    const activeSessions = source
+    const active = source
       .filter(session => options.activeFor?.(session.id) ?? options.stateFor(session.id) !== "sleeping")
       .sort((left, right) => {
         const leftOrder = activeOrder.get(left.id);
@@ -265,8 +232,19 @@ export class SessionIndex {
         }
         return right.modified.getTime() - left.modified.getTime();
       })
-      .slice(0, 100)
-      .map(session => this.summary(session, options, sessionLookup, projectIdFor, projectFor));
+      .slice(0, 100);
+    const metadata = await this.preloadMetadata([...pages.flatMap(item => item.page), ...active]);
+    const projects: SessionProjectPage[] = pages.map(({ id, sessions, registeredLabel, cwd, offset, page }) => ({
+      id,
+      label: registeredLabel ?? labels.get(id) ?? (basename(sessions[0]?.cwd ?? "") || "Workspace"),
+      cwd,
+      totalCount: sessions.length,
+      sessions: page.map(session => this.summary(session, options, sessionLookup, metadata, projectIdFor, projectFor)),
+      ...(offset + page.length < sessions.length && page.length ? { nextCursor: encodeCursor(page.at(-1)!.id) } : {}),
+    }));
+    const activeSessions = active.map(session =>
+      this.summary(session, options, sessionLookup, metadata, projectIdFor, projectFor),
+    );
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: options.generation, activeSessions, projects };
   }
 
@@ -323,8 +301,9 @@ export class SessionIndex {
     const limit = Math.min(100, Math.max(1, input.limit ?? 20));
     const page = cursorId && offset === 0 ? [] : source.slice(offset, offset + limit);
     const sessionLookup = this.sessionLookup();
+    const metadata = await this.preloadMetadata(page);
     const sessions: ArchivedSessionSummary[] = page.map(session => ({
-      ...this.summary(session, options, sessionLookup, projectIdFor, projectFor),
+      ...this.summary(session, options, sessionLookup, metadata, projectIdFor, projectFor),
       active: false,
       runtimeState: "sleeping",
       archivedAt: archiveRecords.get(session.id)!,
@@ -341,28 +320,75 @@ export class SessionIndex {
       ...(offset + page.length < source.length && page.length ? { nextCursor: encodeCursor(page.at(-1)!.id) } : {}),
     };
   }
-
-  private async refresh(): Promise<void> {
-    if (this.scan) return this.scan;
-    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtySessions.size) return;
-    this.scan = this.refreshPending().finally(() => {
-      this.scan = undefined;
-    });
-    return this.scan;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.epoch++;
+    const active = this.cache;
+    this.cache = undefined;
+    if (active) this.retire(active);
+    this.closePromise = (async () => {
+      const settled = await Promise.allSettled([...this.retiring]);
+      const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+      if (failed) throw failed.reason;
+      if (this.retirementError) throw this.retirementError;
+    })();
+    return this.closePromise;
   }
 
-  private async refreshPending(): Promise<void> {
-    while (true) {
+  private createCache(agentDir: string): SessionSummaryCache {
+    return new SessionSummaryCache(agentDir, { deferredPersistence: true });
+  }
+
+  private retire(cache: SessionSummaryCache): void {
+    const closing = cache.close();
+    this.retiring.add(closing);
+    // A directory switch is synchronous, so observe this rejection immediately.
+    void closing.then(
+      () => this.retiring.delete(closing),
+      error => {
+        this.retiring.delete(closing);
+        this.retirementError ??= error;
+        console.error("Retired session summary cache failed to persist", error);
+      },
+    );
+  }
+
+  private async awaitRetiring(): Promise<void> {
+    // A successor reading the same destination should not race a retired writer.
+    await Promise.allSettled([...this.retiring]);
+  }
+
+  private async refresh(): Promise<void> {
+    if (this.closed) throw new Error("session index is closed");
+    if (this.scan) return this.scan;
+    if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtySessions.size) return;
+    const epoch = this.epoch;
+    let scan: Promise<void>;
+    scan = this.refreshPending(epoch).then(() => {
+      if (epoch !== this.epoch || this.closed) throw new Error("Session index changed while loading sessions");
+    }).finally(() => {
+      if (this.scan === scan) this.scan = undefined;
+    });
+    this.scan = scan;
+    return scan;
+  }
+
+  private async refreshPending(epoch: number): Promise<void> {
+    await this.awaitRetiring();
+    while (epoch === this.epoch && !this.closed) {
       if (!this.scannedAt || Date.now() - this.scannedAt >= REFRESH_MS) {
-        if (this.cache) {
-          const cache = this.cache;
+        const cache = this.cache;
+        if (cache) {
           const indexed = await cache.scan();
-          if (cache !== this.cache) continue;
+          if (epoch !== this.epoch || cache !== this.cache) return;
           this.sessions = indexed.map(item => item.session);
           this.metadata = new Map(indexed.map(item => [item.session.id, item.metadata]));
           this.usageBySession = new Map(indexed.map(item => [item.session.id, item.usage]));
         } else {
-          this.sessions = await SessionManager.listAll();
+          const sessions = await SessionManager.listAll();
+          if (epoch !== this.epoch) return;
+          this.sessions = sessions;
           this.usageBySession.clear();
         }
         this.scannedAt = Date.now();
@@ -375,10 +401,11 @@ export class SessionIndex {
       const indexedPending = cache
         ? await cache.refreshMany(pending.map(([sessionId, target]) => ({ sessionId, path: target.path })))
         : undefined;
-      if (cache !== this.cache) continue;
+      if (epoch !== this.epoch || cache !== this.cache) return;
       for (const [pendingIndex, [sessionId, target]] of pending.entries()) {
-        if (!this.cache) {
+        if (!cache) {
           const sessions = await SessionManager.list(target.cwd, dirname(target.path));
+          if (epoch !== this.epoch || cache !== this.cache) return;
           const previousIds = this.sessions
             .filter(session => session.id === sessionId || dirname(session.path) === dirname(target.path))
             .map(session => session.id);
@@ -389,7 +416,6 @@ export class SessionIndex {
           continue;
         }
         const indexed = indexedPending![pendingIndex];
-        if (cache !== this.cache) continue;
         const replacementId = indexed?.session.id;
         const removedIds = this.sessions
           .filter(session => session.id === sessionId || (replacementId && session.id === replacementId))
@@ -406,19 +432,54 @@ export class SessionIndex {
     }
   }
 
+  private async preloadMetadata(sessions: SessionInfo[]): Promise<Map<string, SessionFileMetadata | undefined>> {
+    const epoch = this.epoch;
+    const priorMetadata = this.metadata;
+    const unique = new Map<string, SessionInfo>();
+    for (const session of sessions) unique.set(this.sessionKey(session.id, session.path), session);
+    const values = await mapLimit([...unique.values()], async session => {
+      const candidate = priorMetadata.get(session.id);
+      const cached = candidate?.path === session.path ? candidate : undefined;
+      try {
+        const file = await stat(session.path);
+        if (
+          cached &&
+          cached.path === session.path &&
+          cached.mtimeMs === file.mtimeMs &&
+          cached.ctimeMs === file.ctimeMs &&
+          cached.size === file.size
+        )
+          return cached;
+        const metadata = await readSessionMetadata(session.path, session.id);
+        // A read failure is not evidence that a session was deleted. Keep a
+        // prior value and let the authoritative cache scan reconcile it later.
+        if (!metadata) return cached;
+        if (epoch === this.epoch && !this.closed) this.metadata.set(session.id, metadata);
+        return metadata;
+      } catch {
+        return cached;
+      }
+    });
+    if (epoch !== this.epoch || this.closed) throw new Error("Session index changed while loading metadata");
+    const result = new Map<string, SessionFileMetadata | undefined>();
+    for (const [index, session] of [...unique.values()].entries()) {
+      result.set(this.sessionKey(session.id, session.path), values[index]);
+    }
+    return result;
+  }
+
   private summary(
     session: SessionInfo,
     options: SessionIndexOptions,
     sessionLookup: Map<string, SessionInfo | undefined>,
+    metadataBySession: Map<string, SessionFileMetadata | undefined>,
     projectIdFor: (session: Pick<SessionInfo, "id" | "cwd">) => string = value => this.projectId(value),
     projectFor: (session: Pick<SessionInfo, "id" | "cwd">) => { label: string } | undefined = value =>
       this.registry?.projectForSession(value.id, value.cwd),
   ): SessionSummary {
-    let manager: SessionManager | undefined;
-    const open = () => (manager ??= SessionManager.open(session.path));
-    const metadata = this.metadataFor(session, open);
-    const userMessageCount = options.userCountFor?.(session.id) ?? metadata.userMessageCount;
-    const owner = metadata.owner;
+    const metadata = metadataBySession.get(this.sessionKey(session.id, session.path));
+    const userMessageCount = options.userCountFor?.(session.id) ?? metadata?.userMessageCount ?? 0;
+    const owner = metadata?.owner;
     const project = projectFor(session);
     const workStartedAt = options.workStartedAtFor?.(session.id);
     const todoProgress = options.todoProgressFor?.(session.id);
@@ -446,39 +507,14 @@ export class SessionIndex {
     };
   }
 
-  private metadataFor(session: SessionInfo, open: () => SessionManager) {
-    try {
-      const file = statSync(session.path);
-      const cached = this.metadata.get(session.id);
-      if (
-        cached?.path === session.path &&
-        cached.mtimeMs === file.mtimeMs &&
-        cached.ctimeMs === file.ctimeMs &&
-        cached.size === file.size
-      )
-        return cached;
-      const entries = open().getEntries();
-      const owner = readSpawnOwner(entries);
-      const metadata = {
-        path: session.path,
-        mtimeMs: file.mtimeMs,
-        ctimeMs: file.ctimeMs,
-        size: file.size,
-        userMessageCount: entries.filter(entry => entry.type === "message" && entry.message.role === "user").length,
-        ...(owner ? { owner } : {}),
-      };
-      this.metadata.set(session.id, metadata);
-      return metadata;
-    } catch {
-      return { path: session.path, mtimeMs: 0, ctimeMs: 0, size: 0, userMessageCount: 0 };
-    }
-  }
-
   private sessionKey(id: string, path: string): string {
     return `${id}\0${canonicalPath(path)}`;
   }
 
-  private parentSession(owner: SpawnOwner, sessions: Map<string, SessionInfo | undefined>): SessionInfo | undefined {
+  private parentSession(
+    owner: NonNullable<SessionFileMetadata["owner"]>,
+    sessions: Map<string, SessionInfo | undefined>,
+  ): SessionInfo | undefined {
     const exact = sessions.get(this.sessionKey(owner.id, owner.file));
     if (exact) return exact;
     const migratedPath = this.migratedOwnerPath(owner.file);

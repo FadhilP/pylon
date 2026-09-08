@@ -52,34 +52,60 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
       }
       const requested = resolve(dist, `.${pathname}`);
       const safe = requested === dist || requested.startsWith(`${dist}${sep}`);
-      const requestedExists = safe && (await isFile(requested));
-      if (!requestedExists && extname(pathname)) {
+      const requestedInfo = safe ? await fileInfo(requested) : undefined;
+      if (!requestedInfo && extname(pathname)) {
         response.statusCode = 404;
         response.end("Not found");
         return;
       }
-      const file = requestedExists ? requested : index;
-      if (!(await isFile(file))) {
+      const file = requestedInfo ? requested : index;
+      const info = requestedInfo ?? await fileInfo(file);
+      if (!info) {
         response.statusCode = 503;
         response.end("Web bundle not built");
         return;
       }
-      const body = await readFile(file);
+      const compressible = /\.(?:js|css|svg)$/.test(file);
+      if (compressible) response.setHeader("vary", "Accept-Encoding");
+      let representation: { file: string; size: number; encoding?: string } | undefined;
+      for (const encoding of acceptedEncodings(request.headers["accept-encoding"] ?? "")) {
+        if (encoding === "identity") { representation = { file, size: info.size }; break; }
+        if (!compressible) continue;
+        const variant = `${file}.${encoding === "gzip" ? "gz" : "br"}`;
+        const compressed = await fileInfo(variant);
+        // Never serve an old sidecar after an interrupted or partial build.
+        if (compressed && compressed.mtimeMs >= info.mtimeMs) {
+          representation = { file: variant, size: compressed.size, encoding };
+          break;
+        }
+      }
+      if (!representation) { response.statusCode = 406; response.end(); return; }
       response.statusCode = 200;
       response.setHeader("content-type", contentType(file));
       response.setHeader("cache-control", file === index ? "no-store" : "public, max-age=31536000, immutable");
-      response.setHeader("content-length", body.byteLength);
-      response.end(request.method === "HEAD" ? undefined : body);
+      if (representation.encoding) response.setHeader("content-encoding", representation.encoding);
+      response.setHeader("content-length", representation.size);
+      response.end(request.method === "HEAD" ? undefined : await readFile(representation.file));
     },
     async close() {},
   };
 }
 
-async function isFile(path: string): Promise<boolean> {
-  return stat(path).then(
-    value => value.isFile(),
-    () => false,
-  );
+async function fileInfo(path: string) {
+  return stat(path).then(value => value.isFile() ? value : undefined, () => undefined);
+}
+
+function acceptedEncodings(header: string): string[] {
+  const qualities = new Map<string, number>();
+  for (const entry of header.toLowerCase().split(",")) {
+    const [name, ...parameters] = entry.split(";").map(value => value.trim());
+    const q = parameters.find(value => value.startsWith("q="))?.slice(2);
+    qualities.set(name, q === undefined ? 1 : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(q) ? Number(q) : 0);
+  }
+  const quality = (name: string) => qualities.get(name) ?? (name === "identity"
+    ? qualities.get("*") === 0 ? 0 : 1
+    : qualities.get("*") ?? 0);
+  return ["br", "gzip", "identity"].filter(name => quality(name) > 0).sort((a, b) => quality(b) - quality(a));
 }
 
 function contentType(path: string): string {

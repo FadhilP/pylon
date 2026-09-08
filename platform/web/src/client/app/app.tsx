@@ -11,6 +11,10 @@ import {
   IconTrash,
 } from "@tabler/icons-react";
 import {
+  Component,
+  lazy,
+  Suspense,
+  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -45,15 +49,17 @@ import { AgentPanel } from "../sessions/agent-panel";
 import { AttachmentPanel } from "../conversation/attachment-panel";
 import { agentColor, useAgentColors } from "../sessions/agent-color";
 import { copyText } from "../ui/clipboard";
-import { ArchiveDialog } from "../sessions/archive-dialog";
-import { ChangelogDialog } from "../settings/changelog-dialog";
+const ArchiveDialog = lazy(() => import("../sessions/archive-dialog").then(module => ({ default: module.ArchiveDialog })));
+const ChangelogDialog = lazy(() => import("../settings/changelog-dialog").then(module => ({ default: module.ChangelogDialog })));
 import { version } from "../../../../../package.json";
 import { ConversationPanel, type ComposerSelection } from "../conversation/conversation-panel";
 import { CompactionPanel } from "../conversation/compaction-panel";
-import { BrowserPanel } from "../browser/browser-panel";
-import { DatabasePanel } from "../database/database-panel";
-import { FilesPanel, type FileView } from "../workspace/files-panel";
-import { FileWorkspace, type FileWorkspaceContentStore } from "../workspace/file-workspace";
+const BrowserPanel = lazy(() => import("../browser/browser-panel").then(module => ({ default: module.BrowserPanel })));
+const DatabasePanel = lazy(() => import("../database/database-panel").then(module => ({ default: module.DatabasePanel })));
+const FilesPanel = lazy(() => import("../workspace/files-panel").then(module => ({ default: module.FilesPanel })));
+const FileWorkspace = lazy(() => import("../workspace/file-workspace").then(module => ({ default: module.FileWorkspace })));
+import type { FileView } from "../workspace/files-panel";
+import type { FileWorkspaceContentStore } from "../workspace/file-workspace";
 import { SearchPopup } from "../workspace/search-popup";
 import { openSearch } from "../workspace/workspace-search";
 import { KEY_COMMANDS } from "../../shared/settings/keyboard";
@@ -64,7 +70,7 @@ import { ReferencePanel, ReferenceRail, ScopeRail, SurfaceTabs } from "./app-chr
 
 /** Reference views that render a session view body inside the shared panel. */
 const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory", "tools", "notes"];
-import { UsageView } from "../usage/usage-view";
+const UsageView = lazy(() => import("../usage/usage-view").then(module => ({ default: module.UsageView })));
 import {
   clampPanelWidth,
   beginBrowserSessionSurfaceTransition,
@@ -92,8 +98,8 @@ import {
   sessionTitle,
   type SessionProject,
 } from "../sessions/session-sidebar";
-import { SettingsDialog } from "../settings/settings-dialog";
-import { TerminalPanel } from "../terminal/terminal-panel";
+const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
+const TerminalPanel = lazy(() => import("../terminal/terminal-panel").then(module => ({ default: module.TerminalPanel })));
 import { TurnDiffPanel } from "../workspace/turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "../sessions/use-session-catalog";
 import { useComposerDrafts } from "../conversation/use-composer-drafts";
@@ -1495,7 +1501,7 @@ export function App() {
   );
 
   const sidePanel = (
-    <>
+    <DeferredPanel key={reference ?? "closed"}>
       {reference && inspectorOverlay && (
         <button className="inspector-scrim" aria-label={`Close ${reference}`} onClick={() => setReference(null)} />
       )}
@@ -1594,7 +1600,7 @@ export function App() {
           onError={reportError}
         />
       )}
-    </>
+    </DeferredPanel>
   );
 
   const terminalChrome = (
@@ -1815,7 +1821,9 @@ export function App() {
           <WorkspaceViewHeader view={workspaceView} onClose={() => setWorkspaceView(null)} />
           <div className="workspace-view-body">
             {workspaceView === "usage" && (
-              <UsageView onSelectSession={id => void switchSession({ id, active: live.runtime?.sessionId === id })} />
+              <DeferredPanel>
+                <UsageView onSelectSession={id => void switchSession({ id, active: live.runtime?.sessionId === id })} />
+              </DeferredPanel>
             )}
           </div>
         </main>
@@ -1852,7 +1860,7 @@ export function App() {
                   : {}),
               } as CSSProperties
             }>
-            {surface === "chat" ? conversationPanel : surfaceMain}
+            {surface === "chat" ? conversationPanel : <DeferredPanel key={surface}>{surfaceMain}</DeferredPanel>}
             {sidePanel}
             {referenceRail}
           </div>
@@ -1864,6 +1872,7 @@ export function App() {
           )}
         </main>
       ) : (
+        <DeferredPanel>
         <FileWorkspace
           live={live}
           projectId={activeSession?.projectId}
@@ -1891,8 +1900,9 @@ export function App() {
           }}
           onError={reportError}
         />
+        </DeferredPanel>
       )}
-      <div className="terminal-layer">{terminalChrome}</div>
+      <div className="terminal-layer"><DeferredPanel>{terminalChrome}</DeferredPanel></div>
       <SearchPopup live={live} onError={reportError}
         onOpen={(path, line) => {
           setRequestedFile({ path, line, view: "current", sessionId: live.runtime?.sessionId, requestId: Date.now() });
@@ -1924,15 +1934,18 @@ export function App() {
           onConfirm={sidebarAction.onConfirm}
         />
       )}
-      {changelogOpen && <ChangelogDialog onClose={() => setChangelogOpen(false)} />}
+      {changelogOpen && <DeferredPanel><ChangelogDialog onClose={() => setChangelogOpen(false)} /></DeferredPanel>}
       {archivesOpen && (
+        <DeferredPanel>
         <ArchiveDialog
           revision={live.sessionRevision ?? 0}
           onClose={() => setArchivesOpen(false)}
           onError={reportError}
         />
+        </DeferredPanel>
       )}
       {settings && (
+        <DeferredPanel>
         <SettingsDialog
           initialTab={settings.tab}
           initialProviderQuery={settings.providerQuery}
@@ -2006,10 +2019,22 @@ export function App() {
             runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)
           }
         />
+        </DeferredPanel>
       )}
     </div>
     </AnnotationProvider>
   );
+}
+
+/** A failed optional chunk must not take down the conversation or its drafts. */
+class DeferredPanel extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: unknown) { console.error("Optional panel failed to load", error); }
+  render() {
+    if (this.state.failed) return <div className="conversation-state" role="alert">This panel could not be loaded. Reload the page to retry.</div>;
+    return <Suspense fallback={<div className="conversation-state" role="status">Loading…</div>}>{this.props.children}</Suspense>;
+  }
 }
 
 function TerminalResizer({

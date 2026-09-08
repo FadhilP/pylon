@@ -23,6 +23,7 @@ import {
   createContext,
   useEffect,
   useContext,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -124,6 +125,7 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
 ];
 const SETTINGS_TABS: SettingsTab[] = SETTINGS_NAV.flatMap(group => group.tabs.map(entry => entry.tab));
 const PACKAGE_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const EMPTY_PROVIDERS: NonNullable<ProviderAuthReadModel["providers"]> = [];
 const PackageSearchTargetContext = createContext<string | undefined>(undefined);
 interface SettingsDialogProps {
   initialTab?: SettingsTab;
@@ -242,34 +244,45 @@ export function SettingsDialog({
     hookKey: keyof HookSettingsReadModel;
     sourceId?: string;
   }>();
-  const filteredPackages = packages.filter(item =>
+  const filteredPackages = useMemo(() => packages.filter(item =>
     `${item.name} ${item.description}`.toLowerCase().includes(packageQuery.trim().toLowerCase()),
-  );
-  const providers = providerAuth?.providers ?? [];
-  const filteredProviders = providers
-    .filter(provider => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()))
-    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
-  const connectedProviders = filteredProviders.filter(provider => provider.configured);
-  const availableProviders = filteredProviders.filter(provider => !provider.configured);
-  const providerGroups = [
-    { id: "connected", label: "Connected", providers: providerFilter === "available" ? [] : connectedProviders },
-    { id: "available", label: "Available", providers: providerFilter === "connected" ? [] : availableProviders },
-  ];
+  ), [packages, packageQuery]);
+  const providers = providerAuth?.providers ?? EMPTY_PROVIDERS;
+  const { filteredProviders, connectedProviders, availableProviders, providerGroups } = useMemo(() => {
+    const filteredProviders = providers
+      .filter(provider => `${provider.name} ${provider.id}`.toLowerCase().includes(providerQuery.trim().toLowerCase()))
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));
+    const connectedProviders = filteredProviders.filter(provider => provider.configured);
+    const availableProviders = filteredProviders.filter(provider => !provider.configured);
+    return {
+      filteredProviders,
+      connectedProviders,
+      availableProviders,
+      providerGroups: [
+        { id: "connected", label: "Connected", providers: providerFilter === "available" ? [] : connectedProviders },
+        { id: "available", label: "Available", providers: providerFilter === "connected" ? [] : availableProviders },
+      ],
+    };
+  }, [providers, providerQuery, providerFilter]);
   const hiddenModelKeys = useHiddenModels();
-  const filteredModels = models.filter(item =>
-    `${item.provider} ${item.id} ${item.name}`.toLowerCase().includes(modelQuery.trim().toLowerCase()),
+  const { filteredModels, modelGroups } = useMemo(() => {
+    const filteredModels = models.filter(item =>
+      `${item.provider} ${item.id} ${item.name}`.toLowerCase().includes(modelQuery.trim().toLowerCase()),
+    );
+    const modelGroups: { provider: string; items: ModelOptionReadModel[] }[] = [];
+    for (const item of filteredModels) {
+      const last = modelGroups[modelGroups.length - 1];
+      if (last && last.provider === item.provider) last.items.push(item);
+      else modelGroups.push({ provider: item.provider, items: [item] });
+    }
+    return { filteredModels, modelGroups };
+  }, [models, modelQuery]);
+  const searchIndex = useMemo(
+    () => buildSettingsSearchIndex({ providers, models, packages, extensions, skills, hookSettings, toolPolicies }),
+    [providers, models, packages, extensions, skills, hookSettings, toolPolicies],
   );
-  const modelGroups: { provider: string; items: ModelOptionReadModel[] }[] = [];
-  for (const item of filteredModels) {
-    const last = modelGroups[modelGroups.length - 1];
-    if (last && last.provider === item.provider) last.items.push(item);
-    else modelGroups.push({ provider: item.provider, items: [item] });
-  }
-  const searchResults = searchSettings(
-    buildSettingsSearchIndex({ providers, models, packages, extensions, skills, hookSettings, toolPolicies }),
-    searchQuery,
-  );
-  const agentModelPackages = packages.filter(item => hasAgentModelFields(item.settings));
+  const searchResults = useMemo(() => searchSettings(searchIndex, searchQuery), [searchIndex, searchQuery]);
+  const agentModelPackages = useMemo(() => packages.filter(item => hasAgentModelFields(item.settings)), [packages]);
   const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
     for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
   };

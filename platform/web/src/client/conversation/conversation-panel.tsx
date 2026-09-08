@@ -72,6 +72,7 @@ import type {
   QueuedPromptReadModel,
   SessionControlsReadModel,
   ThinkingLevelReadModel,
+  ToolActivityReadModel,
   TimelineCheckpointReadModel,
 } from "../../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../../shared/protocol/snapshots";
@@ -89,6 +90,9 @@ import { OverviewOrb } from "../ui/overview-primitives";
 import { useSyntaxHighlightingRevision } from "../app/use-chrome";
 import { FileTypeIcon } from "../rendering/file-icons";
 import { ComposerSessionSwitcher, type ComposerSessionSwitcherProps } from "./composer-session-switcher";
+
+const EMPTY_MESSAGES: MessageReadModel[] = [];
+const EMPTY_TOOLS: ToolActivityReadModel[] = [];
 
 const markdownTags = [
   "a",
@@ -394,7 +398,7 @@ export function ConversationPanel({
     activeHistoryWindow.sessionId === runtime?.sessionId &&
     activeHistoryWindow.sessionGeneration === runtime?.sessionGeneration
       ? activeHistoryWindow.messages
-      : (runtime?.conversation.messages ?? []);
+      : (runtime?.conversation.messages ?? EMPTY_MESSAGES);
   useLayoutEffect(() => {
     const previousScrollHeight = prependScrollHeightRef.current;
     const stream = streamRef.current;
@@ -403,20 +407,20 @@ export function ConversationPanel({
     prependScrollHeightRef.current = undefined;
     setHistoryLoading(undefined);
   }, [transcriptSourceMessages]);
-  const liveTools = runtime?.conversation.tools ?? [];
-  const liveToolsById = new Map(liveTools.map(tool => [tool.id, tool]));
-  const transcriptMessages = transcriptSourceMessages.map(message => {
-    const activity = message.tool?.id ? liveToolsById.get(message.tool.id) : undefined;
-    return activity ? reconcileToolActivity(message, activity) : message;
-  });
-  const pendingMessages = (live.pendingMessages ?? []).filter(
+  const liveTools = runtime?.conversation.tools ?? EMPTY_TOOLS;
+  const transcriptMessages = useMemo(() => {
+    const byId = new Map(liveTools.map(tool => [tool.id, tool]));
+    return transcriptSourceMessages.map(message => {
+      const activity = message.tool?.id ? byId.get(message.tool.id) : undefined;
+      return activity ? reconcileToolActivity(message, activity) : message;
+    });
+  }, [transcriptSourceMessages, liveTools]);
+  const pendingMessages = useMemo(() => (live.pendingMessages ?? []).filter(
     item => item.sessionId === runtime?.sessionId && item.sessionGeneration === runtime?.sessionGeneration,
-  );
-  const pendingById = new Map(pendingMessages.map(item => [item.id, item]));
-  const queuedByCommand = new Map(queuedItems.map(item => [item.commandId, item]));
-  const transcriptToolIds = new Set(transcriptMessages.flatMap(item => (item.tool?.id ? [item.tool.id] : [])));
-  const transcriptMessageIds = new Set(transcriptMessages.map(item => item.id));
-  const runningTools = liveTools.filter(tool => tool.status === "running");
+  ), [live.pendingMessages, runtime?.sessionId, runtime?.sessionGeneration]);
+  const pendingById = useMemo(() => new Map(pendingMessages.map(item => [item.id, item])), [pendingMessages]);
+  const queuedByCommand = useMemo(() => new Map(queuedItems.map(item => [item.commandId, item])), [queuedItems]);
+  const runningTools = useMemo(() => liveTools.filter(tool => tool.status === "running"), [liveTools]);
   const hasRunningTools = runningTools.length > 0;
   useEffect(() => {
     if (!hasRunningTools) return;
@@ -424,26 +428,20 @@ export function ConversationPanel({
     const timer = window.setInterval(() => setToolNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [hasRunningTools]);
-  const liveToolMessages = runningTools.filter(tool => !transcriptToolIds.has(tool.id)).map(liveToolMessage);
-  const pendingTranscriptMessages: MessageReadModel[] = pendingMessages
-    .filter(item => !transcriptMessageIds.has(item.id))
-    .map(item => ({
-      id: item.id,
-      role: "user",
-      text: item.text,
-      streaming: false,
-      attachmentCount: item.attachmentCount,
-      fileAttachmentCount: item.fileAttachmentCount,
-    }));
-  const visibleMessages =
-    [...transcriptMessages, ...liveToolMessages, ...pendingTranscriptMessages].filter(item => {
-      const text = item.text.trim();
-      return item.role !== "assistant" || !["", "...", "…"].includes(text);
-    }) ?? [];
-  const conversationBlocks = useMemo(
-    () => groupConversationMessages(visibleMessages),
-    [transcriptMessages, runtime?.conversation.tools, live.pendingMessages],
-  );
+  const visibleMessages = useMemo(() => {
+    const toolIds = new Set(transcriptMessages.flatMap(item => item.tool?.id ? [item.tool.id] : []));
+    const messageIds = new Set(transcriptMessages.map(item => item.id));
+    const liveToolMessages = runningTools.filter(tool => !toolIds.has(tool.id)).map(liveToolMessage);
+    const pendingTranscriptMessages: MessageReadModel[] = pendingMessages
+      .filter(item => !messageIds.has(item.id))
+      .map(item => ({
+        id: item.id, role: "user", text: item.text, streaming: false,
+        attachmentCount: item.attachmentCount, fileAttachmentCount: item.fileAttachmentCount,
+      }));
+    return [...transcriptMessages, ...liveToolMessages, ...pendingTranscriptMessages].filter(item =>
+      item.role !== "assistant" || !["", "...", "…"].includes(item.text.trim()));
+  }, [transcriptMessages, runningTools, pendingMessages]);
+  const conversationBlocks = useMemo(() => groupConversationMessages(visibleMessages), [visibleMessages]);
   const toolBlocksBeforeLaterPrompt = useMemo(() => {
     const ids = new Set<string>();
     let laterPrompt = false;
@@ -470,15 +468,15 @@ export function ConversationPanel({
     ? [...conversationBlocks].reverse().find(block => "tools" in block && !toolBlocksBeforeLaterAssistant.has(block.id))
         ?.id
     : undefined;
-  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [transcriptMessages]);
+  const copyableAssistants = useMemo(() => finalAssistantIds(visibleMessages), [visibleMessages]);
   /** The prompt a failed request can be sent from again. */
   const lastPrompt = useMemo(
     () => [...visibleMessages].reverse().find(item => item.role === "user" && item.entryId),
-    [transcriptMessages],
+    [visibleMessages],
   );
   const userTurns = useMemo(
     () => visibleMessages.filter(item => item.role === "user" && item.entryId),
-    [transcriptMessages],
+    [visibleMessages],
   );
   const userTurnKey = userTurns.map(item => item.entryId ?? item.id).join("\0");
   const latestUserTurn = userTurns.at(-1);

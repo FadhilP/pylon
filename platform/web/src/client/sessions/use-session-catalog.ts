@@ -38,14 +38,14 @@ interface SessionResource<T> {
  * results and errors that arrive after the session has moved on. Returns whether
  * a load is in flight.
  */
-function useSessionResource<T>(live: RuntimeStoreSnapshot, resource: SessionResource<T>): boolean {
+function useSessionResource<T>(live: RuntimeStoreSnapshot, resource: SessionResource<T>, enabled = true): boolean {
   const [loading, setLoading] = useState(true);
   // Read through a ref so a new inline `resource` object never re-runs the load.
   const latest = useRef(resource);
   latest.current = resource;
 
   useEffect(() => {
-    if (live.connection !== "connected" || !live.runtime?.ready) return;
+    if (!enabled || live.connection !== "connected" || !live.runtime?.ready) return;
     let active = true;
     const { load, apply, stale, fallback, reportError } = latest.current;
     const sessionId = live.runtime.sessionId;
@@ -68,7 +68,7 @@ function useSessionResource<T>(live: RuntimeStoreSnapshot, resource: SessionReso
     return () => {
       active = false;
     };
-  }, [live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
+  }, [enabled, live.connection, live.runtime?.ready, live.runtime?.sessionId, live.runtime?.sessionGeneration]);
 
   return loading;
 }
@@ -88,6 +88,13 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
   const [androidTooling, setAndroidTooling] = useState<HeliosAndroidToolingResult>();
   const [androidToolingBusy, setAndroidToolingBusy] = useState<"" | "install" | "remove">("");
 
+  useEffect(() => {
+    setExtensions(undefined);
+    setSkills(undefined);
+    setHookSettings(undefined);
+    setAndroidTooling(undefined);
+  }, [live.runtime?.sessionId, live.runtime?.sessionGeneration]);
+
   const packagesLoading = useSessionResource(live, {
     load: () => runtimeStore.listPackages(),
     apply: result => setPackages(result.packages),
@@ -102,7 +109,7 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     stale: /session changed while listing extensions|extension list is stale/i,
     fallback: "Unable to list extensions",
     reportError,
-  });
+  }, settingsOpen);
 
   const skillsLoading = useSessionResource(live, {
     load: () => runtimeStore.listSkills(),
@@ -110,7 +117,7 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     stale: /session changed while listing skills|skill list is stale/i,
     fallback: "Unable to list skills",
     reportError,
-  });
+  }, settingsOpen);
 
   const hooksLoading = useSessionResource(live, {
     load: () => runtimeStore.listHookSettings(),
@@ -118,7 +125,7 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     stale: /session changed while listing hook settings|hook settings are stale/i,
     fallback: "Unable to load hook settings",
     reportError,
-  });
+  }, settingsOpen);
 
   // Android tooling is only inspected while the dialog that shows it is open.
   const heliosActive = packages.some(item => item.id === "pi-helios" && item.active);

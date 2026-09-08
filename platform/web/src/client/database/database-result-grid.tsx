@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { IconCopy, IconRefresh, IconDownload, IconPlayerStop } from "@tabler/icons-react";
 import { databaseBytes, databaseCell, databaseRecord, type DatabaseResult } from "./database-workspace";
 import {
+  createGridPublication,
   filterGridRows,
   groupGridChanges,
   parseGridJson,
@@ -127,9 +128,10 @@ export function DatabaseResultGrid({
     setComplete(false);
     setLoading(true);
     setError("");
+    const publication = createGridPublication<Record<string, unknown>>(
+      (nextRows, nextTokens) => { if (!abort.signal.aborted) { setRows(nextRows); setTokens(nextTokens); } },
+    );
     const drain = async () => {
-      const collected: Array<Record<string, unknown>> = [];
-      const rowTokens: Array<string | null> = [];
       let offset = 0;
       let bytes = 0;
       let fullValues = true;
@@ -148,23 +150,23 @@ export function DatabaseResultGrid({
           const size = databaseBytes(page.rows);
           const otherBytes = [...buffers.entries()].reduce((sum, [key, value]) => sum + (key === owner ? 0 : value), 0);
           if (
-            collected.length + page.returned > 10_000 ||
+            publication.count + page.returned > 10_000 ||
             bytes + size > 8 * 1024 * 1024 ||
             otherBytes + bytes + size > 16 * 1024 * 1024
           )
             throw new Error("Loaded-row limit reached. Export the complete stored result or close another result tab.");
           bytes += size;
           buffers.set(owner, bytes);
-          collected.push(...page.rows);
-          rowTokens.push(...(page.row_tokens ?? page.rows.map(() => null)));
-          setTokens([...rowTokens]);
-          setWritable(page.writable_columns ?? []);
+          const pageTokens = page.row_tokens ?? page.rows.map(() => null);
+          publication.append(page.rows, pageTokens, offset === 0);
+          const writableColumns = page.writable_columns ?? [];
+          setWritable(previous => previous.length === writableColumns.length && previous.every((name, index) => name === writableColumns[index]) ? previous : writableColumns);
           setEditingReason(page.editing_reason ?? "Rows with unsupported types or expired identity are read-only.");
           fullValues &&= page.full_values === true;
-          if (page.columns) setColumns(page.columns);
-          setRows([...collected]);
+          if (page.columns) setColumns(previous => JSON.stringify(previous) === JSON.stringify(page.columns) ? previous : page.columns!);
           if (page.next_offset === null) {
-            if (collected.length !== page.total) throw new Error("The result page ended early.");
+            if (publication.count !== page.total) throw new Error("The result page ended early.");
+            publication.flush();
             setComplete(fullValues);
             if (!fullValues) setError("Some cells are compact previews. Export for complete stored values.");
             return;
@@ -172,15 +174,20 @@ export function DatabaseResultGrid({
           offset = page.next_offset;
         }
       } catch (cause) {
-        if (!abort.signal.aborted) setError(cause instanceof Error ? cause.message : "Result loading failed.");
+        if (!abort.signal.aborted) {
+          publication.flush();
+          setError(cause instanceof Error ? cause.message : "Result loading failed.");
+        }
       } finally {
         if (!abort.signal.aborted) setLoading(false);
+        publication.dispose();
       }
     };
     rowQueue = rowQueue.then(drain, drain);
     return () => {
       abort.abort();
       downloadController.current?.abort();
+      publication.dispose();
       buffers.delete(owner);
     };
   }, [result.result_id, scope, revision, suspended]);

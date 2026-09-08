@@ -45,7 +45,8 @@ export function mergeHistoryMessages(previous: MessageReadModel[], fresh: Messag
 }
 
 export function mergeHistorySegments(segments: MessageReadModel[][]): MessageReadModel[] {
-  return segments.reduce<MessageReadModel[]>(mergeHistoryMessages, []);
+  // Deduplicate and sort once; folding pages repeatedly reprocesses all earlier history.
+  return mergeHistoryMessages([], segments.flat());
 }
 
 export function hasCompleteHistory(messages: MessageReadModel[]): boolean {

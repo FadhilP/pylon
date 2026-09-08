@@ -142,3 +142,17 @@ test("cached session history survives replacement and preserves safe paging", ()
   });
   assert.equal(rewound.conversation.messages.length, 50);
 });
+
+test("history pages deduplicate overlapping entries with newest content and stable live order", () => {
+  const live = (id: string, text = id): MessageReadModel => ({ id, text, role: "assistant", streaming: true });
+  const persisted = { ...messages(2, 3)[0], entryId: "entry-2" };
+  const first = [...messages(0, 2), persisted, live("live-a")];
+  const second = [{ ...persisted, text: "updated", streaming: false }, ...messages(3, 5), live("live-b")];
+  const final = [live("live-a", "finished"), live("live-c")];
+  const merged = mergeHistorySegments([first, [], second, final]);
+  assert.deepEqual(merged.map(item => item.id), ["history-0", "history-1", "history-2", "history-3", "history-4", "live-a", "live-b", "live-c"]);
+  assert.equal(merged[2].text, "updated");
+  assert.equal(merged[5].text, "finished");
+  assert.deepEqual(first.map(item => item.text), ["0", "1", "2", "live-a"]);
+  assert.deepEqual(mergeHistorySegments([]), []);
+});

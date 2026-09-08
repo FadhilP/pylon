@@ -28,6 +28,36 @@ export interface GridUpdate {
   changes: { set?: Record<string, unknown>; unset?: string[] };
 }
 
+/** Batches result-page snapshots while retaining every row synchronously. */
+export function createGridPublication<T>(
+  publish: (rows: T[], tokens: Array<string | null>) => void,
+  { rowCadence = 500, timeCadence = 50 }: { rowCadence?: number; timeCadence?: number } = {},
+) {
+  const rows: T[] = [];
+  const tokens: Array<string | null> = [];
+  let published = 0;
+  let disposed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const flush = () => {
+    if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
+    if (disposed || published === rows.length) return;
+    publish([...rows], [...tokens]);
+    published = rows.length;
+  };
+  return {
+    append(page: T[], pageTokens: Array<string | null>, immediate = false) {
+      if (disposed) return;
+      rows.push(...page);
+      tokens.push(...pageTokens);
+      if (immediate || rows.length - published >= rowCadence) flush();
+      else if (timer === undefined) timer = setTimeout(flush, timeCadence);
+    },
+    get count() { return rows.length; },
+    flush,
+    dispose() { disposed = true; if (timer !== undefined) clearTimeout(timer); timer = undefined; }
+  };
+}
+
 export function parseGridJson(value: string): { ok: true; value: unknown } | { ok: false } {
   try {
     return { ok: true, value: JSON.parse(value) };

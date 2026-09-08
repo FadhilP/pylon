@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { highlightSource, renderMarkdown } from "../src/client/rendering/markdown.ts";
+import katex from "katex";
+import { highlightSource, MarkdownRenderCache, renderMarkdown } from "../src/client/rendering/markdown.ts";
 import {
   getSyntaxHighlightingRevision,
   setSyntaxTheme,
@@ -116,4 +117,36 @@ test("keeps incomplete math renderable and treats untrusted TeX commands as text
   assert.match(incomplete, /\\frac\{a\}\{b\}/);
   assert.match(untrusted, /<math\b/);
   assert.doesNotMatch(untrusted, /<a\b|href\s*=/);
+});
+
+test("render cache reuses recent results, evicts within its budget, and never retains oversized output", () => {
+  const cache = new MarkdownRenderCache(12);
+  let calls = 0;
+  const render = (key: string, value = "text") => cache.render(key, () => { calls++; return value; });
+  assert.equal(render("a"), "text");
+  render("b");
+  render("a");
+  assert.equal(calls, 2);
+  render("c"); // a was used most recently, so b is evicted.
+  render("a");
+  assert.equal(calls, 3);
+  render("b");
+  assert.equal(calls, 4);
+  render("huge", "x".repeat(20));
+  render("huge", "x".repeat(20));
+  assert.equal(calls, 6);
+  render("b");
+  assert.equal(calls, 6);
+  assert.throws(() => cache.render("error", () => { throw new Error("failed rendering"); }));
+  assert.equal(cache.render("error", () => "ok"), "ok");
+});
+
+test("unchanged math is reused across streaming prose while inline and display modes remain distinct", t => {
+  const renderer = t.mock.method(katex, "renderToString");
+  const expression = "x_{271828}";
+  renderMarkdown(`First $${expression}$`);
+  renderMarkdown(`First $${expression}$ and more streamed text`);
+  assert.equal(renderer.mock.callCount(), 1);
+  renderMarkdown(`$$\n${expression}\n$$`);
+  assert.equal(renderer.mock.callCount(), 2);
 });

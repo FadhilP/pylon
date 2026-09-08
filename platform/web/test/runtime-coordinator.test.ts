@@ -631,6 +631,7 @@ test("session index reuses its persisted cache and rebuilds corrupt or outdated 
   try {
     const initial = new SessionIndex(undefined, isolatedAgentDir);
     await initial.list({}, options);
+    await initial.close();
     const cache = JSON.parse(await readFile(cachePath, "utf8"));
     const record = cache.records.find((item: any) => item.session.id === session.getSessionId());
     assert.ok(record);
@@ -679,11 +680,13 @@ test("session index reuses its persisted cache and rebuilds corrupt or outdated 
     );
     await rm(duplicateDirectory, { recursive: true, force: true });
 
+    await warm.close();
     await writeFile(cachePath, "{broken");
     const corrupt = new SessionIndex(undefined, isolatedAgentDir);
     result = await corrupt.list({ query: "Persisted cache source" }, options);
     assert.equal(result.projects[0]?.sessions[0]?.id, session.getSessionId());
 
+    await corrupt.close();
     const outdated = JSON.parse(await readFile(cachePath, "utf8"));
     outdated.version++;
     await writeFile(cachePath, JSON.stringify(outdated));

@@ -462,7 +462,7 @@ export class ServerTransport {
     const input = validateHeliosBrowserCommand(await readJson(request));
     if (!input) throw httpError(400, "invalid Helios browser request");
     if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the browser tab must have an SSE connection");
     if (!this.driver.heliosBrowser) throw httpError(409, "Helios embedded browser is unavailable");
@@ -480,7 +480,7 @@ export class ServerTransport {
     const input = validateHeliosAndroidToolingCommand(await readJson(request));
     if (!input) throw httpError(400, "invalid Helios Android tooling request");
     if (input.expectedGeneration !== this.journal.sessionGeneration) throw httpError(409, "stale session generation");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the browser tab must have an SSE connection");
     if (!this.driver.heliosAndroidTooling) throw httpError(409, "Helios Android tooling is unavailable");
@@ -632,7 +632,7 @@ export class ServerTransport {
       throw httpError(409, "stale session generation");
     if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 100)
       throw httpError(400, "invalid StateQL history limit");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlSnapshot) throw httpError(409, "StateQL snapshot is unavailable");
     const result = await this.driver.stateqlSnapshot(historyLimit);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
@@ -670,7 +670,7 @@ export class ServerTransport {
     ) {
       throw httpError(400, "invalid StateQL rows request");
     }
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlRows) throw httpError(409, "StateQL rows are unavailable");
     this.renew(tabId);
     const controller = new AbortController();
@@ -704,7 +704,7 @@ export class ServerTransport {
       !["json", "jsonl", "csv"].includes(String(body.format))
     )
       throw httpError(400, "Invalid export request");
-    if (body.generation !== this.journal.sessionGeneration || !this.projection.snapshot().ready)
+    if (body.generation !== this.journal.sessionGeneration || !this.projection.isReady())
       throw httpError(409, "Session is not ready");
     if (!this.driver.stateqlExport) throw httpError(409, "StateQL exports are unavailable");
     if (this.exportController) throw httpError(409, "An export is already running");
@@ -770,7 +770,7 @@ export class ServerTransport {
     if (body.operationId !== undefined && !validOperationId(body.operationId))
       throw httpError(400, "invalid database operation correlation");
     if (this.databaseCommand) throw httpError(409, "A database command is already running");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlCommand) throw httpError(409, "StateQL commands are unavailable");
     if (![...this.clients].some(client => client.tabId === tabId))
       throw httpError(409, "the StateQL command tab must have an SSE connection");
@@ -821,7 +821,7 @@ export class ServerTransport {
       (body.limit as number) > 50
     )
       throw httpError(400, "invalid papercut list request");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.papercutList) throw httpError(409, "Papercuts are unavailable");
     this.renew(tabId);
     const result = await this.driver.papercutList(
@@ -856,7 +856,7 @@ export class ServerTransport {
       (body.action === "delete" && body.message !== undefined)
     )
       throw httpError(400, "invalid papercut mutation request");
-    if (!this.projection.snapshot().ready) throw httpError(409, "runtime is not ready");
+    if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.papercutMutation) throw httpError(409, "Papercut mutations are unavailable");
     this.renew(tabId);
     try {
