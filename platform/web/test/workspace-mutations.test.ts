@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { mutateWorkspace, readWorkspaceEntry } from "../src/server/workspace/workspace-mutations.ts";
 import { collectPlainWorkspaceFiles, collectWorkspaceFiles } from "pylon-core/src/worktree.ts";
 import { WorkspaceDraftStore } from "../src/client/workspace/workspace-edit-state.ts";
-import { openFileTab, selectFileTab, closeChangedFileTabs, reconcileFileTabs, workspaceStateForSession } from "../src/client/workspace/file-workspace-state.ts";
+import { openFileTab, openRequestedFile, closeFileTab, selectFileTab, closeChangedFileTabs, reconcileFileTabs, workspaceStateForSession } from "../src/client/workspace/file-workspace-state.ts";
 
 const run = promisify(execFile);
 async function fixture() {
@@ -262,4 +262,28 @@ test("explorer defaults to working copy while explicit Changes openings retain d
   state = openFileTab(state, "changed.ts");
   assert.equal(state.view, "current", "reopening through explorer chooses working copy even for a changed file");
   assert.deepEqual(closeChangedFileTabs(state).openPaths, ["modified.ts", "changed.ts"]);
+});
+
+
+test("returning to a file surface preserves its last selection instead of replaying a consumed navigation request", () => {
+  const states = new Map();
+  const request = { sessionId: "one", path: "requested.ts", requestId: 1, line: 4 };
+  let state = openRequestedFile(workspaceStateForSession(states, "one"), request);
+  state = { ...openFileTab(state, "chosen.ts", "diff"), query: "chosen" };
+  states.set("one", state);
+  const remounted = workspaceStateForSession(states, "one");
+  assert.equal(openRequestedFile(remounted, request), state);
+  assert.equal(remounted.selectedPath, "chosen.ts");
+  assert.equal(remounted.view, "diff");
+  assert.equal(remounted.query, "chosen");
+  const other = workspaceStateForSession(states, "two");
+  assert.equal(openRequestedFile(other, request), other, "a request for another session must not open its path");
+  const next = { ...request, requestId: 2 };
+  state = openRequestedFile(remounted, next);
+  assert.equal(state.selectedPath, "requested.ts");
+  assert.equal(state.selectedLine, 4);
+  state = closeFileTab(state, "requested.ts");
+  assert.equal(openRequestedFile(state, next), state, "returning must not reopen a deliberately closed file");
+  const inspector = openRequestedFile(workspaceStateForSession(new Map(), "one"), request);
+  assert.equal(inspector.selectedPath, "requested.ts", "each surface consumes explicit navigation independently");
 });

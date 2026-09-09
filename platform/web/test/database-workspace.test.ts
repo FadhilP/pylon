@@ -3,10 +3,25 @@ import test from "node:test";
 import {
   DATABASE_DRAFTS_KEY,
   clearDatabaseDrafts,
+  databaseSnapshotMatchesRuntime,
   readDatabaseDrafts,
   saveDatabaseDraft,
   type DatabaseDraft,
 } from "../src/client/database/database-workspace.ts";
+
+test("database snapshots are visible only to their matching runtime actor and generation", () => {
+  const snapshot = {
+    actor_id: "session-a",
+    sessionGeneration: 7,
+    session: { session_id: "stateql-internal-session", name: "A", status: "active" as const },
+  };
+  const runtime = { sessionId: "session-a", sessionGeneration: 7 };
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime), true);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionId: "session-b" }), false);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionGeneration: 8 }), false);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime), true);
+  assert.equal(databaseSnapshotMatchesRuntime(undefined, runtime), false);
+});
 
 test("query persistence isolates connection scopes and never retains live result or parameter data", () => {
   let raw = "";

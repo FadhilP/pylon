@@ -6,11 +6,14 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { IconNote, IconRefresh, IconTrash, IconX } from "@tabler/icons-react";
 import { createPortal } from "react-dom";
 import { ActionDialog } from "../ui/action-dialog";
+import { isMacKeyboard } from "../ui/keyboard-shortcuts";
+import { AboutPopover } from "../ui/about-popover";
 import { sourceLanguage } from "../rendering/markdown";
 import { loadSyntaxLanguage, syntaxTokens } from "../rendering/syntax-highlighting";
 import { useSyntaxHighlightingRevision } from "../app/use-chrome";
@@ -325,6 +328,7 @@ export function AnnotationProvider({
 export function AnnotationEditor() {
   const store = useAnnotations();
   const [error, setError] = useState("");
+  const [showCode, setShowCode] = useState(false);
   const edit = store?.editor;
   if (!store || !edit) return null;
   return (
@@ -347,6 +351,15 @@ export function AnnotationEditor() {
       <header className="annotation-card-header">
         <strong title={edit.anchor.path}>lines {edit.anchor.from}–{edit.anchor.to}</strong>
         <small title={edit.anchor.revision}>{edit.anchor.kind === "historical" ? "Historical" : "Working copy"} · {edit.anchor.revision}</small>
+        {edit.original && (
+          <button
+            type="button"
+            className="annotation-snapshot"
+            aria-pressed={showCode}
+            onClick={() => setShowCode(open => !open)}>
+            {showCode ? "Hide snapshot" : "Snapshot"}
+          </button>
+        )}
       </header>
       <textarea
         autoFocus
@@ -355,9 +368,13 @@ export function AnnotationEditor() {
         value={edit.body}
         disabled={store.busy}
         onChange={event => store.changeEdit(edit.id, { body: event.target.value })}
+        onKeyDown={event => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.currentTarget.form?.requestSubmit();
+        }}
         maxLength={4096}
         rows={3}
       />
+      {showCode && edit.original && <CapturedCode note={edit.original} />}
       {(error || store.error) && (
         <p role="alert">
           {error || store.error}{" "}
@@ -367,6 +384,7 @@ export function AnnotationEditor() {
         </p>
       )}
       <footer>
+        <span className="annotation-hint">{isMacKeyboard() ? "⌘↵" : "Ctrl+↵"} to save</span>
         <button
           type="button"
           className="secondary-button"
@@ -455,13 +473,17 @@ export function AnnotationCard({
       <header className="annotation-card-header">
         <strong title={note.path}>lines {note.from}–{note.to}</strong>
         <small title={note.revision}>{note.kind === "historical" ? "Historical" : "Working copy"} · {note.revision}</small>
+        <button
+          type="button"
+          className="annotation-snapshot"
+          aria-pressed={showCode}
+          onClick={() => setShowCode(open => !open)}>
+          {showCode ? "Hide snapshot" : "Snapshot"}
+        </button>
         {onClose && <button type="button" onClick={onClose}>Hide</button>}
       </header>
       <p className="annotation-body">{note.body}</p>
-      <details onToggle={event => setShowCode(event.currentTarget.open)}>
-        <summary>Captured code</summary>
-        {showCode && <CapturedCode note={note} />}
-      </details>
+      {showCode && <CapturedCode note={note} />}
       {error && !deleteTarget && <p role="alert">{error}</p>}
       <footer>
         <button
@@ -542,10 +564,6 @@ function AnnotationPanelRow({ note }: { note: Annotation }) {
   const active = store?.activeNote?.id === note.id;
   return (
     <div id={`annotation-${note.id}`} className={`annotation-panel-row${active ? " is-active" : ""}`}>
-      <button className="annotation-open" type="button" aria-pressed={active} onClick={() => store?.open(note)}>
-        <span className="annotation-row-body">{note.body}</span>
-        <span className="annotation-row-meta"><span>{note.kind === "historical" ? "Historical snapshot" : "Captured snapshot"}</span><code>{note.from}{note.to > note.from ? `–${note.to}` : ""}</code></span>
-      </button>
       <label className="annotation-pick" title="Include with next message">
         <input
           type="checkbox"
@@ -555,6 +573,13 @@ function AnnotationPanelRow({ note }: { note: Annotation }) {
           onChange={event => store?.toggle(note, event.target.checked)}
         />
       </label>
+      <button className="annotation-open" type="button" aria-pressed={active} onClick={() => store?.open(note)}>
+        <span className="annotation-row-meta">
+          <code>{note.from}{note.to > note.from ? `–${note.to}` : ""}</code>
+          <span title={note.revision}>{note.kind === "historical" ? "Historical" : "Working copy"} · {note.revision}</span>
+        </span>
+        <span className="annotation-row-body">{note.body}</span>
+      </button>
     </div>
   );
 }
@@ -572,7 +597,6 @@ export function AnnotationPanel() {
     <div className="annotation-panel">
       <div className="annotation-inventory">
       <div className="annotation-panel-tools">
-        <p className="annotation-privacy">Private until sent.</p>
         {store && (
           <button
             className="annotation-refresh"
@@ -583,6 +607,10 @@ export function AnnotationPanel() {
             <IconRefresh size={15} aria-hidden="true" />
           </button>
         )}
+        <AboutPopover label="About saved notes">
+          <p>Notes are private until you send them. They are saved across browsers, and deleting the session or project deletes its notes.</p>
+          <p>Captured code is a snapshot. It does not follow later edits to the file.</p>
+        </AboutPopover>
       </div>
       {!store && <p className="annotation-empty">Select a session to use notes.</p>}
       {store?.error && (
@@ -594,9 +622,15 @@ export function AnnotationPanel() {
         </p>
       )}
       {store && !store.ready && !store.error && (
-        <p className="annotation-empty" role="status">
-          Connecting to notes…
-        </p>
+        <div className="annotation-loading" role="status" aria-busy="true" aria-label="Connecting to notes">
+          {[0, 1, 2].map(row => (
+            <div className="annotation-loading-row" key={row}>
+              <span className="sk" style={{ "--sk-w": "84px" } as CSSProperties} />
+              <span className="sk" />
+              <span className="sk" style={{ "--sk-w": "62%" } as CSSProperties} />
+            </div>
+          ))}
+        </div>
       )}
       {store?.editor && !store.editor.placement && <AnnotationEditor key={store.editor.id} />}
       {store?.ready && !store.notes.length && (
@@ -674,10 +708,6 @@ export function AnnotationPanel() {
           <small>Queues while busy. Restarting clears queued messages, not saved notes.</small>
         </form>
       )}
-      <details className="annotation-storage">
-        <summary>About saved notes</summary>
-        <p>Saved across browsers. Deleting the session or project deletes its notes. Captured code does not track file changes.</p>
-      </details>
     </div>
   );
 }

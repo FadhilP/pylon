@@ -93,9 +93,22 @@ function mergeIntervals(intervals: Interval[], next: Interval): Interval[] {
   return merged;
 }
 
-function rangeWasSeen(snapshot: Snapshot, start: number, end: number): boolean {
-  return snapshot.seen.some(interval => interval.start <= start && interval.end >= end);
+function unseenRanges(snapshot: Snapshot, start: number, end: number): Interval[] {
+  const missing: Interval[] = [];
+  let cursor = start;
+  for (const interval of [...snapshot.seen].sort((left, right) => left.start - right.start)) {
+    if (interval.end < cursor) continue;
+    if (interval.start > end) break;
+    if (interval.start > cursor) missing.push({ start: cursor, end: Math.min(end, interval.start - 1) });
+    cursor = Math.max(cursor, interval.end + 1);
+    if (cursor > end) break;
+  }
+  if (cursor <= end) missing.push({ start: cursor, end });
+  return missing;
 }
+
+const formatIntervals = (intervals: Interval[]) =>
+  intervals.map(interval => `${interval.start}-${interval.end}`).join(", ");
 
 function recordSnapshot(
   state: LineEditState,
@@ -167,13 +180,11 @@ function normalizeNewText(text: string): string[] {
 /** A parsed operation plus the original lines it claims exclusively. */
 type Claimed = { operation: ParsedOperation; claimed: Interval };
 
-function parseReplace(edit: LineEditOperation, position: number, lineCount: number, snapshot: Snapshot): Claimed {
+function parseReplace(edit: LineEditOperation, position: number, lineCount: number): Claimed {
   const start = edit.startLine;
   const end = edit.endLine;
   if (!validLine(start, lineCount) || !validLine(end, lineCount) || end < start)
     throw new Error(`edits[${position}] has an invalid replace range.`);
-  if (!rangeWasSeen(snapshot, start, end))
-    throw new Error(`Lines ${start}-${end} were not displayed for revision #${snapshot.tag}. Read that range first.`);
   const replacement = edit.newText === "" ? [] : normalizeNewText(edit.newText);
   const remove = end - start + 1;
   return {
@@ -189,12 +200,10 @@ function parseReplace(edit: LineEditOperation, position: number, lineCount: numb
   };
 }
 
-function parseInsert(edit: LineEditOperation, position: number, lineCount: number, snapshot: Snapshot): Claimed {
+function parseInsert(edit: LineEditOperation, position: number, lineCount: number): Claimed {
   const line = edit.line;
   if (!validLine(line, lineCount)) throw new Error(`edits[${position}] has an invalid insertion anchor.`);
   if (!edit.newText) throw new Error(`edits[${position}] insertion text must not be empty.`);
-  if (!rangeWasSeen(snapshot, line, line))
-    throw new Error(`Line ${line} was not displayed for revision #${snapshot.tag}. Read that line first.`);
   const replacement = normalizeNewText(edit.newText);
   const before = edit.operation === "insert_before";
   return {
@@ -209,36 +218,106 @@ function parseInsert(edit: LineEditOperation, position: number, lineCount: numbe
   };
 }
 
-/** Validate against the original snapshot, then order edits bottom-up to avoid index shifts. */
-function parseOperations(edits: LineEditOperation[], lineCount: number, snapshot: Snapshot): ParsedOperation[] {
-  const parsed: ParsedOperation[] = [];
-  const claimedLines = new Set<number>();
-  const spliceIndexes = new Set<number>();
-  for (const [position, edit] of edits.entries()) {
-    if (edit.operation !== "replace" && edit.operation !== "insert_before" && edit.operation !== "insert_after")
-      throw new Error(`edits[${position}].operation must be replace, insert_before, or insert_after.`);
-    const { operation, claimed } =
-      edit.operation === "replace"
-        ? parseReplace(edit, position, lineCount, snapshot)
-        : parseInsert(edit, position, lineCount, snapshot);
+type ValidatedOperation = Claimed & { position: number };
+type ClaimedConflict = Interval & { positions: number[] };
 
+function claimedConflicts(operations: ValidatedOperation[]): ClaimedConflict[] {
+  const claims = new Map<number, number[]>();
+  for (const { position, claimed } of operations) {
     for (let line = claimed.start; line <= claimed.end; line++) {
-      if (!claimedLines.has(line)) {
-        claimedLines.add(line);
-        continue;
-      }
-      throw new Error(
-        edit.operation === "replace"
-          ? `edits[${position}] overlaps another operation at line ${line}.`
-          : `edits[${position}] shares an anchor with another operation at line ${line}.`,
-      );
+      const positions = claims.get(line) ?? [];
+      positions.push(position);
+      claims.set(line, positions);
     }
-    if (spliceIndexes.has(operation.index))
-      throw new Error(`edits[${position}] touches the same boundary as another operation; merge the nearby changes.`);
-    spliceIndexes.add(operation.index);
-    parsed.push(operation);
   }
-  return parsed.sort((left, right) => right.index - left.index);
+
+  const conflicts: ClaimedConflict[] = [];
+  for (const [line, positions] of [...claims].sort(([left], [right]) => left - right)) {
+    if (positions.length < 2) continue;
+    const previous = conflicts.at(-1);
+    if (previous && line === previous.end + 1 && positions.join(",") === previous.positions.join(",")) previous.end = line;
+    else conflicts.push({ start: line, end: line, positions });
+  }
+  return conflicts;
+}
+
+function boundaryConflicts(operations: ValidatedOperation[]): number[][] {
+  const boundaries = new Map<number, ValidatedOperation[]>();
+  for (const candidate of operations) {
+    const atBoundary = boundaries.get(candidate.operation.index) ?? [];
+    atBoundary.push(candidate);
+    boundaries.set(candidate.operation.index, atBoundary);
+  }
+
+  const conflicts: number[][] = [];
+  for (const atBoundary of boundaries.values()) {
+    if (atBoundary.length < 2) continue;
+    const byEnd = atBoundary
+      .map((candidate, index) => ({ candidate, index }))
+      .sort((left, right) => left.candidate.claimed.end - right.candidate.claimed.end);
+    const byStart = atBoundary
+      .map((candidate, index) => ({ candidate, index }))
+      .sort((left, right) => right.candidate.claimed.start - left.candidate.claimed.start);
+    const involved = atBoundary.filter((candidate, index) => {
+      const minimumOtherEnd = byEnd[0].index === index ? byEnd[1] : byEnd[0];
+      const maximumOtherStart = byStart[0].index === index ? byStart[1] : byStart[0];
+      return (
+        minimumOtherEnd.candidate.claimed.end < candidate.claimed.start ||
+        maximumOtherStart.candidate.claimed.start > candidate.claimed.end
+      );
+    });
+    if (involved.length > 1) conflicts.push(involved.map(candidate => candidate.position));
+  }
+  return conflicts;
+}
+
+/** Validate every operation against the original snapshot before applying any of them. */
+function parseOperations(edits: LineEditOperation[], lineCount: number, snapshot: Snapshot): ParsedOperation[] {
+  const candidates: ValidatedOperation[] = [];
+  const errors: string[] = [];
+  let missing: Interval[] = [];
+
+  for (const [position, edit] of edits.entries()) {
+    if (edit.operation !== "replace" && edit.operation !== "insert_before" && edit.operation !== "insert_after") {
+      errors.push(`edits[${position}].operation must be replace, insert_before, or insert_after.`);
+      continue;
+    }
+    try {
+      const parsed =
+        edit.operation === "replace"
+          ? parseReplace(edit, position, lineCount)
+          : parseInsert(edit, position, lineCount);
+      candidates.push({ position, ...parsed });
+      for (const interval of unseenRanges(snapshot, parsed.claimed.start, parsed.claimed.end))
+        missing = mergeIntervals(missing, interval);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (missing.length)
+    errors.push(`Lines ${formatIntervals(missing)} were not displayed for revision #${snapshot.tag}. Read those ranges first.`);
+
+  for (const conflict of claimedConflicts(candidates))
+    errors.push(
+      `Lines ${conflict.start}-${conflict.end} have overlapping operations (${conflict.positions
+        .map(position => `edits[${position}]`)
+        .join(", ")}).`,
+    );
+
+  for (const positions of boundaryConflicts(candidates))
+    errors.push(
+      `${positions.map(position => `edits[${position}]`).join(", ")} touch the same boundary; merge the nearby changes.`,
+    );
+
+  if (errors.length)
+    throw new Error(
+      `Edit request has ${errors.length} validation error${errors.length === 1 ? "" : "s"}:\n${errors
+        .map(error => `- ${error}`)
+        .join("\n")}\nNo changes were applied.`,
+    );
+
+  return candidates.map(candidate => candidate.operation).sort((left, right) => right.index - left.index);
 }
 
 /** How far a line at `line` moves once every operation before it has been applied. */

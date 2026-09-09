@@ -223,6 +223,25 @@ test("Pylon Web password-brokers username-only server targets without leaking th
     },
   };
   value.instances[0].executeImpl = async command => {
+    if (command.command === "query") {
+      const resumed = await value.instances[0].options.credentialResolver!({
+        reference: internalReference,
+        actorId: "pi-session",
+        session: { id: "s_1", name: "workspace" },
+        operation: "query",
+        access: "read",
+        requestedReadOnly: true,
+      });
+      assert.equal(new URL(String(resumed)).hostname, "db.example.com");
+      return {
+        ok: true,
+        command_id: "cmd_query",
+        session_id: "s_1",
+        data: {},
+        warnings: [],
+        meta: { duration_ms: 1 },
+      };
+    }
     assert.equal(command.command, "connect");
     assert.equal(command.target, undefined);
     assert.match(String(command.secret_env), /^PYLON_STATEQL_BROKERED_/);
@@ -267,12 +286,272 @@ test("Pylon Web password-brokers username-only server targets without leaking th
     );
     assert.equal(passwordRequests, 1);
     assert.deepEqual(passwordOptions, { timeoutMs: 90_000 });
+    await tool.execute(
+      "resume-password",
+      { command: "query", sql: "SELECT 1", cache: "bypass" },
+      undefined,
+      undefined,
+      context({ ui }),
+    );
+    assert.equal(passwordRequests, 2, "the active connection keeps its password-target binding after connect");
     assert.equal(confirmations, 0);
     assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(password), false);
     assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(envSentinel), false);
   } finally {
     if (internalReference) delete process.env[internalReference];
   }
+});
+
+test("Pylon brokers Redis password-only URLs with the default prompt username", async () => {
+  const value = await start();
+  const ui = {
+    async confirm() {
+      return true;
+    },
+    setStatus() {},
+    async requestStateQLCredential() {
+      throw new Error("full source prompt should not run");
+    },
+    async requestStateQLPassword(_request: CredentialRequest, metadata: Record<string, unknown>) {
+      assert.equal(metadata.username, "default");
+      return "redis-password";
+    },
+  };
+  value.instances[0].executeImpl = async command => {
+    const resolved = await value.instances[0].options.credentialResolver!({
+      reference: String(command.secret_env),
+      actorId: "pi-session",
+      session: { id: "s_1", name: "workspace" },
+      operation: "connect",
+      access: "read",
+      requestedReadOnly: true,
+    });
+    const url = new URL(String(resolved));
+    assert.equal(url.username, "");
+    assert.equal(url.password, "redis-password");
+    return { ok: true, command_id: "redis", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
+  };
+  await value.tools
+    .get("stateql")
+    .execute(
+      "redis-password",
+      { command: "connect", target: "redis://@cache.example.com/0", read_only: true },
+      undefined,
+      undefined,
+      context({ ui }),
+    );
+});
+
+test("brokered profile connects resolve the source before prompting and preserve profile defaults", async () => {
+  const value = await start();
+  const password = "profile-password";
+  const target = "postgresql://app@db.example.com/app?sslmode=no-verify";
+  const profile = "production";
+  const order: string[] = [];
+  const ui = {
+    async confirm(title: string) {
+      order.push("confirm");
+      assert.equal(title, "Allow insecure database TLS?");
+      return true;
+    },
+    setStatus() {},
+    async requestStateQLCredential() {
+      throw new Error("full source prompt should not run");
+    },
+    async requestStateQLPassword() {
+      order.push("password");
+      return password;
+    },
+  };
+  value.instances[0].executeImpl = async command => {
+    if (command.command === "profile.show") {
+      assert.deepEqual(command, { command: "profile.show", name: "production" });
+      return {
+        ok: true,
+        command_id: "show",
+        session_id: "s_1",
+        data: { profile, target, read_only: false },
+        warnings: [],
+        meta: { duration_ms: 1 },
+      };
+    }
+    assert.deepEqual(
+      { ...command, secret_env: typeof command.secret_env === "string" ? "brokered" : command.secret_env },
+      { command: "connect", name: "production", read_only: true, secret_env: "brokered" },
+    );
+    const resolved = await value.instances[0].options.credentialResolver!({
+      reference: String(command.secret_env),
+      actorId: "pi-session",
+      session: { id: "s_1", name: "workspace" },
+      operation: "connect",
+      access: "read",
+      requestedReadOnly: true,
+    });
+    assert.equal(new URL(String(resolved)).password, password);
+    return {
+      ok: true,
+      command_id: "connect",
+      session_id: "s_1",
+      data: { connected: true },
+      warnings: [],
+      meta: { duration_ms: 1 },
+    };
+  };
+
+  const result = await value.tools
+    .get("stateql")
+    .execute(
+      "profile",
+      { command: "connect", profile: "production", read_only: true },
+      undefined,
+      undefined,
+      context({ ui }),
+    );
+  assert.deepEqual(order, ["confirm", "password"]);
+  assert.match(result.content[0].text, /"profile"/);
+  assert.equal(JSON.stringify({ result, commands: value.instances[0].commands }).includes(password), false);
+});
+
+test("panel brokered profile connects use the resolved target without changing the profile", async () => {
+  const value = await start();
+  const handler = value.events.get("pylon:stateql-command-request")![0];
+  const target = "mysql://app@db.example.com/app";
+  const profile = "production";
+  let confirmations = 0;
+  let passwordCalls = 0;
+  value.instances[0].executeImpl = async command => {
+    if (command.command === "profile.show")
+      return {
+        ok: true,
+        command_id: "show",
+        session_id: "s_1",
+        data: { profile, target, read_only: false },
+        warnings: [],
+        meta: { duration_ms: 1 },
+      };
+    assert.deepEqual(
+      { ...command, secret_env: typeof command.secret_env === "string" ? "brokered" : command.secret_env },
+      { command: "connect", name: "production", read_only: false, secret_env: "brokered" },
+    );
+    await value.instances[0].options.credentialResolver!({
+      reference: String(command.secret_env),
+      actorId: "pi-session",
+      session: { id: "s_1", name: "workspace" },
+      operation: "connect",
+      access: "write",
+      requestedReadOnly: false,
+    });
+    return {
+      ok: true,
+      command_id: "connect",
+      session_id: "s_1",
+      data: { connected: true },
+      warnings: [],
+      meta: { duration_ms: 1 },
+    };
+  };
+  let response: Promise<any> | undefined;
+  handler({
+    version: 1,
+    sessionId: "pi-session",
+    command: { command: "connect", profile: "production" },
+    signal: new AbortController().signal,
+    claim: () => true,
+    respond(value: Promise<any>) {
+      response = value;
+    },
+    ui: {
+      async requestStateQLCredential() {
+        throw new Error("full source prompt should not run");
+      },
+      async requestStateQLPassword() {
+        passwordCalls++;
+        return "panel-password";
+      },
+      async confirm() {
+        confirmations++;
+        return true;
+      },
+      setStatus() {},
+    },
+  });
+  assert.deepEqual((await response).data.profile, profile);
+  assert.equal(confirmations, 1);
+  assert.equal(passwordCalls, 1);
+  assert.deepEqual(
+    value.instances[0].commands.map(command => command.command),
+    ["profile.show", "connect"],
+  );
+});
+
+test("nonbrokerable profile sources retain the profile connect path and failed lookup does not connect", async () => {
+  const value = await start();
+  const sources: Record<string, Record<string, unknown>> = {
+    credential: { credential_ref: "vault-ref" },
+    environment: { secret_env: "DATABASE_URL" },
+    sqlite: { target: "sqlite:local.db" },
+    password: { target: "postgresql://app:already-present@db.example.com/app" },
+  };
+  let passwordCalls = 0;
+  const ui = {
+    async confirm() {
+      return true;
+    },
+    setStatus() {},
+    async requestStateQLCredential() {
+      return undefined;
+    },
+    async requestStateQLPassword() {
+      passwordCalls++;
+      return "should-not-prompt";
+    },
+  };
+  value.instances[0].executeImpl = async command => {
+    if (command.command === "profile.show") {
+      const name = String(command.name);
+      if (name === "missing")
+        return {
+          ok: false,
+          command_id: "missing",
+          session_id: "s_1",
+          error: { code: "PROFILE_NOT_FOUND", message: "missing", retryable: false, executed: false },
+          meta: { duration_ms: 1 },
+        };
+      return {
+        ok: true,
+        command_id: "show",
+        session_id: "s_1",
+        data: { profile: name, ...sources[name] },
+        warnings: [],
+        meta: { duration_ms: 1 },
+      };
+    }
+    assert.equal(command.command, "connect");
+    assert.ok(command.profile && command.profile in sources);
+    assert.equal(command.secret_env, undefined);
+    return { ok: true, command_id: "connect", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
+  };
+  for (const name of Object.keys(sources)) {
+    await value.tools
+      .get("stateql")
+      .execute(name, { command: "connect", profile: name }, undefined, undefined, context({ ui }));
+  }
+  await assert.rejects(
+    value.tools
+      .get("stateql")
+      .execute("missing", { command: "connect", profile: "missing" }, undefined, undefined, context({ ui })),
+    /PROFILE_NOT_FOUND/,
+  );
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    value.tools
+      .get("stateql")
+      .execute("cancelled", { command: "connect", profile: "sqlite" }, controller.signal, undefined, context({ ui })),
+    /cancelled/,
+  );
+  assert.equal(passwordCalls, 0);
+  assert.equal(value.instances[0].commands.filter(command => command.command === "connect").length, 4);
 });
 
 test("Pylon requires insecure TLS approval before releasing the brokered password", async () => {
@@ -826,10 +1105,18 @@ test("panel bridge dispatches catalog and batch APIs and confirms Redis writes",
     batched = updates;
     return { ok: true, command_id: "batch", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
   };
-  const run = (command: unknown, confirm = async () => true) => new Promise<unknown>(resolve => handler({
-    version: 1, sessionId: "pi-session", command, signal: new AbortController().signal, claim: () => true,
-    ui: { requestStateQLCredential: async () => undefined, setStatus() {}, confirm }, respond: resolve,
-  }));
+  const run = (command: unknown, confirm = async () => true) =>
+    new Promise<unknown>(resolve =>
+      handler({
+        version: 1,
+        sessionId: "pi-session",
+        command,
+        signal: new AbortController().signal,
+        claim: () => true,
+        ui: { requestStateQLCredential: async () => undefined, setStatus() {}, confirm },
+        respond: resolve,
+      }),
+    );
   await run({ command: "objects.list", kind: "table", search: "users", offset: 2, limit: 10 });
   assert.deepEqual(listed, { kind: "table", schema: undefined, search: "users", offset: 2, limit: 10 });
   await run({ command: "table.plan.batch", updates: [{ row_token: "row", changes: { set: { active: true } } }] });
@@ -840,7 +1127,10 @@ test("panel bridge dispatches catalog and batch APIs and confirms Redis writes",
     return false;
   });
   assert.equal(confirmations, 1);
-  assert.equal(stateql.commands.some((command: BatchCommand) => command.command === "redis.exec"), false);
+  assert.equal(
+    stateql.commands.some((command: BatchCommand) => command.command === "redis.exec"),
+    false,
+  );
   await value.handlers.get("session_shutdown")![0]();
 });
 

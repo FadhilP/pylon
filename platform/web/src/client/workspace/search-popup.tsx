@@ -144,7 +144,7 @@ export function SearchPopup({
 }: {
   live: RuntimeStoreSnapshot;
   actions: SearchAction[];
-  onOpen: (path: string, line?: number) => void;
+  onOpen: (path: string, line?: number, query?: WorkspaceSearchQuery) => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
@@ -364,7 +364,7 @@ export function SearchPopup({
       void Promise.resolve()
         .then(item.action.run)
         .catch(error => onError(error, "Action failed"));
-    else if (item.path) onOpen(item.path, item.line);
+    else if (item.path) onOpen(item.path, item.line, tab === "text" ? search.submitted : undefined);
   };
   const pin = () => {
     if (!search.result || !search.submitted) return;
@@ -512,11 +512,12 @@ export function SearchPopup({
                 controls={false}
                 key={JSON.stringify(search.submitted)}
                 files={search.result?.files ?? []}
+                query={search.submitted}
                 selected={selected?.id}
                 onPreview={(path, line) => setSelectedId(`${path}:${line}`)}
-                onOpen={(path, line) => {
+                onOpen={(path, line, submitted) => {
                   close();
-                  onOpen(path, line);
+                  onOpen(path, line, submitted);
                 }}
               />
             ) : (
@@ -599,7 +600,7 @@ export function SearchPopup({
               ×
             </button>
           </header>
-          <SearchResults files={pinned.result.files} onOpen={onOpen} />
+          <SearchResults files={pinned.result.files} query={pinned.query} onOpen={onOpen} />
           <SearchStatus
             search={{
               result: pinned.result,

@@ -2324,6 +2324,7 @@ export class SessionRuntime implements PiDriver {
       sessionId: runtime.session.sessionId,
       command: input,
       expectedConnectionId,
+      operationId,
       signal: controller.signal,
       ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database", operationId),
       claim: () => {

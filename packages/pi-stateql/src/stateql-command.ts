@@ -93,6 +93,20 @@ export type StateQLPanelCommand =
       timeout_ms?: number;
     }
   | {
+      /** Panel-only atomic setup; intentionally absent from the model tool contract. */
+      command: "connection.setup";
+      action: "connect" | "save" | "save-connect";
+      target?: string;
+      secret_env?: string;
+      profile?: string;
+      name?: string;
+      update?: boolean;
+      read_only?: boolean;
+      remember?: boolean;
+      password_provided?: boolean;
+      timeout_ms?: number;
+    }
+  | {
       command: "query";
       sql: string;
       params?: unknown[] | Record<string, unknown>;
@@ -248,6 +262,18 @@ const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> 
   "profile.update": ["name", "target", "secret_env", "read_only", "remember"],
   "profile.remove": ["name", "forget_credential"],
   connect: ["target", "secret_env", "profile", "name", "read_only", "remember", "timeout_ms"],
+  "connection.setup": [
+    "action",
+    "target",
+    "secret_env",
+    "profile",
+    "name",
+    "update",
+    "read_only",
+    "remember",
+    "password_provided",
+    "timeout_ms",
+  ],
   disconnect: [],
   query: ["sql", "params", "cache", "as", "timeout_ms"],
   exec: ["sql", "params", "replay", "idempotency_key", "allow_unbounded", "allow_destructive", "timeout_ms"],
@@ -646,6 +672,20 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
         optionalBoolean(value.read_only) &&
         optionalBoolean(value.remember) &&
         (value.remember !== true || value.target !== undefined) &&
+        optionalTimeout(value.timeout_ms, maxTimeoutMs)
+      );
+    case "connection.setup":
+      return (
+        (value.action === "connect" || value.action === "save" || value.action === "save-connect") &&
+        connectionSources(value, true) &&
+        optionalString(value.name, 200) &&
+        optionalBoolean(value.update) &&
+        optionalBoolean(value.read_only) &&
+        optionalBoolean(value.remember) &&
+        optionalBoolean(value.password_provided) &&
+        (value.remember !== true || value.target !== undefined) &&
+        (value.action === "connect" || boundedString(value.name, 200)) &&
+        (value.update !== true || boundedString(value.name, 200)) &&
         optionalTimeout(value.timeout_ms, maxTimeoutMs)
       );
     case "query":

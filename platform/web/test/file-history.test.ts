@@ -137,6 +137,83 @@ test("Git history follows committed renames and loads original content and autho
   }
 });
 
+test("Git history counts skipped first-parent commits with one cached traversal", async () => {
+  const f = await fixture();
+  const original = childProcess.execFile;
+  try {
+    await writeFile(join(f.root, "other.txt"), "one\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "Unrelated one");
+    await writeFile(join(f.root, "old name.txt"), "baseline\nkeep\nfirst\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "First file change");
+    const first = await f.git("rev-parse", "HEAD");
+    await writeFile(join(f.root, "other.txt"), "two\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "Unrelated two");
+    await writeFile(join(f.root, "other.txt"), "three\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "Unrelated three");
+    await writeFile(join(f.root, "old name.txt"), "baseline\nkeep\nfirst\nsecond\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "Second file change");
+    const second = await f.git("rev-parse", "HEAD");
+    const calls: string[][] = [];
+    childProcess.execFile = ((...args: any[]) => {
+      calls.push(args[1]);
+      return Reflect.apply(original, childProcess, args);
+    }) as typeof execFile;
+    syncBuiltinESMExports();
+    const reader = new FileHistoryReader();
+    const input = { cwd: f.root, sessionId: "s", query: { path: "old name.txt", scope: "all" as const } };
+    const result = await reader.read(input);
+    assert.deepEqual(
+      result.stops.map(stop => [stop.id, stop.skippedBefore]),
+      [
+        [`git:${f.origin}`, undefined],
+        [`git:${first}`, 1],
+        [`git:${second}`, 2],
+      ],
+    );
+    assert.equal(calls.filter(args => args.includes("rev-list")).length, 1);
+    calls.length = 0;
+    await reader.read({ ...input, query: { ...input.query, selected: `git:${second}` } });
+    assert.equal(calls.filter(args => args.includes("rev-list")).length, 0);
+  } finally {
+    childProcess.execFile = original;
+    syncBuiltinESMExports();
+    await f.cleanup();
+  }
+});
+
+test("Git history keeps an unknown gap when exact counting fails", async () => {
+  const f = await fixture();
+  const original = childProcess.execFile;
+  try {
+    await writeFile(join(f.root, "other.txt"), "unrelated\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "Unrelated");
+    await writeFile(join(f.root, "old name.txt"), "baseline\nkeep\nchanged\n");
+    await f.git("add", ".");
+    await f.git("commit", "-qm", "File change");
+    childProcess.execFile = ((...args: any[]) => {
+      if ((args[1] as string[]).includes("rev-list")) args[1] = [...args[1], "--invalid-gap-count-option"];
+      return Reflect.apply(original, childProcess, args);
+    }) as typeof execFile;
+    syncBuiltinESMExports();
+    const result = await new FileHistoryReader().read({
+      cwd: f.root,
+      sessionId: "s",
+      query: { path: "old name.txt", scope: "all" },
+    });
+    assert.equal(result.stops.at(-1)?.skippedBefore, null);
+  } finally {
+    childProcess.execFile = original;
+    syncBuiltinESMExports();
+    await f.cleanup();
+  }
+});
+
 test("Git Diff shows the selected commit's change despite newer commits and a dirty session baseline", async () => {
   const f = await fixture();
   try {
@@ -156,6 +233,7 @@ test("Git Diff shows the selected commit's change despite newer commits and a di
     const query = { path: "old name.txt", scope: "all" as const, selected: `git:${selected}` };
     const file = await reader.read({ ...input, query });
     const diff = await reader.read({ ...input, query: { ...query, view: "diff" } });
+    assert.deepEqual(file.stops.map(stop => stop.skippedBefore), [undefined, undefined, undefined]);
     assert.equal(diff.content?.before, "baseline\nkeep\n");
     assert.equal(diff.content?.after, file.content?.text);
     assert.equal(applyPatch(diff.content!.before!, parsePatch(diff.content!.text!)[0]), file.content!.text);

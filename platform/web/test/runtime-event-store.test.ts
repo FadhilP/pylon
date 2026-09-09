@@ -101,6 +101,40 @@ test("completed background sessions survive sleeping and bootstrap authoritative
   assert.equal(bounded["session-200"], true);
 });
 
+test("database approval routing survives renewal and stale closes without retaining a closed or unowned request", async () => {
+  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
+  const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
+  const store = new RuntimeEventStore();
+  const original = { window: (globalThis as any).window, requestAnimationFrame: (globalThis as any).requestAnimationFrame, cancelAnimationFrame: (globalThis as any).cancelAnimationFrame };
+  Object.assign(globalThis, { window: { removeEventListener() {} }, requestAnimationFrame: () => 1, cancelAnimationFrame() {} });
+  store.snapshot = { ...store.getSnapshot(), connection: "connected", generation: 1, sequence: 0,
+    runtime: { ready: true, sessionId: "database-test", sessionGeneration: 1, conversation: { messages: [], queue: { items: [] } } } };
+  let sequence = 0;
+  const apply = (type: string, payload: unknown) => store.apply({ type, payload, payloadVersion: 1, sessionGeneration: 1, sequence: ++sequence });
+  const request = { requestId: "current", method: "confirm", payload: { title: "Connect?" }, surface: "database", operationId: "setup-id", owned: true, ownershipAvailable: false };
+  try {
+    apply("ui.request", request);
+    store.api.uiKeepAlive = async () => ({ expiresAt: "2099-01-01T00:00:00.000Z" });
+    await store.keepUiRequestAlive(request);
+    apply("ui.closed", { requestId: "previous" });
+    assert.deepEqual(store.getSnapshot().pendingUi, { ...request, expiresAt: "2099-01-01T00:00:00.000Z" });
+    apply("ui.ownership", { requestId: "current", owned: false, ownershipAvailable: true });
+    assert.equal(store.getSnapshot().pendingUi.owned, false);
+    assert.equal(store.getSnapshot().pendingUi.operationId, "setup-id");
+    apply("ui.closed", { requestId: "current" });
+    assert.equal(store.getSnapshot().pendingUi, undefined);
+    await store.keepUiRequestAlive(request);
+    assert.equal(store.getSnapshot().pendingUi, undefined, "late renewal must not resurrect a closed request");
+    apply("ui.request", { ...request, requestId: "next", operationId: "next-operation" });
+    apply("ui.closed", { requestId: "current" });
+    assert.equal(store.getSnapshot().pendingUi.requestId, "next");
+  } finally {
+    store.dispose();
+    Object.assign(globalThis, original);
+    await vite.close();
+  }
+});
+
 test("runtime inventory sharing preserves cache identity and rejects changes in revision, mode, generation or lifecycle", async () => {
   const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
@@ -143,6 +177,22 @@ test("runtime inventory sharing preserves cache identity and rejects changes in 
     assert.equal((await load()).files, result.files);
     assert.equal((await load(true)).files, result.files);
     assert.deepEqual(requests.map(value => value.refresh), [false, true]);
+
+    const retained = store.cachedWorkspaceInventory();
+    assert.equal(retained.files, result.files, "a remount can read its tree before starting an effect");
+    retained.expiresAt = 0;
+    const expiredPage = { entered: deferred<void>(), page: deferred<WorkspaceFilePage>() };
+    pending = expiredPage;
+    const seen: unknown[] = [];
+    const revalidating = load(false, new AbortController().signal, files => seen.push(files));
+    assert.deepEqual(seen, [result.files], "expiry must synchronously publish the last complete inventory");
+    await expiredPage.entered.promise;
+    assert.equal(store.cachedWorkspaceInventory().files, result.files);
+    expiredPage.page.resolve(page(1, "after-expiry.ts"));
+    await revalidating;
+    assert.equal(store.cachedWorkspaceInventory().files[0].path, "after-expiry.ts");
+    assert.equal(store.cachedWorkspaceInventory({ ...store.snapshot.runtime, sessionId: "other" }), undefined);
+    assert.equal(store.cachedWorkspaceInventory({ ...store.snapshot.runtime, cwdLabel: "other-root" }), undefined);
 
     for (const change of ["revision", "mode", "generation"] as const) {
       const gate = { entered: deferred<void>(), page: deferred<WorkspaceFilePage>() };
@@ -207,6 +257,140 @@ test("switching sessions keeps loaded transcript history available to the replac
     await store.switchSession("target-session");
     assert.strictEqual(store.historyCache.get("target-session"), cached);
   } finally {
+    await vite.close();
+  }
+});
+
+
+test("display previews survive expiry and failed refresh without accepting obsolete reads or leaking workspace content", async t => {
+  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
+  const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
+  const { ApiHttpError } = await vite.ssrLoadModule("/src/client/runtime/api-client.ts");
+  const store = new RuntimeEventStore();
+  const originalWindow = (globalThis as any).window;
+  (globalThis as any).window = { removeEventListener() {} };
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const original = { ready: true, sessionId: "preview-session", sessionGeneration: 1, cwdLabel: "project",
+    workspace: { mode: "worktree", revision: "revision", fileRevision: 0 } };
+  store.snapshot = { connection: "connected", runtime: original };
+  let text = "first";
+  let fail: Error | undefined;
+  let gate: { promise: Promise<void>; resolve: () => void } | undefined;
+  let requests = 0;
+  const defer = () => {
+    let resolve!: () => void;
+    gate = { promise: new Promise<void>(done => { resolve = done; }), resolve: () => resolve() };
+    return gate;
+  };
+  const read = async (generation: number, path: string, signal?: AbortSignal) => {
+    requests++;
+    assert.ok(signal === undefined || signal instanceof AbortSignal);
+    const pending = gate; gate = undefined;
+    if (pending) await pending.promise;
+    if (fail) throw fail;
+    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, path, revision: `content:${text}`, state: "available", text };
+  };
+  store.api.workspaceFile = (generation: number, path: string, _view: string, signal?: AbortSignal) => read(generation, path, signal);
+  store.api.workspaceDiff = read;
+  const load = (path = "a.ts", view = "diff", signal = new AbortController().signal) => store.workspacePreview(path, view, signal);
+  const cached = (path = "a.ts", view = "diff") => store.cachedWorkspacePreview(path, view);
+  try {
+    await load();
+    const first = cached();
+    assert.equal(first.value.text, "first");
+    await load();
+    assert.equal(requests, 1, "a fresh remount must not reread the file");
+    assert.equal(cached(), first);
+    assert.equal(cached("b.ts"), undefined);
+    assert.equal(cached("a.ts", "current"), undefined);
+    await store.workspaceDiff("a.ts");
+    assert.equal(requests, 2, "raw reads must never use the display cache");
+    text = "baseline";
+    await load("a.ts", "base");
+    assert.equal(cached("a.ts", "base").value.text, "baseline");
+    assert.equal(cached(), first, "baseline and diff previews of one path must remain distinct");
+
+    now += 60_001;
+    const expired = defer();
+    const refreshing = load();
+    assert.equal(cached(), first, "expired content remains readable while revalidation is pending");
+    text = "refreshed"; expired.resolve(); await refreshing;
+    assert.equal(cached().value.text, "refreshed");
+    const refreshed = cached();
+    store.snapshot.runtime = { ...original, workspace: { ...original.workspace, fileRevision: 1 } };
+    fail = new Error("temporary read failure");
+    await assert.rejects(load(), /temporary read failure/);
+    assert.equal(cached(), refreshed);
+    fail = undefined; text = "";
+    await load();
+    assert.equal(cached().value.text, "", "a successful empty result replaces old text");
+
+    for (const change of ["session", "generation", "mode", "cwd", "revision", "fileRevision", "unavailable"] as const) {
+      const origin = { ...original, workspace: { ...original.workspace, fileRevision: 2 } };
+      store.snapshot.runtime = origin;
+      const previous = cached();
+      const delayed = defer();
+      const stale = load().catch((error: unknown) => error);
+      store.snapshot.runtime = { ...origin,
+        ...(change === "session" ? { sessionId: "another-session" } : {}),
+        ...(change === "generation" ? { sessionGeneration: 2 } : {}),
+        ...(change === "cwd" ? { cwdLabel: "another-root" } : {}),
+        ...(change === "unavailable" ? { projectAvailable: false } : {}),
+        workspace: { ...origin.workspace,
+          ...(change === "mode" ? { mode: "local" } : {}),
+          ...(change === "revision" ? { revision: "new-revision" } : {}),
+          ...(change === "fileRevision" ? { fileRevision: 3 } : {}),
+        },
+      };
+      if (["session", "mode", "cwd", "unavailable"].includes(change)) assert.equal(cached(), undefined);
+      else assert.equal(cached(), previous, "a new revision or generation may display stale content, not reuse it as fresh");
+      const beforeStaleEffect: number = requests;
+      await assert.rejects(store.workspacePreview("a.ts", "diff", new AbortController().signal, origin), /stale workspace/);
+      assert.equal(requests, beforeStaleEffect, "an effect from a previous render must not request a file in the new workspace");
+      delayed.resolve();
+      assert.match(String(await stale), /stale workspace|previous session/);
+      store.snapshot.runtime = origin;
+      assert.equal(cached(), previous, "obsolete responses must not replace the retained preview");
+    }
+    const cancelled = defer();
+    const controller = new AbortController();
+    const aborted = load("a.ts", "diff", controller.signal).catch((error: unknown) => error);
+    controller.abort(); cancelled.resolve();
+    assert.equal((await aborted as Error).name, "AbortError");
+
+    store.snapshot.runtime = { ...original, sessionGeneration: 2 };
+    const beforeGeneration = requests;
+    await load();
+    assert.equal(requests, beforeGeneration + 1);
+    assert.equal(cached().generation, 2);
+    store.snapshot.runtime = { ...original, workspace: { ...original.workspace, fileRevision: 4 } };
+    fail = new ApiHttpError(403, "Access denied");
+    await assert.rejects(load(), /Access denied/);
+    assert.equal(cached(), undefined, "revoked access must remove retained content");
+    fail = undefined;
+
+    for (let index = 0; index < 40; index++) await load(`${index}.ts`);
+    await load("0.ts");
+    await load("40.ts");
+    assert.equal(cached("1.ts"), undefined, "preview retention must stay bounded");
+    assert.ok(cached("0.ts"), "revisited entries are retained ahead of inactive ones");
+    for (let index = 0; index < 12; index++) {
+      store.snapshot.runtime = { ...original, sessionId: `session-${index}` };
+      await load();
+    }
+    assert.equal(store.cachedWorkspacePreview("0.ts", "diff", original), undefined);
+    const closing = defer();
+    const disposed = load("closing.ts").catch((error: unknown) => error);
+    store.dispose(); closing.resolve();
+    assert.match(String(await disposed), /stale workspace/);
+    assert.equal(cached(), undefined);
+    assert.equal(store.workspacePreviews.size, 0);
+  } finally {
+    store.dispose();
+    if (originalWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = originalWindow;
+    t.mock.restoreAll();
     await vite.close();
   }
 });

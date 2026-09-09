@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { IconCopy, IconRefresh, IconDownload, IconPlayerStop } from "@tabler/icons-react";
 import { databaseBytes, databaseCell, databaseRecord, type DatabaseResult } from "./database-workspace";
 import {
   createGridPublication,
   filterGridRows,
+  GRID_ROW_NUMBER_WIDTH,
   groupGridChanges,
+  initialGridColumnWidth,
+  initialGridColumnWidths,
   parseGridJson,
+  resizeGridColumn,
   sortGridRows,
+  type GridColumn,
   type GridComparison,
   type GridDraft,
   type GridFilter,
@@ -19,6 +25,93 @@ const buffers = new Map<object, number>();
 
 type ActiveEdit = { token: string; column: string; value: string; unset: boolean };
 type Plan = { id: string; expires?: string; revision: number };
+type HeaderMenu = { column: GridColumn; left: number; top: number; trigger: HTMLButtonElement };
+
+function DatabaseHeaderMenu({
+  menu,
+  comparison,
+  value,
+  onComparison,
+  onValue,
+  onSort,
+  onFilter,
+  onHide,
+  onClose,
+}: {
+  menu: HeaderMenu;
+  comparison: GridComparison;
+  value: string;
+  onComparison: (comparison: GridComparison) => void;
+  onValue: (value: string) => void;
+  onSort: (direction: "asc" | "desc" | "") => void;
+  onFilter: () => void;
+  onHide: () => void;
+  onClose: (restoreFocus?: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>("button, select, input")?.focus();
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!ref.current?.contains(target) && !menu.trigger.contains(target)) onClose();
+    };
+    const close = () => onClose();
+    document.addEventListener("pointerdown", outside);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
+  return createPortal(
+    <div
+      ref={ref}
+      className="database-header-popover"
+      role="dialog"
+      aria-label={`Controls for ${menu.column.name}`}
+      style={{ left: menu.left, top: menu.top }}
+      onKeyDown={event => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          onClose(true);
+        }
+      }}>
+      <button type="button" onClick={() => onSort("asc")}>Sort ascending</button>
+      <button type="button" onClick={() => onSort("desc")}>Sort descending</button>
+      <button type="button" onClick={() => onSort("")}>Reset sort</button>
+      <label>
+        Comparison
+        <select value={comparison} onChange={event => onComparison(event.target.value as GridComparison)}>
+          <option value="contains">Contains</option>
+          <option value="equals">Equals</option>
+          <option value="greater">Number greater than</option>
+          <option value="less">Number less than</option>
+          <option value="null">Is null</option>
+          <option value="missing">Is missing</option>
+          <option value="true">Is true</option>
+          <option value="false">Is false</option>
+          {/date|time/i.test(menu.column.type) && (
+            <>
+              <option value="before">Date before</option>
+              <option value="after">Date after</option>
+            </>
+          )}
+        </select>
+      </label>
+      <label>
+        Value
+        <input
+          value={value}
+          disabled={["null", "missing", "true", "false"].includes(comparison)}
+          onChange={event => onValue(event.target.value)}
+        />
+      </label>
+      <button type="button" onClick={onFilter}>Apply filter</button>
+      <button type="button" onClick={onHide}>Hide column</button>
+    </div>,
+    document.body,
+  );
+}
 
 export function DatabaseResultGrid({
   result,
@@ -54,6 +147,8 @@ export function DatabaseResultGrid({
   const [editMode, setEditMode] = useState(false);
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [columns, setColumns] = useState(result.columns);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => initialGridColumnWidths(result.columns));
+  const [headerMenu, setHeaderMenu] = useState<HeaderMenu>();
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [complete, setComplete] = useState(false);
@@ -123,6 +218,8 @@ export function DatabaseResultGrid({
     setPlan(undefined);
     draftRevision.current = 0;
     setColumns(result.columns);
+    setColumnWidths(initialGridColumnWidths(result.columns));
+    setHeaderMenu(undefined);
     setHiddenColumns(new Set());
     setReloadRequired(false);
     setComplete(false);
@@ -163,7 +260,13 @@ export function DatabaseResultGrid({
           setWritable(previous => previous.length === writableColumns.length && previous.every((name, index) => name === writableColumns[index]) ? previous : writableColumns);
           setEditingReason(page.editing_reason ?? "Rows with unsupported types or expired identity are read-only.");
           fullValues &&= page.full_values === true;
-          if (page.columns) setColumns(previous => JSON.stringify(previous) === JSON.stringify(page.columns) ? previous : page.columns!);
+          if (page.columns) {
+            const nextColumns = page.columns;
+            setColumns(previous => JSON.stringify(previous) === JSON.stringify(nextColumns) ? previous : nextColumns);
+            setColumnWidths(current =>
+              Object.fromEntries(nextColumns.map(column => [column.name, current[column.name] ?? initialGridColumnWidth(column)])),
+            );
+          }
           if (page.next_offset === null) {
             if (publication.count !== page.total) throw new Error("The result page ended early.");
             publication.flush();
@@ -212,6 +315,25 @@ export function DatabaseResultGrid({
   const visibleColumns = columns.filter(column => !hiddenColumns.has(column.name));
   const first = Math.max(0, Math.floor(scrollTop / 32) - 8);
   const visible = displayed.slice(first, first + Math.ceil(height / 32) + 16);
+  const tableWidth =
+    GRID_ROW_NUMBER_WIDTH + visibleColumns.reduce((total, column) => total + columnWidths[column.name]!, 0);
+  const closeHeaderMenu = (restoreFocus = false) => {
+    setHeaderMenu(current => {
+      if (restoreFocus && current?.trigger.isConnected) queueMicrotask(() => current.trigger.focus());
+      return undefined;
+    });
+  };
+  const openHeaderMenu = (event: React.MouseEvent<HTMLButtonElement>, column: GridColumn) => {
+    const trigger = event.currentTarget;
+    const rect = trigger.getBoundingClientRect();
+    const width = 220;
+    const height = 330;
+    const left = Math.max(4, Math.min(rect.right - width, window.innerWidth - width - 4));
+    const top = rect.bottom + height + 4 <= window.innerHeight ? rect.bottom + 4 : Math.max(4, rect.top - height - 4);
+    setHeaderMenu(current =>
+      current?.column.name === column.name ? undefined : { column, left, top, trigger },
+    );
+  };
   useEffect(() => {
     setScrollTop(0);
     viewport.current?.scrollTo({ top: 0 });
@@ -577,8 +699,17 @@ export function DatabaseResultGrid({
         tabIndex={0}
         role="region"
         aria-label="Scrollable result rows"
-        onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
-        <table aria-rowcount={displayed.length + 1}>
+        onScroll={event => {
+          setScrollTop(event.currentTarget.scrollTop);
+          closeHeaderMenu();
+        }}>
+        <table aria-rowcount={displayed.length + 1} style={{ width: `max(100%, ${tableWidth}px)` }}>
+          <colgroup>
+            <col style={{ width: GRID_ROW_NUMBER_WIDTH }} />
+            {visibleColumns.map(column => (
+              <col key={column.name} style={{ width: columnWidths[column.name] }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th scope="col">#</th>
@@ -588,62 +719,52 @@ export function DatabaseResultGrid({
                     {item.name}
                     <small>{item.type}</small>
                   </span>
-                  <details className="database-header-panel">
-                    <summary aria-label={`Controls for ${item.name}`} title={`Controls for ${item.name}`}>
-                      ⋮
-                    </summary>
-                    <div>
-                      <button type="button" onClick={() => setSort({ column: item.name, direction: "asc" })}>
-                        Sort ascending
-                      </button>
-                      <button type="button" onClick={() => setSort({ column: item.name, direction: "desc" })}>
-                        Sort descending
-                      </button>
-                      <button type="button" onClick={() => setSort({ column: "", direction: "" })}>
-                        Reset sort
-                      </button>
-                      <label>
-                        Comparison
-                        <select
-                          value={comparison}
-                          onChange={event => setComparison(event.target.value as GridComparison)}>
-                          <option value="contains">Contains</option>
-                          <option value="equals">Equals</option>
-                          <option value="greater">Number greater than</option>
-                          <option value="less">Number less than</option>
-                          <option value="null">Is null</option>
-                          <option value="missing">Is missing</option>
-                          <option value="true">Is true</option>
-                          <option value="false">Is false</option>
-                          {/date|time/i.test(item.type) && (
-                            <>
-                              <option value="before">Date before</option>
-                              <option value="after">Date after</option>
-                            </>
-                          )}
-                        </select>
-                      </label>
-                      <label>
-                        Value
-                        <input
-                          value={filterValue}
-                          disabled={["null", "missing", "true", "false"].includes(comparison)}
-                          onChange={event => setFilterValue(event.target.value)}
-                        />
-                      </label>
-                      <button type="button" onClick={() => addFilter(item.name)}>
-                        Apply filter
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setHiddenColumns(current => new Set(current).add(item.name))}>
-                        Hide column
-                      </button>
-                    </div>
-                  </details>
+                  <button
+                    type="button"
+                    className="database-header-menu-button"
+                    aria-label={`Controls for ${item.name}`}
+                    aria-expanded={headerMenu?.column.name === item.name}
+                    title={`Controls for ${item.name}`}
+                    onClick={event => openHeaderMenu(event, item)}>
+                    ⋮
+                  </button>
                   {sort.column === item.name && (
                     <em aria-label={`Sorted ${sort.direction}`}>{sort.direction === "asc" ? "↑" : "↓"}</em>
                   )}
+                  <button
+                    type="button"
+                    className="database-column-resizer"
+                    aria-label={`Resize ${item.name} column`}
+                    title={`Resize ${item.name} column`}
+                    onPointerDown={event => {
+                      closeHeaderMenu();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      event.currentTarget.dataset.startX = String(event.clientX);
+                      event.currentTarget.dataset.startWidth = String(columnWidths[item.name]);
+                    }}
+                    onPointerMove={event => {
+                      if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                      const startX = Number(event.currentTarget.dataset.startX);
+                      const startWidth = Number(event.currentTarget.dataset.startWidth);
+                      setColumnWidths(current => ({
+                        ...current,
+                        [item.name]: resizeGridColumn(startWidth, event.clientX - startX),
+                      }));
+                    }}
+                    onPointerUp={event => event.currentTarget.releasePointerCapture(event.pointerId)}
+                    onPointerCancel={event => {
+                      if (event.currentTarget.hasPointerCapture(event.pointerId))
+                        event.currentTarget.releasePointerCapture(event.pointerId);
+                    }}
+                    onKeyDown={event => {
+                      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                      event.preventDefault();
+                      setColumnWidths(current => ({
+                        ...current,
+                        [item.name]: resizeGridColumn(current[item.name]!, event.key === "ArrowLeft" ? -16 : 16),
+                      }));
+                    }}
+                  />
                 </th>
               ))}
             </tr>
@@ -756,6 +877,28 @@ export function DatabaseResultGrid({
           <div className="database-empty">{rows.length ? "No matching rows" : "No rows returned"}</div>
         )}
       </div>
+      {headerMenu && (
+        <DatabaseHeaderMenu
+          menu={headerMenu}
+          comparison={comparison}
+          value={filterValue}
+          onComparison={setComparison}
+          onValue={setFilterValue}
+          onSort={direction => {
+            setSort(direction ? { column: headerMenu.column.name, direction } : { column: "", direction: "" });
+            closeHeaderMenu(true);
+          }}
+          onFilter={() => {
+            addFilter(headerMenu.column.name);
+            closeHeaderMenu(true);
+          }}
+          onHide={() => {
+            setHiddenColumns(current => new Set(current).add(headerMenu.column.name));
+            closeHeaderMenu(true);
+          }}
+          onClose={closeHeaderMenu}
+        />
+      )}
       <footer className="database-status" role="status">
         <span
           className={`overview-orb ${loading ? "is-running" : complete ? "is-done" : "is-attention"}`}

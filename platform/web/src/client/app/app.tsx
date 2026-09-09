@@ -56,15 +56,16 @@ import { ConversationPanel, type ComposerSelection } from "../conversation/conve
 import { CompactionPanel } from "../conversation/compaction-panel";
 const BrowserPanel = lazy(() => import("../browser/browser-panel").then(module => ({ default: module.BrowserPanel })));
 const DatabasePanel = lazy(() => import("../database/database-panel").then(module => ({ default: module.DatabasePanel })));
-const FilesPanel = lazy(() => import("../workspace/files-panel").then(module => ({ default: module.FilesPanel })));
-const FileWorkspace = lazy(() => import("../workspace/file-workspace").then(module => ({ default: module.FileWorkspace })));
+import { FilesPanel } from "../workspace/files-panel";
+// Keep the workspace shell synchronous; file viewers and editors have local lazy boundaries.
+import { FileWorkspace } from "../workspace/file-workspace";
 import { useGitWorkspace } from "../workspace/git-controller";
 import type { GitDetailQuery } from "../../shared/workspace/git";
 const GitPanel = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitPanel })));
 const ReviewSurface = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.ReviewSurface })));
 const GitDialogs = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitDialogs })));
 import type { FileView } from "../workspace/files-panel";
-import type { FileWorkspaceContentStore } from "../workspace/file-workspace";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 import { SearchPopup } from "../workspace/search-popup";
 import { openSearch } from "../workspace/workspace-search";
 import { KEY_COMMANDS } from "../../shared/settings/keyboard";
@@ -114,7 +115,7 @@ import { useMarkSessionSeen, useTerminalDrawer } from "../terminal/use-terminal-
 import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
 import { exitDelay } from "../ui/motion";
 
-type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView };
+type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView; searchQuery?: WorkspaceSearchQuery };
 type FileNavigation = "explorer" | "sessions";
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
 type SelectedAttachment = {
@@ -252,7 +253,7 @@ export function App() {
   const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
   const pendingSessionInFlight = useRef(false);
   const fileWorkspaceStates = useRef(new Map<string, FileWorkspaceState>());
-  const fileWorkspaceContents = useRef<FileWorkspaceContentStore>(new Map());
+  const changesStates = useRef(new Map<string, FileWorkspaceState>());
   const toastId = useRef(0);
   const lastError = useRef({ message: "", at: 0 });
   const mobile = useMediaQuery("(max-width: 900px)");
@@ -1344,7 +1345,7 @@ export function App() {
       <ReviewSurface key={`review:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`} live={live} git={git} onClose={() => { setReviewDismissed(true); changeSurface("files"); }} onOpenFile={openGitFile} />
     ) : surface === "database" ? (
       <DatabasePanel
-        key={`database:${live.runtime?.sessionId ?? "loading"}`}
+        key={`database:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`}
         live={live}
         onClose={() => changeSurface("chat")}
       />
@@ -1616,6 +1617,7 @@ export function App() {
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
           live={live}
           projectId={activeSession?.projectId}
+          stateStore={changesStates}
           requestedPath={requestedFile}
           applyRequest={applyRequest}
           onApplyRequestHandled={() => setApplyRequest(undefined)}
@@ -1908,7 +1910,6 @@ export function App() {
           projectId={activeSession?.projectId}
           requestedPath={requestedFile}
           stateStore={fileWorkspaceStates}
-          contentStore={fileWorkspaceContents}
           header={topbar}
           workspaceRef={workspaceRef}
           sidePanel={
@@ -1934,8 +1935,8 @@ export function App() {
       )}
       <div className="terminal-layer"><DeferredPanel>{terminalChrome}</DeferredPanel></div>
       <SearchPopup live={live} onError={reportError}
-        onOpen={(path, line) => {
-          setRequestedFile({ path, line, view: "current", sessionId: live.runtime?.sessionId, requestId: Date.now() });
+        onOpen={(path, line, searchQuery) => {
+          setRequestedFile({ path, line, view: "current", searchQuery, sessionId: live.runtime?.sessionId, requestId: Date.now() });
           changeSurface("files");
         }}
         actions={[

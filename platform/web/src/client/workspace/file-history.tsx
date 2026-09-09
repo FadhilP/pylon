@@ -7,6 +7,7 @@ import { historyColor, type CodeAttribution } from "../../shared/workspace/code-
 import { FileContent, type FileView } from "./files-panel";
 import { runtimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
 import { displayDate, displayTimelineTime } from "../ui/display-format";
+import { AboutPopover } from "../ui/about-popover";
 import "./file-history.css";
 
 const CodeViewer = lazy(() => import("../rendering/code-viewer"));
@@ -14,6 +15,7 @@ const CodeViewer = lazy(() => import("../rendering/code-viewer"));
 type HistoryScope = "session" | "all";
 type ChangeCounts = { added: number; removed: number };
 
+const CODE_SKELETON = [62, 45, 78, 34, 70, 52, 84, 40, 66, 30, 74, 48];
 function initials(name?: string) {
   return name
     ?.split(/\s+/)
@@ -72,23 +74,17 @@ export function FileHistoryViewer({
   selection.current = selected;
   const runtime = live.runtime;
   const ready = live.connection === "connected" && runtime?.ready && canCompare;
-  const contextKey = JSON.stringify([
-    runtime?.sessionId,
-    runtime?.sessionGeneration,
-    path,
-    scope,
-    limit,
-    runtime?.operational.timeline?.revision,
-    ready,
-  ]);
-  const history = metadata?.key === contextKey ? metadata.result : undefined;
+  const historyKey = JSON.stringify([runtime?.sessionId, runtime?.workspace?.mode, runtime?.cwdLabel, path, scope, limit]);
+  const contextKey = JSON.stringify([historyKey, runtime?.sessionGeneration, runtime?.operational.timeline?.revision, ready]);
+  const history = metadata?.key === historyKey ? metadata.result : undefined;
   const historical = selected !== "live";
   const historyView = view === "diff" ? "diff" : "file";
   const mutableAnchor =
     history?.baselineLabel === "HEAD" &&
     (selected === "baseline" || (historyView === "diff" && !selected.startsWith("git:")));
   const selectionKey = `${contextKey}:${selected}:${historyView}:${mutableAnchor ? runtime?.workspace?.revision : ""}`;
-  const result = loaded?.key === selectionKey ? loaded.result : undefined;
+  const displayKey = `${historyKey}:${selected}:${historyView}`;
+  const result = loaded?.key === displayKey ? loaded.result : undefined;
   const content = result?.content;
   useEffect(() => { countCache.current.clear(); }, [contextKey]);
 
@@ -106,7 +102,7 @@ export function FileHistoryViewer({
         .workspaceHistory({ path, scope, limit }, controller.signal)
         .then(response => {
           if (controller.signal.aborted) return;
-          setMetadata({ key: contextKey, result: response });
+          setMetadata({ key: historyKey, result: response });
           if (scope === "session" && !scopeChosen.current && !response.stops.some(stop => stop.kind === "checkpoint")) {
             setScope("all");
             return;
@@ -139,7 +135,7 @@ export function FileHistoryViewer({
         .workspaceHistory({ path, scope, limit, selected, view: historyView }, controller.signal)
         .then(response => {
           if (controller.signal.aborted) return;
-          setLoaded({ key: selectionKey, result: response });
+          setLoaded({ key: displayKey, result: response });
           if (response.content?.changes) {
             countCache.current.set(`${contextKey}:${selected}`, response.content.changes);
             setCountEpoch(value => value + 1);
@@ -405,8 +401,21 @@ export function FileHistoryViewer({
         </span>
       </div>
       {canCompare && (
-        <section className="file-history" aria-label="File history" aria-busy={!history && !listError && !!ready}>
+        <section className="file-history" aria-label="File history" aria-busy={!history && !listError && !!ready} style={{ "--history-color": selectedColor } as CSSProperties}>
           <div className="file-history-axis">
+            <div className="file-history-pick">
+              <button
+                ref={titleButton}
+                type="button"
+                className="file-history-selected-title"
+                aria-haspopup="listbox"
+                aria-expanded={listOpen}
+                onClick={() => listOpen ? closeVersionList(false) : setListOpen(true)}
+                title={`${selectedTitle} — show every version of this file`}>
+                <i className={selectedNeutral ? "is-neutral" : ""} />
+                <span>{selectedTitle}</span><em>▾</em>
+              </button>
+            </div>
             <div className="file-history-scopes" role="group" aria-label="History scope">
               <button aria-pressed={scope === "session"} disabled={!!history && !checkpoints.length} onClick={() => {
                 scopeChosen.current = true;
@@ -432,6 +441,9 @@ export function FileHistoryViewer({
                 buttons[next]?.click();
                 buttons[next]?.focus();
               }}>
+              {!history && !listError && ready && [0, 1, 2, 3, 4].map(index => (
+                <span className="file-history-stop-skeleton" key={index} aria-hidden="true"><span className="sk" /></span>
+              ))}
               {scope === "all" && history?.hasMore && <span className="file-history-gap is-unknown"><span>Older commits not loaded</span></span>}
               {scope === "all" && commits.map((stop, index) => (
                 <span className="file-history-track-item" key={stop.id}>
@@ -451,33 +463,28 @@ export function FileHistoryViewer({
               {dot("live", "Live working copy — may differ from the last checkpoint", true, "last")}
             </div>
             <button className="file-history-edge" aria-label="Scroll to later versions" disabled={edgeState.after} onClick={() => scrollTrack(1)}>›</button>
-          </div>
-          <div className="file-history-info" style={{ "--history-color": selectedColor } as CSSProperties}>
-            <button
-              ref={titleButton}
-              type="button"
-              className="file-history-selected-title"
-              aria-haspopup="listbox"
-              aria-expanded={listOpen}
-              onClick={() => listOpen ? closeVersionList(false) : setListOpen(true)}
-              title="Show every version of this file">
-              <i className={selectedNeutral ? "is-neutral" : ""} />
-              <span>{selectedTitle}</span><em>▾</em>
-            </button>
-            {current?.kind === "checkpoint" && (
-              <span className={`overview-state-label${current.verification === "passed" ? " is-done" : current.verification === "failed" ? " is-failed" : ""}`}>
-                {current.verification === "passed" ? "Verified" : current.verification === "failed" ? "Failed" : "Unverified"}
-              </span>
-            )}
-            {current?.kind === "commit" && <span className="file-history-author" title={current.author}><i>{initials(current.author)}</i>{current.author}</span>}
-            {current?.kind === "commit" && <code className="file-history-sha">{current.id.slice(4, 11)}</code>}
-            {current?.createdAt && <time className="file-history-time" dateTime={current.createdAt}>{displayTimelineTime(current.createdAt)}</time>}
-            {selectedCounts && <span className="file-history-counts"><b>+{selectedCounts.added}</b> <i>−{selectedCounts.removed}</i></span>}
             {history?.hasMore && <button className="secondary-button file-history-earlier" onClick={() => setLimit(value => Math.min(200, value + 40))}>Earlier commits</button>}
+            <div className="file-history-meta">
+              {current?.kind === "checkpoint" && (
+                <span className={`overview-state-label${current.verification === "passed" ? " is-done" : current.verification === "failed" ? " is-failed" : ""}`}>
+                  {current.verification === "passed" ? "Verified" : current.verification === "failed" ? "Failed" : "Unverified"}
+                </span>
+              )}
+              {current?.kind === "commit" && <span className="file-history-author" title={current.author}><i>{initials(current.author)}</i><span>{current.author}</span></span>}
+              {current?.kind === "commit" && <code className="file-history-sha">{current.id.slice(4, 11)}</code>}
+              {current?.createdAt
+                ? <time className="file-history-time" dateTime={current.createdAt}>{displayTimelineTime(current.createdAt)}</time>
+                : <span className="file-history-time">{selected === "live" ? "unsaved" : selected === "baseline" ? "session start" : ""}</span>}
+              {selectedCounts && <span className="file-history-counts"><b>+{selectedCounts.added}</b> <i>−{selectedCounts.removed}</i></span>}
+            </div>
+            <AboutPopover label="About this history">
+              <p>{history?.notice ?? "History is read-only. Live edits are not attributed to a saved turn."}</p>
+              <p>Select a timeline stop to inspect that version. Diff shows a selected checkpoint against the baseline, and a selected commit against its parent.</p>
+            </AboutPopover>
           </div>
-          {(listError || history?.partial || (history && !checkpoints.length)) && (
+          {(listError || history?.partial) && (
             <div className="file-history-notice" role="status">
-              {listError ?? (history?.partial ? "Showing bounded history; earlier versions or attribution may be unavailable." : "No saved session changes for this path.")}
+              {listError ?? "Showing bounded history; earlier versions or attribution may be unavailable."}
               {listError && <button onClick={() => setRetry(value => value + 1)}>Retry</button>}
             </div>
           )}
@@ -489,14 +496,15 @@ export function FileHistoryViewer({
       ) : (
         <>
           {content && !content.attributionComplete && <div className="file-history-notice" role="status">Some line attribution is unavailable; unassigned lines are left blank.</div>}
-          {error ? <div className="files-empty large" role="alert">{error}<button onClick={() => setRetry(value => value + 1)}>Retry</button></div>
-          : !content ? <div className="files-empty large" role="status">Loading version…</div>
+          {error && <div className="file-history-notice" role="alert">{error}<button onClick={() => setRetry(value => value + 1)}>Retry</button></div>}
+          {!content ? selected === "baseline" && view === "base" && value
+            ? <FileContent value={value} view="base" targetLine={targetLine} onError={onError} />
+            : !error && <div className="sk-lines" role="status" aria-busy="true" aria-label="Loading version">{CODE_SKELETON.map((width, index) => <span className="sk" style={{ "--sk-w": `${width}%` } as CSSProperties} key={index} />)}</div>
           : content.state !== "available" ? <div className="files-empty large">{content.state === "deleted" ? "File absent at this version" : content.state === "binary" ? "Binary file" : content.state === "oversized" ? "Version exceeds the display limit" : "Version unavailable"}</div>
           : historyView !== "file" && !content.text ? <div className="files-empty large">No changes</div>
           : <Suspense fallback={<div className="files-empty large">Rendering…</div>}><CodeViewer wrap key={result!.revision} mode={historyView === "file" ? "file" : "diff"} path={current?.path ?? path} text={content.text ?? ""} revision={result!.revision} annotationSource={{ kind: "historical", revision: `${selected}: ${result!.revision}` }} loadDiffFiles={loadDiffFiles} attribution={attribution} onSelectOwner={pick} /></Suspense>}
         </>
       )}
-      {canCompare && <details className="file-history-policy"><summary>About this history</summary><p>{history?.notice ?? "History is read-only. Live edits are not attributed to a saved turn."} Select a timeline stop to inspect that version. Diff shows a selected checkpoint against the baseline, and a selected commit against its parent.</p></details>}
     </>
   );
 }

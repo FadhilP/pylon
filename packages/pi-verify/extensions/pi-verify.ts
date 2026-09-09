@@ -442,7 +442,6 @@ export default function verifyExtension(pi: ExtensionAPI) {
       const groups = new Map<string, typeof checks>();
       for (const check of checks) groups.set(check.cwd, [...(groups.get(check.cwd) ?? []), check]);
       let startedChecks = 0;
-      let stopped = false;
       const orderedResults = () =>
         indexedResults
           .slice()
@@ -524,13 +523,12 @@ export default function verifyExtension(pi: ExtensionAPI) {
         });
         activeChecks.delete(check.id);
         publishRunning();
-        if (execution.code !== 0) stopped = true;
       };
       await runGrouped(
         [...groups.values()],
         MAX_PARALLEL_DIRECTORIES,
         runCheck,
-        () => stopped || Boolean(signal?.aborted),
+        () => Boolean(signal?.aborted),
       );
       const results = orderedResults();
 

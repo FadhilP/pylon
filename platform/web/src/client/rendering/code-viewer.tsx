@@ -36,6 +36,8 @@ import {
 } from "../../shared/workspace/code-viewer-model";
 import { sourceLanguage } from "./markdown";
 import { loadSyntaxLanguage, syntaxTokens, type SyntaxToken } from "./syntax-highlighting";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
+import { findTextMatches } from "../../shared/workspace/text-search";
 import { useSyntaxHighlightingRevision } from "../app/use-chrome";
 import { IconChevronDown, IconChevronRight, IconChevronUp, IconNote, IconPlus } from "@tabler/icons-react";
 
@@ -45,6 +47,8 @@ interface ViewerProps {
   text: string;
   revision: string;
   targetLine?: number;
+  /** Project-search context, supported only for normal full-file rendering. */
+  searchQuery?: WorkspaceSearchQuery;
   wrap?: boolean;
   loadDiffFiles?: DiffContentsLoader;
   unifiedDiff?: string;
@@ -91,12 +95,22 @@ function RawText({ text }: { text: string }) {
   );
 }
 
+function viewerSearchQuery(query?: WorkspaceSearchQuery): WorkspaceSearchQuery {
+  return {
+    query: query?.query ?? "",
+    regex: query?.regex,
+    caseSensitive: query?.caseSensitive,
+    wholeWord: query?.wholeWord,
+  };
+}
+
 function Viewer({
   mode,
   path,
   text,
   revision,
   targetLine,
+  searchQuery,
   wrap = false,
   loadDiffFiles,
   unifiedDiff,
@@ -108,12 +122,26 @@ function Viewer({
   annotationSource,
 }: ViewerProps) {
   const root = useRef<HTMLDivElement>(null);
+  const findNavigated = useRef(false);
+  const findInput = useRef<HTMLInputElement>(null);
+  const [find, setFind] = useState<WorkspaceSearchQuery>(() => viewerSearchQuery(searchQuery));
+  const [activeFind, setActiveFind] = useState<number>();
+  const [findNavigation, setFindNavigation] = useState(0);
+  useEffect(() => {
+    findNavigated.current = false;
+    setFind(viewerSearchQuery(searchQuery));
+    setActiveFind(undefined);
+  }, [path, revision, searchQuery?.query, searchQuery?.regex, searchQuery?.caseSensitive, searchQuery?.wholeWord]);
   const syntaxRevision = useSyntaxHighlightingRevision();
   const files = useMemo(() => (mode === "diff" ? parseDiff(unifiedDiff ?? text) : []), [mode, text, unifiedDiff]);
   const plainLines = useMemo<CodeLine[]>(
     () =>
       mode === "file" ? sourceLines(text).map((text, index) => ({ kind: "context", text, newLine: index + 1 })) : [],
     [mode, text],
+  );
+  const searchMatches = useMemo(
+    () => findTextMatches(mode === "file" ? text : "", mode === "file" ? find : { query: "" }),
+    [mode, text, find],
   );
   const [contents, setContents] = useState<Record<number, DiffContents>>({});
   const [expanded, setExpanded] = useState<Record<number, ExpandedContext>>({});
@@ -278,6 +306,20 @@ function Viewer({
       return next;
     });
   }, [sourceRows, inline, cardHeights, wrap, lineHeights, viewport.width]);
+  useEffect(() => {
+    const initial = searchQuery?.query && targetLine ? searchMatches.hits.findIndex(hit => hit.line >= targetLine) : -1;
+    setActiveFind(initial < 0 ? undefined : initial);
+    findNavigated.current = false;
+  }, [searchMatches.hits, targetLine, searchQuery]);
+  useEffect(() => {
+    if (!findNavigated.current || activeFind === undefined) return;
+    const hit = searchMatches.hits[activeFind];
+    const index = hit ? rows.findIndex(row => row.kind !== "gap" && row.kind !== "header" && row.newLine === hit.line) : -1;
+    if (index >= 0) {
+      setSelection({ start: index, end: index });
+      root.current?.scrollTo({ top: Math.max(0, rows[index].top - root.current.clientHeight / 2 + 10) });
+    }
+  }, [activeFind, findNavigation, searchMatches.hits, rows]);
   useLayoutEffect(() => {
     if (!wrap || !root.current) return;
     const width = viewport.width;
@@ -563,6 +605,43 @@ function Viewer({
   const selectLine = (index: number, shift: boolean) => {
     setSelection(current => ({ start: shift && current ? current.start : index, end: index }));
   };
+  const moveFind = (direction: -1 | 1) => {
+    if (!searchMatches.hits.length) return;
+    setActiveFind(current =>
+      ((current ?? (direction > 0 ? -1 : 0)) + direction + searchMatches.hits.length) % searchMatches.hits.length,
+    );
+    findNavigated.current = true;
+    setFindNavigation(current => current + 1);
+  };
+  const findControls = mode === "file" && (
+    <div className="code-viewer-find" role="search" aria-label="Find in file">
+      <input
+        ref={findInput}
+        aria-label="Find in file"
+        maxLength={2000}
+        value={find.query}
+        onChange={event => setFind(current => ({ ...current, query: event.target.value }))}
+        onKeyDown={event => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") { event.preventDefault(); moveFind(event.shiftKey ? -1 : 1); }
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setFind(current => ({ ...current, query: "" })); }
+        }}
+      />
+      <span role="status">{searchMatches.invalidRegex ? "Invalid regular expression" : `${activeFind === undefined ? "" : `${activeFind + 1} / `}${searchMatches.hits.length}${searchMatches.truncated ? "+ (first 10,000)" : ""} matches`}</span>
+      <button type="button" aria-label="Previous match" disabled={!searchMatches.hits.length} onClick={() => moveFind(-1)}>↑</button>
+      <button type="button" aria-label="Next match" disabled={!searchMatches.hits.length} onClick={() => moveFind(1)}>↓</button>
+      {(["caseSensitive", "wholeWord", "regex"] as const).map(flag => (
+        <button
+          key={flag}
+          type="button"
+          aria-label={flag === "caseSensitive" ? "Match case" : flag === "wholeWord" ? "Whole word" : "Regular expression"}
+          aria-pressed={!!find[flag]}
+          onClick={() => setFind(current => ({ ...current, [flag]: !current[flag] }))}>
+          {flag === "caseSensitive" ? "Aa" : flag === "wholeWord" ? "|ab|" : ".*"}
+        </button>
+      ))}
+    </div>
+  );
 
   const addNote = async () => {
     if (!range || !annotationSource || !annotations || capturing) return;
@@ -625,7 +704,15 @@ function Viewer({
   ) : null;
 
   return (
-    <div className="code-viewer-shell">
+    <div className="code-viewer-shell" onKeyDown={event => {
+      if (mode !== "file" || event.defaultPrevented || event.nativeEvent.isComposing || event.shiftKey || event.altKey ||
+        !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f" ||
+        (event.target as HTMLElement).closest(".annotation-inline")) return;
+      event.preventDefault();
+      findInput.current?.focus();
+      findInput.current?.select();
+    }}>
+      {findControls}
       {noteActions && <div className="annotation-toolbar">{noteActions}</div>}
       {unmatchedNotes > 0 && (
         <div className="annotation-notice" role="status">
@@ -888,7 +975,7 @@ function Viewer({
                     {gutter(row.kind === "deletion" ? "oldLine" : "newLine")}
                   </span>
                   <code data-wrap-key={wrap ? row.key : undefined}>
-                    <HighlightedLine line={row} tokens={highlighted.get(row.key)} />
+                    <HighlightedLine line={row} tokens={highlighted.get(row.key)} highlights={mode === "file" ? searchMatches.ranges.get(row.newLine!) : undefined} />
                   </code>
                 </div>
                 {inline.has(row.key) && (
@@ -961,18 +1048,27 @@ function fileDescription(file: DiffFile): string {
   return `+${additions} −${deletions}`;
 }
 
-export function HighlightedLine({ line, tokens }: { line: CodeLine; tokens?: SyntaxToken[] }) {
+export function HighlightedLine({
+  line,
+  tokens,
+  highlights,
+}: {
+  line: CodeLine;
+  tokens?: SyntaxToken[];
+  highlights?: { start: number; end: number }[];
+}) {
+  const ranges = [...(line.changes ?? []), ...(highlights ?? [])].sort((left, right) => left.start - right.start || left.end - right.end);
   let offset = 0;
   return (tokens ?? [{ content: line.text, className: "" }]).map((token, index) => {
     const start = offset;
     offset += token.content.length;
     const parts: ReactNode[] = [];
     let cursor = 0;
-    for (const range of line.changes ?? []) {
-      const from = Math.max(0, range.start - start);
+    for (const range of ranges) {
+      const from = Math.max(cursor, range.start - start);
       const to = Math.min(token.content.length, range.end - start);
       if (from >= to) continue;
-      parts.push(token.content.slice(cursor, from), <mark key={from}>{token.content.slice(from, to)}</mark>);
+      parts.push(token.content.slice(cursor, from), <mark key={`${from}:${to}`}>{token.content.slice(from, to)}</mark>);
       cursor = to;
     }
     parts.push(token.content.slice(cursor));

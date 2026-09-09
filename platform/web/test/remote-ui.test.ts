@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { databasePasswordSubmission } from "../src/client/database/database-password-submission.ts";
 import {
   RemoteUiBridge,
   type StateQLCredentialHost,
@@ -125,6 +126,67 @@ test("StateQL credential references resolve from the OS vault and stale entries 
   assert.equal(await vault.resolve(reference), DATABASE_URL);
 });
 
+test("an explicitly provided password wins over vault/cache, while retry prefers the valid session password", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(request));
+  bridge.setStateQLCredentialVault({
+    async save() {
+      return false;
+    },
+    async resolve() {
+      return undefined;
+    },
+    async invalidate() {
+      return true;
+    },
+    async forget() {
+      return true;
+    },
+    async resolvePassword() {
+      return "old-vault-password";
+    },
+  });
+  const host = stateqlHost(bridge);
+  const target = "postgres://private@localhost/app?sslmode=verify-full";
+  const request = stateqlRequest("read", {
+    source: "password_ref",
+    reference: createStateQLCredentialReference(),
+    target,
+  });
+  const metadata = {
+    driver: "postgres" as const,
+    username: "private",
+    hostname: "localhost",
+    port: 5432,
+    database: "app",
+  };
+  const options = { timeoutMs: 0, savedPassword: { reference: request.reference, target } };
+  try {
+    const first = host.requestStateQLPassword(request, metadata, { ...options, forcePrompt: true });
+    await new Promise(resolve => setImmediate(resolve));
+    bridge.answer({
+      requestId: requests.at(-1)!.requestId,
+      sessionGeneration: 3,
+      method: "input",
+      value: "new-form-password",
+    });
+    assert.equal(await first, "new-form-password");
+    assert.equal(await host.requestStateQLPassword(request, metadata, options), "new-form-password");
+    assert.equal(requests.length, 1);
+    assert.equal(
+      await host.requestStateQLPassword(request, metadata, {
+        timeoutMs: 0,
+        initialPassword: "selected-environment-password",
+      }),
+      "selected-environment-password",
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(JSON.stringify(requests).includes("new-form-password"), false);
+  } finally {
+    bridge.dispose();
+  }
+});
+
 test("password setup persists only in the vault and cancelled setup saves nothing", async () => {
   const values = new Map<string, string>();
   const vault = new OsStateQLCredentialVault((_service, account) => ({
@@ -167,7 +229,22 @@ test("password setup persists only in the vault and cancelled setup saves nothin
     "setup-1",
   );
   const prompt = requests.at(-1)!;
-  bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: "p%@:/# Ü" });
+  assert.equal(prompt.method, "input");
+  const submission = databasePasswordSubmission("p%@:/# Ü", {
+    target,
+    operationId: "setup-1",
+    generation: 3,
+    readOnly: true,
+  });
+  assert.equal(
+    await submission.answer(
+      { ...prompt, method: "input", owned: true, ownershipAvailable: false },
+      async (_request, body) => {
+        bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", ...body });
+      },
+    ),
+    true,
+  );
   assert.equal(await pending, "p%@:/# Ü");
   const stored = await vault.resolve(reference, target);
   assert.ok(stored);
@@ -187,6 +264,49 @@ test("password setup persists only in the vault and cancelled setup saves nothin
   abort.abort();
   assert.equal(await cancelled, undefined);
   assert.equal(await vault.resolve(cancelledReference), undefined);
+  bridge.dispose();
+});
+
+test("an explicitly empty database password is not cancellation and is not published", async () => {
+  const requests: UiRequest[] = [];
+  const bridge = new RemoteUiBridge(request => requests.push(structuredClone(request)));
+  bridge.context("session-1", 3);
+  const pending = bridge.requestStateQLPassword(
+    "session-1",
+    3,
+    stateqlRequest("read", {
+      reference: "PYLON_STATEQL_BROKERED_" + "Z".repeat(48),
+      operation: "connect",
+      connection: undefined,
+    }),
+    { driver: "postgres", username: "dbuser", hostname: "localhost", port: 5432, database: "app" },
+    { timeoutMs: 0 },
+    "database",
+    "empty-password",
+  );
+  const prompt = requests.at(-1)!;
+  assert.equal(prompt.method, "input");
+  const submission = databasePasswordSubmission("", {
+    target: "postgres://dbuser@localhost/app",
+    operationId: "empty-password",
+    generation: 3,
+    readOnly: true,
+  });
+  assert.equal(
+    await submission.answer(
+      { ...prompt, method: "input", owned: true, ownershipAvailable: false },
+      async (_request, body) => {
+        bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", ...body });
+      },
+    ),
+    true,
+  );
+  assert.equal(await pending, "");
+  assert.equal(Object.hasOwn(prompt.payload, "value"), false);
+  assert.throws(
+    () => bridge.answer({ requestId: prompt.requestId, sessionGeneration: 3, method: "input", value: "" }),
+    /unknown or expired/,
+  );
   bridge.dispose();
 });
 

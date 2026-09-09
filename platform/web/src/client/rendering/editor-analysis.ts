@@ -1,12 +1,15 @@
+import type { Diagnostic } from "@codemirror/lint";
 import type { GitLineChange } from "../../shared/workspace/code-viewer-model.ts";
 import type { SyntaxSpan, VisibleRange } from "./incremental-syntax.ts";
 import type { SyntaxTheme } from "./syntax-highlighting.ts";
+import type { SqlDialect } from "./editor-language.ts";
 
 export interface EditorAnalysisInput {
   text: string;
   path: string;
   theme: SyntaxTheme;
   indexText?: string;
+  sqlDialect?: SqlDialect;
   ranges: readonly VisibleRange[];
 }
 export interface EditorAnalysisRequest extends EditorAnalysisInput { id: number }
@@ -16,6 +19,7 @@ export interface EditorAnalysisResult {
   changes?: Map<number, GitLineChange>;
   css?: string;
   error?: boolean;
+  diagnostics?: Diagnostic[];
 }
 
 /** One running job and one latest replacement: no backlog, and no stale results applied. */

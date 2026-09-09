@@ -23,6 +23,11 @@ import { codeEditLimit, selectedCodeLines, paintedSyntax, paintSyntax, paintCode
 import type { GitLineChange } from "../../shared/workspace/code-viewer-model";
 import { getSyntaxTheme, subscribeSyntaxHighlighting, installTokenStyles } from "./syntax-highlighting";
 import { EditorAnalysisRequests, type EditorAnalysisInput, type EditorAnalysisResult } from "./editor-analysis";
+import { lintKeymap, setDiagnostics } from "@codemirror/lint";
+import { search, searchKeymap, setSearchQuery, openSearchPanel, closeSearchPanel } from "@codemirror/search";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
+import { fileSearchQuery } from "../../shared/workspace/text-search";
+import { editorAssistance } from "./editor-language";
 import "./editable-code.css";
 
 export interface CodeEditing {
@@ -42,6 +47,7 @@ interface Props {
   path: string;
   editing: CodeEditing;
   targetLine?: number;
+  searchQuery?: WorkspaceSearchQuery;
   navigationToken?: number;
   notes: readonly Annotation[];
   openNotes: Set<string>;
@@ -160,6 +166,7 @@ class LineMarker extends GutterMarker {
 export function EditableCode(props: Props) {
   const theme = useSyncExternalStore(subscribeSyntaxHighlighting, getSyntaxTheme);
   const [analysisError, setAnalysisError] = useState(false);
+  const [languageError, setLanguageError] = useState(false);
   const analyses = useRef<EditorAnalysisRequests>(undefined);
   const lastAnalysis = useRef<{ doc: EditorState["doc"]; input: EditorAnalysisInput }>(undefined);
   const [comparison, setComparison] = useState<{ text: string; indexText?: string; changes?: Map<number, GitLineChange> }>();
@@ -213,7 +220,8 @@ export function EditableCode(props: Props) {
       if (!editor || request.text !== editor.state.doc.toString() || request.path !== current.current.path ||
         request.theme !== getSyntaxTheme() || request.indexText !== current.current.editing.gitIndexText) return;
       if (result.css) installTokenStyles(result.css);
-      editor.dispatch({ effects: paintSyntax.of({ doc: editor.state.doc, spans: result.spans }) });
+      editor.dispatch(setDiagnostics(editor.state, result.diagnostics ?? []),
+        { effects: paintSyntax.of({ doc: editor.state.doc, spans: result.spans }) });
       setComparison({ text: request.text, indexText: request.indexText, changes: result.changes });
       setAnalysisError(Boolean(result.error));
     });
@@ -224,7 +232,8 @@ export function EditableCode(props: Props) {
       requests.dispose(); analyses.current = undefined; worker.terminate();
       setComparison(undefined); setAnalysisError(true);
       const editor = view.current;
-      if (editor) editor.dispatch({ effects: paintSyntax.of({ doc: editor.state.doc, spans: [] }) });
+      if (editor) editor.dispatch(setDiagnostics(editor.state, []),
+        { effects: paintSyntax.of({ doc: editor.state.doc, spans: [] }) });
     };
     worker.onerror = fail;
     worker.onmessageerror = fail;
@@ -234,6 +243,7 @@ export function EditableCode(props: Props) {
   useEffect(requestAnalysis, [theme, props.path, props.editing.gitIndexText]);
 
   useLayoutEffect(() => {
+    let analysisTimer: ReturnType<typeof setTimeout> | undefined;
     const measure = () => {
       const scroll = view.current?.scrollDOM;
       if (!scroll) return;
@@ -247,6 +257,8 @@ export function EditableCode(props: Props) {
         doc: current.current.text,
         extensions: [
           history(),
+          editorAssistance(current.current.path, { onLoadError: () => setLanguageError(true) }),
+          search({ top: true, literal: true }),
           drawSelection(),
           highlightActiveLine(),
           paintedCode,
@@ -293,6 +305,8 @@ export function EditableCode(props: Props) {
                 return true;
               },
             },
+            ...searchKeymap,
+            ...lintKeymap,
             ...defaultKeymap,
             ...historyKeymap,
           ]),
@@ -323,7 +337,10 @@ export function EditableCode(props: Props) {
           }),
           EditorView.updateListener.of(update => {
             if (update.docChanged) { measure(); current.current.editing.onChange(update.state.doc.toString()); }
-            if (update.docChanged || update.viewportChanged) requestAnalysis();
+            if (update.docChanged) {
+              clearTimeout(analysisTimer);
+              analysisTimer = setTimeout(requestAnalysis, 150);
+            } else if (update.viewportChanged) requestAnalysis();
             if (update.docChanged || update.selectionSet) {
               const selection = selectedCodeLines(
                 update.state.doc,
@@ -352,6 +369,7 @@ export function EditableCode(props: Props) {
     // Gutters contain accessible note actions, not just decorative line numbers.
     editor.dom.querySelector(".cm-gutters")?.removeAttribute("aria-hidden");
     return () => {
+      clearTimeout(analysisTimer);
       observer.disconnect();
       editor.destroy();
       view.current = undefined;
@@ -400,8 +418,23 @@ export function EditableCode(props: Props) {
     });
   }, [props.targetLine, props.navigationToken]);
 
+  useLayoutEffect(() => {
+    const editor = view.current;
+    if (!editor) return;
+    const query = fileSearchQuery(props.searchQuery);
+    editor.dispatch({ effects: setSearchQuery.of(query) });
+    if (props.searchQuery?.query) {
+      openSearchPanel(editor);
+      const line = editor.state.doc.line(Math.min(editor.state.doc.lines, Math.max(1, props.targetLine ?? 1)));
+      const hit = query.valid ? query.getCursor(editor.state.doc, line.from, line.to).next() : undefined;
+      if (hit && !hit.done) editor.dispatch({ selection: EditorSelection.range(hit.value.from, hit.value.to),
+        effects: EditorView.scrollIntoView(hit.value.from, { y: "center" }) });
+    } else closeSearchPanel(editor);
+  }, [props.path, props.searchQuery, props.targetLine]);
+
   return (
     <>
+      {languageError && <div className="file-history-notice" role="status">Language assistance unavailable; document-word completion is still available.</div>}
       {analysisError && <div className="file-history-notice" role="status">Highlighting unavailable; plain-text editing is available.</div>}
       {comparisonUnavailable && <div className="file-history-notice" role="status">Git gutters unavailable: comparison exceeds the size or time limit.</div>}
       <div

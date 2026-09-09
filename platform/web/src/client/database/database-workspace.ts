@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
-import type { StateQLCommandInput, StateQLCommandResult } from "../../shared/protocol/snapshots.ts";
+import type { RuntimeSnapshot, StateQLCommandInput, StateQLCommandResult, StateQLSnapshot } from "../../shared/protocol/snapshots.ts";
 
 export type DatabaseDriver = "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
 export interface DatabaseQuery {
@@ -32,6 +32,18 @@ export const databaseRecord = (value: unknown): value is Record<string, unknown>
   value !== null && typeof value === "object" && !Array.isArray(value);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const text = (value: unknown): value is string => typeof value === "string" && value.length <= 65_536;
+
+export function databaseSnapshotMatchesRuntime(
+  snapshot: Pick<StateQLSnapshot, "actor_id" | "sessionGeneration"> | undefined,
+  runtime: Pick<RuntimeSnapshot, "sessionId" | "sessionGeneration"> | null | undefined,
+): boolean {
+  return Boolean(
+    snapshot &&
+      runtime &&
+      snapshot.actor_id === runtime.sessionId &&
+      snapshot.sessionGeneration === runtime.sessionGeneration,
+  );
+}
 
 export function isDatabaseResult(value: unknown): value is DatabaseResult {
   return (

@@ -10,7 +10,7 @@ import {
   IconRefresh,
   IconX,
 } from "@tabler/icons-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type {
   GitActionInput,
   GitCommit,
@@ -21,6 +21,7 @@ import type {
   GitState,
 } from "../../shared/workspace/git";
 import type { DiffContentsLoader } from "../../shared/workspace/code-viewer-model";
+import type { WorkspaceReadModel } from "../../shared/protocol/snapshots";
 import { FileTypeIcon } from "../rendering/file-icons";
 import type { RuntimeStoreSnapshot } from "../runtime/event-store";
 import { ActionDialog } from "../ui/action-dialog";
@@ -79,28 +80,45 @@ function Group({ name, count, children }: { name: string; count: number; childre
     </header>
   );
 }
-function Feedback({ git }: { git: GitWorkspaceController }) {
+type WorkspaceApply = NonNullable<WorkspaceReadModel["lastApply"]>;
+function SkeletonFiles({ rows = 6 }: { rows?: number }) {
   return (
-    <>
-      {git.dirty && (
-        <p className="git-panel-result notice">
-          Save or discard editor drafts before Git actions. Only saved files can be staged.
-        </p>
-      )}
-      {git.state?.truncated && (
-        <p className="git-panel-result notice">Git inspection exceeded its safe limit. Mutations are disabled.</p>
-      )}
-      {git.error && (
-        <p className="git-panel-result bad" role="alert">
-          {git.error}
-        </p>
-      )}
-      {git.result && (
-        <p className="git-panel-result" role="status">
-          {git.result}
-        </p>
-      )}
-    </>
+    <div aria-hidden="true">
+      {Array.from({ length: rows }, (_, index) => (
+        <div className="sk-row" key={index}>
+          <span className="sk" />
+          <span className="sk" style={{ "--sk-w": `${62 + ((index * 43) % 96)}px` } as CSSProperties} />
+        </div>
+      ))}
+    </div>
+  );
+}
+/** One banner at a time, worst news first. The warnings describe a live condition, so only a result or an error is dismissible. */
+function Feedback({ git, apply }: { git: GitWorkspaceController; apply?: WorkspaceApply }) {
+  const banner = git.error
+    ? { tone: "danger", title: "Git action failed", body: git.error, role: "alert" as const, dismiss: true }
+    : git.dirty
+      ? { tone: "", title: "Unsaved drafts", body: "Save or discard editor drafts before Git actions. Only saved files can be staged." }
+      : git.state?.truncated
+        ? { tone: "", title: "Inspection truncated", body: "Git inspection exceeded its safe limit. Mutations are disabled." }
+        : apply?.message
+          ? { tone: apply.state === "conflict" || apply.state === "error" ? "danger" : "good", title: apply.state === "conflict" ? "Applied with conflicts" : apply.state === "error" ? "Apply failed" : "Applied", body: apply.message }
+          : git.result
+            ? { tone: "good", title: "Done", body: git.result, dismiss: true }
+            : undefined;
+  if (!banner) return null;
+  return (
+    <section className={`git-panel-op ${banner.tone}`} role={banner.role ?? "status"} aria-live="polite">
+      <div className="git-op-title">
+        <strong>{banner.title}</strong>
+        {banner.dismiss && (
+          <button className="git-op-dismiss" type="button" aria-label="Dismiss" onClick={git.dismiss}>
+            <IconX size={14} />
+          </button>
+        )}
+      </div>
+      <p>{banner.body}</p>
+    </section>
   );
 }
 function Composer({ git }: { git: GitWorkspaceController }) {
@@ -355,10 +373,15 @@ export function GitPanel({
           <IconX size={16} />
         </button>
       </header>
+      <Feedback git={git} apply={workspace?.lastApply} />
       {!state ? (
-        <div className="git-panel-empty">
-          {git.ready ? "Loading Git status…" : "Connect to a ready session to inspect Git."}
-        </div>
+        git.ready ? (
+          <div className="git-panel-loading" role="status" aria-busy="true">
+            <SkeletonFiles />
+          </div>
+        ) : (
+          <div className="git-panel-empty">Connect to a ready session to inspect Git.</div>
+        )
       ) : !state.available ? (
         <div className="git-panel-empty">
           <strong>Git unavailable</strong>
@@ -471,15 +494,8 @@ export function GitPanel({
               Review changes
             </button>
           </footer>
-          {workspace?.lastApply && (
-            <p
-              className={`git-panel-result ${workspace.lastApply.state === "conflict" || workspace.lastApply.state === "error" ? "bad" : ""}`}>
-              {workspace.lastApply.message}
-            </p>
-          )}
         </>
       )}
-      <Feedback git={git} />
     </aside>
   );
 }
@@ -1084,7 +1100,6 @@ export function ReviewSurface({
           ))}
         </div>
         {!historical && !state?.operation && <Composer git={git} />}
-        <Feedback git={git} />
       </aside>
       <main className="git-review-view">
         {!selectedPath ? (

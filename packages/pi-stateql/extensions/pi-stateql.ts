@@ -12,6 +12,12 @@ import {
 } from "@fadhilp/stateql";
 import { Type, type Static } from "typebox";
 import { parseStateQLPanelCommand, type StateQLPanelCommand } from "../src/stateql-command.ts";
+import {
+  insecureTls,
+  materializeConnectionTarget,
+  runConnectionSetup,
+  type SetupPasswordOptions,
+} from "../src/connection-setup.ts";
 
 const COMMANDS = [
   "connect",
@@ -188,12 +194,13 @@ interface StateQLCredentialHost {
   requestStateQLPassword?(
     request: CredentialRequest,
     target: StateQLPasswordTarget,
-    options?: { timeoutMs: number; remember?: { reference: string; target: string } },
+    options?: SetupPasswordOptions,
   ): Promise<string | undefined>;
   invalidateStateQLPassword?(request: CredentialRequest, target: StateQLPasswordTarget): void;
   invalidateStateQLCredential?(request: CredentialRequest): void;
   hasStateQLCredential?(reference: string, target?: string): Promise<boolean>;
   forgetStateQLCredential?(reference: string): Promise<boolean>;
+  rememberStateQLPassword?(reference: string, target: string, password: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 function credentialHost(value: unknown): StateQLCredentialHost | undefined {
@@ -225,6 +232,7 @@ interface RowsRequest {
 
 interface PanelCommandRequest {
   expectedConnectionId?: string | null;
+  operationId?: string;
   version: 1;
   sessionId: string;
   command: unknown;
@@ -519,9 +527,19 @@ interface RuntimeBrokeredTarget extends BrokeredTarget {
   request?: CredentialRequest;
 }
 
+interface ProfileBrokeredConnect {
+  target: BrokeredTarget;
+  name?: string;
+  readOnly?: boolean;
+  profileMetadata?: string;
+  passwordReference?: string;
+  fromProfile: boolean;
+}
+
 function brokeredTarget(value: string): BrokeredTarget | undefined {
+  const source = materializeConnectionTarget(value);
   try {
-    const url = new URL(value);
+    const url = new URL(source);
     const driver: StateQLPasswordTarget["driver"] | undefined =
       url.protocol === "postgres:" || url.protocol === "postgresql:"
         ? "postgres"
@@ -532,7 +550,7 @@ function brokeredTarget(value: string): BrokeredTarget | undefined {
             : url.protocol === "redis:" || url.protocol === "rediss:"
               ? "redis"
               : undefined;
-    if (!driver || !url.username || url.password || !url.hostname || url.hash) return undefined;
+    if (!driver || url.password || !url.hostname || url.hash || (driver !== "redis" && !url.username)) return undefined;
     if ([...url.searchParams.keys()].some(key => ENDPOINT_QUERY_KEYS.has(key.toLowerCase()))) return undefined;
     const defaultPort =
       driver === "postgres" ? "5432" : driver === "mysql" ? "3306" : driver === "redis" ? "6379" : "27017";
@@ -540,12 +558,12 @@ function brokeredTarget(value: string): BrokeredTarget | undefined {
     const database = url.pathname.replace(/^\//u, "");
     const prompt = {
       driver,
-      username: decodeURIComponent(url.username),
+      username: url.username ? decodeURIComponent(url.username) : "default",
       hostname: url.hostname.toLowerCase().replace(/\.$/u, ""),
       port,
       database,
     };
-    return { source: value, prompt };
+    return { source, prompt };
   } catch {
     return undefined;
   }
@@ -559,25 +577,7 @@ function durableReference(): string {
   return `pylon:stateql:v1:${randomUUID()}`;
 }
 
-function insecureTls(target: string | undefined): boolean {
-  if (!target) return false;
-  try {
-    const url = new URL(target);
-    const sslMode = url.searchParams.getAll("sslmode").at(-1)?.toLowerCase();
-    const libpqCompat = url.searchParams.getAll("uselibpqcompat").at(-1)?.toLowerCase() === "true";
-    return (
-      sslMode === "disable" ||
-      sslMode === "no-verify" ||
-      (libpqCompat && (sslMode === undefined || ["prefer", "require", "verify-ca"].includes(sslMode))) ||
-      url.searchParams.get("ssl")?.toLowerCase() === "false" ||
-      url.searchParams.get("rejectUnauthorized")?.toLowerCase() === "false"
-    );
-  } catch {
-    return false;
-  }
-}
-
-function confirmationText(input: StateQLToolInput, brokered = false): string {
+function confirmationText(input: StateQLToolInput, brokered = false, effectiveTarget?: string): string {
   switch (input.command) {
     case "connect": {
       const source = input.profile
@@ -587,7 +587,7 @@ function confirmationText(input: StateQLToolInput, brokered = false): string {
           : brokered
             ? "the provided passwordless target using its securely brokered password approval"
             : "the provided target";
-      const tlsWarning = insecureTls(input.target)
+      const tlsWarning = insecureTls(effectiveTarget ?? input.target)
         ? " Warning: this target weakens or disables TLS certificate or hostname verification."
         : "";
       return `Connect StateQL using ${source} in ${input.read_only === false ? "read-write" : "read-only"} mode? Queries may expose database content to the selected model provider.${tlsWarning}`;
@@ -723,7 +723,18 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   const createStateQL: Factory = options.createStateQL ?? (value => StateQL.forActor(value));
   let runtime: Runtime | undefined;
   let activeCredentialHost: StateQLCredentialHost | undefined;
+  const activePasswordResolution: {
+    value?: { request: CredentialRequest; target: StateQLPasswordTarget };
+  } = {};
+  const takeActivePasswordResolution = (): typeof activePasswordResolution.value => {
+    const value = activePasswordResolution.value;
+    activePasswordResolution.value = undefined;
+    return value;
+  };
   const brokeredTargets = new Map<string, RuntimeBrokeredTarget>();
+  const retainBrokeredConnection = (reference?: string) => {
+    for (const key of brokeredTargets.keys()) if (key !== reference) brokeredTargets.delete(key);
+  };
   let stopping = false;
   let approvalTiming: { guardEnabled: boolean; timeoutSeconds: number | null } = {
     guardEnabled: false,
@@ -739,6 +750,8 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     );
     return result;
   };
+  let setupPassword:
+    { reference: string; target: string; value: string; actorId: string; sessionId: string } | undefined;
   const open = (actorId: string): Runtime => {
     const controller = new AbortController();
     return {
@@ -749,6 +762,29 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         credentialTimeoutMs: CREDENTIAL_RESOLUTION_TIMEOUT_MS,
         signal: controller.signal,
         credentialResolver: async request => {
+          if (request.source === "password_ref") {
+            if (
+              setupPassword &&
+              request.reference === setupPassword.reference &&
+              request.target === setupPassword.target &&
+              request.actorId === setupPassword.actorId &&
+              request.session.id === setupPassword.sessionId
+            )
+              return setupPassword.value;
+            const target = typeof request.target === "string" ? brokeredTarget(request.target) : undefined;
+            if (!target) return undefined;
+            const host = activeCredentialHost;
+            if (!host?.requestStateQLPassword) return undefined;
+            const password = await host.requestStateQLPassword(request, target.prompt, {
+              timeoutMs:
+                approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+                  ? approvalTiming.timeoutSeconds * 1000
+                  : 0,
+              savedPassword: { reference: request.reference, target: target.source },
+            });
+            if (password !== undefined) activePasswordResolution.value = { request, target: target.prompt };
+            return password;
+          }
           if (request.reference.startsWith(BROKERED_REFERENCE_PREFIX)) {
             const target = brokeredTargets.get(request.reference);
             if (
@@ -778,6 +814,79 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     if (!runtime || stopping || (actorId && runtime.actorId !== actorId))
       throw new Error("StateQL is unavailable for this Pi session");
     return runtime;
+  };
+
+  const resolveProfileBrokeredConnect = async (
+    actorId: string,
+    input: StateQLToolInput | StateQLPanelCommand,
+    host: StateQLCredentialHost | undefined,
+    signal: AbortSignal | undefined,
+    origin: "user" | "model",
+  ): Promise<ProfileBrokeredConnect | undefined> => {
+    if (input.command !== "connect" || !host?.requestStateQLPassword) return undefined;
+    if (input.target) {
+      const target = brokeredTarget(input.target);
+      return target ? { target, fromProfile: false } : undefined;
+    }
+    if (!input.profile) return undefined;
+    return exclusive(async () => {
+      if (signal?.aborted) throw new Error(`StateQL ${origin === "user" ? "command request" : "operation"} cancelled`);
+      const shown = await current(actorId).stateql.executeCommand(
+        { command: "profile.show", name: input.profile } as BatchCommand,
+        { signal, origin },
+      );
+      if (!shown.ok) throw safeFailure(shown);
+      if (signal?.aborted) throw new Error(`StateQL ${origin === "user" ? "command request" : "operation"} cancelled`);
+      if (!record(shown.data)) return undefined;
+      const data = shown.data;
+      const sourceCount = [data.target, data.secret_env, data.credential_ref].filter(
+        value => typeof value === "string",
+      ).length;
+      if (sourceCount !== 1 || typeof data.target !== "string") return undefined;
+      const target = brokeredTarget(data.target);
+      if (!target) return undefined;
+      return {
+        target,
+        name: input.profile,
+        readOnly: typeof data.read_only === "boolean" ? data.read_only : undefined,
+        profileMetadata: input.profile,
+        ...(typeof data.password_ref === "string" ? { passwordReference: data.password_ref } : {}),
+        fromProfile: true,
+      };
+    });
+  };
+  const brokeredConnectCommand = (
+    input: BatchCommand,
+    reference: string,
+    profile: ProfileBrokeredConnect | undefined,
+    source: "secret_env" | "credential_ref" = "secret_env",
+  ): BatchCommand => {
+    const { target: _target, ...withoutTarget } = input;
+    if (!profile) return { ...withoutTarget, [source]: reference } as BatchCommand;
+    const { profile: _profile, ...withoutProfile } = withoutTarget;
+    return {
+      ...withoutProfile,
+      ...(input.name === undefined && profile.name !== undefined ? { name: profile.name } : {}),
+      ...(input.read_only === undefined && profile.readOnly !== undefined ? { read_only: profile.readOnly } : {}),
+      [source]: reference,
+    } as BatchCommand;
+  };
+  const savedPasswordProfileConnectCommand = (
+    input: BatchCommand,
+    profile: ProfileBrokeredConnect & { passwordReference: string },
+  ): BatchCommand => {
+    const { profile: _profile, target: _target, ...withoutSource } = input;
+    return {
+      ...withoutSource,
+      target: profile.target.source,
+      password_ref: profile.passwordReference,
+      ...(input.name === undefined && profile.name !== undefined ? { name: profile.name } : {}),
+      ...(input.read_only === undefined && profile.readOnly !== undefined ? { read_only: profile.readOnly } : {}),
+    } as BatchCommand;
+  };
+  const restoreProfileMetadata = (response: Response<unknown>, profile: ProfileBrokeredConnect | undefined) => {
+    if (!profile?.fromProfile || !response.ok || !record(response.data)) return response;
+    return { ...response, data: { ...response.data, profile: profile.profileMetadata } };
   };
 
   const disposePolicy = pi.events.on("pylon:runtime-policy", (event: any) => {
@@ -891,17 +1000,74 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       if (connectionId !== expectedConnectionId)
         throw new Error("Database connection changed; review and submit again.");
     };
+    if (command.command === "connection.setup") {
+      request.respond(
+        exclusive(async () => {
+          if ((StateQL as typeof StateQL & { passwordReferenceVersion?: number }).passwordReferenceVersion !== 1)
+            throw new Error(
+              "Database setup requires the updated StateQL password-reference runtime. Rebuild the linked StateQL package and restart Pylon; do not downgrade a state home containing password references.",
+            );
+          const stateql = current(request.sessionId).stateql;
+          const execute = async (input: BatchCommand) => {
+            activeCredentialHost = ui;
+            try {
+              return await stateql.executeCommand(input, { signal: request.signal, origin: "user" });
+            } finally {
+              activeCredentialHost = undefined;
+            }
+          };
+          return runConnectionSetup(command, {
+            snapshot: () => stateql.snapshot({ historyLimit: 1 }),
+            execute,
+            ui,
+            actorId: request.sessionId!,
+            operationId: request.operationId ?? randomUUID(),
+            signal: request.signal,
+            timeoutMs:
+              approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+                ? approvalTiming.timeoutSeconds * 1000
+                : 0,
+            checkConnection,
+            connect: async (input, reference, password) => {
+              if (reference && password !== undefined && typeof input.target === "string")
+                setupPassword = {
+                  reference,
+                  target: input.target,
+                  value: password,
+                  actorId: request.sessionId!,
+                  sessionId: stateql.snapshot({ historyLimit: 1 }).session.session_id,
+                };
+              try {
+                return await execute(input);
+              } finally {
+                setupPassword = undefined;
+              }
+            },
+          });
+        }),
+      );
+      return;
+    }
     request.respond(
       (async () => {
         checkConnection();
         const input = command;
         const remembers = "remember" in input && input.remember === true;
+        const profileBrokered = await resolveProfileBrokeredConnect(
+          request.sessionId!,
+          input,
+          ui,
+          request.signal,
+          "user",
+        );
+        checkConnection();
         const target =
-          (input.command === "connect" || input.command === "profile.add" || input.command === "profile.update") &&
+          profileBrokered?.target ??
+          ((input.command === "profile.add" || input.command === "profile.update") &&
           input.target &&
           ui.requestStateQLPassword
             ? brokeredTarget(input.target)
-            : undefined;
+            : undefined);
         const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
         const passwordTimeoutMs =
           approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
@@ -909,11 +1075,12 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             : 0;
         if (
           CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
-          (!(target && (input.command === "connect" || remembers)) || insecureBrokeredConnect)
+          (!(target && (input.command === "connect" || remembers) && !profileBrokered?.fromProfile) ||
+            insecureBrokeredConnect)
         ) {
           const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
           if (
-            !(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target)), {
+            !(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target), target?.source), {
               timeout: passwordTimeoutMs,
               ...(request.signal ? { signal: request.signal } : {}),
             }))
@@ -931,38 +1098,49 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         let reference: string | undefined;
         let credentialSaved = false;
         let executionCommand = stateqlInput as BatchCommand;
-        if (target && remembers) {
+        if (input.command === "connect" && profileBrokered?.passwordReference) {
+          executionCommand = savedPasswordProfileConnectCommand(
+            stateqlInput as BatchCommand,
+            profileBrokered as ProfileBrokeredConnect & { passwordReference: string },
+          );
+        } else if (target && remembers) {
           const transientReference = brokeredReference();
           const savedReference = durableReference();
           const snapshot = current(request.sessionId).stateql.snapshot({ historyLimit: 1 });
+          const effectiveReadOnly = input.read_only ?? profileBrokered?.readOnly;
           const credentialRequest = {
             reference: transientReference,
             actorId: request.sessionId,
             session: { id: snapshot.session.session_id, name: snapshot.session.name },
             operation: "connect",
-            access: input.read_only === false ? "write" : "read",
-            requestedReadOnly: input.read_only !== false,
+            access: effectiveReadOnly === false ? "write" : "read",
+            requestedReadOnly: effectiveReadOnly !== false,
             signal: request.signal,
           } as CredentialRequest;
+          checkConnection();
           const password = await ui.requestStateQLPassword?.(credentialRequest, target.prompt, {
             timeoutMs: passwordTimeoutMs,
             remember: { reference: savedReference, target: target.source },
           });
           if (password === undefined) return { declined: true };
           credentialSaved = (await ui.hasStateQLCredential?.(savedReference, target.source)) === true;
-          const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
+          const withoutCredential = stateqlInput as BatchCommand;
           if (credentialSaved) {
-            executionCommand = { ...withoutTarget, credential_ref: savedReference } as BatchCommand;
+            executionCommand = brokeredConnectCommand(
+              withoutCredential,
+              savedReference,
+              profileBrokered,
+              "credential_ref",
+            );
           } else if (input.command === "connect") {
             reference = transientReference;
-            executionCommand = { ...withoutTarget, secret_env: reference } as BatchCommand;
+            executionCommand = brokeredConnectCommand(withoutCredential, transientReference, profileBrokered);
             brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
           }
         } else if (target && input.command === "connect") {
           const transientReference = brokeredReference();
           reference = transientReference;
-          const { target: _target, ...withoutTarget } = stateqlInput as Record<string, unknown>;
-          executionCommand = { ...withoutTarget, secret_env: transientReference } as BatchCommand;
+          executionCommand = brokeredConnectCommand(stateqlInput as BatchCommand, transientReference, profileBrokered);
           brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
         }
 
@@ -977,11 +1155,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                 { command: "profile.show", name: input.name },
                 { signal: request.signal, origin: "user" },
               );
-              if (shown.ok && record(shown.data) && typeof shown.data.credential_ref === "string") {
-                credentialToForget = shown.data.credential_ref;
+              if (shown.ok && record(shown.data)) {
+                const reference = shown.data.password_ref ?? shown.data.credential_ref;
+                if (typeof reference === "string") credentialToForget = reference;
               }
             }
             let response: Response<unknown>;
+            activePasswordResolution.value = undefined;
             activeCredentialHost = ui;
             try {
               const stateql = current(request.sessionId).stateql;
@@ -1051,17 +1231,25 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
               }
             } catch (error) {
               if (reference) brokeredTargets.delete(reference);
+              activePasswordResolution.value = undefined;
               throw error;
             } finally {
               activeCredentialHost = undefined;
             }
-            if (reference) {
+            const passwordResolution = takeActivePasswordResolution();
+            if (!response.ok && passwordResolution && passwordAuthenticationFailed(response)) {
+              ui.invalidateStateQLPassword?.(passwordResolution.request, passwordResolution.target);
+              ui.invalidateStateQLCredential?.(passwordResolution.request);
+            }
+            if (reference && !response.ok) {
               const brokered = brokeredTargets.get(reference);
-              if (!response.ok && brokered?.request && passwordAuthenticationFailed(response)) {
+              if (brokered?.request && passwordAuthenticationFailed(response)) {
                 ui.invalidateStateQLPassword?.(brokered.request, brokered.prompt);
               }
               brokeredTargets.delete(reference);
             }
+            if (response.ok && input.command === "connect") retainBrokeredConnection(reference);
+            if (response.ok && input.command === "disconnect") brokeredTargets.clear();
             if (response.ok && credentialToForget) await ui.forgetStateQLCredential?.(credentialToForget);
             if (response.ok && remembers && !credentialSaved) {
               response = {
@@ -1075,6 +1263,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                 ],
               };
             }
+            response = restoreProfileMetadata(response, profileBrokered);
             return response;
           });
         } finally {
@@ -1204,21 +1393,20 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       const command = validateInput(input);
       const id = sessionId(ctx);
       const host = credentialHost(ctx.ui);
-      const target =
-        command.command === "connect" && command.target && host?.requestStateQLPassword
-          ? brokeredTarget(command.target)
-          : undefined;
-      const insecureBrokeredConnect = Boolean(target && insecureTls(input.target));
+      const profileBrokered = await resolveProfileBrokeredConnect(id, command, host, signal, "model");
+      const target = profileBrokered?.target;
+      const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
       const passwordTimeoutMs =
         approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
           ? approvalTiming.timeoutSeconds * 1_000
           : 0;
-      const requiresConfirmation = CONFIRMED_COMMANDS.has(command.command) && (!target || insecureBrokeredConnect);
+      const requiresConfirmation =
+        CONFIRMED_COMMANDS.has(command.command) && (!target || profileBrokered?.fromProfile || insecureBrokeredConnect);
       if (requiresConfirmation) {
         if (!ctx.hasUI) throw new Error(`${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
         if (
-          !(await ctx.ui.confirm(title, confirmationText(input, Boolean(target)), {
+          !(await ctx.ui.confirm(title, confirmationText(input, Boolean(target), target?.source), {
             timeout: passwordTimeoutMs,
             ...(signal ? { signal } : {}),
           }))
@@ -1230,11 +1418,15 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         }
       }
       let reference: string | undefined;
-      let executionCommand = command;
-      if (target) {
+      let executionCommand = command as BatchCommand & StateQLToolInput;
+      if (target && command.command === "connect" && profileBrokered?.passwordReference) {
+        executionCommand = savedPasswordProfileConnectCommand(
+          command as BatchCommand,
+          profileBrokered as ProfileBrokeredConnect & { passwordReference: string },
+        ) as BatchCommand & StateQLToolInput;
+      } else if (target) {
         reference = brokeredReference();
-        const { target: _target, ...withoutTarget } = command;
-        executionCommand = { ...withoutTarget, secret_env: reference } as BatchCommand & StateQLToolInput;
+        executionCommand = brokeredConnectCommand(command, reference, profileBrokered) as BatchCommand & StateQLToolInput;
         brokeredTargets.set(reference, { ...target, actorId: id, passwordTimeoutMs });
       }
       onUpdate?.({
@@ -1247,6 +1439,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
           const active = current(id);
           if (signal?.aborted) throw new Error("StateQL operation cancelled");
           let response: Response<unknown>;
+          activePasswordResolution.value = undefined;
           activeCredentialHost = host;
           try {
             if (command.command === "objects.list") {
@@ -1271,9 +1464,15 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             }
           } catch (error) {
             if (reference) brokeredTargets.delete(reference);
+            activePasswordResolution.value = undefined;
             throw error;
           } finally {
             activeCredentialHost = undefined;
+          }
+          const passwordResolution = takeActivePasswordResolution();
+          if (!response.ok && passwordResolution && passwordAuthenticationFailed(response)) {
+            host?.invalidateStateQLPassword?.(passwordResolution.request, passwordResolution.target);
+            host?.invalidateStateQLCredential?.(passwordResolution.request);
           }
           if (!response.ok) {
             if (reference) {
@@ -1285,6 +1484,9 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             }
             throw safeFailure(response);
           }
+          if (command.command === "connect") retainBrokeredConnection(reference);
+          if (command.command === "disconnect") brokeredTargets.clear();
+          response = restoreProfileMetadata(response, profileBrokered);
           const output = boundedResponse(response, input.command);
           return {
             content: [{ type: "text" as const, text: output.text }],

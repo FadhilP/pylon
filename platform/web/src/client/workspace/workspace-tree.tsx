@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -41,6 +42,34 @@ function ChangeCount({ additions, deletions }: { additions: number; deletions: n
   );
 }
 
+/** The tree the index is about to produce: rows at the depths real ones will sit at. */
+const INDEXING_DEPTHS = [0, 1, 2, 3, 3, 2, 3, 1, 0, 1, 2, 3, 3];
+export function WorkspaceIndexing({ progress }: { progress?: { loaded: number; total: number } }) {
+  return (
+    // role="none": the tree this sits in only admits treeitems, and these rows are not selectable.
+    <div className="workspace-indexing" role="none">
+      <div className="sk-progress">
+        <i style={{ width: progress?.total ? `${Math.min(100, (progress.loaded / progress.total) * 100)}%` : "12%" }} />
+      </div>
+      <p className="sk-caption" role="status">
+        Indexing workspace
+        {progress && (
+          <span className="sk-count">
+            {progress.loaded.toLocaleString()} of {progress.total.toLocaleString()} files
+          </span>
+        )}
+      </p>
+      <div aria-hidden="true">
+        {INDEXING_DEPTHS.map((depth, index) => (
+          <div className="sk-row" style={{ "--depth": depth } as CSSProperties} key={index}>
+            <span className="sk" />
+            <span className="sk" style={{ "--sk-w": `${56 + ((index * 37) % 92)}px` } as CSSProperties} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 export function WorkspaceTree({
   files,
   selectedPath,

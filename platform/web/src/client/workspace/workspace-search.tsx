@@ -181,6 +181,7 @@ export function MatchText({ match }: { match: WorkspaceSearchMatch }) {
 export function SearchResults({
   files,
   layout = "grouped",
+  query,
   onOpen,
   onPreview,
   selected,
@@ -188,7 +189,9 @@ export function SearchResults({
 }: {
   files: WorkspaceSearchFile[];
   layout?: "tree" | "grouped";
-  onOpen: (path: string, line?: number) => void;
+  /** The submitted query that produced files, never the currently edited input. */
+  query?: WorkspaceSearchQuery;
+  onOpen: (path: string, line?: number, query?: WorkspaceSearchQuery) => void;
   onPreview?: (path: string, line?: number) => void;
   selected?: string;
   controls?: boolean;
@@ -214,7 +217,7 @@ export function SearchResults({
         title={file.path}
         aria-expanded={!closed.has(file.path)}
         onClick={() => (controls ? toggle(file.path) : onPreview?.(file.path, file.matches[0]?.line))}
-        onDoubleClick={() => onOpen(file.path)}>
+        onDoubleClick={() => onOpen(file.path, undefined, query)}>
         <FileTypeIcon path={file.path} size={15} />
         <span>{layout === "tree" ? file.path.split("/").at(-1) : file.path}</span>
         <small>
@@ -231,12 +234,12 @@ export function SearchResults({
             data-search-hit={`${file.path}:${match.line}`}
             style={{ paddingLeft: 10 + depth * 12 }}
             title={`${file.path}:${match.line}`}
-            onClick={() => (onPreview ?? onOpen)(file.path, match.line)}
-            onDoubleClick={() => onOpen(file.path, match.line)}
+            onClick={() => (onPreview ?? ((path: string, line?: number) => onOpen(path, line, query)))(file.path, match.line)}
+            onDoubleClick={() => onOpen(file.path, match.line, query)}
             onKeyDown={event => {
               if (event.key === "Enter") {
                 event.preventDefault();
-                onOpen(file.path, match.line);
+                onOpen(file.path, match.line, query);
               }
             }}>
             <span>{match.line}</span>
@@ -323,7 +326,7 @@ export function ExplorerSearch({
   scope: string;
   query: string;
   onQuery: (query: string) => void;
-  onOpen: (path: string, line?: number) => void;
+  onOpen: (path: string, line?: number, query?: WorkspaceSearchQuery) => void;
   children: ReactNode;
 }) {
   const [mode, setMode] = useState<"path" | "text">("path");
@@ -393,6 +396,7 @@ export function ExplorerSearch({
             key={JSON.stringify(search.submitted)}
             files={search.result?.files ?? []}
             layout={layout}
+            query={search.submitted}
             onOpen={onOpen}
           />
           <SearchStatus search={search} />

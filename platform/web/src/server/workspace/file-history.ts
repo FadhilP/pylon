@@ -17,6 +17,7 @@ import type {
 const MAX_FILE = 1024 * 1024;
 const MAX_LINES = 20_000;
 const MAX_OUTPUT = 8 * 1024 * 1024;
+const GAP_COUNT_TIMEOUT = 2_000;
 const OID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const canonical = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
@@ -69,9 +70,10 @@ class HistoryGit {
   private deadline = Date.now() + 12_000;
   private remaining = 24 * 1024 * 1024;
   constructor(private signal: AbortSignal) {}
-  async run(root: string, args: string[], input?: string, maxBytes = MAX_OUTPUT): Promise<Buffer> {
+  async run(root: string, args: string[], input?: string, maxBytes = MAX_OUTPUT, maxDuration?: number): Promise<Buffer> {
     this.signal.throwIfAborted();
-    const timeout = this.deadline - Date.now();
+    const remainingTime = this.deadline - Date.now();
+    const timeout = Math.min(remainingTime, maxDuration ?? remainingTime);
     if (timeout <= 0 || this.remaining <= 0) throw Error("History work limit reached; select a shorter history");
     const env = { ...process.env };
     for (const name of Object.keys(env)) if (name.startsWith("GIT_")) delete env[name];
@@ -103,8 +105,8 @@ class HistoryGit {
     });
     return output;
   }
-  async text(root: string, args: string[], input?: string, maxBytes?: number): Promise<string> {
-    return (await this.run(root, args, input, maxBytes)).toString("utf8");
+  async text(root: string, args: string[], input?: string, maxBytes?: number, maxDuration?: number): Promise<string> {
+    return (await this.run(root, args, input, maxBytes, maxDuration)).toString("utf8");
   }
 }
 
@@ -120,6 +122,10 @@ interface GitStop extends FileHistoryStop {
   sha: string;
   parent?: string;
   previousPath: string;
+}
+interface CachedGitHistory {
+  commits: GitStop[];
+  hasMore: boolean;
 }
 interface Owned {
   text: string;
@@ -417,41 +423,41 @@ export class FileHistoryReader {
     if (input.query.scope === "all" && anchor) {
       const limit = input.query.limit ?? 40;
       const logKey = `log:${digest([fileRoot, anchor, innerPath, limit])}`;
-      const cachedLog = this.cache.get<GitStop[]>(logKey);
-      commits =
-        cachedLog ??
-        this.cache.set(
-          logKey,
-          parseHistoryLog(
-            await git.text(fileRoot, [
-              "--literal-pathspecs",
-              "log",
-              "--no-ext-diff",
-              "--no-textconv",
-              "--first-parent",
-              "--follow",
-              "--diff-merges=first-parent",
-              "--find-renames",
-              `--max-count=${limit + 1}`,
-              "--format=%x00%H%x00%P%x00%aI%x00%an%x00%s",
-              "--name-status",
-              "-z",
-              anchor,
-              "--",
-              innerPath,
-            ]),
+      const cachedLog = this.cache.get<CachedGitHistory>(logKey);
+      if (cachedLog) {
+        commits = cachedLog.commits;
+        hasMore = cachedLog.hasMore;
+      } else {
+        const logged = parseHistoryLog(
+          await git.text(fileRoot, [
+            "--literal-pathspecs",
+            "log",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--first-parent",
+            "--follow",
+            "--diff-merges=first-parent",
+            "--find-renames",
+            `--max-count=${limit + 1}`,
+            "--format=%x00%H%x00%P%x00%aI%x00%an%x00%s",
+            "--name-status",
+            "-z",
+            anchor,
+            "--",
             innerPath,
-          ),
+          ]),
+          innerPath,
         );
-      hasMore = commits.length > limit;
-      commits = commits.slice(0, limit);
+        hasMore = logged.length > limit;
+        commits = await this.withGitGapCounts(git, fileRoot, logged.slice(0, limit), signal);
+        this.cache.set(logKey, { commits, hasMore });
+      }
     }
-    const gitStops = [...commits].reverse().map((commit, index, ordered) => {
+    const gitStops = [...commits].reverse().map(commit => {
       const { sha, parent, previousPath, ...stop } = commit;
       return {
         ...stop,
         path: prefix ? `${prefix}/${stop.path}` : stop.path,
-        ...(index > 0 && ordered[index - 1].sha !== parent ? { skippedBefore: null } : {}),
       };
     });
     const result: FileHistoryResult = {
@@ -485,6 +491,46 @@ export class FileHistoryReader {
       : this.cache.set(`result:${key}`, result);
   }
 
+  private async withGitGapCounts(
+    git: HistoryGit,
+    root: string,
+    commits: GitStop[],
+    signal: AbortSignal,
+  ): Promise<GitStop[]> {
+    const gapIndexes = commits
+      .slice(0, -1)
+      .map((commit, index) => (commit.parent !== commits[index + 1].sha ? index : -1))
+      .filter(index => index >= 0);
+    if (!gapIndexes.length) return commits;
+    const counts = new Map<number, number>();
+    try {
+      const oldest = commits[commits.length - 1];
+      const output = await git.text(
+        root,
+        ["rev-list", "--first-parent", commits[0].sha, `^${oldest.sha}`],
+        undefined,
+        MAX_OUTPUT,
+        GAP_COUNT_TIMEOUT,
+      );
+      const chain = output.trimEnd() ? output.trimEnd().split(/\r?\n/) : [];
+      if (chain.every(sha => OID.test(sha))) {
+        const positions = new Map(chain.map((sha, index) => [sha, index]));
+        positions.set(oldest.sha, chain.length);
+        for (const index of gapIndexes) {
+          const newer = positions.get(commits[index].sha);
+          const older = positions.get(commits[index + 1].sha);
+          const skipped = newer === undefined || older === undefined ? 0 : older - newer - 1;
+          if (skipped > 0) counts.set(index, skipped);
+        }
+      }
+    } catch {
+      signal.throwIfAborted();
+    }
+    const gaps = new Set(gapIndexes);
+    return commits.map((commit, index) =>
+      gaps.has(index) ? { ...commit, skippedBefore: counts.get(index) ?? null } : commit,
+    );
+  }
   private outside(root: string, path: string): boolean {
     const rel = relative(root, path);
     return rel === ".." || rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(rel);

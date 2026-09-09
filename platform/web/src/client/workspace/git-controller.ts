@@ -42,6 +42,10 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
   const ready = enabled && !!sessionId && live.connection === "connected" && !!live.runtime?.ready;
   const workspaceRevision = `${live.runtime?.workspace?.revision ?? ""}:${live.runtime?.workspace?.fileRevision ?? 0}`;
   const refresh = useCallback(() => setReload(value => value + 1), []);
+  const dismiss = useCallback(() => {
+    setError(undefined);
+    setResult(undefined);
+  }, []);
   const select = useCallback((query?: GitDetailQuery) => {
     setSelection(query);
     setDetail(undefined);
@@ -128,6 +132,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
     async (input: GitActionInput): Promise<boolean> => {
       if (!ready || lock.current) return false;
       if (workspaceDrafts.dirty(sessionId)) {
+        setResult(undefined);
         setError(
           "Save or discard this session’s unsaved drafts before changing Git state. Git acts on saved files, not editor buffers.",
         );
@@ -136,16 +141,21 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
       lock.current = true;
       statusEpoch.current++;
       setBusy(true);
-      setError(undefined);
-      setResult(undefined);
+      // The banner is overwritten when the action reports, never cleared first:
+      // clearing here collapsed it and reopened it, moving the panel twice.
       let succeeded = false;
       try {
         await runtimeStore.gitAction(input, sessionId, generation);
         succeeded = true;
-        if (current.current === identity)
+        if (current.current === identity) {
+          setError(undefined);
           setResult(`${input.action === "resolve" ? "File saved and staged" : "Git action completed"}.`);
+        }
       } catch (reason) {
-        if (current.current === identity) setError((reason as Error).message);
+        if (current.current === identity) {
+          setResult(undefined);
+          setError((reason as Error).message);
+        }
       } finally {
         try {
           if (current.current === identity) {
@@ -221,6 +231,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
     ready,
     dirty,
     refresh,
+    dismiss,
     select,
     selectPath,
     action,

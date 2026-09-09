@@ -170,9 +170,6 @@ export function DatabaseHistory({
                 <span className="overview-orb-cell">
                   <span className={`overview-orb is-${state}`} aria-hidden="true" />
                 </span>
-                {(item.result?.alias || item.handle) && (
-                  <code className="database-history-handle">{item.result?.alias ?? item.handle}</code>
-                )}
                 <span className="seam-label" title={label}>
                   {item.sql ? <DatabaseSyntax text={item.sql} /> : label}
                 </span>

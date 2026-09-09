@@ -13,11 +13,11 @@
   :root { --track-empty: var(--line); --track-filled: var(--line-strong); --track-open-opacity: 0.45; }
   :root[data-theme="dark"] { --track-empty: color-mix(in srgb, var(--line-strong) 72%, var(--text-muted)); --track-filled: color-mix(in srgb, var(--line-strong) 72%, var(--text-muted));}
   :root[data-theme="warm"] { color-scheme: light; --shell: #eee8dd; --sidebar: #eee8dd; --surface: #faf7f0; --surface-raised: #fffdf8; --surface-subtle: #f3ede2; --surface-hover: #ece3d5; --surface-active: #e3d6c5; --code-bg: #f6f0e6; --line: #ddd2c2; --line-strong: #cdbfa9; --text: #28231f; --text-soft: #655b52; --text-muted: #776b60; --accent: #b17a52; --accent-soft: #f2dfd0; --accent-text: #7b482c; --accent-contrast: #2d180d; --green: #44684d; --green-soft: #e0ebdf; --amber: #825218; --amber-soft: #f3e4c9; --red: #953e37; --red-soft: #f2ddd8; --violet: #674d83; --violet-soft: #e9e0ef; --teal: #47756d; --lime: #657239; --magenta: #92566f; --blue: #4b6e91; --shadow: 0 18px 48px rgb(87 61 37 / 13%); --caret: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="7" viewBox="0 0 10 7"><path d="M1 1.5 5 5.5 9 1.5" fill="none" stroke="%23776b60" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'); }
-  :root { --syntax-bg: #282c34; --syntax-fg: #abb2bf; --syntax-muted: #7f848e; --syntax-border: #3e4452; }
-  :root[data-syntax-theme="github-dark"] { --syntax-bg: #24292e; --syntax-fg: #e1e4e8; --syntax-muted: #6a737d; --syntax-border: #444d56; }
-  :root[data-syntax-theme="dracula"] { --syntax-bg: #282a36; --syntax-fg: #f8f8f2; --syntax-muted: #6272a4; --syntax-border: #44475a; }
-  :root[data-syntax-theme="nord"] { --syntax-bg: #2e3440; --syntax-fg: #d8dee9; --syntax-muted: #616e88; --syntax-border: #4c566a; }
-  :root[data-syntax-theme="github-light"] { --syntax-bg: #ffffff; --syntax-fg: #24292e; --syntax-muted: #6a737d; --syntax-border: #d1d5da; }
+  :root { --syntax-bg: #282c34; --syntax-fg: #abb2bf; --syntax-muted: #7f848e; --syntax-border: #3e4452; --syntax-keyword: #c678dd; --syntax-string: #98c379; --syntax-number: #d19a66; --syntax-comment: #7f848e; --syntax-operator: #abb2bf; --syntax-function: #61afef; --syntax-variable: #e06c75; --syntax-type: #e5c07b; }
+  :root[data-syntax-theme="github-dark"] { --syntax-bg: #24292e; --syntax-fg: #e1e4e8; --syntax-muted: #6a737d; --syntax-border: #444d56; --syntax-keyword: #f97583; --syntax-string: #9ecbff; --syntax-number: #79b8ff; --syntax-comment: #6a737d; --syntax-operator: #e1e4e8; --syntax-function: #b392f0; --syntax-variable: #ffab70; --syntax-type: #b392f0; }
+  :root[data-syntax-theme="dracula"] { --syntax-bg: #282a36; --syntax-fg: #f8f8f2; --syntax-muted: #6272a4; --syntax-border: #44475a; --syntax-keyword: #ff79c6; --syntax-string: #f1fa8c; --syntax-number: #bd93f9; --syntax-comment: #6272a4; --syntax-operator: #ff79c6; --syntax-function: #50fa7b; --syntax-variable: #f8f8f2; --syntax-type: #8be9fd; }
+  :root[data-syntax-theme="nord"] { --syntax-bg: #2e3440; --syntax-fg: #d8dee9; --syntax-muted: #616e88; --syntax-border: #4c566a; --syntax-keyword: #81a1c1; --syntax-string: #a3be8c; --syntax-number: #b48ead; --syntax-comment: #616e88; --syntax-operator: #81a1c1; --syntax-function: #88c0d0; --syntax-variable: #d8dee9; --syntax-type: #8fbcbb; }
+  :root[data-syntax-theme="github-light"] { --syntax-bg: #ffffff; --syntax-fg: #24292e; --syntax-muted: #6a737d; --syntax-border: #d1d5da; --syntax-keyword: #d73a49; --syntax-string: #032f62; --syntax-number: #005cc5; --syntax-comment: #6a737d; --syntax-operator: #24292e; --syntax-function: #6f42c1; --syntax-variable: #e36209; --syntax-type: #6f42c1; }
   html, body, #root { min-height: 100%; }
   body { min-width: 320px; min-height: 100dvh; overflow: hidden; background: var(--shell); color: var(--text); font-size: 14px; }
   button { border: 0; background: none; cursor: pointer; }
@@ -261,6 +261,26 @@
     0%, 100% { opacity: 0.55; transform: scale(0.85); }
     50% { opacity: 1; transform: scale(1); }
   }
+
+  .about { position: relative; display: inline-flex; flex: 0 0 auto; }
+  .about-button { display: grid; width: 24px; height: 24px; place-items: center; border-radius: var(--radius-control); color: var(--text-muted); }
+  .about-button:hover { background: var(--surface-hover); color: var(--text); }
+  .about-button[aria-expanded="true"] { background: var(--surface-active); color: var(--text); }
+  .about-sheet { position: absolute; z-index: 30; top: 28px; right: 0; width: 272px; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow); color: var(--text-soft); font-size: 11.5px; line-height: 1.55; white-space: normal; }
+  .about-sheet p { margin: 0; }
+  .about-sheet p + p { margin-top: 7px; }
+
+  /* Loading placeholders: --sk-w/--sk-h size a block, --depth indents a tree row to where the real row lands. */
+  .sk { position: relative; overflow: hidden; width: var(--sk-w, 100%); height: var(--sk-h, 9px); flex: 0 0 auto; border-radius: 4px; background: color-mix(in srgb, var(--text-muted) 16%, transparent); }
+  .sk::after { position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--surface-raised) 75%, transparent) 50%, transparent 100%); background-size: 220% 100%; animation: sk-sweep 1.5s ease-in-out infinite; content: ""; }
+  .sk-row { display: flex; align-items: center; gap: 8px; height: 24px; padding-left: calc(10px + var(--depth, 0) * 14px); padding-right: 12px; }
+  .sk-row .sk:first-child { --sk-w: 13px; --sk-h: 13px; border-radius: 3px; }
+  .sk-lines { display: grid; gap: 11px; padding: 14px 16px; }
+  .sk-progress { height: 2px; flex: 0 0 auto; overflow: hidden; border-radius: 2px; background: var(--surface-active); }
+  .sk-progress > i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width var(--motion-standard) var(--motion-ease-out); }
+  .sk-caption { display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--text-muted); font-size: 11.5px; line-height: 16px; }
+  .sk-caption .sk-count { margin-left: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  @keyframes sk-sweep { from { background-position: 120% 0; } to { background-position: -20% 0; } }
 }
 @layer responsive {
   @media (max-width: 1080px) {
@@ -1190,6 +1210,12 @@
   .code-viewer-shell { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; --viewer-bg: #0a0a0a; --viewer-fg: #fafafa; --viewer-mixer: #fff; --viewer-add: #07c480; --viewer-delete: #ff2e3f; --viewer-select: #009fff; --viewer-line-mix: 80%; --viewer-gutter-mix: 85%; --viewer-separator-mix: 85%; --viewer-emphasis: 20%; background: var(--code-bg); color: var(--viewer-fg); }
   :root[data-syntax-theme="github-light"] .code-viewer-shell { --viewer-bg: #fff; --viewer-fg: #0a0a0a; --viewer-mixer: #000; --viewer-add: #18a46c; --viewer-delete: #d52c36; --viewer-select: #1a85d4; --viewer-line-mix: 88%; --viewer-gutter-mix: 91%; --viewer-separator-mix: 96%; --viewer-emphasis: 15%; }
   .code-viewer { min-width: 0; min-height: 0; flex: 1; overflow: auto; overflow-anchor: none; font: 13px/20px "SF Mono", Monaco, Consolas, "Ubuntu Mono", "Liberation Mono", "Courier New", monospace; tab-size: 2; --viewer-muted: color-mix(in lab, var(--viewer-fg) 65%, var(--viewer-bg)); --viewer-separator: color-mix(in lab, var(--viewer-bg) var(--viewer-separator-mix), var(--viewer-mixer)); }
+  .code-viewer-find { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .code-viewer-find input { min-width: 90px; flex: 1; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-subtle); color: var(--text); font-size: 12px; }
+  .code-viewer-find span { min-width: 64px; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+  .code-viewer-find button { min-width: 24px; min-height: 24px; padding: 3px 5px; border-radius: 4px; color: var(--text-soft); font-size: 11px; }
+  .code-viewer-find button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
+  .code-viewer-find button:disabled { opacity: .5; }
   .code-viewer-content { position: relative; width: 100%; }
   .code-viewer-content::before { position: absolute; inset: 8px 0 0; background: var(--viewer-bg); content: ""; }
   .code-viewer-line, .code-viewer-header, .code-viewer-gap, .code-viewer-note { position: absolute; left: 0; display: flex; width: 100%; align-items: center; white-space: pre; }
@@ -1229,7 +1255,6 @@
   .file-line-numbers i { min-height: 1.55em; font-style: normal; }
   .file-line-numbers i.is-target { margin-inline: -8px; padding-inline: 8px; background: var(--accent-soft); color: var(--accent-text); font-weight: 700; }
   .files-empty { display: flex; align-items: center; justify-content: center; padding: 20px; color: var(--text-muted); font-size: 12px; }
-  .files-progress { display: block; padding: 7px 10px; color: var(--text-muted); font-size: 12px; }
   .files-empty.large { min-height: 120px; flex: 1; gap: 8px; flex-direction: column; }
   .files-truncated { display: block; padding: 8px 10px; color: var(--text-muted); font-size: 12px; text-align: center; }
   .inspector-header { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
@@ -1718,6 +1743,8 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
 .seam.is-running .seam-rule, .seam.is-attention .seam-rule { background: linear-gradient(90deg, var(--seam-line) 0%, var(--seam-glow) 50%, var(--seam-line) 100%); background-size: 220% 100%; animation: seam-scan 1.9s ease-in-out infinite; }
 @keyframes seam-scan { from { background-position: 120% 0; } to { background-position: -20% 0; } }
 @media (prefers-reduced-motion: reduce) { .seam .seam-rule { background-position: 50% 0; animation: none; } }
+/* The blanket rule only shortens the sweep; freeze it. */
+@media (prefers-reduced-motion: reduce) { .sk::after { animation: none; background-position: 50% 0; opacity: 0.4; } }
 .seam.is-failed .seam-label, .seam.is-failed .seam-value { color: var(--red); }
 .seam.is-failed .seam-open { color: var(--red); }
 .seam.is-failed .seam-rule { background: color-mix(in srgb, var(--red) 34%, var(--line)); }

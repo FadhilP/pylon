@@ -19,6 +19,7 @@ import type { StateQLCommandInput, StateQLCommandResult, StateQLSnapshot } from 
 import {
   databaseCell,
   databaseRecord,
+  databaseSnapshotMatchesRuntime,
   isDatabaseResult,
   readDatabaseDrafts,
   saveDatabaseDraft,
@@ -31,6 +32,7 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store"
 import { UiDialog } from "../runtime/remote-ui-dialog";
 import { DatabaseHistory } from "./database-history";
 import { DatabaseConnectDialog, type DatabaseProfileSetup } from "./database-connect-dialog";
+import { DatabaseSetupError, submitDatabaseSetup, type DatabaseSetupStep } from "./database-setup";
 import { DatabaseResultGrid } from "./database-result-grid";
 import { DatabaseQueryEditor } from "./database-query-editor";
 
@@ -49,7 +51,10 @@ const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({ ...tab, params: "", ki
 
 export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
   const runtimeScope = `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`;
-  const [snapshot, setSnapshot] = useState<StateQLSnapshot>();
+  const ready = live.connection === "connected" && live.runtime?.ready === true;
+  const [receivedSnapshot, setSnapshot] = useState<StateQLSnapshot>();
+  const snapshot =
+    ready && databaseSnapshotMatchesRuntime(receivedSnapshot, live.runtime) ? receivedSnapshot : undefined;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [tabs, setTabs] = useState<QueryTab[]>([]);
@@ -58,6 +63,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const [busy, setBusy] = useState("");
   const [busyTab, setBusyTab] = useState("");
   const [setup, setSetup] = useState<{ operationId: string; profile?: DatabaseProfileSetup }>();
+  const setupOperation = useRef<string | undefined>(undefined);
   const [profiles, setProfiles] = useState<Array<{ profile: string; read_only: boolean }>>([]);
   const [transaction, setTransaction] = useState<Record<string, unknown>>();
   const [isolation, setIsolation] = useState("serializable");
@@ -76,17 +82,26 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const scope = snapshot
     ? JSON.stringify([snapshot.actor_id, snapshot.session.session_id, snapshot.connection?.connection_id ?? "unbound"])
     : "";
-  const ready = live.connection === "connected" && live.runtime?.ready === true;
   const connected = Boolean(snapshot?.connection);
+  // The ref changes synchronously before the command starts; React state can still contain
+  // the dialog's previous correlation ID when the first local SSE prompt arrives.
+  const setupOperationId = setupOperation.current ?? setup?.operationId;
   const setupPending =
     setup &&
     live.pendingUi?.surface === "database" &&
-    live.pendingUi.operationId === setup.operationId &&
+    live.pendingUi.operationId === setupOperationId &&
     live.generation === live.runtime?.sessionGeneration
       ? live.pendingUi
       : undefined;
   const pending = live.pendingUi?.surface === "database" && (!setup || !setupPending) ? live.pendingUi : undefined;
-  const locked = !ready || Boolean(busy) || Boolean(live.pendingUi);
+  const setupStatus = setupOperationId
+    ? live.runtime?.extensionUi.statuses.find(status => status.key === `database-setup:${setupOperationId}`)?.text
+    : undefined;
+  const setupStep: DatabaseSetupStep | undefined =
+    setupStatus === "resolving" || setupStatus === "approving" || setupStatus === "connecting" || setupStatus === "saving"
+      ? setupStatus
+      : undefined;
+  const locked = !ready || !snapshot || Boolean(busy) || Boolean(live.pendingUi);
   const inTransaction = Boolean(snapshot?.transaction);
   const ownTransaction = snapshot?.transaction?.owner_actor_id === snapshot?.actor_id;
   const readOnly = snapshot?.connection?.read_only !== false;
@@ -114,13 +129,16 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     return () => controller.abort();
   }, [runtimeScope, ready, toolRevision]);
   useEffect(() => {
+    setSnapshot(undefined);
     request.current?.abort();
+    setupOperation.current = undefined;
     setSetup(undefined);
     dirtyTabs.current.clear();
     setTabs([]);
   }, [runtimeScope]);
   useEffect(
     () => () => {
+      setupOperation.current = undefined;
       request.current?.abort();
     },
     [runtimeScope],
@@ -177,8 +195,8 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     tabId = "",
     operationId?: string,
   ): Promise<StateQLCommandResult | undefined> => {
-    if (request.current || !ready) return;
-    if (["connect", "disconnect"].includes(input.command) && dirtyTabs.current.size) {
+    if (request.current || !ready || !snapshotRef.current) return;
+    if (["connect", "connection.setup", "disconnect"].includes(input.command) && dirtyTabs.current.size) {
       setError("Apply or discard pending table edits before changing connection.");
       return;
     }
@@ -228,42 +246,37 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   };
   const setupCommand = async (input: StateQLCommandInput, operationId: string) => {
     const response = await run(input, "", operationId);
-    if (response?.status === "completed" && response.response.ok) return response;
+    if (response?.status === "completed" && response.response.ok) {
+      const setupData = databaseRecord(response.response.data) ? response.response.data.setup : undefined;
+      if (databaseRecord(setupData) && databaseRecord(setupData.error)) {
+        const message = typeof setupData.error.message === "string" ? setupData.error.message : "Saving connection failed.";
+        throw new DatabaseSetupError(message, true);
+      }
+      return;
+    }
     if (response?.status === "completed" && !response.response.ok)
-      throw new Error(`${response.response.error.code}: ${response.response.error.message}`);
-    if (response?.status === "declined") throw new Error("Operation declined. No command was submitted.");
-    throw new Error("Database setup did not complete. Try again.");
+      throw new DatabaseSetupError(`${response.response.error.code}: ${response.response.error.message}`);
+    if (response?.status === "declined") throw new DatabaseSetupError("Operation declined. No command was submitted.");
+    throw new DatabaseSetupError("Database setup did not complete. Try again.");
   };
   const closeSetup = () => {
+    setupOperation.current = undefined;
     request.current?.abort();
     setSetup(undefined);
   };
-  const submitSetup = async (input: StateQLCommandInput, action: "connect" | "save" | "save-connect") => {
+  const submitSetup = async (input: StateQLCommandInput, operationId: string) => {
     if (!setup) return;
-    if (action === "connect") {
-      await setupCommand(input, setup.operationId);
-      setSetup(undefined);
-      return;
-    }
-    if (input.command !== "connect" && input.command !== "profile.update") throw new Error("Invalid setup command.");
-    const profileCommand: StateQLCommandInput =
-      input.command === "profile.update"
-        ? input
-        : {
-            command: "profile.add",
-            name: input.name!,
-            ...(input.target ? { target: input.target, remember: input.remember } : { secret_env: input.secret_env! }),
-            read_only: input.read_only,
-          };
-    await setupCommand(profileCommand, setup.operationId);
-    loadProfiles();
-    if (action === "save-connect") {
-      await setupCommand(
-        { command: "connect", profile: input.command === "profile.update" ? input.name : input.name! },
-        setup.operationId,
-      );
-    }
-    setSetup(undefined);
+    setupOperation.current = operationId;
+    setSetup(current => (current ? { ...current, operationId } : current));
+    await submitDatabaseSetup(
+      input,
+      command => {
+        if (setupOperation.current !== operationId) throw new Error("Database setup cancelled.");
+        return setupCommand(command, operationId);
+      },
+      refreshProfiles,
+    );
+    setSetup(current => (current?.operationId === operationId ? undefined : current));
   };
   const removeSetupProfile = async (forgetCredential: boolean) => {
     if (!setup?.profile) return;
@@ -394,30 +407,33 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     );
   };
   // Metadata requests do not recurse through run()/snapshot refresh or lock query controls.
+  const refreshProfiles = async (signal?: AbortSignal) => {
+    try {
+      const response = await runtimeStore.stateqlCommand({ command: "profile.list" }, signal);
+      const value = data(response);
+      if (signal?.aborted) return;
+      if (!Array.isArray(value?.profiles)) {
+        const failure =
+          response.status === "completed" && !response.response.ok
+            ? response.response.error.message
+            : "No profile list was returned.";
+        throw new Error(`Could not refresh saved connections: ${failure}`);
+      }
+      setProfiles(value.profiles as typeof profiles);
+    } catch (cause) {
+      if (!signal?.aborted) setError(String(cause));
+    }
+  };
   const loadProfiles = () => setProfileRevision(value => value + 1);
   useEffect(() => {
     const controller = new AbortController();
-    if (ready)
-      void runtimeStore
-        .stateqlCommand({ command: "profile.list" }, controller.signal)
-        .then(response => {
-          const value = data(response);
-          if (!controller.signal.aborted && Array.isArray(value?.profiles))
-            setProfiles(value.profiles as typeof profiles);
-        })
-        .catch(cause => {
-          if (!controller.signal.aborted) setError(String(cause));
-        });
+    if (ready) void refreshProfiles(controller.signal);
     return () => controller.abort();
   }, [runtimeScope, ready, toolRevision, profileRevision]);
   const openObject = async (object: StateQLCatalogObject) => {
     if (["table", "view", "collection"].includes(object.kind)) {
       const table = { name: object.name, ...(object.schema ? { schema: object.schema } : {}) };
-      const id = add("", table);
-      if (!id || dirtyTabs.current.has(id)) return;
-      const value = data(await run({ command: "table.read", table, limit: 1000 }, id));
-      if (value && isDatabaseResult(value))
-        update(id, { result: value, text: typeof value.query === "string" ? value.query : "" });
+      add("", table);
     } else {
       const id = add();
       if (!id) return;
@@ -685,7 +701,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                               ...(typeof value.read_only === "boolean"
                                 ? { readOnly: value.read_only }
                                 : { readOnly: profile.read_only }),
-                              hasCredential: typeof value.credential_ref === "string",
+                              hasCredential: typeof value.password_ref === "string" || typeof value.credential_ref === "string",
                             },
                           });
                         })
@@ -1031,7 +1047,8 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                         <div className="database-editor" style={{ height }}>
                           <DatabaseQueryEditor
                             text={tab.text}
-                            language={tab.driver === "mongodb" || tab.driver === "redis" ? "json" : "sql"}
+                            driver={tab.driver}
+                            active={active === tab.id}
                             onChange={text => update(tab.id, { text })}
                             onRun={() => {
                               if (!locked && connected && !inTransaction) void execute(tab, "read");
@@ -1234,6 +1251,8 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
           <DatabaseConnectDialog
             profile={setup.profile}
             pending={setupPending}
+            generation={live.generation ?? 0}
+            step={setupStep}
             suspended={Boolean(live.pendingUi && !setupPending)}
             onClose={closeSetup}
             onSubmit={submitSetup}

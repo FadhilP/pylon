@@ -221,10 +221,21 @@ const HISTORY_MUTATION_EVENTS = new Set([
 const MAX_CACHED_SESSIONS = 10;
 const MAX_SESSION_STATUSES = 200;
 const WORKSPACE_INVENTORY_TTL_MS = 60_000;
+const WORKSPACE_PREVIEW_TTL_MS = 60_000;
+type WorkspaceFileView = "current" | "base" | "diff";
+interface CachedWorkspacePreview {
+  generation: number;
+  mode: CachedWorkspaceInventory["mode"];
+  cwdLabel: string;
+  revision: string;
+  expiresAt: number;
+  value: WorkspaceFileContent | WorkspaceFileDiff;
+}
 
 interface CachedWorkspaceInventory {
   generation: number;
   mode: WorkspacePolicyMode | "non-git" | undefined;
+  cwdLabel: string;
   revision?: string;
   expiresAt: number;
   files: WorkspaceFileReadModel[];
@@ -273,6 +284,7 @@ export class RuntimeEventStore {
   private readonly invalidatedHistoryGenerations = new Map<string, number>();
   private readonly workspaceInventories = new Map<string, CachedWorkspaceInventory>();
   private readonly workspaceInventoryLoads = new WorkspaceInventoryLoads();
+  private readonly workspacePreviews = new Map<string, Map<string, CachedWorkspacePreview>>();
   private readonly historyWindows = new Map<string, HistorySegment[]>();
   private readonly historyWindowRevisions = new Map<string, number>();
   private readonly mergedHistoryWindows = new Map<string, { revision: number; window: TranscriptWindowReadModel }>();
@@ -302,6 +314,8 @@ export class RuntimeEventStore {
   dispose(): void {
     this.disposed = true;
     this.workspaceInventoryLoads.clear();
+    this.workspaceInventories.clear();
+    this.workspacePreviews.clear();
     window.removeEventListener("focus", this.refreshKeyboardOnFocus);
     this.source?.close();
     if (this.frame !== undefined) cancelAnimationFrame(this.frame);
@@ -694,31 +708,98 @@ export class RuntimeEventStore {
     return result;
   }
 
+  /** Last known tree, available during render even before a remount's effects run. */
+  cachedWorkspaceInventory(runtime = this.snapshot.runtime): CachedWorkspaceInventory | undefined {
+    if (this.disposed || !runtime || runtime.projectAvailable === false) return;
+    const cached = this.workspaceInventories.get(runtime.sessionId);
+    return cached?.mode === runtime.workspace?.mode && cached?.cwdLabel === runtime.cwdLabel ? cached : undefined;
+  }
+
+  cachedWorkspacePreview(path: string, view: WorkspaceFileView, runtime = this.snapshot.runtime): CachedWorkspacePreview | undefined {
+    if (this.disposed || !runtime || runtime.projectAvailable === false) return;
+    const cached = this.workspacePreviews.get(runtime.sessionId)?.get(JSON.stringify([view, path]));
+    return cached?.mode === runtime.workspace?.mode && cached?.cwdLabel === runtime.cwdLabel ? cached : undefined;
+  }
+
+  /** Display-only cache. Raw file/diff reads below still always revalidate on the server. */
+  async workspacePreview(path: string, view: WorkspaceFileView, signal: AbortSignal, expected?: RuntimeSnapshot): Promise<void> {
+    signal.throwIfAborted();
+    const runtime = expected ?? this.requireReadyRuntime();
+    const { sessionId, sessionGeneration: generation, cwdLabel } = runtime;
+    const mode = runtime.workspace?.mode;
+    const revision = `${runtime.workspace?.revision ?? ""}:${runtime.workspace?.fileRevision ?? 0}`;
+    const checkCurrent = () => {
+      signal.throwIfAborted();
+      const current = this.snapshot.runtime;
+      if (this.disposed || this.snapshot.connection !== "connected" || !current?.ready || current.projectAvailable === false ||
+        current.sessionId !== sessionId || current.sessionGeneration !== generation || current.cwdLabel !== cwdLabel ||
+        current.workspace?.mode !== mode || `${current.workspace?.revision ?? ""}:${current.workspace?.fileRevision ?? 0}` !== revision)
+        throw new Error("File preview belongs to a stale workspace");
+    };
+    checkCurrent();
+    const cached = this.cachedWorkspacePreview(path, view, runtime);
+    if (cached?.generation === generation && cached.revision === revision && cached.expiresAt > Date.now()) {
+      const sessionCache = this.workspacePreviews.get(sessionId)!;
+      const key = JSON.stringify([view, path]);
+      sessionCache.delete(key);
+      sessionCache.set(key, cached);
+      this.workspacePreviews.delete(sessionId);
+      this.workspacePreviews.set(sessionId, sessionCache);
+      return;
+    }
+    let value: WorkspaceFileContent | WorkspaceFileDiff;
+    try {
+      value = view === "diff" ? await this.workspaceDiff(path, signal) : await this.workspaceFile(path, view, signal);
+    } catch (error) {
+      checkCurrent();
+      // Revoked access must not leave a displayable snapshot behind; transient failures do.
+      if (error instanceof ApiHttpError && (error.status === 401 || error.status === 403)) {
+        this.workspacePreviews.delete(sessionId);
+        this.workspaceInventories.delete(sessionId);
+      }
+      throw error;
+    }
+    checkCurrent();
+    if (value.path !== path) throw new Error("File preview belongs to a different file");
+    let sessionCache = this.workspacePreviews.get(sessionId);
+    if (!sessionCache) sessionCache = new Map();
+    const key = JSON.stringify([view, path]);
+    sessionCache.delete(key);
+    sessionCache.set(key, { generation, mode, cwdLabel, revision, expiresAt: Date.now() + WORKSPACE_PREVIEW_TTL_MS, value });
+    while (sessionCache.size > 40) sessionCache.delete(sessionCache.keys().next().value!);
+    this.workspacePreviews.delete(sessionId);
+    this.workspacePreviews.set(sessionId, sessionCache);
+    while (this.workspacePreviews.size > 12) this.workspacePreviews.delete(this.workspacePreviews.keys().next().value!);
+  }
+
   async workspaceInventory(
     refresh: boolean,
     signal: AbortSignal,
     publish: (files: WorkspaceFileReadModel[], truncated: boolean) => void,
     progress: (loaded: number, total: number) => void,
+    expected?: RuntimeSnapshot,
   ): Promise<CachedWorkspaceInventory> {
     signal.throwIfAborted();
-    const runtime = this.requireReadyRuntime();
+    const runtime = expected ?? this.requireReadyRuntime();
     const { sessionId, sessionGeneration: generation } = runtime;
     const mode = runtime.workspace?.mode;
     const revision = `${runtime.workspace?.revision ?? ""}:${runtime.workspace?.fileRevision ?? 0}`;
-    const metadata = { generation, mode, revision };
+    const metadata = { generation, mode, revision, cwdLabel: runtime.cwdLabel };
     const checkCurrent = () => {
       const current = this.snapshot.runtime;
       if (this.disposed || this.snapshot.connection !== "connected" || !current?.ready ||
         current.sessionId !== sessionId || current.sessionGeneration !== generation ||
-        current.workspace?.mode !== mode ||
+        current.workspace?.mode !== mode || current.cwdLabel !== runtime.cwdLabel || current.projectAvailable === false ||
         `${current.workspace?.revision ?? ""}:${current.workspace?.fileRevision ?? 0}` !== revision)
         throw new Error("Workspace files belong to a stale workspace");
     };
     checkCurrent();
-    const cached = this.workspaceInventories.get(sessionId);
+    const cached = this.cachedWorkspaceInventory(runtime);
     const cacheState = cached ? workspaceInventoryCacheState(cached, metadata) : "hidden";
     if (!refresh && cached && cacheState !== "hidden") {
       // Keep this session's last known tree visible while its current generation loads.
+      this.workspaceInventories.delete(sessionId);
+      this.workspaceInventories.set(sessionId, cached);
       publish(cached.files, cached.truncated);
       checkCurrent();
       signal.throwIfAborted();
@@ -728,7 +809,7 @@ export class RuntimeEventStore {
       }
     }
     const result = await this.workspaceInventoryLoads.load({
-      key: JSON.stringify([sessionId, generation, mode, revision]),
+      key: JSON.stringify([sessionId, generation, mode, runtime.cwdLabel, revision]),
       refresh, signal, checkCurrent, publish, progress,
       previous: cacheState === "hidden" ? undefined : cached?.files,
       fetchPage: (cursor, producerSignal) => this.workspaceFiles("", cursor, producerSignal, refresh && !cursor),
@@ -820,18 +901,18 @@ export class RuntimeEventStore {
     return this.sendCommand({ type: "mutateWorkspace", commandId: commandId(), expectedGeneration: generation, sessionId, mutation });
   }
 
-  async workspaceFile(path: string, view: "current" | "base" = "current"): Promise<WorkspaceFileContent> {
+  async workspaceFile(path: string, view: "current" | "base" = "current", signal?: AbortSignal): Promise<WorkspaceFileContent> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.workspaceFile(runtime.sessionGeneration, path, view);
+    const result = await this.api.workspaceFile(runtime.sessionGeneration, path, view, signal);
     if (!isWorkspaceFileContent(result) || result.sessionGeneration !== runtime.sessionGeneration) {
       throw new Error("Workspace file is stale or invalid");
     }
     return result;
   }
 
-  async workspaceDiff(path: string): Promise<WorkspaceFileDiff> {
+  async workspaceDiff(path: string, signal?: AbortSignal): Promise<WorkspaceFileDiff> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.workspaceDiff(runtime.sessionGeneration, path);
+    const result = await this.api.workspaceDiff(runtime.sessionGeneration, path, signal);
     if (
       !isWorkspaceFileContent(result) ||
       result.sessionGeneration !== runtime.sessionGeneration ||
@@ -2146,7 +2227,7 @@ export class RuntimeEventStore {
             ownershipAvailable: ownership.ownershipAvailable === true,
           };
       }
-      if (event.type === "ui.closed") pendingUi = undefined;
+      if (event.type === "ui.closed" && asRecord(event.payload).requestId === pendingUi?.requestId) pendingUi = undefined;
     }
     const sessionChanged =
       event.type === "agent.start" ||

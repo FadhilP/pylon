@@ -1136,12 +1136,14 @@ test("StateQL command bridge normalizes user commands and propagates cancellatio
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   let requests = 0;
   let cancelled = false;
+  const operationIds: Array<string | undefined> = [];
   const probe: InlineExtension = {
     name: "pylon-stateql-command-probe",
     factory(pi) {
       pi.events.on("pylon:stateql-command-request", (value: any) => {
         if (value?.version !== 1 || !value.claim()) return;
         requests++;
+        operationIds.push(value.operationId);
         assert.equal(typeof value.ui.confirm, "function");
         assert.equal(typeof value.ui.requestStateQLCredential, "function");
         value.signal.addEventListener("abort", () => (cancelled = true), { once: true });
@@ -1182,7 +1184,14 @@ test("StateQL command bridge normalizes user commands and propagates cancellatio
   const driver = new SessionRuntime({ extensionFactories: [probe] });
   try {
     const handle = await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
-    const result = await driver.stateqlCommand({ command: "query", sql: "SELECT 1", cache: "bypass" });
+    const operationId = "3f72d83b-2e91-4cc5-b732-e4d8f526d214";
+    const result = await driver.stateqlCommand(
+      { command: "query", sql: "SELECT 1", cache: "bypass" },
+      undefined,
+      undefined,
+      operationId,
+    );
+    assert.equal(operationIds[0], operationId);
     assert.equal(result.sessionGeneration, handle.sessionGeneration);
     assert.equal(result.actor_id, handle.sessionId);
     assert.equal(result.status, "completed");

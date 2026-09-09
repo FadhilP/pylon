@@ -22,13 +22,15 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import type { FileReference } from "./file-reference";
+import { openRequestedFile, workspaceStateForSession, type FileWorkspaceRequest, type FileWorkspaceState } from "./file-workspace-state";
 import { formatCompactNumber } from "../ui/session-format";
 import { highlightSource } from "../rendering/markdown";
 import { loadDiffContents, type DiffContentsLoader } from "../../shared/workspace/code-viewer-model";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 import type {
   WorkspaceFileContent,
   WorkspaceFileDiff,
@@ -36,7 +38,7 @@ import type {
   WorkspaceReadModel,
 } from "../../shared/protocol/snapshots";
 import { FileTypeIcon } from "../rendering/file-icons";
-import { WorkspaceTree } from "./workspace-tree";
+import { WorkspaceIndexing, WorkspaceTree } from "./workspace-tree";
 import { ExplorerSearch } from "./workspace-search";
 import { displayTime } from "../ui/display-format";
 import { referenceDefinition } from "../app/navigation";
@@ -51,6 +53,7 @@ export function FilesPanel({
   live,
   projectId,
   requestedPath,
+  stateStore,
   applyRequest,
   onApplyRequestHandled,
   onClose,
@@ -59,7 +62,8 @@ export function FilesPanel({
 }: {
   live: RuntimeStoreSnapshot;
   projectId?: string;
-  requestedPath?: FileReference & { requestId: number; view?: FileView };
+  requestedPath?: FileWorkspaceRequest;
+  stateStore: MutableRefObject<Map<string, FileWorkspaceState>>;
   applyRequest?: { sessionId: string; revision: string };
   onApplyRequestHandled?: () => void;
   onClose: () => void;
@@ -67,15 +71,34 @@ export function FilesPanel({
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
-  const [files, setFiles] = useState<WorkspaceFileReadModel[]>([]);
-  const [query, setQuery] = useState("");
-  const [selectedPath, setSelectedPath] = useState<string>();
-  const [selectedLine, setSelectedLine] = useState<number>();
-  const [view, setView] = useState<FileView>("diff");
-  const [content, setContent] = useState<WorkspaceFileContent | WorkspaceFileDiff>();
-  const [inventoryLoading, setInventoryLoading] = useState(false);
-  const [viewerLoading, setViewerLoading] = useState(false);
-  const [truncated, setTruncated] = useState(false);
+  const sessionId = runtime?.sessionId ?? "";
+  const workspaceRevision = `${runtime?.workspace?.revision ?? ""}:${runtime?.workspace?.fileRevision ?? 0}`;
+  const inventoryScope = JSON.stringify([sessionId, runtime?.workspace?.mode, runtime?.cwdLabel]);
+  const cachedInventory = runtime ? runtimeStore.cachedWorkspaceInventory(runtime) : undefined;
+  const [files, setFiles] = useState<WorkspaceFileReadModel[]>(() => cachedInventory?.files ?? []);
+  const [loadedInventoryScope, setLoadedInventoryScope] = useState(inventoryScope);
+  const currentFiles = loadedInventoryScope === inventoryScope ? files : cachedInventory?.files ?? [];
+  const [ui, setUi] = useState(() => workspaceStateForSession(stateStore.current, sessionId));
+  const currentUi = ui.sessionId === sessionId ? ui : workspaceStateForSession(stateStore.current, sessionId);
+  const { query, selectedPath, selectedLine, view } = currentUi;
+  const updateUi = (update: (state: FileWorkspaceState) => FileWorkspaceState) => setUi(current => {
+    const next = update(current.sessionId === sessionId ? current : workspaceStateForSession(stateStore.current, sessionId));
+    if (sessionId) {
+      stateStore.current.delete(sessionId);
+      stateStore.current.set(sessionId, next);
+      while (stateStore.current.size > 12) stateStore.current.delete(stateStore.current.keys().next().value!);
+    }
+    return next;
+  });
+  const setQuery = (query: string) => updateUi(current => ({ ...current, query }));
+  const setSelectedPath = (selectedPath?: string) => updateUi(current => ({ ...current, selectedPath }));
+  const setSelectedLine = (selectedLine?: number) => updateUi(current => ({ ...current, selectedLine }));
+  const setView = (view: FileView | ((current: FileView) => FileView)) =>
+    updateUi(current => ({ ...current, view: typeof view === "function" ? view(current.view) : view }));
+  const content = runtime && selectedPath ? runtimeStore.cachedWorkspacePreview(selectedPath, view, runtime)?.value : undefined;
+  const [inventoryLoading, setInventoryLoading] = useState(!cachedInventory);
+  const [viewer, setViewer] = useState<{ loading: boolean; failed?: boolean }>({ loading: false });
+  const [truncated, setTruncated] = useState(cachedInventory?.truncated ?? false);
   const [inventoryProgress, setInventoryProgress] = useState<{ loaded: number; total: number }>();
   const [applyOpen, setApplyOpen] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -122,12 +145,14 @@ export function FilesPanel({
         controller.signal,
         (next, wasTruncated) => {
           if (revision !== requestRevision.current) return;
+          setLoadedInventoryScope(inventoryScope);
           setFiles(next);
           setTruncated(wasTruncated);
         },
         (loaded, total) => {
           if (revision === requestRevision.current) setInventoryProgress({ loaded, total });
         },
+        runtime,
       );
     })()
       .catch(error => {
@@ -140,69 +165,29 @@ export function FilesPanel({
       controller.abort();
       requestRevision.current++;
     };
-  }, [live.connection, runtime?.ready, runtime?.sessionId, runtime?.sessionGeneration, runtime?.workspace?.revision]);
+  }, [live.connection, runtime?.ready, runtime?.sessionGeneration, workspaceRevision, inventoryScope]);
   useEffect(() => {
-    if (!requestedPath) return;
-    setSelectedPath(requestedPath.path);
-    setSelectedLine(requestedPath.line);
-    setView(requestedPath.view ?? "current");
-  }, [requestedPath]);
+    updateUi(current => openRequestedFile(current, requestedPath));
+  }, [requestedPath?.requestId, sessionId]);
   useEffect(() => {
-    if (!selectedPath) {
-      setContent(undefined);
+    if (!selectedPath || live.connection !== "connected" || !runtime?.ready) {
+      setViewer({ loading: false });
       return;
     }
-    const current = runtimeStore.getSnapshot();
-    if (
-      !runtime?.ready ||
-      current.connection !== "connected" ||
-      !current.runtime?.ready ||
-      current.runtime.sessionId !== runtime.sessionId ||
-      current.runtime.sessionGeneration !== runtime.sessionGeneration
-    ) {
-      setContent(undefined);
-      setViewerLoading(false);
-      return;
-    }
-    const sessionId = runtime.sessionId;
-    const generation = runtime.sessionGeneration;
-    const stillCurrent = () => {
-      const snapshot = runtimeStore.getSnapshot();
-      return (
-        snapshot.connection === "connected" &&
-        snapshot.runtime?.ready === true &&
-        snapshot.runtime.sessionId === sessionId &&
-        snapshot.runtime.sessionGeneration === generation
-      );
-    };
-    let active = true;
-    setViewerLoading(true);
-    const request =
-      view === "diff" ? runtimeStore.workspaceDiff(selectedPath) : runtimeStore.workspaceFile(selectedPath, view);
-    void request
-      .then(value => {
-        if (active && stillCurrent()) setContent(value);
+    const controller = new AbortController();
+    setViewer({ loading: true });
+    void runtimeStore.workspacePreview(selectedPath, view, controller.signal, runtime)
+      .then(() => {
+        if (!controller.signal.aborted) setViewer({ loading: false });
       })
       .catch(error => {
-        if (!active || !stillCurrent()) return;
-        setContent(undefined);
-        onError(error, "Unable to read workspace file");
-      })
-      .finally(() => {
-        if (active) setViewerLoading(false);
+        if (!controller.signal.aborted) {
+          setViewer({ loading: false, failed: true });
+          onError(error, "Unable to refresh workspace file");
+        }
       });
-    return () => {
-      active = false;
-    };
-  }, [
-    live.connection,
-    selectedPath,
-    view,
-    runtime?.ready,
-    runtime?.sessionId,
-    runtime?.sessionGeneration,
-    runtime?.workspace?.revision,
-  ]);
+    return () => controller.abort();
+  }, [live.connection, selectedPath, view, runtime?.ready, runtime?.sessionGeneration, workspaceRevision, inventoryScope]);
 
   const copySelectedPath = async () => {
     if (!selectedPath) return;
@@ -329,7 +314,7 @@ export function FilesPanel({
               setView("current");
             }}>
             <WorkspaceTree
-              files={files}
+              files={currentFiles}
               selectedPath={selectedPath}
               query={query}
               projectId={projectId}
@@ -339,15 +324,9 @@ export function FilesPanel({
                 setSelectedLine(undefined);
                 setView(changed ? "diff" : "current");
               }}>
-              {inventoryLoading && !files.length && (
-                <span className={inventoryProgress ? "files-progress" : "files-empty"}>
-                  {inventoryProgress
-                    ? `Loading ${inventoryProgress.loaded.toLocaleString()} of ${inventoryProgress.total.toLocaleString()} files…`
-                    : "Indexing workspace…"}
-                </span>
-              )}
-              {!inventoryLoading && !files.length && <span className="files-empty">No files found</span>}
-              {truncated && <span className="files-truncated">Showing first 10,000 files</span>}
+              {inventoryLoading && !currentFiles.length && <WorkspaceIndexing progress={inventoryProgress} />}
+              {!inventoryLoading && !currentFiles.length && <span className="files-empty">No files found</span>}
+              {loadedInventoryScope === inventoryScope && truncated && <span className="files-truncated">Showing first 10,000 files</span>}
             </WorkspaceTree>
           </ExplorerSearch>
           {selectedPath && (
@@ -419,8 +398,10 @@ export function FilesPanel({
                     </button>
                   </span>
                 </div>
+                {viewer.loading && content && <span className="files-empty" role="status">Refreshing preview…</span>}
+                {viewer.failed && <span className="files-empty" role="status">{content ? "Refresh failed; showing the last loaded version." : "Unable to load the file preview."}</span>}
                 <FileContent
-                  value={viewerLoading ? undefined : content}
+                  value={content}
                   view={view}
                   targetLine={selectedLine}
                   onError={onError}
@@ -592,11 +573,13 @@ export function FileContent({
   value,
   view,
   targetLine,
+  searchQuery,
   onError,
 }: {
   value?: WorkspaceFileContent | WorkspaceFileDiff;
   view: FileView;
   targetLine?: number;
+  searchQuery?: WorkspaceSearchQuery;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const loadDiffFiles = useMemo<DiffContentsLoader | undefined>(() => {
@@ -640,6 +623,7 @@ export function FileContent({
         revision={value.revision}
         annotationSource={value.state === "available" ? { kind: view === "base" ? "historical" : "current", revision: `${view === "base" ? "Baseline" : "Working copy"}: ${value.revision}` } : undefined}
         targetLine={targetLine}
+        searchQuery={view === "current" ? searchQuery : undefined}
         loadDiffFiles={loadDiffFiles}
       />
     </Suspense>
@@ -686,7 +670,7 @@ function RawFileContent({
         })}
       </span>
       <code dangerouslySetInnerHTML={{ __html: rendered.highlighted }} />
-      {truncated && <small>Output truncated</small>}
+      {truncated && <small>Output truncated; find is unavailable for truncated output.</small>}
     </pre>
   );
 }

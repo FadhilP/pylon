@@ -3,8 +3,12 @@ import test from "node:test";
 import {
   createGridPublication,
   filterGridRows,
+  GRID_COLUMN_MAX_WIDTH,
+  GRID_COLUMN_MIN_WIDTH,
   groupGridChanges,
+  initialGridColumnWidths,
   parseGridJson,
+  resizeGridColumn,
   sortGridRows,
   type GridRow,
 } from "../src/client/database/database-grid.ts";
@@ -21,6 +25,14 @@ const rows: GridRow[] = [
   { index: 2, token: "opaque-c", row: { id: 3, score: 2, value: "same" } },
   { index: 3, token: "opaque-d", row: { id: 4, score: 3 } },
 ];
+
+test("grid column widths are stable metadata state and user resizing is bounded", () => {
+  const widths = initialGridColumnWidths(columns);
+  assert.deepEqual(widths, { id: 108, score: 100, value: 96, when: 124 });
+  assert.equal(resizeGridColumn(widths.value!, 40), 136);
+  assert.equal(resizeGridColumn(widths.value!, -10_000), GRID_COLUMN_MIN_WIDTH);
+  assert.equal(resizeGridColumn(widths.value!, 10_000), GRID_COLUMN_MAX_WIDTH);
+});
 
 test("grid filtering combines filters without losing opaque row identity", () => {
   const filtered = filterGridRows(

@@ -1,5 +1,21 @@
 [
   {
+    "version": "3.1.0",
+    "date": "Sep 9, 2026",
+    "title": "Smarter editors and safer database setup",
+    "summary": "Pylon 3.1 adds on-demand editor assistance, streamlines secure database connection setup, and improves workspace search, previews, history, annotations, and runtime reliability.",
+    "notes": [
+      "Added lazily loaded language support, completions, and syntax diagnostics for supported workspace files, plus dialect-aware SQL and JSON query diagnostics that keep editing available when assistance cannot load.",
+      "Unified database connection testing and profile saving into one guarded flow with inline password entry, PostgreSQL TLS and CA controls, password-only OS-vault storage, explicit approval progress, and retryable partial-save failures.",
+      "Added in-file search with case, whole-word, and regular-expression controls, carried project search terms into opened files, and preserved each file surface's last selection after explicit navigation requests are consumed.",
+      "Kept file inventories and previews visible while they refresh through bounded session caches, cancelled superseded reads, cleared cached content when access is revoked, and reported refresh failures without discarding the last readable result.",
+      "Extended file discovery into bounded nested Git repositories and improved file history with isolated workspace caches, baseline fallbacks, and bounded commit counts for history gaps.",
+      "Made annotations easier to preserve with optional source snapshots, keyboard submission, and storage guidance, while consolidating Git workspace feedback into a single prioritized status banner.",
+      "Made multi-range line edits validate every conflict before changing a file, prevented unrelated remote UI close events from dismissing active dialogs, and kept verification running through independent check failures unless cancelled.",
+      "Expanded durable-memory review rules while bounding and redacting quoted user evidence, and hardened database credential prompting, invalidation, and remembered-password resolution across browser and vault flows."
+    ]
+  },
+  {
     "version": "3.0.0",
     "date": "Sep 8, 2026",
     "title": "A complete workspace for code, Git, and data",

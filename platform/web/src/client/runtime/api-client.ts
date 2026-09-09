@@ -367,22 +367,25 @@ export class ApiClient {
     generation: number,
     path: string,
     view: "current" | "base" = "current",
+    signal?: AbortSignal,
   ): Promise<WorkspaceFileContent> {
     const query = new URLSearchParams({ generation: String(generation), path, view });
     return json<WorkspaceFileContent>(
       await fetch(`/api/v1/workspace/file?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
         credentials: "same-origin",
+        signal,
       }),
     );
   }
 
-  async workspaceDiff(generation: number, path: string): Promise<WorkspaceFileDiff> {
+  async workspaceDiff(generation: number, path: string, signal?: AbortSignal): Promise<WorkspaceFileDiff> {
     const query = new URLSearchParams({ generation: String(generation), path });
     return json<WorkspaceFileDiff>(
       await fetch(`/api/v1/workspace/diff?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
         credentials: "same-origin",
+        signal,
       }),
     );
   }

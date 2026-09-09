@@ -66,6 +66,56 @@ test("numbered reads issue compact revisions and reject unseen or stale edits", 
   }
 });
 
+test("invalid edit batches report every actionable error before writing", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pylon-line-validation-"));
+  const path = join(cwd, "sample.txt");
+  const original = Array.from({ length: 12 }, (_, index) => `line-${index + 1}`).join("\n");
+  try {
+    await writeFile(path, original);
+    const registered = tools();
+    const before = await invoke(registered.get("read"), { path: "sample.txt", limit: 3 }, cwd);
+    await invoke(registered.get("read"), { path: "sample.txt", offset: 6, limit: 1 }, cwd);
+    await invoke(registered.get("read"), { path: "sample.txt", offset: 11, limit: 2 }, cwd);
+
+    await assert.rejects(
+      invoke(
+        registered.get("edit"),
+        {
+          path: "sample.txt",
+          revision: revision(before),
+          edits: [
+            { operation: "move", line: 1, newText: "invalid" },
+            { operation: "replace", startLine: 7, endLine: 6, newText: "invalid" },
+            { operation: "insert_before", line: 2, newText: "" },
+            { operation: "replace", startLine: 4, endLine: 8, newText: "unseen" },
+            { operation: "replace", startLine: 10, endLine: 10, newText: "unseen" },
+            { operation: "replace", startLine: 1, endLine: 2, newText: "seen" },
+            { operation: "replace", startLine: 2, endLine: 3, newText: "overlap" },
+            { operation: "insert_after", line: 11, newText: "boundary" },
+            { operation: "insert_before", line: 12, newText: "boundary" },
+          ],
+        },
+        cwd,
+      ),
+      error => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /Edit request has 6 validation errors/);
+        assert.match(error.message, /edits\[0\]\.operation must be/);
+        assert.match(error.message, /edits\[1\] has an invalid replace range/);
+        assert.match(error.message, /edits\[2\] insertion text must not be empty/);
+        assert.match(error.message, /Lines 4-5, 7-8, 10-10 were not displayed/);
+        assert.match(error.message, /Lines 2-2 have overlapping operations \(edits\[5\], edits\[6\]\)/);
+        assert.match(error.message, /edits\[7\], edits\[8\] touch the same boundary/);
+        assert.match(error.message, /No changes were applied/);
+        return true;
+      },
+    );
+    assert.equal(await readFile(path, "utf8"), original);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("displayed empty lines are editable without granting coverage past a bounded read", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pylon-line-empty-"));
   const path = join(cwd, "sample.txt");
@@ -209,7 +259,7 @@ test("overlapping operations fail before writing", async () => {
         },
         cwd,
       ),
-      /overlaps another operation/,
+      /overlapping operations/,
     );
     assert.equal(await readFile(path, "utf8"), "one\ntwo\nthree\n");
   } finally {

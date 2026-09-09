@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { lstat, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
 import { rankFilePaths, validRelativePath } from "../../shared/workspace/file-search.ts";
 export { rankFilePaths } from "../../shared/workspace/file-search.ts";
 import { collectPlainWorkspaceFiles } from "pylon-core/src/worktree.ts";
@@ -9,6 +10,13 @@ const MAX_BUFFER = 2 * 1024 * 1024;
 const MAX_PATHS = 20_000;
 const MAX_CACHES = 25;
 const MAX_EMBEDDED_REPO_DEPTH = 4;
+const MAX_REPOSITORIES = 64;
+
+interface GitTraversal {
+  root: string;
+  visited: Set<string>;
+  remainingPaths: number;
+}
 
 interface CacheEntry {
   expiresAt: number;
@@ -69,36 +77,117 @@ async function inventory(cwd: string): Promise<string[] | undefined> {
   return entry.pending;
 }
 
-async function gitFiles(cwd: string, depth = 0): Promise<string[] | undefined> {
-  const stdout = await new Promise<string | undefined>((resolve, reject) => {
+async function gitOutput(cwd: string, args: string[]): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolveOutput, reject) => {
     execFile(
       "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+      args,
       { cwd, windowsHide: true, encoding: "utf8", maxBuffer: MAX_BUFFER },
       (error, output) => {
         if (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT" || ("code" in error && error.code === 128)) {
-            resolve(undefined);
+            resolveOutput(undefined);
             return;
           }
           reject(error);
           return;
         }
-        resolve(output);
+        resolveOutput(output);
       },
     );
   });
+}
+
+const canonicalPath = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
+
+function outside(root: string, child: string): boolean {
+  const path = relative(root, child);
+  return path === ".." || path.startsWith("../") || path.startsWith("..\\") || isAbsolute(path);
+}
+
+async function childRepository(
+  cwd: string,
+  path: string,
+  traversal: GitTraversal,
+): Promise<string | undefined> {
+  if (!validRelativePath(path)) return undefined;
+  const absolute = resolve(cwd, path.endsWith("/") ? path.slice(0, -1) : path);
+  const info = await lstat(absolute).catch(() => undefined);
+  if (!info?.isDirectory() || info.isSymbolicLink()) return undefined;
+  const physical = await realpath(absolute).catch(() => undefined);
+  if (!physical || outside(traversal.root, physical)) return undefined;
+  const reported = (await gitOutput(physical, ["rev-parse", "--show-toplevel"]))?.trim();
+  if (!reported) return undefined;
+  const topLevel = await realpath(reported).catch(() => undefined);
+  const identity = canonicalPath(physical);
+  if (!topLevel || canonicalPath(topLevel) !== identity || traversal.visited.has(identity)) return undefined;
+  if (traversal.visited.size >= MAX_REPOSITORIES) return undefined;
+  traversal.visited.add(identity);
+  return physical;
+}
+
+function stagedGitlinks(stdout: string): Set<string> {
+  const paths = new Set<string>();
+  for (const record of stdout.split("\0").filter(Boolean)) {
+    const tab = record.indexOf("\t");
+    const space = record.indexOf(" ");
+    if (tab < 0 || space < 0 || record.slice(0, space) !== "160000") continue;
+    const path = record.slice(tab + 1);
+    if (validRelativePath(path)) paths.add(path);
+  }
+  return paths;
+}
+
+async function gitFiles(cwd: string, depth = 0, state?: GitTraversal): Promise<string[] | undefined> {
+  const stdout = await gitOutput(cwd, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
   if (stdout === undefined) return undefined;
+  const staged = await gitOutput(cwd, ["ls-files", "--stage", "-z"]);
+  if (staged === undefined) return [];
+  const physicalCwd = await realpath(cwd);
+  const traversal = state ?? {
+    root: physicalCwd,
+    visited: new Set([canonicalPath(physicalCwd)]),
+    remainingPaths: MAX_PATHS,
+  };
   const paths: string[] = [];
-  for (const entry of stdout.split("\0").filter(path => path.length > 0)) {
-    if (entry.endsWith("/") && depth < MAX_EMBEDDED_REPO_DEPTH) {
-      // Collapsed embedded repository: list it from its own checkout.
-      const nested = await gitFiles(join(cwd, entry), depth + 1);
-      if (nested !== undefined) paths.push(...nested.map(path => entry + path));
+  const links = stagedGitlinks(staged);
+  const handledLinks = new Set<string>();
+  const addPath = (path: string) => {
+    if (traversal.remainingPaths <= 0) return false;
+    paths.push(path);
+    traversal.remainingPaths--;
+    return true;
+  };
+  const addNested = async (path: string, marker: boolean) => {
+    const prefix = path.endsWith("/") ? path.slice(0, -1) : path;
+    if (marker && !addPath(`${prefix}/`)) return;
+    if (depth >= MAX_EMBEDDED_REPO_DEPTH || traversal.remainingPaths <= 0) {
+      if (!marker) addPath(`${prefix}/`);
+      return;
+    }
+    const child = await childRepository(physicalCwd, path, traversal);
+    if (!child) return;
+    const nested = await gitFiles(child, depth + 1, traversal);
+    if (nested !== undefined) paths.push(...nested.map(childPath => `${prefix}/${childPath}`));
+  };
+
+  for (const entry of stdout.split("\0").filter(Boolean)) {
+    if (traversal.remainingPaths <= 0) break;
+    const normalized = entry.endsWith("/") ? entry.slice(0, -1) : entry;
+    if (links.has(normalized)) {
+      if (!handledLinks.has(normalized)) {
+        handledLinks.add(normalized);
+        await addNested(normalized, true);
+      }
       continue;
     }
     if (!validRelativePath(entry)) continue;
-    paths.push(entry);
+    if (entry.endsWith("/")) await addNested(entry, false);
+    else addPath(entry);
   }
-  return paths.length > MAX_PATHS ? paths.slice(0, MAX_PATHS) : paths;
+  for (const link of links) {
+    if (traversal.remainingPaths <= 0) break;
+    if (!handledLinks.has(link)) await addNested(link, true);
+  }
+  return paths;
 }

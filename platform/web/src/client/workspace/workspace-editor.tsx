@@ -4,6 +4,7 @@ import { workspaceDrafts } from "./workspace-edit-state";
 import { runtimeStore } from "../runtime/event-store";
 import { MAX_EDIT_BYTES } from "../../shared/workspace/workspace-mutations";
 import type { WorkspaceFileContent } from "../../shared/protocol/snapshots";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 import "./workspace-editor.css";
 
 const WorkspaceCodeEditor = lazy(() => import("./workspace-code-editor"));
@@ -17,9 +18,9 @@ if (typeof window !== "undefined") {
   });
 }
 
-export function WorkspaceEditor({ sessionId, generation, path, revision, ready, disabled, targetLine, children }: {
+export function WorkspaceEditor({ sessionId, generation, path, revision, ready, disabled, targetLine, searchQuery, children }: {
   sessionId: string; generation: number; path: string; revision: string; ready: boolean;
-  disabled: boolean; targetLine?: number; children: (value?: WorkspaceFileContent) => ReactNode;
+  disabled: boolean; targetLine?: number; searchQuery?: WorkspaceSearchQuery; children: (value?: WorkspaceFileContent) => ReactNode;
 }) {
   const subscribe = useCallback((listener: () => void) => workspaceDrafts.subscribeFile(sessionId, path, listener), [sessionId, path]);
   const draft = useSyncExternalStore(subscribe, () => workspaceDrafts.get(sessionId, path));
@@ -132,7 +133,7 @@ export function WorkspaceEditor({ sessionId, generation, path, revision, ready, 
       {!dirty && <button className="secondary-button" disabled={!ready || pending} onClick={() => setReload(value => value + 1)}>Retry</button>}
     </div>}
     {draft ? <Suspense fallback={<div className="files-empty large">Rendering…</div>}>
-      <WorkspaceCodeEditor path={path} text={draft.text} revision={draft.version} targetLine={targetLine}
+      <WorkspaceCodeEditor path={path} text={draft.text} revision={draft.version} targetLine={targetLine} searchQuery={searchQuery}
         renderToolbar={renderToolbar}
         editing={{ readOnly: pending, maxLength: MAX_EDIT_BYTES,
           gitIndexText: ready && gitIndex?.key === comparisonKey ? gitIndex.text : undefined,

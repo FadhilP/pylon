@@ -28,6 +28,23 @@ export interface GridUpdate {
   changes: { set?: Record<string, unknown>; unset?: string[] };
 }
 
+export const GRID_ROW_NUMBER_WIDTH = 52;
+export const GRID_COLUMN_MIN_WIDTH = 96;
+export const GRID_COLUMN_MAX_WIDTH = 560;
+
+export function initialGridColumnWidth(column: GridColumn): number {
+  const labelCharacters = Math.max(column.name.length, column.type.length);
+  return Math.max(GRID_COLUMN_MIN_WIDTH, Math.min(280, labelCharacters * 8 + 52));
+}
+
+export function resizeGridColumn(width: number, delta: number): number {
+  return Math.max(GRID_COLUMN_MIN_WIDTH, Math.min(GRID_COLUMN_MAX_WIDTH, width + delta));
+}
+
+export function initialGridColumnWidths(columns: GridColumn[]): Record<string, number> {
+  return Object.fromEntries(columns.map(column => [column.name, initialGridColumnWidth(column)]));
+}
+
 /** Batches result-page snapshots while retaining every row synchronously. */
 export function createGridPublication<T>(
   publish: (rows: T[], tokens: Array<string | null>) => void,

@@ -3,12 +3,14 @@ import { IconNote, IconPlus } from "@tabler/icons-react";
 import { EditableCode, type CodeEditing } from "../rendering/editable-code";
 import { AnnotationCard, AnnotationEditor, useAnnotations } from "./annotations";
 import { captureAnnotation, sourceHash, type Annotation } from "../../shared/workspace/annotations";
+import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 
 interface Props {
   path: string;
   text: string;
   revision: string;
   targetLine?: number;
+  searchQuery?: WorkspaceSearchQuery;
   editing: CodeEditing;
   renderToolbar: (actions: ReactNode) => ReactNode;
 }
@@ -35,7 +37,7 @@ export default function WorkspaceCodeEditor(props: Props) {
 }
 
 /** React manages notes and chrome. CodeMirror owns input, selection and undo; Shiki runs off-thread. */
-function Editor({ path, text, revision, targetLine, editing, renderToolbar }: Props) {
+function Editor({ path, text, revision, targetLine, searchQuery, editing, renderToolbar }: Props) {
   const annotations = useAnnotations();
   const placement = useId();
   const release = useRef(annotations?.releaseEditor);
@@ -120,9 +122,10 @@ function Editor({ path, text, revision, targetLine, editing, renderToolbar }: Pr
     {renderToolbar(actions)}
     {notes.length > matching.length && <div className="annotation-notice" role="status">{notes.length - matching.length} notes don’t match this source. View captured code in Notes.</div>}
     {error && <div className="code-viewer-error" role="alert">{error}</div>}
-    <EditableCode text={text} path={path} editing={editing} targetLine={noteTarget?.line ?? targetLine} navigationToken={noteTarget?.token} notes={matching} openNotes={open}
+    <EditableCode text={text} path={path} editing={editing} targetLine={noteTarget?.line ?? targetLine} navigationToken={noteTarget?.token} searchQuery={searchQuery} notes={matching} openNotes={open}
       onToggleNote={id => { if (open.has(id)) closeNote(id); else { setOpen(current => new Set(current).add(id)); annotations?.showNote(id, placement); } }}
-      onSelection={(from, to, code) => setSelection(previous => code === undefined ? undefined
+      onSelection={(from, to, code) => setSelection(previous => code === undefined
+        ? undefined
         : previous?.from === from && previous.to === to && previous.code === code ? previous : { from, to, code })}
       noteActionLine={annotations?.ready && !edit && !capturing ? selection?.to : undefined}
       onAddNote={() => void addNote()} blocks={blocks} />

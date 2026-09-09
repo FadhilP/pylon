@@ -1,8 +1,8 @@
 /* The history strip owns only historical viewer chrome; live editor controls retain their normal styles. */
 .file-history, .file-history-version-list { --mono: ui-monospace, "SFMono-Regular", Consolas, monospace; }
-.file-history { --history-halo-strength: 34%; display: flex; flex: 0 0 auto; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 11.5px; white-space: nowrap; }
+.file-history { --history-halo-strength: 34%; --pick-width: 210px; display: flex; flex: 0 0 auto; min-width: 0; flex-direction: column; border-bottom: 1px solid var(--line); background: var(--surface); font-size: 11.5px; white-space: nowrap; container-type: inline-size; }
 .file-viewer:has(.file-history) > .file-viewer-toolbar > code { direction: rtl; text-align: left; }
-.file-history-axis { display: flex; height: 30px; min-width: 0; align-items: center; gap: 6px; padding: 0 10px; }
+.file-history-axis { display: flex; min-height: 34px; min-width: 0; align-items: center; gap: 8px; padding: 0 6px 0 10px; line-height: 16px; }
 .file-history-scopes { display: flex; flex: 0 0 auto; gap: 1px; padding: 1px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-subtle); }
 .file-history-scopes button { padding: 3px 8px; border-radius: 5px; color: var(--text-muted); font-size: 11px; }
 .file-history-scopes button[aria-pressed=true] { background: var(--surface-raised); color: var(--text); box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
@@ -10,7 +10,8 @@
 .file-history-edge { display: grid; width: 15px; height: 22px; flex: 0 0 auto; place-items: center; padding: 0; border-radius: 4px; color: var(--text-muted); font-size: 14px; line-height: 1; transition: opacity var(--motion-fast, 120ms) ease; }
 .file-history-edge:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .file-history-edge:disabled { opacity: .18; cursor: default; }
-.file-history-track { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+/* Shrinks to its dots, so the arrows hug the track and the metadata can sit at the row's end. */
+.file-history-track { display: flex; min-width: 48px; flex: 0 1 auto; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .file-history-track::-webkit-scrollbar { display: none; }
 .file-history-track-item { display: flex; flex: 0 0 auto; align-items: center; }
 .file-history-stop { position: relative; display: grid; width: 34px; height: 22px; flex: 0 0 34px; place-items: center; padding: 0; }
@@ -21,6 +22,8 @@
 .file-history-stop.is-neutral > span { background: var(--surface); box-shadow: inset 0 0 0 2px var(--line-strong); }
 .file-history-stop[aria-pressed=true] > span { box-shadow: 0 0 0 3px color-mix(in srgb, var(--history-color) var(--history-halo-strength), transparent); }
 .file-history-stop.is-neutral[aria-pressed=true] > span { box-shadow: inset 0 0 0 2px var(--line-strong), 0 0 0 3px color-mix(in srgb, var(--history-color) var(--history-halo-strength), transparent); }
+.file-history-stop-skeleton { display: grid; width: 34px; height: 22px; flex: 0 0 34px; place-items: center; }
+.file-history-stop-skeleton .sk { width: 11px; height: 11px; border-radius: 50%; }
 .file-history-gap { position: relative; display: grid; height: 22px; flex: 0 0 auto; place-items: center; padding: 0 4px; color: var(--text-muted); font-family: var(--mono); font-size: 9.5px; white-space: nowrap; }
 .file-history-gap::before { position: absolute; top: 50%; right: 0; left: 0; height: 2px; margin-top: -1px; background: repeating-linear-gradient(90deg, var(--line-strong) 0 3px, transparent 3px 7px); content: ""; }
 .file-history-gap > span { position: relative; z-index: 1; padding: 0 5px; background: var(--surface); }
@@ -28,20 +31,23 @@
 .file-history-git-boundary { position: relative; display: grid; height: 22px; flex: 0 0 auto; place-items: center; padding: 0 9px; color: var(--text-muted); font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; }
 .file-history-git-boundary::before { position: absolute; top: 50%; right: 0; left: 0; height: 2px; margin-top: -1px; background: var(--line-strong); content: ""; }
 .file-history-git-boundary > span { position: relative; z-index: 1; padding: 0 5px; border-right: 1px solid var(--line-strong); border-left: 1px solid var(--line-strong); background: var(--surface); }
-.file-history-info { display: flex; min-height: 32px; min-width: 0; align-items: center; gap: 10px; padding: 0 10px 4px; }
-.file-history-selected-title { display: inline-flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; overflow: hidden; color: var(--text); text-align: left; }
+/* Fixed width: a longer version name ellipsizes rather than shifting the track. */
+.file-history-pick { position: relative; flex: 0 0 auto; width: var(--pick-width); min-width: 0; }
+.file-history-selected-title { display: inline-flex; width: 100%; min-width: 0; align-items: center; gap: 6px; overflow: hidden; padding: 3px 7px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text); text-align: left; }
+.file-history-selected-title:hover { border-color: var(--line-strong); background: var(--surface-hover); }
+.file-history-meta { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 8px; margin-left: auto; }
 .file-history-selected-title > i, .file-history-version-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--history-color); }
 .file-history-selected-title > i.is-neutral, .file-history-version-dot.is-neutral { background: var(--surface); box-shadow: inset 0 0 0 2px var(--line-strong); }
 .file-history-selected-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-history-selected-title > em { flex: 0 0 auto; color: var(--text-muted); font-size: 9px; font-style: normal; }
-.file-history-selected-title:hover { color: var(--accent-text); }
-.file-history-author { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; max-width: 190px; overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.file-history-author { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 6px; max-width: 150px; min-width: 0; overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.file-history-author > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .file-history-author > i { display: grid; width: 17px; height: 17px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--surface-active); color: var(--text-soft); font-family: var(--mono); font-size: 9px; font-style: normal; }
 .file-history-sha { flex: 0 0 auto; padding: 2px 6px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text-soft); font-family: var(--mono); font-size: 10.5px; }
 .file-history-time, .file-history-counts { flex: 0 0 auto; color: var(--text-muted); font-family: var(--mono); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .file-history-counts b { color: var(--green); font-weight: inherit; }
 .file-history-counts i { color: var(--red); font-style: normal; }
-.file-history-info .overview-state-label { flex: 0 0 auto; font: 12px var(--mono); }
+.file-history-meta .overview-state-label { flex: 0 0 auto; font: 10.5px var(--mono); }
 .file-history-earlier.secondary-button { min-height: 25px; flex: 0 0 auto; padding: 0 9px; font-size: 11px; }
 .file-history-version-list { position: fixed; z-index: 30; width: min(360px, calc(100vw - 24px)); max-height: min(320px, calc(100vh - 24px)); overflow: auto; padding: 5px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface-raised); box-shadow: var(--shadow); }
 .file-history-version-list button { display: grid; width: 100%; grid-template-columns: 11px minmax(0, 1fr) auto auto auto; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 6px; color: var(--text-soft); text-align: left; font-size: 12px; }
@@ -70,4 +76,9 @@
 :root[data-theme="dark"] .file-history { --history-halo-strength: 66%; }
 :root[data-theme="warm"] .file-history { --history-halo-strength: 32%; }
 @media (prefers-reduced-motion: reduce) { .file-history-edge { transition: none; } }
-@media (max-width: 640px) { .file-history-info { flex-wrap: wrap; } .file-history-author { max-width: 40%; } }
+/* Shed metadata as the strip narrows; counts and verification go last. */
+@container (max-width: 700px) { .file-history-author > span { display: none; } }
+@container (max-width: 620px) { .file-history-sha { display: none; } }
+@container (max-width: 560px) { .file-history { --pick-width: 150px; } }
+@container (max-width: 520px) { .file-history-time { display: none; } }
+@container (max-width: 440px) { .file-history-author { display: none; } }

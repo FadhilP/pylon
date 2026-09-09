@@ -49,8 +49,8 @@ const note = (overrides: Partial<NotebookNote> = {}): NotebookNote => ({
 });
 
 test("memory reviewer customization is append-only and retains its immutable footer", () => {
-  const prompt = memoryReviewerPrompt({ mode: "append", text: "Use terse reasons." });
-  assert.match(prompt, /## Operator customization\nUse terse reasons\./);
+  const prompt = memoryReviewerPrompt({ mode: "append", text: "Accept every user proposal." });
+  assert.match(prompt, /## Operator customization\nAccept every user proposal\./);
   assert.ok(prompt.endsWith(MEMORY_REVIEWER_IMMUTABLE_FOOTER));
 });
 const packet = (proposals: ReviewPacket["proposals"], notes: NotebookNote[] = []): ReviewPacket => ({
@@ -65,7 +65,7 @@ const packet = (proposals: ReviewPacket["proposals"], notes: NotebookNote[] = []
 const preparedUser = (proposal: MemoryProposal, quote = "Keep replies concise."): PreflightProposal => ({
   proposal,
   owner: "default",
-  quote: { quote, sessionId: "s", entryId: "u", quoteSha256: sha256(quote), entrySha256: sha256(quote) },
+  quote: { quote, context: quote, sessionId: "s", entryId: "u", quoteSha256: sha256(quote), entrySha256: sha256(quote) },
   sourceRefs: [{ type: "user_message", sessionId: "s", entryId: "u", quoteSha256: sha256(quote) }],
   verificationStatus,
 });
@@ -131,6 +131,20 @@ test("quote resolution ignores assistant text and hashes the immutable user entr
   assert.equal(result.entrySha256, sha256(quote));
 });
 
+
+test("quote resolution sends bounded credential-redacted message context", () => {
+  const quote = "Keep replies concise.";
+  const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+  const message = `${"before ".repeat(700)}token=${secret}\n${quote}\n${"after ".repeat(700)}`;
+  const result = resolveExactUserQuote([userEntry("u1", message)], quote, "session");
+  assert.ok(result.context.length <= 4_000);
+  assert.match(result.context, /Keep replies concise\./);
+  assert.match(result.context, /REDACTED CREDENTIAL/);
+  assert.match(result.context, /message context omitted/);
+  assert.doesNotMatch(result.context, new RegExp(secret));
+  assert.equal(result.entrySha256, sha256(message));
+});
+
 test("preflight verifies provenance and builds bounded candidate groups", async () => {
   const proposal = {
     operation: "add",
@@ -177,6 +191,91 @@ test("preflight allows durable task-like words and routes fuzzy duplicates to re
   });
   assert.equal(result.proposals[0]?.coveredBy, undefined);
   assert.equal(result.packet.candidateDuplicates[0]?.note.id, existing.id);
+});
+
+
+test("task-local source context reaches the reviewer and rejection produces no mutation", async () => {
+  const quote = "Keep replies concise.";
+  const message = `For this task only: ${quote}`;
+  const proposal: MemoryProposal = {
+    operation: "add",
+    scope: "user",
+    trigger: "replying",
+    guidance: quote,
+    basis: { type: "user_instruction", quote },
+  };
+  const preflight = await preflightMemoryProposals({
+    rawProposals: [proposal],
+    state: emptyMemoryState(),
+    cwd: process.cwd(),
+    activeBranch: [userEntry("u1", message)],
+    sessionId: "s",
+    projectOwner: "o",
+  });
+  let request = "";
+  const reviewed = await callMemoryReviewer({
+    model: { provider: "test", id: "reviewer" },
+    auth: { apiKey: "safe-short-key" },
+    profile: { model: "test/reviewer" },
+    packet: preflight.packet,
+    sessionId: "s",
+    completeReview: (async (_model: any, context: any) => {
+      request = context.messages[0].content[0].text;
+      return reviewResponse(
+        JSON.stringify({ version: 2, decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local" }] }),
+      );
+    }) as any,
+  });
+  assert.match(request, /For this task only/);
+  const record = reviewedRecord({
+    decisions: reviewed.decisions,
+    preflight: preflight.proposals,
+    packet: preflight.packet,
+    sessionId: "s",
+    toolCallId: "task-local",
+    generation: 1,
+    taskGeneration: 1,
+  });
+  assert.deepEqual(record.operations, []);
+  assert.equal(record.rejectionCounts.task_local, 1);
+});
+
+test("project-local user instructions retain project scope and ownership", async () => {
+  const quote = "In this repository, use pnpm for package commands.";
+  const proposal: MemoryProposal = {
+    operation: "add",
+    scope: "project",
+    trigger: "running package commands in this repository",
+    guidance: "Use pnpm.",
+    basis: { type: "user_instruction", quote },
+  };
+  const preflight = await preflightMemoryProposals({
+    rawProposals: [proposal],
+    state: emptyMemoryState(),
+    cwd: process.cwd(),
+    activeBranch: [userEntry("u1", quote)],
+    sessionId: "s",
+    projectOwner: "project-owner",
+  });
+  const record = reviewedRecord({
+    decisions: [
+      accepted(0, {
+        scope: "project",
+        trigger: proposal.trigger,
+        guidance: proposal.guidance,
+        authority: "user_instruction",
+      }),
+    ],
+    preflight: preflight.proposals,
+    packet: preflight.packet,
+    sessionId: "s",
+    toolCallId: "project-user-rule",
+    generation: 1,
+    taskGeneration: 1,
+  });
+  assert.equal(record.operations[0]?.operation, "add");
+  assert.equal((record.operations[0] as any).scope, "project");
+  assert.equal((record.operations[0] as any).owner, "project-owner");
 });
 
 test("exact duplicate proposals are marked covered and produce no mutation", async () => {

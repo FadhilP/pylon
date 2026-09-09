@@ -4,7 +4,15 @@ import { runtimeStore, type RuntimeStoreSnapshot } from "./event-store";
 
 const SKIPPED_ANSWER = "Skipped by user";
 
-export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapshot["pendingUi"]> }) {
+export function UiDialog({
+  request,
+  embedded = false,
+  presentation = "default",
+}: {
+  request: NonNullable<RuntimeStoreSnapshot["pendingUi"]>;
+  embedded?: boolean;
+  presentation?: "default" | "database";
+}) {
   const payload = request.payload;
   const rawOptions = Array.isArray(payload.options) ? payload.options : [];
   const questions = Array.isArray(payload.questions)
@@ -68,7 +76,7 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
     return () => {
       if (previous?.isConnected) previous.focus();
     };
-  }, [request.owned]);
+  }, [request.requestId, request.owned]);
 
   useEffect(() => {
     if (!request.owned) return;
@@ -232,8 +240,13 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
 
   if (!request.owned) {
     return (
-      <div className="ui-request ui-request-observer" role="status" aria-live="polite">
-        <strong>{title}</strong>
+      <div
+        className={`ui-request ui-request-observer${presentation === "database" ? " ui-request-database" : ""}`}
+        role="status"
+        aria-live="polite">
+        <header className="ui-request-header">
+          <strong id={titleId}>{title}</strong>
+        </header>
         <p>
           {request.ownershipAvailable ? "Response ownership is available." : "A response is pending in another tab."}
         </p>
@@ -258,8 +271,8 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
   return (
     <div
       ref={rootRef}
-      className="ui-request ui-request-inline"
-      role={request.method === "confirm" ? "alertdialog" : "dialog"}
+      className={`ui-request ui-request-inline${presentation === "database" ? " ui-request-database" : ""}`}
+      role={embedded ? undefined : request.method === "confirm" ? "alertdialog" : "dialog"}
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       onKeyDown={onKeyDown}>
@@ -276,26 +289,37 @@ export function UiDialog({ request }: { request: NonNullable<RuntimeStoreSnapsho
         )}
       </header>
       <p id={descriptionId}>{description}</p>
-      {(request.method === "select" || request.method === "confirm") && (
-        <div className="ui-request-options" role="listbox" aria-label={title}>
-          {options.map((option, index) => {
-            const nextValue = optionValue(option, index);
-            return (
-              <button
-                key={nextValue}
-                type="button"
-                role="option"
-                data-ui-option
-                aria-selected={false}
-                data-autofocus={index === allowOnce || (allowOnce < 0 && index === 0) ? "" : undefined}
-                disabled={busy}
-                onClick={() => choose(index)}>
-                <kbd>{index + 1}</kbd>
-                <span>{optionLabel(option, index)}</span>
-              </button>
-            );
-          })}
-        </div>
+      {request.method === "confirm" && presentation === "database" ? (
+        <footer className="database-approval-actions">
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => choose(1)}>
+            Cancel
+          </button>
+          <button type="button" className="primary-button" data-autofocus disabled={busy} onClick={() => choose(0)}>
+            Continue
+          </button>
+        </footer>
+      ) : (
+        (request.method === "select" || request.method === "confirm") && (
+          <div className="ui-request-options" role="listbox" aria-label={title}>
+            {options.map((option, index) => {
+              const nextValue = optionValue(option, index);
+              return (
+                <button
+                  key={nextValue}
+                  type="button"
+                  role="option"
+                  data-ui-option
+                  aria-selected={false}
+                  data-autofocus={index === allowOnce || (allowOnce < 0 && index === 0) ? "" : undefined}
+                  disabled={busy}
+                  onClick={() => choose(index)}>
+                  <kbd>{index + 1}</kbd>
+                  <span>{optionLabel(option, index)}</span>
+                </button>
+              );
+            })}
+          </div>
+        )
       )}
       {request.method === "questionnaire" &&
         (() => {

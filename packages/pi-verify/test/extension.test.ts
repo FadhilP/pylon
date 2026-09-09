@@ -297,6 +297,44 @@ test("verify runs checks from independent child-package directories concurrently
   );
 });
 
+test("verify runs remaining checks after a check fails", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-verify-continue-after-failure-"));
+  await writeFile(
+    join(cwd, "package.json"),
+    JSON.stringify({ scripts: { lint: "node lint.js", test: "node test.js" } }),
+  );
+  let tool: any;
+  const executions: string[] = [];
+  extension({
+    registerTool: (value: any) => {
+      tool = value;
+    },
+    on: () => {},
+    events: { emit: () => {} },
+    appendEntry: () => {},
+    exec: async (command: string, args: string[]) => {
+      if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
+      if (command === "git") return { code: 0, stdout: "", stderr: "" };
+      const script = args.at(-1)!;
+      executions.push(script);
+      return { code: script === "lint" ? 1 : 0, stdout: `${script}\n`, stderr: "" };
+    },
+  } as any);
+
+  const result = await tool.execute("continue", { scope: "project" }, undefined, undefined, { cwd, hasUI: false });
+
+  assert.equal(result.details.state, "failed");
+  assert.deepEqual(executions, ["lint", "test"]);
+  assert.deepEqual(
+    result.details.results.map((item: any) => [item.id, item.code]),
+    [
+      ["npm:lint", 1],
+      ["npm:test", 0],
+    ],
+  );
+  assert.equal(result.details.unrunChecks, undefined);
+});
+
 test("changed scope selects affected workspace packages and falls back for root changes", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "pi-verify-changed-packages-"));
   const packageA = join(cwd, "packages", "a");

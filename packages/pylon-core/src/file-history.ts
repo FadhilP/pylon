@@ -45,7 +45,7 @@ export interface FileHistoryStop extends FileHistoryOwner {
   verification?: "passed" | "failed" | "unverified";
   /** Path at this revision; renames in committed history are followed. */
   path: string;
-  /** Unchanged session snapshots omitted before this checkpoint; null is a known Git gap of unknown size. */
+  /** Omitted stops before this version; null is a known Git gap whose exact first-parent count was unavailable. */
   skippedBefore?: number | null;
 }
 export interface FileHistoryContent {
