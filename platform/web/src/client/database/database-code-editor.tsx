@@ -6,6 +6,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { lintKeymap, setDiagnostics } from "@codemirror/lint";
 import { search, searchKeymap } from "@codemirror/search";
+import { findWidget } from "../rendering/find-widget";
 import { editorAssistance } from "../rendering/editor-language";
 import { codeEditLimit } from "../rendering/editable-code-state";
 import { EditorAnalysisRequests, type EditorAnalysisResult } from "../rendering/editor-analysis";
@@ -47,7 +48,7 @@ export default function DatabaseCodeEditor(props: DatabaseQueryEditorProps) {
     const extensions = [
       history(), drawSelection(), highlightActiveLine(), lineNumbers(), EditorState.tabSize.of(2), codeEditLimit(65536), colors,
       editorAssistance(path, { dialect, onLoadError: () => setUnavailable(true) }),
-      search({ top: true, literal: true }),
+      search({ top: true, literal: true, createPanel: findWidget }),
       EditorView.contentAttributes.of({ "aria-label": label, "aria-multiline": "true", spellcheck: "false", autocapitalize: "off", autocorrect: "off" }),
       keymap.of([{ key: "Mod-Enter", run: view => {
         if (view.composing) return false;

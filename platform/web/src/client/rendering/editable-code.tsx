@@ -25,6 +25,7 @@ import { getSyntaxTheme, subscribeSyntaxHighlighting, installTokenStyles } from 
 import { EditorAnalysisRequests, type EditorAnalysisInput, type EditorAnalysisResult } from "./editor-analysis";
 import { lintKeymap, setDiagnostics } from "@codemirror/lint";
 import { search, searchKeymap, setSearchQuery, openSearchPanel, closeSearchPanel } from "@codemirror/search";
+import { findWidget } from "./find-widget";
 import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 import { fileSearchQuery } from "../../shared/workspace/text-search";
 import { editorAssistance } from "./editor-language";
@@ -258,7 +259,7 @@ export function EditableCode(props: Props) {
         extensions: [
           history(),
           editorAssistance(current.current.path, { onLoadError: () => setLanguageError(true) }),
-          search({ top: true, literal: true }),
+          search({ top: true, literal: true, createPanel: findWidget }),
           drawSelection(),
           highlightActiveLine(),
           paintedCode,
@@ -424,7 +425,11 @@ export function EditableCode(props: Props) {
     const query = fileSearchQuery(props.searchQuery);
     editor.dispatch({ effects: setSearchQuery.of(query) });
     if (props.searchQuery?.query) {
+      // openSearchPanel focuses the find field when the panel is already open; navigating to a
+      // file must not move the caret there.
+      const hadFocus = editor.hasFocus;
       openSearchPanel(editor);
+      if (!hadFocus && editor.dom.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
       const line = editor.state.doc.line(Math.min(editor.state.doc.lines, Math.max(1, props.targetLine ?? 1)));
       const hit = query.valid ? query.getCursor(editor.state.doc, line.from, line.to).next() : undefined;
       if (hit && !hit.done) editor.dispatch({ selection: EditorSelection.range(hit.value.from, hit.value.to),

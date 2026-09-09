@@ -19,16 +19,22 @@ export function shortcutLabel(id: CommandId): string {
     isMacKeyboard(),
   );
 }
-export function shortcutsBlocked(event: KeyboardEvent): boolean {
-  const target = event.target instanceof Element ? event.target : null;
+/** Blocks every shortcut, including gestures that type nothing. */
+function hardBlocked(event: KeyboardEvent): boolean {
   return (
     event.defaultPrevented ||
     event.isComposing ||
     event.keyCode === 229 ||
     event.repeat ||
     !!event.getModifierState?.("AltGraph") ||
-    !!document.querySelector("[data-keyboard-recording], dialog[open], [role=dialog][aria-modal=true]") ||
-    !!target?.closest(".xterm, .workspace-editor, .database-query-input, .cm-editor, .monaco-editor")
+    !!document.querySelector("[data-keyboard-recording], dialog[open], [role=dialog][aria-modal=true]")
+  );
+}
+export function shortcutsBlocked(event: KeyboardEvent): boolean {
+  const target = event.target instanceof Element ? event.target : null;
+  return (
+    hardBlocked(event) ||
+    !!target?.closest(".xterm, .database-query-input, .cm-editor, .monaco-editor")
   );
 }
 function inputTarget(event: KeyboardEvent): boolean {
@@ -77,7 +83,7 @@ export function useGlobalShortcuts(handlers: ShortcutHandlers, disabled: boolean
         reset();
         previousMap = currentMap;
       }
-      if (latest.current.disabled || shortcutsBlocked(event)) {
+      if (latest.current.disabled || hardBlocked(event)) {
         reset();
         return;
       }
@@ -85,10 +91,8 @@ export function useGlobalShortcuts(handlers: ShortcutHandlers, disabled: boolean
         reset();
         return;
       }
-      if (inputTarget(event)) {
-        reset();
-        return;
-      }
+      // Editors and inputs keep the bindings above, but not the double-shift gesture: Shift types
+      // nothing, and any other key cancels the taps, so it can fire from wherever the caret is.
       if (!taps.handle(event, event.type as "keydown" | "keyup", Date.now())) return;
       const map = runtimeStore.getSnapshot().keyboardSettings?.keymap ?? DEFAULT_KEYMAP;
       const command = KEY_COMMANDS.find(

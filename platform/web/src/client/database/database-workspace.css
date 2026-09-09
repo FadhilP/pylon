@@ -40,7 +40,7 @@
 .database-code-host .cm-lineNumbers .cm-syntax-line-warning { color: color-mix(in srgb, var(--amber) 65%, var(--syntax-fg)); font-weight: 600; }
 .database-code-host .cm-activeLine { background: var(--surface-subtle); }
 .database-code-host .cm-cursor { border-left-color: var(--syntax-fg); }
-.database-code-host .cm-panels, .database-code-host .cm-tooltip { background: var(--surface-raised); color: var(--text); border-color: var(--line); }
+.database-code-host .cm-tooltip { background: var(--surface-raised); color: var(--text); border-color: var(--line); }
 .database-code-host .cm-selectionBackground { background: var(--surface-active) !important; }
 .database-code-editor > small { flex: none; color: var(--amber); }
 .database-syntax { font: inherit; }

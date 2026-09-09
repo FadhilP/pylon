@@ -474,7 +474,7 @@ export function FileHistoryViewer({
               {current?.kind === "commit" && <code className="file-history-sha">{current.id.slice(4, 11)}</code>}
               {current?.createdAt
                 ? <time className="file-history-time" dateTime={current.createdAt}>{displayTimelineTime(current.createdAt)}</time>
-                : <span className="file-history-time">{selected === "live" ? "unsaved" : selected === "baseline" ? "session start" : ""}</span>}
+                : <span className="file-history-time">{selected === "live" ? "" : selected === "baseline" ? "session start" : ""}</span>}
               {selectedCounts && <span className="file-history-counts"><b>+{selectedCounts.added}</b> <i>−{selectedCounts.removed}</i></span>}
             </div>
             <AboutPopover label="About this history">

@@ -27,6 +27,7 @@ for (const engine of engines) {
       const data = {
         "src/a.ts": "é😀 needle NEEDLE needles\nliteral.*\n",
         "src/b.txt": "needle\n",
+        "src/c.tsx": "      needle deep\n\t    needle\n",
         "-": "needle\n",
         "space name.ts": "needle\n",
       };
@@ -74,6 +75,13 @@ for (const engine of engines) {
         );
       }
       assert.equal((await run({ query: "literal.*" })).files[0].matches[0].line, 2);
+      const indented = (await run({ query: "needle", glob: "*.tsx" })).files[0].matches;
+      assert.deepEqual(indented.map(match => match.text), ["needle deep", "needle"]);
+      if (engine === "rg") {
+        const inside = (await run({ query: "    needle", glob: "*.tsx" })).files[0].matches[0];
+        assert.equal(inside.text, "    needle deep", "trimming stops at the match");
+        assert.deepEqual(inside.ranges.map(range => inside.text.slice(range.start, range.end)), ["    needle"]);
+      }
       assert.equal((await run({ query: "^literal", regex: true })).files[0].matches[0].line, 2);
       await assert.rejects(run({ query: "[", regex: true }), /Search failed/);
     },

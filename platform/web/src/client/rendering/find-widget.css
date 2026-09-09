@@ -1,0 +1,58 @@
+/* The editor's find/replace widget. Shape and behaviour live in
+   find-widget.ts; this is what it looks like.
+
+   CodeMirror wraps every panel in .cm-panels, which is a full-width block above
+   the code. The float is applied there — the wrapper is what would otherwise
+   push the file down — and the widget itself carries the chrome. */
+
+.cm-panels.cm-panels-top:has(.find-widget) {
+  position: absolute; z-index: 5; top: 0; right: 0; left: auto;
+  width: auto; max-width: calc(100% - 16px);
+  border: 0; background: none;
+}
+
+.find-widget {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start;
+  width: min(432px, 100%); padding: 4px 6px 4px 0;
+  border: 1px solid var(--line-strong); border-top: 0; border-right: 0;
+  border-radius: 0 0 0 var(--radius-panel);
+  /* the editor toolbar's surface, so the widget reads as the same chrome */
+  background: var(--surface); box-shadow: var(--shadow);
+  color: var(--text); font: 12px "OpenAI Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.find-widget.is-find-only { grid-template-columns: minmax(0, 1fr); padding-left: 6px; }
+
+/* the chevron folds the replace row away; it spans both rows */
+.find-fold { display: grid; align-self: stretch; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--text-muted); cursor: pointer; }
+.find-fold:hover { background: var(--surface-hover); color: var(--text); }
+.find-fold svg { transition: transform var(--motion-fast) var(--motion-ease-out); }
+.find-widget[data-replace="closed"] .find-fold svg { transform: rotate(-90deg); }
+.find-widget[data-replace="closed"] .find-row.replace { display: none; }
+
+.find-row { display: flex; align-items: center; gap: 3px; min-height: 28px; }
+.find-row + .find-row { margin-top: 3px; }
+
+/* the field, with the flags inside it — they modify the text they sit next to */
+.find-field { display: flex; flex: 1; align-items: center; min-width: 0; padding-right: 3px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-subtle); transition: border-color var(--motion-fast) ease; }
+.find-field:focus-within { border-color: var(--accent); }
+.find-field.invalid { border-color: var(--red); }
+.find-field input { min-width: 0; flex: 1; padding: 4px 6px; border: 0; background: none; color: var(--text); font: inherit; }
+.find-field input:focus { outline: none; }
+.find-field input::placeholder { color: var(--text-muted); }
+.find-row.replace .find-field { margin-right: 3px; }
+
+/* a flag is a 20px square that lights on --accent-soft when it is on */
+.find-flag { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border-radius: 3px; color: var(--text-muted); font: 11px ui-monospace, "SFMono-Regular", Consolas, monospace; cursor: pointer; transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
+.find-flag:hover { background: var(--surface-hover); color: var(--text-soft); }
+.find-flag:has(:checked) { background: var(--accent-soft); color: var(--accent-text); }
+.find-flag:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.find-flag input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+
+/* the counter carries the state, so the arrows never have to say anything */
+.find-count { flex: 0 0 auto; min-width: 68px; padding: 0 4px; color: var(--text-muted); font: 11px ui-monospace, "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.find-count.empty { color: var(--red); }
+
+.find-action { display: grid; width: 22px; height: 22px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 4px; background: none; color: var(--text-soft); cursor: pointer; transition: background-color var(--motion-fast) ease, color var(--motion-fast) ease; }
+.find-action:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.find-action:active:not(:disabled) { background: var(--surface-active); }
+.find-action:disabled { color: var(--text-muted); cursor: default; opacity: .45; }

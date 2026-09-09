@@ -78,3 +78,5 @@ export { default as IconMessage } from "@tabler/icons-react/dist/esm/icons/IconM
 export { default as IconChevronsDown } from "@tabler/icons-react/dist/esm/icons/IconChevronsDown.mjs";
 export { default as IconChevronsUp } from "@tabler/icons-react/dist/esm/icons/IconChevronsUp.mjs";
 export { default as IconCrosshair } from "@tabler/icons-react/dist/esm/icons/IconCrosshair.mjs";
+export { default as IconLayoutList } from "@tabler/icons-react/dist/esm/icons/IconLayoutList.mjs";
+export { default as IconListTree } from "@tabler/icons-react/dist/esm/icons/IconListTree.mjs";

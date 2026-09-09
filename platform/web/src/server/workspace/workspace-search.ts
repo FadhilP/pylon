@@ -154,7 +154,10 @@ export async function searchWorkspace(options: WorkspaceSearchOptions): Promise<
       record.capped = true;
       return;
     }
-    const text = raw.replace(/\r?\n$/, "").slice(0, 4000);
+    const source = raw.replace(/\r?\n$/, "");
+    // Indentation is dead width in a sidebar, but never trim into a match.
+    const indent = Math.min(source.length - source.trimStart().length, ...ranges.map(range => range.start), Infinity);
+    const text = source.slice(indent, indent + 4000);
     if (outputBytes + Buffer.byteLength(text) > MAX_OUTPUT) {
       truncated = true;
       return;
@@ -170,9 +173,12 @@ export async function searchWorkspace(options: WorkspaceSearchOptions): Promise<
     record.matches.push({
       line,
       text,
-      ranges: ranges.filter(range => range.start >= 0 && range.end <= text.length).slice(0, 100),
+      ranges: ranges
+        .map(range => ({ start: range.start - indent, end: range.end - indent }))
+        .filter(range => range.start >= 0 && range.end <= text.length)
+        .slice(0, 100),
     });
-    if (raw.length > 4000) truncated = true;
+    if (source.length - indent > 4000) truncated = true;
   };
   for (let at = 0; at < files.length && !timedOut && !truncated;) {
     signal.throwIfAborted();

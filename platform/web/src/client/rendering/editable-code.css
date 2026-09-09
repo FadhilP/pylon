@@ -22,6 +22,6 @@
 .code-editor .code-viewer-gutter > .code-editor-git.is-deleted { width: 6px; background: transparent; }
 .code-editor-git.is-deleted::before, .code-editor-git.is-deleted.is-both::after { position: absolute; left: 0; top: -4px; content: ""; width: 0; height: 0; border: 4px solid transparent; border-left: 6px solid var(--viewer-delete); }
 .code-editor-git.is-deleted.is-after::before, .code-editor-git.is-deleted.is-both::after { top: auto; bottom: -4px; }
-.code-editor .cm-panels, .code-editor .cm-tooltip { background: var(--viewer-bg); color: var(--viewer-fg); border-color: var(--viewer-muted); }
+.code-editor .cm-tooltip { background: var(--viewer-bg); color: var(--viewer-fg); border-color: var(--viewer-muted); }
 .code-editor .cm-searchMatch { background: color-mix(in srgb, var(--viewer-select) 45%, transparent); outline: 1px solid var(--viewer-select); }
 .code-editor .cm-searchMatch-selected { background: var(--viewer-select); }

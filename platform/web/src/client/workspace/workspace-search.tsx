@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { IconLayoutList, IconListTree } from "@tabler/icons-react";
 import type {
   WorkspaceSearchFile,
   WorkspaceSearchMatch,
@@ -10,8 +11,11 @@ import { FileTypeIcon, FolderTypeIcon } from "../rendering/file-icons";
 import { runtimeStore } from "../runtime/event-store";
 import "./workspace-search.css";
 
-export function openSearch(tab: "all" | "files" | "text" | "symbols" | "actions" = "all") {
-  window.dispatchEvent(new CustomEvent("pylon:search", { detail: tab }));
+export function openSearch(
+  tab: "all" | "files" | "text" | "symbols" | "actions" = "all",
+  prefill?: WorkspaceSearchQuery,
+) {
+  window.dispatchEvent(new CustomEvent("pylon:search", { detail: prefill ? { tab, query: prefill } : tab }));
 }
 
 /** Both entry points own their query, but share cancellation, errors and partial-result semantics. */
@@ -127,8 +131,10 @@ export function SearchOptions({
 
 export function SearchStatus({
   search,
+  summary = true,
 }: {
   search: Pick<TextSearch, "result" | "running" | "error" | "stopped" | "submitted">;
+  summary?: boolean;
 }) {
   const { result, running, error, stopped, submitted } = search;
   const total = result?.files.reduce((sum, file) => sum + file.matches.length, 0) ?? 0;
@@ -136,7 +142,7 @@ export function SearchStatus({
     <div className="workspace-search-status" role="status">
       {error ? (
         <span className="search-warning">{error}</span>
-      ) : (
+      ) : summary ? (
         <span>
           {running ? "Searching… " : stopped ? "Stopped · partial results · " : ""}
           {result
@@ -145,7 +151,7 @@ export function SearchStatus({
               ? "No results returned yet"
               : "Search the working copy"}
         </span>
-      )}
+      ) : null}
       {submitted?.query && <span title={submitted.query}>Query: {submitted.query}</span>}
       {result?.engine === "grep" && <span>ripgrep is not installed; using grep. Regex syntax follows grep.</span>}
       {result?.timedOut && <span className="search-warning">Search timed out; results are incomplete.</span>}
@@ -333,18 +339,27 @@ export function ExplorerSearch({
   const [input, setInput] = useState<WorkspaceSearchQuery>({ query: "" });
   const [layout, setLayout] = useState<"tree" | "grouped">("tree");
   const search = useTextSearch(scope);
+  const { run } = search;
   useEffect(() => {
     setInput({ query: "" });
     setMode("path");
   }, [scope]);
+  useEffect(() => {
+    if (mode !== "text") return;
+    const timer = setTimeout(() => void run(input), 250);
+    return () => clearTimeout(timer);
+  }, [mode, input, run]);
+  const matched = search.result?.files.reduce((sum, file) => sum + file.matches.length, 0) ?? 0;
+  const summary = search.running
+    ? "Searching…"
+    : !search.submitted
+      ? "Search the working copy"
+      : matched
+        ? `${matched} lines in ${search.result?.files.length} files`
+        : "No matching lines";
   return (
     <div className="workspace-search-explorer">
-      <form
-        className="files-search"
-        onSubmit={event => {
-          event.preventDefault();
-          if (mode === "text") void search.run(input);
-        }}>
+      <form className="files-search" onSubmit={event => event.preventDefault()}>
         <button
           type="button"
           aria-label="Open search popup"
@@ -356,11 +371,12 @@ export function ExplorerSearch({
           aria-label={mode === "path" ? "Filter files" : "Search file contents"}
           value={mode === "path" ? query : input.query}
           maxLength={mode === "path" ? 500 : 2000}
-          placeholder={mode === "path" ? "Filter files" : "Search text — Enter"}
+          placeholder={mode === "path" ? "Filter files" : "Search text"}
           onChange={event =>
             mode === "path" ? onQuery(event.target.value) : setInput({ ...input, query: event.target.value })
           }
         />
+        {search.running && <i className="search-busy" aria-hidden="true" />}
         {(["path", "text"] as const).map(value => (
           <button
             type="button"
@@ -379,18 +395,23 @@ export function ExplorerSearch({
       ) : (
         <>
           <SearchOptions value={input} onChange={setInput} />
-          <div className="workspace-search-fold">
-            <button type="button" onClick={() => setLayout(layout === "tree" ? "grouped" : "tree")}>
-              {layout === "tree" ? "In tree" : "Grouped"}
-            </button>
-            <button type="button" disabled={!input.query} onClick={() => void search.run(input)}>
-              Search
-            </button>
-            {search.running && (
-              <button type="button" onClick={search.stop}>
-                Stop
-              </button>
-            )}
+          <div className="workspace-search-summary">
+            <span role="status">{summary}</span>
+            <div className="workspace-search-layout">
+              {([["tree", "Show in tree", IconListTree], ["grouped", "Group by file", IconLayoutList]] as const).map(
+                ([value, title, Icon]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    title={title}
+                    aria-label={title}
+                    aria-pressed={layout === value}
+                    onClick={() => setLayout(value)}>
+                    <Icon size={17} />
+                  </button>
+                ),
+              )}
+            </div>
           </div>
           <SearchResults
             key={JSON.stringify(search.submitted)}
@@ -399,7 +420,7 @@ export function ExplorerSearch({
             query={search.submitted}
             onOpen={onOpen}
           />
-          <SearchStatus search={search} />
+          <SearchStatus search={search} summary={false} />
         </>
       )}
     </div>

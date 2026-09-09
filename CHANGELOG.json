@@ -1,5 +1,17 @@
 [
   {
+    "version": "3.1.1",
+    "date": "Sep 9, 2026",
+    "title": "Faster search and focused editor finding",
+    "summary": "A maintenance release makes workspace search more immediate and reusable, upgrades in-editor finding, and keeps global navigation accessible while editing.",
+    "notes": [
+      "Replaced the stock editor search panel with compact floating find and replace controls across workspace and database editors, including match counts, case, whole-word, regular-expression, navigation, select-all, and read-only handling.",
+      "Made Explorer text search run automatically after a brief debounce, with live activity and result summaries plus tree and grouped layout controls.",
+      "Allowed project search snapshots to be pinned beneath the file editor and reopened with their original query, while making narrow result snippets more readable by trimming indentation without losing match highlighting.",
+      "Kept the double-Shift global navigation gesture available while focus is inside editors and inputs, while continuing to block typing shortcuts there."
+    ]
+  },
+  {
     "version": "3.1.0",
     "date": "Sep 9, 2026",
     "title": "Smarter editors and safer database setup",

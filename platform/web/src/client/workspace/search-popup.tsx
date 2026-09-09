@@ -18,6 +18,12 @@ import { useSyntaxHighlightingRevision } from "../app/use-chrome";
 
 const TABS = ["all", "files", "text", "symbols", "actions"] as const;
 type Tab = (typeof TABS)[number];
+export interface PinnedSearch {
+  scope: string;
+  query: WorkspaceSearchQuery;
+  result: WorkspaceSearchResult;
+  incomplete: boolean;
+}
 export interface SearchAction {
   id: string;
   label: string;
@@ -140,11 +146,13 @@ export function SearchPopup({
   live,
   actions,
   onOpen,
+  onPin,
   onError,
 }: {
   live: RuntimeStoreSnapshot;
   actions: SearchAction[];
   onOpen: (path: string, line?: number, query?: WorkspaceSearchQuery) => void;
+  onPin: (pinned: PinnedSearch) => void;
   onError: (error: unknown, fallback: string) => void;
 }) {
   const runtime = live.runtime;
@@ -160,12 +168,6 @@ export function SearchPopup({
   const [symbolError, setSymbolError] = useState("");
   const [symbolLoading, setSymbolLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
-  const [pinned, setPinned] = useState<{
-    scope: string;
-    query: WorkspaceSearchQuery;
-    result: WorkspaceSearchResult;
-    incomplete: boolean;
-  }>();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -180,7 +182,6 @@ export function SearchPopup({
 
   useEffect(() => {
     setOpen(false);
-    setPinned(undefined);
     setInventory(undefined);
     setSymbols(undefined);
     setSelectedId(undefined);
@@ -203,8 +204,13 @@ export function SearchPopup({
   useEffect(() => {
     const eventOpen = (event: Event) => {
       if (!available || live.pendingUi || document.querySelector("dialog[open], [role=dialog][aria-modal=true]")) return;
-      const value = (event as CustomEvent).detail;
+      const detail = (event as CustomEvent).detail;
+      const value = typeof detail === "object" && detail ? detail.tab : detail;
       if (TABS.includes(value)) setTab(value);
+      if (typeof detail === "object" && detail?.query) {
+        setBoxes(previous => ({ ...previous, [value as Tab]: detail.query.query }));
+        setOptions({ ...detail.query });
+      }
       setOpen(true);
       setSelectedId(undefined);
     };
@@ -368,7 +374,7 @@ export function SearchPopup({
   };
   const pin = () => {
     if (!search.result || !search.submitted) return;
-    setPinned({
+    onPin({
       scope,
       query: { ...search.submitted },
       result: structuredClone(search.result),
@@ -581,37 +587,43 @@ export function SearchPopup({
           <small>↑↓ preview · Enter open · Esc close</small>
         </footer>
       </dialog>
-      {pinned?.scope === scope && (
-        <section className="workspace-search-pinned" aria-label="Pinned search results">
-          <header>
-            <strong>{pinned.query.query}</strong>
-            <small>Snapshot{pinned.incomplete ? " · incomplete" : ""}</small>
-            <button
-              type="button"
-              onClick={() => {
-                setBoxes(previous => ({ ...previous, text: pinned.query.query }));
-                setOptions({ ...pinned.query });
-                setTab("text");
-                setOpen(true);
-              }}>
-              Search again
-            </button>
-            <button type="button" aria-label="Close pinned search" onClick={() => setPinned(undefined)}>
-              ×
-            </button>
-          </header>
-          <SearchResults files={pinned.result.files} query={pinned.query} onOpen={onOpen} />
-          <SearchStatus
-            search={{
-              result: pinned.result,
-              submitted: pinned.query,
-              running: false,
-              stopped: pinned.incomplete,
-              error: "",
-            }}
-          />
-        </section>
-      )}
     </>
+  );
+}
+
+export function PinnedSearchPanel({
+  pinned,
+  onOpen,
+  onSearchAgain,
+  onClose,
+}: {
+  pinned: PinnedSearch;
+  onOpen: (path: string, line?: number, query?: WorkspaceSearchQuery) => void;
+  onSearchAgain: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <section className="workspace-search-pinned" aria-label="Pinned search results">
+      <header className="panel-header">
+        <strong>{pinned.query.query}</strong>
+        <small>Snapshot{pinned.incomplete ? " · incomplete" : ""}</small>
+        <button type="button" onClick={onSearchAgain}>
+          Search again
+        </button>
+        <button type="button" aria-label="Close pinned search" onClick={onClose}>
+          ×
+        </button>
+      </header>
+      <SearchResults files={pinned.result.files} query={pinned.query} onOpen={onOpen} />
+      <SearchStatus
+        search={{
+          result: pinned.result,
+          submitted: pinned.query,
+          running: false,
+          stopped: pinned.incomplete,
+          error: "",
+        }}
+      />
+    </section>
   );
 }

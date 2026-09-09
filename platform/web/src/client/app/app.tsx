@@ -66,7 +66,7 @@ const ReviewSurface = lazy(() => import("../workspace/git-workspace").then(modul
 const GitDialogs = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitDialogs })));
 import type { FileView } from "../workspace/files-panel";
 import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
-import { SearchPopup } from "../workspace/search-popup";
+import { PinnedSearchPanel, SearchPopup, type PinnedSearch } from "../workspace/search-popup";
 import { openSearch } from "../workspace/workspace-search";
 import { KEY_COMMANDS } from "../../shared/settings/keyboard";
 import { shortcutLabel, shortcutsBlocked, useGlobalShortcuts, type ShortcutHandlers } from "../ui/keyboard-shortcuts";
@@ -206,6 +206,7 @@ export function App() {
   const [browserActive, setBrowserActive] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [requestedFile, setRequestedFile] = useState<RequestedFile>();
+  const [pinnedSearch, setPinnedSearch] = useState<PinnedSearch>();
   const [surface, setSurface] = useState<SurfaceId>("chat");
   const [reviewDismissed, setReviewDismissed] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
@@ -1910,6 +1911,18 @@ export function App() {
           projectId={activeSession?.projectId}
           requestedPath={requestedFile}
           stateStore={fileWorkspaceStates}
+          dock={
+            pinnedSearch?.scope === `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}` ? (
+              <PinnedSearchPanel
+                pinned={pinnedSearch}
+                onOpen={(path, line, searchQuery) => {
+                  setRequestedFile({ path, line, view: "current", searchQuery, sessionId: live.runtime?.sessionId, requestId: Date.now() });
+                }}
+                onSearchAgain={() => openSearch("text", pinnedSearch.query)}
+                onClose={() => setPinnedSearch(undefined)}
+              />
+            ) : undefined
+          }
           header={topbar}
           workspaceRef={workspaceRef}
           sidePanel={
@@ -1934,7 +1947,7 @@ export function App() {
         </DeferredPanel>
       )}
       <div className="terminal-layer"><DeferredPanel>{terminalChrome}</DeferredPanel></div>
-      <SearchPopup live={live} onError={reportError}
+      <SearchPopup live={live} onError={reportError} onPin={setPinnedSearch}
         onOpen={(path, line, searchQuery) => {
           setRequestedFile({ path, line, view: "current", searchQuery, sessionId: live.runtime?.sessionId, requestId: Date.now() });
           changeSurface("files");

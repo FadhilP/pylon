@@ -56,6 +56,7 @@ export function FileWorkspace({
   header,
   workspaceRef,
   sidePanel,
+  dock,
   rightPanelOpen,
   inspectorWidth,
   showExplorer,
@@ -72,6 +73,8 @@ export function FileWorkspace({
   header: ReactNode;
   workspaceRef: RefObject<HTMLDivElement | null>;
   sidePanel: ReactNode;
+  /** Docked under the editor: pinned search results. */
+  dock?: ReactNode;
   rightPanelOpen: boolean;
   inspectorWidth: number;
   showExplorer: boolean;
@@ -446,6 +449,7 @@ export function FileWorkspace({
                 </div>
               )}
             </section>
+            {dock}
           </div>
           {sidePanel}
         </div>
