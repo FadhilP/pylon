@@ -500,6 +500,40 @@ test("compacted continuation authorizes only retained refs from its latest page"
   await manager.close("compact-continuation", "close");
 });
 
+test("compact control hints admit more actionable refs within the byte budget without bypassing full-mode bounds", async () => {
+  const raw = '- button "First" [ref=e1] [cursor=pointer]\n- link "Next" [ref=e2] [cursor=pointer]';
+  const commands: string[][] = [];
+  const adapterExec = async (_command: string, args: string[]) => {
+    commands.push(args);
+    const value = args.includes("snapshot")
+      ? { snapshot: raw }
+      : args.includes("tab-list")
+        ? { result: "- 0: (current) [Example](https://example.com/)" }
+        : {};
+    return { code: 0, stdout: JSON.stringify(value), stderr: "", killed: false };
+  };
+  const manager = new BrowserSessionManager(adapterExec as any, exec =>
+    PlaywrightCli.create(exec, { maxSnapshotBytes: 64 }),
+  );
+  try {
+    await manager.start("compact-controls");
+    const compact = await manager.operate("compact-controls", { kind: "snapshot" });
+    assert.equal(compact.snapshotTruncated, false);
+    assert.equal(compact.snapshotContinuation, undefined);
+    await manager.operate("compact-controls", { kind: "click", target: "e2" });
+
+    const full = await manager.operate("compact-controls", { kind: "snapshot", snapshotMode: "full" });
+    assert.equal(full.snapshotTruncated, true);
+    const before = commands.length;
+    await assert.rejects(manager.operate("compact-controls", { kind: "click", target: "e2" }), /stale/);
+    assert.equal(commands.length, before, "an omitted ref must not reach the browser");
+    await manager.operate("compact-controls", { kind: "continue", cursor: full.snapshotContinuation! });
+    await manager.operate("compact-controls", { kind: "click", target: "e2" });
+  } finally {
+    await manager.shutdown();
+  }
+});
+
 test("continuation chunks replace usable references", async () => {
   const cli = fakeCli([]);
   cli.run = async (_session: string, action: any) => {

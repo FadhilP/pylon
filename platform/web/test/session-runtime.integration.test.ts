@@ -29,6 +29,7 @@ import type {
   UiRequest,
 } from "../src/server/runtime/remote-ui-bridge.ts";
 import { runtimeSnapshotValidationIssue } from "../src/shared/protocol/validation.ts";
+import { STATEQL_GLOBAL_UI_ACTOR } from "../src/shared/protocol/snapshots.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -987,10 +988,11 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
       pi.events.on("pylon:stateql-snapshot-request", (value: any) => {
         if (value?.version !== 1 || !value.claim()) return;
         requests++;
+        const actorId = value.workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : value.sessionId;
         value.respond(
           Promise.resolve({
             session: { session_id: "s_1", name: "shared-workspace", status: "active", ignored: "value" },
-            actor_id: value.sessionId,
+            actor_id: actorId,
             connection: {
               connection_id: "connection-1",
               ...(alias === undefined ? {} : { alias }),
@@ -1011,7 +1013,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
                 command_id: "cmd_1",
                 timestamp: "2026-07-30T10:00:00.000Z",
                 session_id: "s_1",
-                actor_id: value.sessionId,
+                actor_id: actorId,
                 command: "query",
                 sql: "SELECT id, email FROM users WHERE id = ?",
                 handle: "q_1",
@@ -1025,7 +1027,7 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
                 command_id: "cmd_2",
                 timestamp: "2026-07-30T10:00:01.000Z",
                 session_id: "s_1",
-                actor_id: value.sessionId,
+                actor_id: actorId,
                 command: "inspect.columns",
                 sql: null,
                 target: "public.users",
@@ -1061,6 +1063,10 @@ test("StateQL snapshot bridge claims one bounded session-scoped response", async
     assert.equal("ignored" in snapshot, false);
     assert.equal("ignored" in snapshot.session, false);
     assert.equal("ignored" in snapshot.history[0]!, false);
+    const global = await driver.stateqlSnapshot(20, "global");
+    assert.equal(global.workspace, "global");
+    assert.equal(global.actor_id, STATEQL_GLOBAL_UI_ACTOR);
+    assert.equal(requests, 2);
     alias = undefined;
     const legacy = await driver.stateqlSnapshot(20);
     assert.equal(legacy.connection?.connection_id, "connection-1");

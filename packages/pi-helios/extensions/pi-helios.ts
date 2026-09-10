@@ -252,11 +252,15 @@ const browserActionFields = {
     Type.String({
       pattern: ELEMENT_REF_PATTERN,
       maxLength: 32,
-      description: "Element reference from latest snapshot, such as e12 or f1e12; not accepted by press",
+      description:
+        "Latest returned element ref (e12 or f1e12); scopes snapshot/screenshot to that element; not for press",
     }),
   ),
   text: Type.Optional(
-    Type.String({ maxLength: 10000, description: "Exact text to find; keep narrow to avoid large match sets" }),
+    Type.String({
+      maxLength: 10000,
+      description: "Text to enter for fill, or a narrow literal query for find (max 500)",
+    }),
   ),
   regex: Type.Optional(
     Type.String({ maxLength: 500, description: "Regular expression to find; keep specific to avoid large match sets" }),
@@ -268,7 +272,9 @@ const browserActionFields = {
         "press accepts only key and sends it to the current focus; click the intended element or use Tab to focus it first. Key/chord examples: Enter, ArrowLeft, Control+A. Named keys are case-insensitive; single-character case is preserved",
     }),
   ),
-  value: Type.Optional(Type.String({ maxLength: 1000 })),
+  value: Type.Optional(
+    Type.String({ maxLength: 1000, description: "Option value for select; fill uses text instead" }),
+  ),
   width: Type.Optional(
     Type.Integer({ minimum: 320, maximum: 1920, description: "Viewport width for start or resize; requires height" }),
   ),
@@ -279,12 +285,13 @@ const browserActionFields = {
     Type.Integer({
       minimum: 1,
       maximum: 20,
-      description: "Snapshot depth; prefer 4-6 first, then target a returned ref for more detail",
+      description: "Snapshot depth; prefer a returned target ref, otherwise start at 4-6 when a broad view is needed",
     }),
   ),
   snapshotMode: Type.Optional(
     StringEnum(["compact", "full"] as const, {
-      description: "Snapshot structure: compact flattens anonymous generic wrappers (default); full preserves them",
+      description:
+        "Compact removes anonymous wrappers and redundant control pointer hints (default); full preserves them",
     }),
   ),
   cursor: Type.Optional(
@@ -294,7 +301,11 @@ const browserActionFields = {
       description: "One-use cursor returned by truncated snapshot, find, or action output",
     }),
   ),
-  fullPage: Type.Optional(Type.Boolean()),
+  fullPage: Type.Optional(
+    Type.Boolean({
+      description: "Whole-page screenshot; prefer target for a component or omit both for viewport/layout checks",
+    }),
+  ),
   tabAction: Type.Optional(StringEnum(["list", "select", "create", "close"] as const)),
   tabIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: 100 })),
 };
@@ -323,7 +334,7 @@ const browserSchema = Type.Object(
       Type.Array(browserActionSchema, {
         minItems: 1,
         maxItems: 20,
-        description: "Ordered browser actions with already-known refs",
+        description: "Ordered known-ref actions or ready action-observation pairs, such as resize then screenshot",
       }),
     ),
     plan: Type.Optional(
@@ -483,6 +494,7 @@ function browserAction(params: BrowserParams): BrowserAction {
       rejectExtra(params, ["target"]);
       return { kind: params.action, target: requireField(params, "target") };
     case "fill":
+      if (params.value !== undefined) throw new Error("fill does not accept value; use text (select uses value)");
       rejectExtra(params, ["target", "text"]);
       return { kind: "fill", target: requireField(params, "target"), text: requireField(params, "text") };
     case "press":
@@ -566,6 +578,7 @@ function describe(result: BrowserOperationResult): string {
       `Tabs: ${result.tabs.map(tab => `${tab.index}: ${tab.title} (${tab.url})`).join(" | ")}${result.tabsOmitted ? ` | ${result.tabsOmitted} more omitted.` : ""}`,
     );
   if (result.snapshot) lines.push(`Snapshot:\n${result.snapshot}`);
+  if (result.referencesInvalidated) lines.push("Refs cleared; use find or snapshot before targeting an element.");
   if (result.snapshotRedactions) lines.push(`Redactions: ${result.snapshotRedactions}.`);
   if (result.snapshotTruncated)
     lines.push(`Remaining: ${result.snapshotOmittedLines ?? 0} lines / ${result.snapshotOmittedBytes ?? 0} bytes.`);
@@ -1103,17 +1116,18 @@ export default function heliosExtension(
     name: "helios_browser",
     label: "Helios Browser",
     description:
-      "Use one owned isolated or consented attached browser only for user-requested browser work: start or attach first, then close or detach when done; never monitor, and require user supervision for purchases, messages, publishing, destructive actions, and other consequential clicks. Act through returned element refs rather than guessed selectors, reuse adequate snapshots, and use continuation cursors for truncated output because each chunk replaces prior usable refs. Batch known refs, or use a bounded semantic plan that resolves one unique element per step and stops on ambiguity or page change. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
+      "Use one isolated owned or consented attached browser for requested browser work: start/attach first, close/detach when done. Never monitor; user must supervise purchases, messages, publishing, destructive actions, and other consequential clicks. Use current refs, focused observations, and targeted screenshots. Batch known-ref actions or ready action-observation pairs; semantic plans stop on ambiguity or page change. No raw Playwright commands, scripts, storage, network interception, uploads, or downloads.",
     promptSnippet:
       "Use one owned browser with an isolated profile or one consented attached browser through constrained Playwright actions",
     promptGuidelines: [
       "Use only for user-requested browser work; start or attach first, then close or detach when done. Never monitor. User must supervise purchases, messages, publishing, destructive actions, and other consequential clicks.",
-      "Act through returned element references; never guess selectors. Prefer find for narrow text, otherwise start snapshots at depth 4–6 or target a returned ref.",
-      "Reuse returned snapshots; request another only when absent, truncated, or insufficient. Prefer targeted screenshots; use fullPage only for whole-page context.",
-      "Use continuation cursors for remaining output; each chunk replaces prior refs. Refine truncated searches instead of broadening.",
-      "Batch only known refs. Use plan only for deterministic, non-consequential steps; each match must resolve uniquely and execution stops on ambiguity or page change.",
-      "Supply both CSS-pixel width and height on start when the initial viewport size matters; use resize to change an active browser. Swap dimensions for landscape. This is viewport manipulation, not full device emulation.",
-      "For local HTML prototypes, use an explicit file: URL ending in .html or .htm; raw filesystem paths are not accepted.",
+      "Use only latest returned refs, never selectors. Prefer narrow find or snapshot.target over whole-page output; start untargeted snapshots at depth 4–6 only when needed.",
+      "Reuse adequate output. Snapshot/find/continue replace refs; mutations without snapshots clear refs. For truncation, narrow find/target first or continue only if the remainder is needed.",
+      "Batch known refs or ready action-observation pairs (resize then screenshot, Escape then snapshot). Do not guess future refs or assume async UI work has settled. Plans require unique, non-consequential matches.",
+      "fill uses text; select uses value. After a blocked click, inspect the blocker and verify the app/build is ready before retrying.",
+      "Prefer screenshot.target for a component; omit target for viewport/layout checks and use fullPage only for whole-page context.",
+      "Set both width and height on start when needed, then resize. CSS-pixel viewport changes are not device emulation; swap dimensions for landscape.",
+      "Local HTML prototypes require explicit file: URLs ending .html/.htm, not filesystem paths.",
     ],
     parameters: browserSchema,
     executionMode: "sequential",

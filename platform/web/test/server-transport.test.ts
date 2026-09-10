@@ -13,6 +13,7 @@ import type { AcceptedCommand, QueuedPromptPayload } from "../src/shared/protoco
 import type { HeliosBrowserInput } from "../src/shared/protocol/helios.ts";
 import type { HeliosAndroidToolingCommand } from "../src/shared/protocol/helios-android-tooling.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
+import { STATEQL_GLOBAL_UI_ACTOR } from "../src/shared/protocol/snapshots.ts";
 import type {
   ArchiveListSnapshot,
   ConversationAttachmentContent,
@@ -30,6 +31,7 @@ import type {
   StateQLCommandInput,
   StateQLCommandResult,
   StateQLSnapshot,
+  StateQLWorkspace,
   UsageQuery,
   UsageSnapshot,
   WorkspaceFileHistory,
@@ -412,6 +414,7 @@ class FakeDriver implements PiDriver {
   stateqlHistoryLimits: number[] = [];
   stateqlRowsRequests: Array<{ handle: string; offset: number; limit: number }> = [];
   stateqlCommands: StateQLCommandInput[] = [];
+  stateqlWorkspaces: Array<{ operation: string; workspace: StateQLWorkspace }> = [];
   papercutMutations: PapercutMutationInput[] = [];
   usageDays: number[] = [];
   usageQueries: UsageQuery[] = [];
@@ -625,13 +628,15 @@ class FakeDriver implements PiDriver {
       driverVersion: "8.2.2",
     });
   }
-  stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+  stateqlSnapshot(historyLimit: number, workspace: StateQLWorkspace = "session"): Promise<StateQLSnapshot> {
     this.stateqlHistoryLimits.push(historyLimit);
+    this.stateqlWorkspaces.push({ operation: "snapshot", workspace });
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: this.current.sessionGeneration,
+      workspace,
       session: { session_id: "s_1", name: "shared-workspace", status: "active" },
-      actor_id: this.current.sessionId,
+      actor_id: workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : this.current.sessionId,
       connection: null,
       transaction: null,
       state_version: null,
@@ -641,12 +646,14 @@ class FakeDriver implements PiDriver {
       history: [],
     });
   }
-  stateqlRows(handle: string, offset: number, limit: number) {
+  stateqlRows(handle: string, offset: number, limit: number, _signal?: AbortSignal, workspace: StateQLWorkspace = "session") {
     this.stateqlRowsRequests.push({ handle, offset, limit });
+    this.stateqlWorkspaces.push({ operation: "rows", workspace });
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: this.current.sessionGeneration,
-      actor_id: this.current.sessionId,
+      workspace,
+      actor_id: workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : this.current.sessionId,
       handle,
       offset,
       limit,
@@ -657,21 +664,31 @@ class FakeDriver implements PiDriver {
       next_offset: null,
     });
   }
-  stateqlExport(_handle: string, format: "json" | "jsonl" | "csv") {
+  stateqlExport(_handle: string, format: "json" | "jsonl" | "csv", _signal?: AbortSignal, workspace: StateQLWorkspace = "session") {
+    this.stateqlWorkspaces.push({ operation: "export", workspace });
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: this.current.sessionGeneration,
-      actor_id: this.current.sessionId,
+      workspace,
+      actor_id: workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : this.current.sessionId,
       format,
       content: '[{"value":"complete"}]',
     });
   }
-  stateqlCommand(input: StateQLCommandInput): Promise<StateQLCommandResult> {
+  stateqlCommand(
+    input: StateQLCommandInput,
+    _signal?: AbortSignal,
+    _expectedConnectionId?: string | null,
+    _operationId?: string,
+    workspace: StateQLWorkspace = "session",
+  ): Promise<StateQLCommandResult> {
     this.stateqlCommands.push(input);
+    this.stateqlWorkspaces.push({ operation: "command", workspace });
     return Promise.resolve({
       protocolVersion: PROTOCOL_VERSION,
       sessionGeneration: this.current.sessionGeneration,
-      actor_id: this.current.sessionId,
+      workspace,
+      actor_id: workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : this.current.sessionId,
       command: input.command,
       status: "completed",
       response: {
@@ -1949,8 +1966,23 @@ test(
       });
       assert.equal(stateql.status, 200);
       assert.equal(stateql.headers.get("cache-control"), "no-store");
-      assert.equal((await body(stateql)).sessionGeneration, 1);
+      const sessionStateql = await body(stateql);
+      assert.equal(sessionStateql.sessionGeneration, 1);
+      assert.equal(sessionStateql.workspace, "session");
       assert.deepEqual(driver.stateqlHistoryLimits, [25]);
+      const globalStateql = await fetch(`${origin}/api/v1/stateql?generation=1&workspace=global`, {
+        headers: { cookie, "x-pylon-tab-id": tab },
+      });
+      assert.equal(globalStateql.status, 200);
+      const globalSnapshot = await body(globalStateql);
+      assert.equal(globalSnapshot.workspace, "global");
+      assert.equal(globalSnapshot.actor_id, STATEQL_GLOBAL_UI_ACTOR);
+      assert.equal(
+        (await fetch(`${origin}/api/v1/stateql?generation=1&workspace=other`, {
+          headers: { cookie, "x-pylon-tab-id": tab },
+        })).status,
+        400,
+      );
       assert.equal(
         (await fetch(`${origin}/api/v1/stateql?generation=2`, { headers: { cookie, "x-pylon-tab-id": tab } })).status,
         409,
@@ -2058,6 +2090,24 @@ test(
       assert.equal(stateqlCommand.headers.get("cache-control"), "no-store");
       assert.equal((await body(stateqlCommand)).command, "query");
       assert.deepEqual(driver.stateqlCommands, [commandRequest.input]);
+      const globalCommand = await fetch(`${origin}/api/v1/stateql/command`, {
+        method: "POST",
+        headers: mutationHeaders,
+        body: JSON.stringify({ ...commandRequest, workspace: "global" }),
+      });
+      assert.equal(globalCommand.status, 200);
+      const globalCommandResult = await body(globalCommand);
+      assert.equal(globalCommandResult.workspace, "global");
+      assert.equal(globalCommandResult.actor_id, STATEQL_GLOBAL_UI_ACTOR);
+      assert.deepEqual(driver.stateqlWorkspaces.at(-1), { operation: "command", workspace: "global" });
+      assert.equal(
+        (await fetch(`${origin}/api/v1/stateql/command`, {
+          method: "POST",
+          headers: mutationHeaders,
+          body: JSON.stringify({ ...commandRequest, workspace: "other" }),
+        })).status,
+        400,
+      );
       const execCommand = { generation: 1, input: { command: "exec", sql: "DELETE FROM users" } };
       const execResponse = await fetch(`${origin}/api/v1/stateql/command`, {
         method: "POST",
@@ -2065,7 +2115,7 @@ test(
         body: JSON.stringify(execCommand),
       });
       assert.equal(execResponse.status, 200);
-      assert.deepEqual(driver.stateqlCommands, [commandRequest.input, execCommand.input]);
+      assert.deepEqual(driver.stateqlCommands, [commandRequest.input, commandRequest.input, execCommand.input]);
       assert.equal(
         (
           await fetch(`${origin}/api/v1/stateql/command`, {

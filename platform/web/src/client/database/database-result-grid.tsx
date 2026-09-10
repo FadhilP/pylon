@@ -19,6 +19,7 @@ import {
 } from "./database-grid";
 import { runtimeStore } from "../runtime/event-store";
 import type { StateQLCommandInput, StateQLCommandResult } from "../../shared/protocol/snapshots";
+import type { StateQLWorkspace } from "../../shared/protocol/snapshots";
 
 let rowQueue: Promise<void> = Promise.resolve();
 const buffers = new Map<object, number>();
@@ -116,6 +117,7 @@ function DatabaseHeaderMenu({
 export function DatabaseResultGrid({
   result,
   scope,
+  workspace,
   editable = false,
   disabled = false,
   suspended = false,
@@ -126,6 +128,7 @@ export function DatabaseResultGrid({
 }: {
   result: DatabaseResult;
   scope: string;
+  workspace: StateQLWorkspace;
   editable?: boolean;
   disabled?: boolean;
   suspended?: boolean;
@@ -234,7 +237,7 @@ export function DatabaseResultGrid({
       let fullValues = true;
       try {
         while (!abort.signal.aborted) {
-          const page = await runtimeStore.stateqlRows(result.result_id, offset, 100, abort.signal);
+          const page = await runtimeStore.stateqlRows(workspace, result.result_id, offset, 100, abort.signal);
           if (abort.signal.aborted) return;
           if (
             page.total !== result.rows ||
@@ -293,7 +296,7 @@ export function DatabaseResultGrid({
       publication.dispose();
       buffers.delete(owner);
     };
-  }, [result.result_id, scope, revision, suspended]);
+  }, [result.result_id, scope, workspace, revision, suspended]);
 
   const loaded = useMemo(
     () => rows.map((row, index) => ({ row, token: tokens[index] ?? null, index })),
@@ -465,7 +468,7 @@ export function DatabaseResultGrid({
     downloadController.current = abort;
     setExporting(true);
     try {
-      const blob = await runtimeStore.stateqlExport(result.result_id, format, abort.signal);
+      const blob = await runtimeStore.stateqlExport(workspace, result.result_id, format, abort.signal);
       if (abort.signal.aborted) return;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");

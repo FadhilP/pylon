@@ -14,7 +14,7 @@ Reload Pi afterward. In the Pylon bundle, the single `stateql` tool is deferred 
 
 ## Use the `stateql` tool
 
-StateQL manages connection profiles, read queries, materialized result handles, filters, schema/storage health, write plans and confirmed writes, transactions, receipts, and bounded history. Each Pi session is an actor in one durable StateQL workspace; linked actors share its connections, handles, aliases, cache, and history. Membership, lifecycle, purge, and export controls are intentionally not model-facing.
+StateQL manages connection profiles, read queries, materialized result handles, filters, schema/storage health, write plans and confirmed writes, transactions, receipts, and bounded history. Each Pi session keeps its private workspace and can also use Pylon's shared global workspace through a distinct actor. Membership, lifecycle, purge, and export controls are intentionally not model-facing.
 
 ```text
 { "command": "connect", "profile": "local" }
@@ -25,6 +25,19 @@ StateQL manages connection profiles, read queries, materialized result handles, 
 ```
 
 Prefer profiles and credential environment variables. `secret_env` replaces `target`; it must resolve to a complete PostgreSQL/MySQL URL or `sqlite:<path>`, not a password or bare SQLite path. Do not provide both. Set `STQL_HOME` to override StateQL's platform data directory.
+
+### Workspace scopes
+
+Commands use the private `session` workspace by default. Select the shared workspace once for later calls, inspect the selection, or override one call without changing it:
+
+```text
+{ "command": "workspace.select", "workspace": "global" }
+{ "command": "workspace.status" }
+{ "command": "query", "sql": "SELECT id FROM jobs ORDER BY id LIMIT 20" }
+{ "command": "query", "workspace": "session", "sql": "SELECT id FROM local_jobs ORDER BY id LIMIT 20" }
+```
+
+Every model-facing result identifies the workspace that handled it. Selection is isolated to the live Pi session and resets to `session` when that runtime is recreated. In Pylon Web, the Database panel has an independent Session/Global switch; changing it does not change the agent's selected scope.
 
 ## Confirmations and credentials
 
@@ -42,7 +55,7 @@ The Web form submits one `connection.setup` operation. Its reviewed configuratio
 
 New remembered literal-target profiles persist a password-free `target` plus `password_ref`; the OS vault stores a destination-bound password-only v2 record. Existing environment and complete-URL vault profiles remain readable. Explicit replacement edits use only a matching legacy password, not the legacy URL's configuration. Valid same-destination retries reuse the existing bounded password broker; newly entered passwords supersede cached values.
 
-This setup requires the updated StateQL runtime exposing `StateQL.passwordReferenceVersion === 1`; older runtimes fail closed rather than silently ignoring `password_ref`. The current development checkout uses the rebuilt sibling `../StateQL` package. Publish and pin a compatible StateQL release before distributing this change; reinstalling the currently pinned registry version is not sufficient. Stop Pylon and back up the complete StateQL data directory before upgrading. The password-reference schema migration is not downgrade-safe: do not open state homes containing password references with older StateQL binaries.
+This setup requires the updated StateQL runtime exposing `StateQL.passwordReferenceVersion === 1`; global workspaces additionally require `StateQL.forWorkspace`. Older runtimes fail closed rather than silently ignoring password references or misrouting global work. The current development checkout can use the rebuilt sibling `../StateQL` package. Publish and pin a compatible StateQL release before distributing this change; reinstalling the currently pinned registry version is not sufficient. Stop Pylon and back up the complete StateQL data directory before upgrading. The password-reference schema migration is not downgrade-safe: do not open state homes containing password references with older StateQL binaries.
 
 ## Pylon Web workspace view
 

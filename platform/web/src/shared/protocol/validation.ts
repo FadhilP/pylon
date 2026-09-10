@@ -74,6 +74,7 @@ const sieveProjectionModes = new Set(["stable", "legacy", "standard-v2"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
 const usageAgents = new Set(["main", "advisor", "grunt", "scout", "private", "other", "unknown"]);
+const stateqlWorkspaces = new Set(["session", "global"]);
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -1359,6 +1360,11 @@ export function isPapercutListPage(value: unknown): value is PapercutListPage {
   return value.nextOffset === nextOffset;
 }
 
+export function isStateQLWorkspace(value: unknown): value is import("./snapshots.ts").StateQLWorkspace {
+  return stateqlWorkspaces.has(String(value));
+}
+
+
 export function isStateQLCommandInput(value: unknown): value is StateQLCommandInput {
   return parseStateQLPanelCommand(value) !== undefined;
 }
@@ -1379,6 +1385,7 @@ export function isStateQLRowsPage(value: unknown): value is StateQLRowsPage {
     !record(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
     !generation(value.sessionGeneration) ||
+    !isStateQLWorkspace(value.workspace) ||
     !identifier(value.actor_id) ||
     !boundedString(value.handle, 200) ||
     !Number.isSafeInteger(value.offset) ||
@@ -1438,6 +1445,7 @@ export function isStateQLSnapshot(value: unknown): value is StateQLSnapshot {
     value.protocolVersion !== PROTOCOL_VERSION ||
     !generation(value.sessionGeneration) ||
     !record(value.session) ||
+    !isStateQLWorkspace(value.workspace) ||
     !identifier(value.session.session_id) ||
     !identifier(value.session.name) ||
     !["active", "closed"].includes(String(value.session.status)) ||

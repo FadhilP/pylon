@@ -3,6 +3,7 @@ import { IconChevronRight, IconDatabase } from "@tabler/icons-react";
 import type { StateQLCatalogObject } from "pi-stateql/stateql-command";
 import { runtimeStore } from "../runtime/event-store";
 import "./database-workspace.css";
+import type { StateQLWorkspace } from "../../shared/protocol/snapshots";
 
 type CatalogKind = StateQLCatalogObject["kind"];
 type Cursor = number | string;
@@ -10,6 +11,7 @@ type Group = { objects: StateQLCatalogObject[]; next: Cursor | null; loading: bo
 
 type Props = {
   scope: string;
+  workspace: StateQLWorkspace;
   driver: "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
   connectionId: string;
   search: string;
@@ -50,6 +52,7 @@ const message = (result: Awaited<ReturnType<typeof runtimeStore.stateqlCommand>>
 
 export function DatabaseObjectBrowser({
   scope,
+  workspace,
   driver,
   connectionId,
   search,
@@ -86,6 +89,7 @@ export function DatabaseObjectBrowser({
       }));
       try {
         const result = await runtimeStore.stateqlCommand(
+          workspace,
           {
             command: "objects.list",
             kind,

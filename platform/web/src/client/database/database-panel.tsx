@@ -15,7 +15,7 @@ import {
 } from "@tabler/icons-react";
 import { parseStateQLPanelCommand, type StateQLCatalogObject } from "pi-stateql/stateql-command";
 import { DatabaseObjectBrowser } from "./database-object-browser";
-import type { StateQLCommandInput, StateQLCommandResult, StateQLSnapshot } from "../../shared/protocol/snapshots";
+import type { StateQLCommandInput, StateQLCommandResult, StateQLSnapshot, StateQLWorkspace } from "../../shared/protocol/snapshots";
 import {
   databaseCell,
   databaseRecord,
@@ -48,13 +48,22 @@ interface QueryTab extends DatabaseQuery {
   plan?: { handle: string; expires: string; text: string; params: string };
 }
 const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({ ...tab, params: "", kind: "query", sub: "data" });
+const DATABASE_WORKSPACE_KEY = "pylon-database-workspace-v1";
+const persistedWorkspace = (): StateQLWorkspace => {
+  try {
+    return localStorage.getItem(DATABASE_WORKSPACE_KEY) === "global" ? "global" : "session";
+  } catch {
+    return "session";
+  }
+};
 
 export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
   const runtimeScope = `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`;
+  const [workspace, setWorkspace] = useState<StateQLWorkspace>(persistedWorkspace);
   const ready = live.connection === "connected" && live.runtime?.ready === true;
   const [receivedSnapshot, setSnapshot] = useState<StateQLSnapshot>();
   const snapshot =
-    ready && databaseSnapshotMatchesRuntime(receivedSnapshot, live.runtime) ? receivedSnapshot : undefined;
+    ready && databaseSnapshotMatchesRuntime(receivedSnapshot, live.runtime, workspace) ? receivedSnapshot : undefined;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [tabs, setTabs] = useState<QueryTab[]>([]);
@@ -80,7 +89,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const savedScope = useRef("");
   const refreshRevision = useRef(0);
   const scope = snapshot
-    ? JSON.stringify([snapshot.actor_id, snapshot.session.session_id, snapshot.connection?.connection_id ?? "unbound"])
+    ? JSON.stringify([workspace, snapshot.actor_id, snapshot.session.session_id, snapshot.connection?.connection_id ?? "unbound"])
     : "";
   const connected = Boolean(snapshot?.connection);
   // The ref changes synchronously before the command starts; React state can still contain
@@ -114,7 +123,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const refresh = async (signal?: AbortSignal) => {
     const revision = ++refreshRevision.current;
     try {
-      const next = await runtimeStore.stateqlSnapshot(100, signal);
+      const next = await runtimeStore.stateqlSnapshot(workspace, 100, signal);
       if (!signal?.aborted && revision === refreshRevision.current) setSnapshot(next);
       return next;
     } catch (cause) {
@@ -127,7 +136,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     if (ready) void refresh(controller.signal);
     else setSnapshot(undefined);
     return () => controller.abort();
-  }, [runtimeScope, ready, toolRevision]);
+  }, [runtimeScope, ready, toolRevision, workspace]);
   useEffect(() => {
     setSnapshot(undefined);
     request.current?.abort();
@@ -135,14 +144,26 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     setSetup(undefined);
     dirtyTabs.current.clear();
     setTabs([]);
-  }, [runtimeScope]);
+  }, [runtimeScope, workspace]);
   useEffect(
     () => () => {
       setupOperation.current = undefined;
       request.current?.abort();
     },
-    [runtimeScope],
+    [runtimeScope, workspace],
   );
+  useEffect(() => {
+    try {
+      localStorage.setItem(DATABASE_WORKSPACE_KEY, workspace);
+    } catch {
+      // Storage is optional; this panel still works without persistence.
+    }
+  }, [workspace]);
+  useEffect(() => {
+    if (workspace !== "global" || !ready) return;
+    const timer = window.setInterval(() => void refresh(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [workspace, ready, runtimeScope]);
   useEffect(() => {
     if (!scope || scope === savedScope.current) return;
     savedScope.current = scope;
@@ -213,6 +234,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     setError("");
     try {
       const response = await runtimeStore.stateqlCommand(
+        workspace,
         parsed,
         controller.signal,
         snapshotRef.current?.connection?.connection_id ?? null,
@@ -409,7 +431,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   // Metadata requests do not recurse through run()/snapshot refresh or lock query controls.
   const refreshProfiles = async (signal?: AbortSignal) => {
     try {
-      const response = await runtimeStore.stateqlCommand({ command: "profile.list" }, signal);
+      const response = await runtimeStore.stateqlCommand(workspace, { command: "profile.list" }, signal);
       const value = data(response);
       if (signal?.aborted) return;
       if (!Array.isArray(value?.profiles)) {
@@ -429,7 +451,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     const controller = new AbortController();
     if (ready) void refreshProfiles(controller.signal);
     return () => controller.abort();
-  }, [runtimeScope, ready, toolRevision, profileRevision]);
+  }, [runtimeScope, ready, toolRevision, profileRevision, workspace]);
   const openObject = async (object: StateQLCatalogObject) => {
     if (["table", "view", "collection"].includes(object.kind)) {
       const table = { name: object.name, ...(object.schema ? { schema: object.schema } : {}) };
@@ -509,6 +531,21 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
             Database
           </span>
           <span className="spacer" />
+          <select
+            aria-label="Database workspace"
+            value={workspace}
+            disabled={Boolean(busy) || Boolean(live.pendingUi)}
+            onChange={event => {
+              const next = event.target.value === "global" ? "global" : "session";
+              if (next === workspace) return;
+              if (dirtyTabs.current.size && !window.confirm("Discard pending table edits and switch database workspace?"))
+                return;
+              request.current?.abort();
+              setWorkspace(next);
+            }}>
+            <option value="session">Session</option>
+            <option value="global">Global</option>
+          </select>
           <button
             className="icon-button"
             type="button"
@@ -739,6 +776,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
               {snapshot?.connection ? (
                 <DatabaseObjectBrowser
                   scope={`${runtimeScope}:${scope}`}
+                  workspace={workspace}
                   driver={driver}
                   connectionId={snapshot.connection.connection_id}
                   search={search}
@@ -839,6 +877,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
               aria-labelledby="database-tab-history"
               hidden={active !== "history"}>
               <DatabaseHistory
+                workspace={workspace}
                 snapshot={snapshot}
                 onOpen={text => {
                   add(text);
@@ -1198,6 +1237,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                         key={tab.result.result_id}
                         result={tab.result}
                         scope={runtimeScope}
+                        workspace={workspace}
                         editable={tab.kind === "table" && !tab.detached && !readOnly && !inTransaction}
                         disabled={locked || tab.detached}
                         suspended={Boolean(tab.detached)}

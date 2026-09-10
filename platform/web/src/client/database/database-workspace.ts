@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
-import type { RuntimeSnapshot, StateQLCommandInput, StateQLCommandResult, StateQLSnapshot } from "../../shared/protocol/snapshots.ts";
+import { STATEQL_GLOBAL_UI_ACTOR, type RuntimeSnapshot, type StateQLCommandInput, type StateQLCommandResult, type StateQLSnapshot, type StateQLWorkspace } from "../../shared/protocol/snapshots.ts";
 
 export type DatabaseDriver = "sqlite" | "postgres" | "mysql" | "mongodb" | "redis";
 export interface DatabaseQuery {
@@ -34,13 +34,15 @@ const integer = (value: unknown): value is number => Number.isSafeInteger(value)
 const text = (value: unknown): value is string => typeof value === "string" && value.length <= 65_536;
 
 export function databaseSnapshotMatchesRuntime(
-  snapshot: Pick<StateQLSnapshot, "actor_id" | "sessionGeneration"> | undefined,
+  snapshot: Pick<StateQLSnapshot, "actor_id" | "sessionGeneration" | "workspace"> | undefined,
   runtime: Pick<RuntimeSnapshot, "sessionId" | "sessionGeneration"> | null | undefined,
+  workspace: StateQLWorkspace,
 ): boolean {
   return Boolean(
     snapshot &&
       runtime &&
-      snapshot.actor_id === runtime.sessionId &&
+      snapshot.workspace === workspace &&
+      snapshot.actor_id === (workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.sessionId) &&
       snapshot.sessionGeneration === runtime.sessionGeneration,
   );
 }
@@ -131,6 +133,7 @@ export function isDatabaseCommandResult(
     !databaseRecord(value) ||
     value.protocolVersion !== PROTOCOL_VERSION ||
     !integer(value.sessionGeneration) ||
+    !["session", "global"].includes(String(value.workspace)) ||
     !text(value.actor_id) ||
     value.command !== command ||
     databaseBytes(value) > 256 * 1024

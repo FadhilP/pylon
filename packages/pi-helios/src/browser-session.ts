@@ -43,6 +43,7 @@ export interface BrowserOperationResult {
   page?: PageIdentity;
   tabs?: PageIdentity[];
   snapshot?: string;
+  referencesInvalidated?: boolean;
   tabsOmitted?: number;
   snapshotRedactions?: number;
   snapshotTruncated?: boolean;
@@ -639,7 +640,16 @@ export class BrowserSessionManager {
     if (action.kind === "mouse-up") managed.heldButtons.delete(action.button);
     if (action.kind === "key-up") managed.heldKeys.delete(action.key);
     try {
-      return await this.envelope(managed, action.kind, result, signal, action.kind === "tab-list", startedAt);
+      const operation = await this.envelope(
+        managed,
+        action.kind,
+        result,
+        signal,
+        action.kind === "tab-list",
+        startedAt,
+      );
+      if (result.snapshot === undefined && this.invalidatesReferences(action)) operation.referencesInvalidated = true;
+      return operation;
     } catch (error) {
       if (result.artifactPath) await rm(result.artifactPath, { force: true }).catch(() => {});
       throw error;
@@ -691,7 +701,9 @@ export class BrowserSessionManager {
   private validateReference(managed: Managed, action: BrowserAction): void {
     if (!("target" in action) || !action.target) return;
     if (!managed.references.has(action.target))
-      throw new Error(`Element reference ${action.target} is stale or was not returned by latest snapshot`);
+      throw new Error(
+        `Element reference ${action.target} is stale or was not returned by latest snapshot; use find or snapshot for fresh refs`,
+      );
   }
 
   private invalidatesReferences(action: BrowserAction): boolean {

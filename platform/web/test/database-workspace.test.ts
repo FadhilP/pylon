@@ -13,14 +13,15 @@ test("database snapshots are visible only to their matching runtime actor and ge
   const snapshot = {
     actor_id: "session-a",
     sessionGeneration: 7,
+    workspace: "session" as const,
     session: { session_id: "stateql-internal-session", name: "A", status: "active" as const },
   };
   const runtime = { sessionId: "session-a", sessionGeneration: 7 };
-  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime), true);
-  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionId: "session-b" }), false);
-  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionGeneration: 8 }), false);
-  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime), true);
-  assert.equal(databaseSnapshotMatchesRuntime(undefined, runtime), false);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime, "session"), true);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionId: "session-b" }, "session"), false);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, { ...runtime, sessionGeneration: 8 }, "session"), false);
+  assert.equal(databaseSnapshotMatchesRuntime(snapshot, runtime, "global"), false);
+  assert.equal(databaseSnapshotMatchesRuntime(undefined, runtime, "session"), false);
 });
 
 test("query persistence isolates connection scopes and never retains live result or parameter data", () => {

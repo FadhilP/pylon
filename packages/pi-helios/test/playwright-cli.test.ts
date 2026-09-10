@@ -38,7 +38,7 @@ test("snapshot compactor flattens only exact anonymous generic wrappers", () => 
     '      - link "Docs" [ref=e9]',
   ];
   assert.deepEqual(compactSnapshotLines(raw), [
-    '- button "Go" [ref=f1e3] [cursor=pointer]',
+    '- button "Go" [ref=f1e3]',
     '- generic "Named" [ref=e4]:',
     "  - text: Keep",
     "- generic [ref=e5] [cursor=pointer]:",
@@ -539,6 +539,48 @@ test("adapter surfaces nested Playwright CLI errors", async () => {
     );
   } finally {
     await cli.dispose();
+  }
+});
+
+test("adapter retains bounded interaction blockers and diagnostic tails without leaking credentials", async () => {
+  let errorText = "";
+  for (const nested of [false, true]) {
+    const cli = await PlaywrightCli.create(async () => {
+      const failure = { isError: true, error: errorText };
+      return { code: 1, stdout: JSON.stringify(nested ? { result: failure } : failure), stderr: "", killed: false };
+    });
+    try {
+      const secret = "sk-" + "s".repeat(48);
+      errorText = [
+        "TimeoutError: Timeout 5000ms exceeded.",
+        "Call log:",
+        ...Array(30).fill("\u001b[2m  - waiting for element to be visible, enabled and stable\u001b[22m"),
+        `\u001b[2m  - <dialog data-source="${cli.directory}" token=${secret}> intercepts pointer events\u001b[22m`,
+        "  - retrying click action",
+        "  - waiting 500ms",
+      ].join("\n");
+      await assert.rejects(cli.run(SESSION, { kind: "click", target: "e1" }), (error: any) => {
+        assert.equal(error.category, "command-failed");
+        assert.ok(error.message.length <= 500);
+        assert.match(error.message, /^TimeoutError: Timeout 5000ms exceeded/);
+        assert.match(error.message, /intercepts pointer events/);
+        assert.match(error.message, /credential redacted/);
+        assert.doesNotMatch(error.message, /[\u0000-\u001f\u007f-\u009f]/);
+        assert.equal(error.message.includes(secret), false);
+        assert.equal(error.message.includes(cli.directory), false);
+        return true;
+      });
+
+      errorText = "Error: navigation failed\n" + "waiting for response; ".repeat(80) + "\nCause: connection reset";
+      await assert.rejects(cli.run(SESSION, { kind: "reload" }), (error: any) => {
+        assert.ok(error.message.length <= 500);
+        assert.match(error.message, /^Error: navigation failed/);
+        assert.match(error.message, /Cause: connection reset$/);
+        return true;
+      });
+    } finally {
+      await cli.dispose();
+    }
   }
 });
 

@@ -8,11 +8,12 @@ import {
   describeRuntimeSnapshotIssue,
   isStateQLCommandInput,
   validateCommand,
+  isStateQLWorkspace,
 } from "../../shared/protocol/validation.ts";
 import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
-import type { BootstrapSnapshot, StateQLCommandInput, UsageQuery } from "../../shared/protocol/snapshots.ts";
+import type { BootstrapSnapshot, StateQLCommandInput, StateQLWorkspace, UsageQuery } from "../../shared/protocol/snapshots.ts";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope.ts";
 import type { WorkspaceSearchQuery, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search.ts";
@@ -631,16 +632,21 @@ export class ServerTransport {
 
   private async stateqlSnapshot(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     this.requireTab(request);
+    if ([...url.searchParams.keys()].some(key => !["generation", "historyLimit", "workspace"].includes(key)))
+      throw httpError(400, "invalid StateQL snapshot request");
     const generation = Number(url.searchParams.get("generation"));
     const historyLimit = Number(url.searchParams.get("historyLimit") ?? 50);
+    const workspaces = url.searchParams.getAll("workspace");
+    const workspace = (workspaces[0] ?? "session") as StateQLWorkspace;
+    if (workspaces.length > 1 || !isStateQLWorkspace(workspace)) throw httpError(400, "invalid StateQL workspace");
     if (!Number.isSafeInteger(generation) || generation !== this.journal.sessionGeneration)
       throw httpError(409, "stale session generation");
     if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 100)
       throw httpError(400, "invalid StateQL history limit");
     if (!this.projection.isReady()) throw httpError(409, "runtime is not ready");
     if (!this.driver.stateqlSnapshot) throw httpError(409, "StateQL snapshot is unavailable");
-    const result = await this.driver.stateqlSnapshot(historyLimit);
-    if (result.sessionGeneration !== this.journal.sessionGeneration)
+    const result = await this.driver.stateqlSnapshot(historyLimit, workspace);
+    if (result.sessionGeneration !== this.journal.sessionGeneration || result.workspace !== workspace)
       throw httpError(409, "session changed while loading StateQL status");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
@@ -653,6 +659,10 @@ export class ServerTransport {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw httpError(400, "invalid StateQL rows request");
     const body = input as Record<string, unknown>;
+    if (Object.keys(body).some(key => !["generation", "workspace", "handle", "offset", "limit"].includes(key)))
+      throw httpError(400, "invalid StateQL rows request");
+    const workspace = (body.workspace ?? "session") as StateQLWorkspace;
+    if (!isStateQLWorkspace(workspace)) throw httpError(400, "invalid StateQL workspace");
     if (
       typeof body.generation !== "number" ||
       !Number.isSafeInteger(body.generation) ||
@@ -684,12 +694,12 @@ export class ServerTransport {
     response.once("close", cancel);
     let result;
     try {
-      result = await this.driver.stateqlRows(body.handle, body.offset, body.limit, controller.signal);
+      result = await this.driver.stateqlRows(body.handle, body.offset, body.limit, controller.signal, workspace);
     } finally {
       request.removeListener("aborted", cancel);
       response.removeListener("close", cancel);
     }
-    if (result.sessionGeneration !== this.journal.sessionGeneration)
+    if (result.sessionGeneration !== this.journal.sessionGeneration || result.workspace !== workspace)
       throw httpError(409, "session changed while loading StateQL rows");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);
@@ -702,13 +712,15 @@ export class ServerTransport {
     if (
       !body ||
       typeof body !== "object" ||
-      Object.keys(body).some(key => !["generation", "handle", "format"].includes(key)) ||
+      Object.keys(body).some(key => !["generation", "workspace", "handle", "format"].includes(key)) ||
       typeof body.handle !== "string" ||
       !body.handle ||
       body.handle.length > 200 ||
       !["json", "jsonl", "csv"].includes(String(body.format))
     )
       throw httpError(400, "Invalid export request");
+    const workspace = (body.workspace ?? "session") as StateQLWorkspace;
+    if (!isStateQLWorkspace(workspace)) throw httpError(400, "invalid StateQL workspace");
     if (body.generation !== this.journal.sessionGeneration || !this.projection.isReady())
       throw httpError(409, "Session is not ready");
     if (!this.driver.stateqlExport) throw httpError(409, "StateQL exports are unavailable");
@@ -724,9 +736,10 @@ export class ServerTransport {
         body.handle,
         body.format as "json" | "jsonl" | "csv",
         controller.signal,
+        workspace,
       );
       controller.signal.throwIfAborted();
-      if (result.sessionGeneration !== this.journal.sessionGeneration)
+      if (result.sessionGeneration !== this.journal.sessionGeneration || result.workspace !== workspace)
         throw httpError(409, "Session changed during export");
       response.setHeader("cache-control", "no-store");
       response.setHeader(
@@ -755,8 +768,10 @@ export class ServerTransport {
     if (!input || typeof input !== "object" || Array.isArray(input))
       throw httpError(400, "invalid StateQL command request");
     const body = input as Record<string, unknown>;
-    if (Object.keys(body).some(key => key !== "generation" && key !== "input" && key !== "expectedConnectionId" && key !== "operationId"))
+    if (Object.keys(body).some(key => !["generation", "workspace", "input", "expectedConnectionId", "operationId"].includes(key)))
       throw httpError(400, "invalid StateQL command request");
+    const workspace = (body.workspace ?? "session") as StateQLWorkspace;
+    if (!isStateQLWorkspace(workspace)) throw httpError(400, "invalid StateQL workspace");
     if (
       typeof body.generation !== "number" ||
       !Number.isSafeInteger(body.generation) ||
@@ -793,13 +808,14 @@ export class ServerTransport {
         controller.signal,
         body.expectedConnectionId as string | null | undefined,
         body.operationId as string | undefined,
+        workspace,
       );
     } finally {
       request.removeListener("aborted", cancel);
       response.removeListener("close", cancel);
       if (this.databaseCommand === commandOwner) this.databaseCommand = undefined;
     }
-    if (result.sessionGeneration !== this.journal.sessionGeneration)
+    if (result.sessionGeneration !== this.journal.sessionGeneration || result.workspace !== workspace)
       throw httpError(409, "session changed while running StateQL command");
     response.setHeader("cache-control", "no-store");
     this.send(response, 200, result);

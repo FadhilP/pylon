@@ -1111,6 +1111,67 @@ test("browser semantic plan stops when post-action page metadata is unavailable"
   assert.equal(finds, 1);
 });
 
+test("browser mutation recovery batches observations and keeps focused refs authoritative", async () => {
+  const commands: string[][] = [];
+  const { tools, handlers } = runtime({
+    exec: async (_command: string, args: string[]) => {
+      commands.push(args);
+      const command = args[3];
+      const value =
+        command === "tab-list"
+          ? { result: "- 0: (current) [Form](https://example.com/)" }
+          : command === "open"
+            ? { snapshot: '- textbox "Email" [ref=e1]\n- button "Save" [ref=e2]' }
+            : command === "snapshot"
+              ? {
+                  snapshot: args.includes("e3")
+                    ? '- textbox "Email" [ref=e4]'
+                    : '- dialog [ref=e3]:\n  - textbox "Email" [ref=e4]\n- button "Outside" [ref=e5]',
+                }
+              : {};
+      return { code: 0, stdout: JSON.stringify(value), stderr: "", killed: false };
+    },
+  });
+  const browser = tools.get("helios_browser");
+  const ctx = context();
+  const run = (params: any) => browser.execute("recovery", params, undefined, undefined, ctx);
+  try {
+    await run({ action: "start" });
+    const beforeInvalid = commands.length;
+    await assert.rejects(run({ action: "fill", target: "e1", value: "person@example.com" }), /use text/);
+    assert.equal(commands.length, beforeInvalid, "invalid input must not reach the browser");
+
+    const filled = await run({ action: "fill", target: "e1", text: "person@example.com" });
+    assert.equal(filled.details.referencesInvalidated, true);
+    assert.match(filled.content[0].text, /Refs cleared/);
+    assert.deepEqual(commands.at(-1)!.slice(3), ["fill", "e1", "person@example.com"]);
+    const beforeStale = commands.length;
+    await assert.rejects(run({ action: "snapshot", target: "e1" }), /stale/);
+    assert.equal(commands.length, beforeStale);
+
+    const observed = await run({
+      actions: [
+        { action: "press", key: "Escape" },
+        { action: "snapshot", depth: 4 },
+      ],
+    });
+    assert.deepEqual(
+      commands.slice(beforeStale).map(args => args[3]),
+      ["press", "tab-list", "snapshot"],
+    );
+    assert.equal(observed.details.steps[0].details.referencesInvalidated, true);
+    assert.equal(observed.details.steps[1].details.referencesInvalidated, undefined);
+    await run({ action: "snapshot", target: "e3", depth: 4 });
+    assert.ok(commands.at(-1)!.includes("e3"));
+    const beforeOutside = commands.length;
+    await assert.rejects(run({ action: "click", target: "e5" }), /stale/);
+    assert.equal(commands.length, beforeOutside, "a focused observation must not keep omitted refs");
+    await run({ action: "fill", target: "e4", text: "updated@example.com" });
+  } finally {
+    for (const handler of handlers.get("session_shutdown") ?? []) await handler({ reason: "quit" }, ctx);
+  }
+});
+
 test("browser continue pages cached output without another CLI command and replaces refs", async () => {
   const raw = Array.from({ length: 205 }, (_, index) => `- button Item ${index} [ref=e${index}]`).join("\n");
   const commands: string[] = [];
@@ -1544,7 +1605,7 @@ test("attached browser still requires consent to close a user tab", async () => 
   assert.equal(commands.at(-1), "detach");
 });
 
-test("owned browser screenshot uses Playwright CLI, attaches image, and cleans artifacts", async () => {
+test("owned browser cropped screenshot uses a current ref, attaches image, and cleans artifacts", async () => {
   const commands: string[] = [];
   const before = await temporaryCaptures();
   const { tools, handlers } = runtime({
@@ -1567,10 +1628,17 @@ test("owned browser screenshot uses Playwright CLI, attaches image, and cleans a
           killed: false,
         };
       if (cliCommand === "screenshot") {
+        assert.ok(args.includes("e1"));
+        assert.equal(args.includes("--full-page"), false);
         const path = args.find(arg => arg.startsWith("--filename="))!.slice("--filename=".length);
         await writeFile(path, PNG);
       }
-      return { code: 0, stdout: "{}", stderr: "", killed: false };
+      return {
+        code: 0,
+        stdout: JSON.stringify(cliCommand === "open" ? { snapshot: '- region "Component" [ref=e1]' } : {}),
+        stderr: "",
+        killed: false,
+      };
     },
   });
   const statuses: Array<string | undefined> = [];
@@ -1587,7 +1655,12 @@ test("owned browser screenshot uses Playwright CLI, attaches image, and cleans a
   });
   const browser = tools.get("helios_browser");
   await browser.execute("start", { action: "start", url: "https://example.com" }, undefined, undefined, ctx);
-  const result = await browser.execute("shot", { action: "screenshot" }, undefined, undefined, ctx);
+  await assert.rejects(
+    browser.execute("stale-crop", { action: "screenshot", target: "e9" }, undefined, undefined, ctx),
+    /stale/,
+  );
+  assert.equal(commands.includes("screenshot"), false);
+  const result = await browser.execute("shot", { action: "screenshot", target: "e1" }, undefined, undefined, ctx);
   assert.ok(result.content.some((item: any) => item.type === "image" && item.data.length > 0));
   assert.equal(result.details.snapshot, undefined);
   assert.equal(result.details.artifactPath, undefined);

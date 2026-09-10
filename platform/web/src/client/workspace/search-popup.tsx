@@ -168,7 +168,7 @@ export function SearchPopup({
   const [symbolError, setSymbolError] = useState("");
   const [symbolLoading, setSymbolLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string>();
-  const dialog = useRef<HTMLDialogElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const search = useTextSearch(scope);
@@ -195,12 +195,14 @@ export function SearchPopup({
     }
   }, [available, live.pendingUi, search.cancel]);
   useEffect(() => {
-    const element = dialog.current;
-    if (open && element && !element.open) {
-      element.showModal();
-      input.current?.focus();
-    } else if (!open && element?.open) element.close();
-  }, [open]);
+    if (!open) return;
+    input.current?.focus();
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !dialog.current?.contains(event.target)) close();
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [open, search.cancel]);
   useEffect(() => {
     const eventOpen = (event: Event) => {
       if (!available || live.pendingUi || document.querySelector("dialog[open], [role=dialog][aria-modal=true]")) return;
@@ -384,26 +386,13 @@ export function SearchPopup({
   };
   return (
     <>
-      <dialog
+      <div
         ref={dialog}
         className="workspace-search-popup"
+        data-shortcuts-blocked
+        hidden={!open}
+        role="dialog"
         aria-labelledby="workspace-search-title"
-        onCancel={event => {
-          event.preventDefault();
-          close();
-        }}
-        onClick={event => {
-          if (event.target === dialog.current) {
-            const rect = dialog.current.getBoundingClientRect();
-            if (
-              event.clientX < rect.left ||
-              event.clientX > rect.right ||
-              event.clientY < rect.top ||
-              event.clientY > rect.bottom
-            )
-              close();
-          }
-        }}
         onKeyDown={event => {
           if (event.key === "Escape") {
             event.preventDefault();
@@ -413,6 +402,21 @@ export function SearchPopup({
           if (event.ctrlKey && event.key === "Tab") {
             event.preventDefault();
             chooseTab(TABS[(TABS.indexOf(tab) + (event.shiftKey ? 4 : 1)) % 5]);
+            return;
+          }
+          if (event.key !== "Tab") return;
+          const focusable = dialog.current?.querySelectorAll<HTMLElement>(
+            "button:not([disabled]), input:not([disabled]), select:not([disabled])",
+          );
+          if (!focusable?.length) return;
+          const first = focusable[0]!;
+          const last = focusable[focusable.length - 1]!;
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
           }
         }}>
         <header>
@@ -586,7 +590,7 @@ export function SearchPopup({
           )}
           <small>↑↓ preview · Enter open · Esc close</small>
         </footer>
-      </dialog>
+      </div>
     </>
   );
 }

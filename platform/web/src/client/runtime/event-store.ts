@@ -7,6 +7,7 @@ import { isDatabaseCommandResult, clearDatabaseDrafts } from "../database/databa
 import type { GuardRuleOverrides } from "../../shared/settings/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
+import { STATEQL_GLOBAL_UI_ACTOR } from "../../shared/protocol/snapshots";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
 import type {
   HeliosAndroidToolingInput,
@@ -58,6 +59,7 @@ import type {
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
+  StateQLWorkspace,
   TimelineCheckpointDiff,
   TimelineCheckpointFiles,
   TurnDiffResult,
@@ -968,23 +970,29 @@ export class RuntimeEventStore {
     return result;
   }
 
-  async stateqlSnapshot(historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
+  async stateqlSnapshot(workspace: StateQLWorkspace, historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.stateqlSnapshot(runtime.sessionGeneration, historyLimit, signal);
+    const result = await this.api.stateqlSnapshot(runtime.sessionGeneration, workspace, historyLimit, signal);
     if (
       !isStateQLSnapshot(result) ||
       this.snapshot.runtime?.sessionGeneration !== runtime.sessionGeneration ||
       this.snapshot.runtime?.sessionId !== runtime.sessionId ||
       result.sessionGeneration !== runtime.sessionGeneration ||
-      result.actor_id !== runtime.sessionId
+      result.workspace !== workspace ||
+      result.actor_id !== (workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.sessionId)
     )
       throw new Error("StateQL status is stale or invalid");
     return result;
   }
 
-  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<Blob> {
+  async stateqlExport(
+    workspace: StateQLWorkspace,
+    handle: string,
+    format: "json" | "jsonl" | "csv",
+    signal?: AbortSignal,
+  ): Promise<Blob> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.stateqlExport(runtime.sessionGeneration, handle, format, signal);
+    const result = await this.api.stateqlExport(runtime.sessionGeneration, workspace, handle, format, signal);
     const current = this.requireReadyRuntime();
     if (current.sessionGeneration !== runtime.sessionGeneration || current.sessionId !== runtime.sessionId)
       throw new Error("Session changed during export");
@@ -992,40 +1000,55 @@ export class RuntimeEventStore {
   }
 
   async stateqlCommand(
+    workspace: StateQLWorkspace,
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
     operationId?: string,
   ): Promise<StateQLCommandResult> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.stateqlCommand(runtime.sessionGeneration, input, signal, expectedConnectionId, operationId);
+    const result = await this.api.stateqlCommand(
+      runtime.sessionGeneration,
+      workspace,
+      input,
+      signal,
+      expectedConnectionId,
+      operationId,
+    );
     const current = this.requireReadyRuntime();
     if (
       current.sessionGeneration !== runtime.sessionGeneration ||
       current.sessionId !== runtime.sessionId ||
       !isDatabaseCommandResult(result, input.command) ||
       result.sessionGeneration !== current.sessionGeneration ||
-      result.actor_id !== current.sessionId
+      result.workspace !== workspace ||
+      result.actor_id !== (workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : current.sessionId)
     )
       throw new Error("Database command response is stale or invalid");
     return result;
   }
 
-  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
+  async stateqlRows(
+    workspace: StateQLWorkspace,
+    handle: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<StateQLRowsPage> {
     const runtime = this.requireReadyRuntime();
-    const result = await this.api.stateqlRows(runtime.sessionGeneration, handle, offset, limit, signal);
+    const result = await this.api.stateqlRows(runtime.sessionGeneration, workspace, handle, offset, limit, signal);
     if (
       !isStateQLRowsPage(result) ||
       this.snapshot.runtime?.sessionGeneration !== runtime.sessionGeneration ||
       this.snapshot.runtime?.sessionId !== runtime.sessionId ||
       result.sessionGeneration !== runtime.sessionGeneration ||
-      result.actor_id !== runtime.sessionId ||
+      result.workspace !== workspace ||
+      result.actor_id !== (workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.sessionId) ||
       result.handle !== handle ||
       result.offset !== offset ||
       result.limit !== limit
-    ) {
+    )
       throw new Error("StateQL rows are stale or invalid");
-    }
     return result;
   }
 

@@ -1,5 +1,17 @@
 [
   {
+    "version": "3.1.3",
+    "date": "Sep 10, 2026",
+    "title": "Shared database workspaces and smarter browser control",
+    "summary": "A maintenance release adds an isolated shared database scope, makes browser automation more efficient and predictable, and improves global search keyboard behavior.",
+    "notes": [
+      "Added independent Session and Global StateQL workspaces for agents and the Web Database panel, with persisted UI selection, periodic shared-state refresh, workspace-tagged requests and responses, guarded switching when table edits are pending, and strict actor and generation isolation.",
+      "Added model-facing StateQL workspace selection and per-command overrides that default and reset safely to the private session scope, and upgraded the StateQL runtime to 0.11.1 for global workspace support.",
+      "Made Helios browser work more efficient and predictable with focused observations, element-targeted snapshots and screenshots, ready action-observation batches, explicit stale-reference handling, stricter action validation, and bounded redacted CLI diagnostics.",
+      "Improved the global search popup with outside-click closing, initial focus, contained Tab navigation, and background shortcut blocking only while the popup is open."
+    ]
+  },
+  {
     "version": "3.1.2",
     "date": "Sep 10, 2026",
     "title": "Scalable interface and smoother code browsing",

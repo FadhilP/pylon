@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -20,6 +20,8 @@ import {
 } from "../src/connection-setup.ts";
 
 const COMMANDS = [
+  "workspace.select",
+  "workspace.status",
   "connect",
   "disconnect",
   "status",
@@ -61,6 +63,11 @@ const COMMANDS = [
 const toolSchema = Type.Object(
   {
     command: StringEnum(COMMANDS, { description: "StateQL command" }),
+    workspace: Type.Optional(
+      StringEnum(["session", "global"] as const, {
+        description: "StateQL workspace; defaults to the current selection, initially session",
+      }),
+    ),
     target: Type.Optional(
       Type.String({
         description:
@@ -174,9 +181,13 @@ type RuntimeStateQL = {
   describeObject?: StateQL["describeObject"];
 };
 type Factory = (options: StateQLActorOptions) => RuntimeStateQL;
+type WorkspaceFactory = (options: StateQLActorOptions & { workspace: string }) => RuntimeStateQL;
+type WorkspaceName = "session" | "global";
 
 interface Runtime {
   actorId: string;
+  piActorId: string;
+  workspace: WorkspaceName;
   controller: AbortController;
   stateql: RuntimeStateQL;
 }
@@ -213,6 +224,7 @@ function credentialHost(value: unknown): StateQLCredentialHost | undefined {
 interface SnapshotRequest {
   version: 1;
   sessionId: string;
+  workspace?: WorkspaceName;
   historyLimit?: number;
   signal?: AbortSignal;
   claim(): boolean;
@@ -222,6 +234,7 @@ interface SnapshotRequest {
 interface RowsRequest {
   version: 1;
   sessionId: string;
+  workspace?: WorkspaceName;
   handle: string;
   offset: number;
   limit: number;
@@ -235,6 +248,7 @@ interface PanelCommandRequest {
   operationId?: string;
   version: 1;
   sessionId: string;
+  workspace?: WorkspaceName;
   command: unknown;
   signal?: AbortSignal;
   ui: unknown;
@@ -263,6 +277,8 @@ function abortSignal(value: unknown): value is AbortSignal | undefined {
 }
 
 const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInput)[]> = {
+  "workspace.select": ["workspace"],
+  "workspace.status": [],
   connect: ["target", "name", "read_only", "secret_env", "profile", "timeout_ms"],
   disconnect: [],
   status: [],
@@ -417,11 +433,25 @@ function boundedJson(value: unknown, label: string): void {
     throw new Error(`${label} cannot exceed ${formatSize(MAX_PARAMS_BYTES)}`);
   }
 }
-function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput {
+function validateInput(input: StateQLToolInput): StateQLToolInput {
+  if (input.workspace !== undefined && input.workspace !== "session" && input.workspace !== "global")
+    throw new Error("workspace must be session or global");
+  if (input.command === "workspace.select") {
+    if (input.workspace === undefined) throw new Error("workspace.select requires workspace");
+    for (const [key, value] of Object.entries(input))
+      if (value !== undefined && key !== "command" && key !== "workspace") throw new Error(`workspace.select does not accept ${key}`);
+    return input;
+  }
+  if (input.command === "workspace.status") {
+    for (const [key, value] of Object.entries(input))
+      if (value !== undefined && key !== "command") throw new Error(`workspace.status does not accept ${key}`);
+    return input;
+  }
   if (PANEL_COMMANDS.has(input.command as StateQLPanelCommand["command"])) {
-    const parsed = parseStateQLPanelCommand(input, { maxTimeoutMs: 2_147_483_647 });
+    const { workspace, ...stateqlInput } = input;
+    const parsed = parseStateQLPanelCommand(stateqlInput, { maxTimeoutMs: 2_147_483_647 });
     if (!parsed) {
-      const allowed = new Set(["command", ...(fields[input.command] ?? [])]);
+      const allowed = new Set(["command", "workspace", ...(fields[input.command] ?? [])]);
       const unexpected = Object.keys(input).find(
         key => input[key as keyof StateQLToolInput] !== undefined && !allowed.has(key as keyof StateQLToolInput),
       );
@@ -435,11 +465,11 @@ function validateInput(input: StateQLToolInput): BatchCommand & StateQLToolInput
       if (input.command.startsWith("mongo.")) throw new Error(`${input.command} has an invalid MongoDB command`);
       throw new Error(`${input.command} has invalid input`);
     }
-    return parsed as BatchCommand & StateQLToolInput;
+    return { ...parsed, ...(workspace ? { workspace } : {}) } as StateQLToolInput;
   }
   const commandFields = fields[input.command];
   if (!commandFields) throw new Error(`Unknown StateQL command ${String(input.command)}`);
-  const allowed = new Set<keyof StateQLToolInput>(["command", ...commandFields]);
+  const allowed = new Set<keyof StateQLToolInput>(["command", "workspace", ...commandFields]);
   for (const [key, value] of Object.entries(input))
     if (value !== undefined && !allowed.has(key as keyof StateQLToolInput))
       throw new Error(`${input.command} does not accept ${key}`);
@@ -619,6 +649,15 @@ function confirmationText(input: StateQLToolInput, brokered = false, effectiveTa
   }
 }
 
+function workspaceConfirmationText(
+  workspace: WorkspaceName,
+  input: StateQLToolInput,
+  brokered = false,
+  effectiveTarget?: string,
+): string {
+  return `${confirmationText(input, brokered, effectiveTarget)}\n\nWorkspace: ${workspace}.`;
+}
+
 function fit(value: string, maxBytes: number): string {
   let output = value;
   while (Buffer.byteLength(output, "utf8") > maxBytes) output = output.slice(0, -1);
@@ -680,8 +719,14 @@ function modelResponse(response: Response<unknown>, command: StateQLToolInput["c
 function boundedResponse(
   response: Response<unknown>,
   command: StateQLToolInput["command"],
+  workspace: WorkspaceName,
+  selectedWorkspace?: WorkspaceName,
 ): { text: string; truncated: boolean } {
-  const output = JSON.stringify(modelResponse(response, command), null, 2);
+  const output = JSON.stringify(
+    { ...modelResponse(response, command), workspace, ...(selectedWorkspace && selectedWorkspace !== workspace ? { selected_workspace: selectedWorkspace } : {}) },
+    null,
+    2,
+  );
   const result = truncateHead(output, { maxLines: 1_000, maxBytes: MAX_OUTPUT_BYTES });
   if (!result.truncated) return { text: result.content, truncated: false };
   const notice = `\n\n[StateQL output truncated at ${formatSize(MAX_OUTPUT_BYTES)}. Request a smaller rows limit or narrower query.]`;
@@ -719,9 +764,27 @@ function sessionId(ctx: any): string {
   return id;
 }
 
-export default function stateqlExtension(pi: ExtensionAPI, options: { createStateQL?: Factory } = {}) {
+const GLOBAL_WORKSPACE = "pylon:stateql:global:v1";
+const GLOBAL_UI_ACTOR = "pylon:stateql:global:ui:v1";
+function globalAgentActor(session: string): string {
+  return `pylon:stateql:global:agent:${createHash("sha256").update(session).digest("hex").slice(0, 32)}`;
+}
+function workspaceName(value: unknown): WorkspaceName | undefined {
+  return value === undefined || value === "session" ? "session" : value === "global" ? "global" : undefined;
+}
+function workspaceLabel(workspace: WorkspaceName): string {
+  return `workspace: ${workspace}`;
+}
+
+export default function stateqlExtension(
+  pi: ExtensionAPI,
+  options: { createStateQL?: Factory; createWorkspaceStateQL?: WorkspaceFactory } = {},
+) {
   const createStateQL: Factory = options.createStateQL ?? (value => StateQL.forActor(value));
   let runtime: Runtime | undefined;
+  let globalAgentRuntime: Runtime | undefined;
+  let globalUiRuntime: Runtime | undefined;
+  let selectedWorkspace: WorkspaceName = "session";
   let activeCredentialHost: StateQLCredentialHost | undefined;
   const activePasswordResolution: {
     value?: { request: CredentialRequest; target: StateQLPasswordTarget };
@@ -752,68 +815,80 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   };
   let setupPassword:
     { reference: string; target: string; value: string; actorId: string; sessionId: string } | undefined;
-  const open = (actorId: string): Runtime => {
+  const open = (actorId: string, piActorId: string, workspace: WorkspaceName): Runtime => {
     const controller = new AbortController();
-    return {
-      actorId,
-      controller,
-      stateql: createStateQL({
-        actor: actorId,
-        credentialTimeoutMs: CREDENTIAL_RESOLUTION_TIMEOUT_MS,
-        signal: controller.signal,
-        credentialResolver: async request => {
-          if (request.source === "password_ref") {
-            if (
-              setupPassword &&
-              request.reference === setupPassword.reference &&
-              request.target === setupPassword.target &&
-              request.actorId === setupPassword.actorId &&
-              request.session.id === setupPassword.sessionId
-            )
-              return setupPassword.value;
-            const target = typeof request.target === "string" ? brokeredTarget(request.target) : undefined;
-            if (!target) return undefined;
-            const host = activeCredentialHost;
-            if (!host?.requestStateQLPassword) return undefined;
-            const password = await host.requestStateQLPassword(request, target.prompt, {
-              timeoutMs:
-                approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
-                  ? approvalTiming.timeoutSeconds * 1000
-                  : 0,
-              savedPassword: { reference: request.reference, target: target.source },
-            });
-            if (password !== undefined) activePasswordResolution.value = { request, target: target.prompt };
-            return password;
-          }
-          if (request.reference.startsWith(BROKERED_REFERENCE_PREFIX)) {
-            const target = brokeredTargets.get(request.reference);
-            if (
-              !target ||
-              target.actorId !== request.actorId ||
-              (target.stateqlSessionId && target.stateqlSessionId !== request.session.id)
-            )
-              return undefined;
-            target.stateqlSessionId ??= request.session.id;
-            target.request = { ...request, signal: undefined };
-            const password = await activeCredentialHost?.requestStateQLPassword?.(request, target.prompt, {
-              timeoutMs: target.passwordTimeoutMs,
-            });
-            if (password === undefined) return undefined;
-            const source = new URL(target.source);
-            source.password = encodeURIComponent(password);
-            return source.toString();
-          }
-          const configured = process.env[request.reference];
-          if (configured !== undefined) return configured;
-          return activeCredentialHost?.requestStateQLCredential(request);
-        },
-      }),
+    const hostRequest = (request: CredentialRequest): CredentialRequest => ({ ...request, actorId: piActorId });
+    const stateqlOptions: StateQLActorOptions = {
+      actor: actorId,
+      credentialTimeoutMs: CREDENTIAL_RESOLUTION_TIMEOUT_MS,
+      signal: controller.signal,
+      credentialResolver: async request => {
+        // StateQL must authenticate its own actor before Pylon receives the originating Pi identity.
+        if (request.actorId !== actorId) return undefined;
+        if (request.source === "password_ref") {
+          if (
+            setupPassword &&
+            request.reference === setupPassword.reference &&
+            request.target === setupPassword.target &&
+            request.actorId === setupPassword.actorId &&
+            request.session.id === setupPassword.sessionId
+          )
+            return setupPassword.value;
+          const target = typeof request.target === "string" ? brokeredTarget(request.target) : undefined;
+          if (!target) return undefined;
+          const host = activeCredentialHost;
+          if (!host?.requestStateQLPassword) return undefined;
+          const credential = hostRequest(request);
+          const password = await host.requestStateQLPassword(credential, target.prompt, {
+            timeoutMs:
+              approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null ? approvalTiming.timeoutSeconds * 1000 : 0,
+            savedPassword: { reference: request.reference, target: target.source },
+          });
+          if (password !== undefined) activePasswordResolution.value = { request: credential, target: target.prompt };
+          return password;
+        }
+        if (request.reference.startsWith(BROKERED_REFERENCE_PREFIX)) {
+          const target = brokeredTargets.get(request.reference);
+          if (!target || target.actorId !== request.actorId || (target.stateqlSessionId && target.stateqlSessionId !== request.session.id))
+            return undefined;
+          target.stateqlSessionId ??= request.session.id;
+          const credential = hostRequest(request);
+          target.request = { ...credential, signal: undefined };
+          const password = await activeCredentialHost?.requestStateQLPassword?.(credential, target.prompt, {
+            timeoutMs: target.passwordTimeoutMs,
+          });
+          if (password === undefined) return undefined;
+          const source = new URL(target.source);
+          source.password = encodeURIComponent(password);
+          return source.toString();
+        }
+        const configured = process.env[request.reference];
+        if (configured !== undefined) return configured;
+        return activeCredentialHost?.requestStateQLCredential(hostRequest(request));
+      },
     };
+    let stateql: RuntimeStateQL;
+    if (workspace === "session") stateql = createStateQL(stateqlOptions);
+    else {
+      const factory =
+        options.createWorkspaceStateQL ??
+        (StateQL as typeof StateQL & { forWorkspace?: WorkspaceFactory }).forWorkspace;
+      if (typeof factory !== "function")
+        throw new Error("StateQL global workspace requires a runtime exposing StateQL.forWorkspace; upgrade @fadhilp/stateql.");
+      stateql = factory({ ...stateqlOptions, workspace: GLOBAL_WORKSPACE });
+    }
+    return { actorId, piActorId, workspace, controller, stateql };
   };
-  const current = (actorId?: string): Runtime => {
-    if (!runtime || stopping || (actorId && runtime.actorId !== actorId))
-      throw new Error("StateQL is unavailable for this Pi session");
-    return runtime;
+  const current = (piActorId?: string, workspace: WorkspaceName = "session", ui = false): Runtime => {
+    if (!runtime || stopping || (piActorId && runtime.piActorId !== piActorId))
+      throw new Error(`StateQL is unavailable for this Pi session (${workspaceLabel(workspace)})`);
+    if (workspace === "session") return runtime;
+    const active = ui ? globalUiRuntime : globalAgentRuntime;
+    if (active) return active;
+    const opened = open(ui ? GLOBAL_UI_ACTOR : globalAgentActor(runtime.piActorId), runtime.piActorId, "global");
+    if (ui) globalUiRuntime = opened;
+    else globalAgentRuntime = opened;
+    return opened;
   };
 
   const resolveProfileBrokeredConnect = async (
@@ -822,6 +897,8 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     host: StateQLCredentialHost | undefined,
     signal: AbortSignal | undefined,
     origin: "user" | "model",
+    workspace: WorkspaceName = "session",
+    ui = false,
   ): Promise<ProfileBrokeredConnect | undefined> => {
     if (input.command !== "connect" || !host?.requestStateQLPassword) return undefined;
     if (input.target) {
@@ -831,7 +908,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     if (!input.profile) return undefined;
     return exclusive(async () => {
       if (signal?.aborted) throw new Error(`StateQL ${origin === "user" ? "command request" : "operation"} cancelled`);
-      const shown = await current(actorId).stateql.executeCommand(
+      const shown = await current(actorId, workspace, ui).stateql.executeCommand(
         { command: "profile.show", name: input.profile } as BatchCommand,
         { signal, origin },
       );
@@ -839,9 +916,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       if (signal?.aborted) throw new Error(`StateQL ${origin === "user" ? "command request" : "operation"} cancelled`);
       if (!record(shown.data)) return undefined;
       const data = shown.data;
-      const sourceCount = [data.target, data.secret_env, data.credential_ref].filter(
-        value => typeof value === "string",
-      ).length;
+      const sourceCount = [data.target, data.secret_env, data.credential_ref].filter(value => typeof value === "string").length;
       if (sourceCount !== 1 || typeof data.target !== "string") return undefined;
       const target = brokeredTarget(data.target);
       if (!target) return undefined;
@@ -890,7 +965,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   };
 
   const disposePolicy = pi.events.on("pylon:runtime-policy", (event: any) => {
-    if (event?.version !== 2 || typeof event.sessionId !== "string" || event.sessionId !== runtime?.actorId) return;
+    if (event?.version !== 2 || typeof event.sessionId !== "string" || event.sessionId !== runtime?.piActorId) return;
     const timeoutSeconds = event.dialogTimeouts?.guard;
     approvalTiming =
       typeof event.guardEnabled === "boolean" &&
@@ -905,10 +980,12 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
 
   const disposeSnapshot = pi.events.on("pylon:stateql-snapshot-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<SnapshotRequest>) : undefined;
+    const workspace = workspaceName(request?.workspace);
     if (
       request?.version !== 1 ||
       typeof request.sessionId !== "string" ||
-      request.sessionId !== runtime?.actorId ||
+      workspace === undefined ||
+      request.sessionId !== runtime?.piActorId ||
       typeof request.claim !== "function" ||
       typeof request.respond !== "function" ||
       !request.claim()
@@ -919,18 +996,20 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       Promise.resolve().then(() => {
         if (request.signal?.aborted) throw new Error("StateQL snapshot request cancelled");
-        return current(request.sessionId).stateql.snapshot({ historyLimit, historyInternal: false });
+        return current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit, historyInternal: false });
       }),
     );
   });
 
   const disposeRows = pi.events.on("pylon:stateql-rows-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<RowsRequest>) : undefined;
+    const workspace = workspaceName(request?.workspace);
     // Validate everything before claiming so malformed requests remain available to another owner.
     if (
       request?.version !== 1 ||
       typeof request.sessionId !== "string" ||
-      request.sessionId !== runtime?.actorId ||
+      workspace === undefined ||
+      request.sessionId !== runtime?.piActorId ||
       typeof request.handle !== "string" ||
       !request.handle.trim() ||
       request.handle.length > 200 ||
@@ -951,7 +1030,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       exclusive(async () => {
         if (request.signal?.aborted) throw new Error("StateQL rows request cancelled");
-        const stateql = current(request.sessionId).stateql;
+        const stateql = current(request.sessionId, workspace, true).stateql;
         if (stateql.readMaterialized) {
           try {
             return stateql.readMaterialized(request.handle!, {
@@ -977,11 +1056,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   const disposeCommand = pi.events.on("pylon:stateql-command-request", (value: unknown) => {
     const request = value && typeof value === "object" ? (value as Partial<PanelCommandRequest>) : undefined;
     const command = parseStateQLPanelCommand(request?.command);
+    const workspace = workspaceName(request?.workspace);
     const ui = commandUi(request?.ui);
     if (
       request?.version !== 1 ||
       typeof request.sessionId !== "string" ||
-      request.sessionId !== runtime?.actorId ||
+      workspace === undefined ||
+      request.sessionId !== runtime?.piActorId ||
       !command ||
       !ui ||
       typeof request.claim !== "function" ||
@@ -992,11 +1073,11 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     if (!request.claim()) return;
     const expectedConnectionId =
       request.expectedConnectionId === undefined
-        ? (current(request.sessionId).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null)
+        ? (current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null)
         : request.expectedConnectionId;
     const checkConnection = () => {
       const connectionId =
-        current(request.sessionId).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null;
+        current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null;
       if (connectionId !== expectedConnectionId)
         throw new Error("Database connection changed; review and submit again.");
     };
@@ -1007,7 +1088,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             throw new Error(
               "Database setup requires the updated StateQL password-reference runtime. Rebuild the linked StateQL package and restart Pylon; do not downgrade a state home containing password references.",
             );
-          const stateql = current(request.sessionId).stateql;
+          const stateql = current(request.sessionId, workspace, true).stateql;
           const execute = async (input: BatchCommand) => {
             activeCredentialHost = ui;
             try {
@@ -1034,7 +1115,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                   reference,
                   target: input.target,
                   value: password,
-                  actorId: request.sessionId!,
+                  actorId: current(request.sessionId, workspace, true).actorId,
                   sessionId: stateql.snapshot({ historyLimit: 1 }).session.session_id,
                 };
               try {
@@ -1059,6 +1140,8 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
           ui,
           request.signal,
           "user",
+          workspace,
+          true,
         );
         checkConnection();
         const target =
@@ -1080,7 +1163,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         ) {
           const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
           if (
-            !(await ui.confirm(title, confirmationText(input as StateQLToolInput, Boolean(target), target?.source), {
+            !(await ui.confirm(title, workspaceConfirmationText(workspace, input as StateQLToolInput, Boolean(target), target?.source), {
               timeout: passwordTimeoutMs,
               ...(request.signal ? { signal: request.signal } : {}),
             }))
@@ -1106,7 +1189,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         } else if (target && remembers) {
           const transientReference = brokeredReference();
           const savedReference = durableReference();
-          const snapshot = current(request.sessionId).stateql.snapshot({ historyLimit: 1 });
+          const snapshot = current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 });
           const effectiveReadOnly = input.read_only ?? profileBrokered?.readOnly;
           const credentialRequest = {
             reference: transientReference,
@@ -1135,13 +1218,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
           } else if (input.command === "connect") {
             reference = transientReference;
             executionCommand = brokeredConnectCommand(withoutCredential, transientReference, profileBrokered);
-            brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
+            brokeredTargets.set(transientReference, { ...target, actorId: current(request.sessionId, workspace, true).actorId, passwordTimeoutMs });
           }
         } else if (target && input.command === "connect") {
           const transientReference = brokeredReference();
           reference = transientReference;
           executionCommand = brokeredConnectCommand(stateqlInput as BatchCommand, transientReference, profileBrokered);
-          brokeredTargets.set(transientReference, { ...target, actorId: request.sessionId!, passwordTimeoutMs });
+          brokeredTargets.set(transientReference, { ...target, actorId: current(request.sessionId, workspace, true).actorId, passwordTimeoutMs });
         }
 
         ui.setStatus?.("pi-stateql", `database: ${input.command}`);
@@ -1151,7 +1234,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             checkConnection();
             let credentialToForget: string | undefined;
             if (input.command === "profile.remove" && forgetCredential) {
-              const shown = await current(request.sessionId).stateql.executeCommand(
+              const shown = await current(request.sessionId, workspace, true).stateql.executeCommand(
                 { command: "profile.show", name: input.name },
                 { signal: request.signal, origin: "user" },
               );
@@ -1164,7 +1247,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
             activePasswordResolution.value = undefined;
             activeCredentialHost = ui;
             try {
-              const stateql = current(request.sessionId).stateql;
+              const stateql = current(request.sessionId, workspace, true).stateql;
               if (input.command === "table.plan") {
                 if (!stateql.planTableUpdate) throw new Error("Row edits require the current StateQL package.");
                 response = await stateql.planTableUpdate(input.row_token, input.changes, {
@@ -1277,16 +1360,19 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     const request = value as {
       version?: number;
       sessionId?: string;
+      workspace?: WorkspaceName;
       handle?: string;
       format?: "json" | "jsonl" | "csv";
       signal?: AbortSignal;
       claim?: () => boolean;
       respond?: (value: Promise<unknown>) => void;
     };
+    const workspace = workspaceName(request?.workspace);
     if (
       !request ||
       request.version !== 1 ||
-      request.sessionId !== runtime?.actorId ||
+      workspace === undefined ||
+      request.sessionId !== runtime?.piActorId ||
       typeof request.handle !== "string" ||
       !request.handle ||
       request.handle.length > 200 ||
@@ -1300,7 +1386,7 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     request.respond(
       exclusive(async () => {
         request.signal?.throwIfAborted();
-        const stateql = current(request.sessionId).stateql;
+        const stateql = current(request.sessionId, workspace, true).stateql;
         if (!stateql.serializeResult) throw new Error("Exports require the current StateQL package.");
         const response = await stateql.serializeResult(request.handle!, request.format!, request.signal, "user");
         if (!response.ok) throw safeFailure(response);
@@ -1333,14 +1419,24 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     );
   });
 
+  const closeRuntimes = async () => {
+    const opened = [runtime, globalAgentRuntime, globalUiRuntime].filter((value): value is Runtime => Boolean(value));
+    for (const active of opened) active.controller.abort();
+    await Promise.all(opened.map(active => active.stateql.close()));
+    runtime = undefined;
+    globalAgentRuntime = undefined;
+    globalUiRuntime = undefined;
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     stopping = false;
+    selectedWorkspace = "session";
     approvalTiming = { guardEnabled: false, timeoutSeconds: null };
     brokeredTargets.clear();
     const id = sessionId(ctx);
-    await exclusive(() => {
-      runtime?.stateql.close();
-      runtime = open(id);
+    await exclusive(async () => {
+      await closeRuntimes();
+      runtime = open(id, id, "session");
     });
     pi.events.emit("pylon:tool-policy", {
       version: 1,
@@ -1356,7 +1452,6 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
   pi.on("session_shutdown", async () => {
     stopping = true;
     brokeredTargets.clear();
-    runtime?.controller.abort();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-stateql" });
     disposePolicy();
     disposeSnapshot();
@@ -1364,20 +1459,18 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     disposeCommand();
     disposeExport();
     disposeHealth();
-    await exclusive(() => {
-      runtime?.stateql.close();
-      runtime = undefined;
-    });
+    await exclusive(closeRuntimes);
   });
 
   pi.registerTool({
     name: "stateql",
     label: "StateQL",
     description:
-      "Perform user-requested SQLite, PostgreSQL, MySQL, or MongoDB work. Prefer read-only profiles and parameterized SQL or bounded native MongoDB commands. Query output includes normalized parallel-column previews; call rows only when truncated or additional rows are needed. Plan consequential writes when practical and confirm writes, plan application, and transaction completion. Supports schema inspection, MongoDB reads/writes/plans, transactions, receipts, and history; cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
+      "Perform user-requested SQLite, PostgreSQL, MySQL, MongoDB, or Redis work in the private session workspace or shared global workspace. Prefer read-only profiles and parameterized SQL or bounded native commands. Query output includes normalized parallel-column previews; call rows only when truncated or additional rows are needed. Plan consequential writes when practical and confirm writes, plan application, and transaction completion. Cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",
+      "Use workspace.select once to choose session or global scope for later calls; an explicit workspace on one call overrides that selection without changing it.",
       "For PostgreSQL/MySQL targets, include the username but never a password in target; Pylon Web will request the password through a masked dialog. Use secret_env when the complete source already lives in an environment variable.",
       "Never weaken TLS or certificate verification without explicit user authorization; prefer configuring the database CA certificate with a native host absolute path, not a shell-only path such as /tmp on Windows.",
       "StateQL query output already includes preview rows in model context. Call StateQL rows only when the result is truncated or missing needed rows; when the complete preview is present, continue from preview_count instead of duplicating it from offset 0.",
@@ -1392,8 +1485,34 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
     async execute(_toolCallId, input: StateQLToolInput, signal, onUpdate, ctx) {
       const command = validateInput(input);
       const id = sessionId(ctx);
+      if (command.command === "workspace.select") {
+        if (selectedWorkspace !== command.workspace) {
+          const selected = current(id, selectedWorkspace);
+          const transaction = selected.stateql.snapshot({ historyLimit: 1 }).transaction;
+          if (transaction?.owner_actor_id === selected.actorId)
+            throw new Error(`[${workspaceLabel(selectedWorkspace)}] Commit or roll back the active transaction before switching workspaces.`);
+        }
+        selectedWorkspace = command.workspace!;
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ workspace: selectedWorkspace }, null, 2) }],
+          details: { command: command.command, workspace: selectedWorkspace },
+        };
+      }
+      if (command.command === "workspace.status") {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ workspace: selectedWorkspace }, null, 2) }],
+          details: { command: command.command, workspace: selectedWorkspace },
+        };
+      }
+      const workspace = command.workspace ?? selectedWorkspace;
+      const active = current(id, workspace);
       const host = credentialHost(ctx.ui);
-      const profileBrokered = await resolveProfileBrokeredConnect(id, command, host, signal, "model");
+      let profileBrokered: ProfileBrokeredConnect | undefined;
+      try {
+        profileBrokered = await resolveProfileBrokeredConnect(id, command, host, signal, "model", workspace);
+      } catch (error) {
+        throw new Error(`[${workspaceLabel(workspace)}] ${error instanceof Error ? error.message : String(error)}`);
+      }
       const target = profileBrokered?.target;
       const insecureBrokeredConnect = Boolean(target && insecureTls(target.source));
       const passwordTimeoutMs =
@@ -1403,17 +1522,17 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
       const requiresConfirmation =
         CONFIRMED_COMMANDS.has(command.command) && (!target || profileBrokered?.fromProfile || insecureBrokeredConnect);
       if (requiresConfirmation) {
-        if (!ctx.hasUI) throw new Error(`${input.command} requires interactive confirmation`);
+        if (!ctx.hasUI) throw new Error(`[${workspaceLabel(workspace)}] ${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
         if (
-          !(await ctx.ui.confirm(title, confirmationText(input, Boolean(target), target?.source), {
+          !(await ctx.ui.confirm(title, workspaceConfirmationText(workspace, input, Boolean(target), target?.source), {
             timeout: passwordTimeoutMs,
             ...(signal ? { signal } : {}),
           }))
         ) {
           return {
-            content: [{ type: "text" as const, text: "User declined the StateQL operation; nothing was executed." }],
-            details: { command: input.command, declined: true },
+            content: [{ type: "text" as const, text: `User declined the StateQL operation; nothing was executed (${workspaceLabel(workspace)}).` }],
+            details: { command: input.command, declined: true, workspace },
           };
         }
       }
@@ -1426,17 +1545,18 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
         ) as BatchCommand & StateQLToolInput;
       } else if (target) {
         reference = brokeredReference();
-        executionCommand = brokeredConnectCommand(command, reference, profileBrokered) as BatchCommand & StateQLToolInput;
-        brokeredTargets.set(reference, { ...target, actorId: id, passwordTimeoutMs });
+        executionCommand = brokeredConnectCommand(command as BatchCommand, reference, profileBrokered) as BatchCommand & StateQLToolInput;
+        brokeredTargets.set(reference, { ...target, actorId: active.actorId, passwordTimeoutMs });
       }
       onUpdate?.({
-        content: [{ type: "text" as const, text: `Running StateQL ${input.command}...` }],
-        details: { command: input.command },
+        content: [{ type: "text" as const, text: `Running StateQL ${input.command} (${workspaceLabel(workspace)})...` }],
+        details: { command: input.command, workspace },
       });
       if (ctx.hasUI) ctx.ui.setStatus?.("pi-stateql", `database: ${input.command}`);
       try {
         return await exclusive(async () => {
-          const active = current(id);
+          // Resolve before the exclusive operation so a global runtime is never mistaken for the private actor.
+          if (active !== current(id, workspace)) throw new Error(`[${workspaceLabel(workspace)}] StateQL runtime changed`);
           if (signal?.aborted) throw new Error("StateQL operation cancelled");
           let response: Response<unknown>;
           activePasswordResolution.value = undefined;
@@ -1460,12 +1580,13 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
                 throw new Error("Object descriptions require the current StateQL package.");
               response = await active.stateql.describeObject(command.object, { signal, timeoutMs: command.timeout_ms });
             } else {
-              response = await active.stateql.executeCommand(executionCommand, { signal, origin: "model" });
+              const { workspace: _workspace, ...stateqlCommand } = executionCommand;
+              response = await active.stateql.executeCommand(stateqlCommand as BatchCommand, { signal, origin: "model" });
             }
           } catch (error) {
             if (reference) brokeredTargets.delete(reference);
             activePasswordResolution.value = undefined;
-            throw error;
+            throw new Error(`[${workspaceLabel(workspace)}] ${error instanceof Error ? error.message : String(error)}`);
           } finally {
             activeCredentialHost = undefined;
           }
@@ -1482,16 +1603,18 @@ export default function stateqlExtension(pi: ExtensionAPI, options: { createStat
               }
               brokeredTargets.delete(reference);
             }
-            throw safeFailure(response);
+            throw new Error(`[${workspaceLabel(workspace)}] ${safeFailure(response).message}`);
           }
           if (command.command === "connect") retainBrokeredConnection(reference);
           if (command.command === "disconnect") brokeredTargets.clear();
           response = restoreProfileMetadata(response, profileBrokered);
-          const output = boundedResponse(response, input.command);
+          const output = boundedResponse(response, input.command, workspace, selectedWorkspace);
           return {
             content: [{ type: "text" as const, text: output.text }],
             details: {
               command: input.command,
+              workspace,
+              ...(selectedWorkspace !== workspace ? { selectedWorkspace } : {}),
               commandId: response.command_id,
               sessionId: response.session_id,
               truncated: output.truncated,

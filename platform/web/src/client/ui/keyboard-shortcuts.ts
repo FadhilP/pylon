@@ -27,7 +27,7 @@ function hardBlocked(event: KeyboardEvent): boolean {
     event.keyCode === 229 ||
     event.repeat ||
     !!event.getModifierState?.("AltGraph") ||
-    !!document.querySelector("[data-keyboard-recording], dialog[open], [role=dialog][aria-modal=true]")
+    !!document.querySelector("[data-keyboard-recording], [data-shortcuts-blocked]:not([hidden]), dialog[open], [role=dialog][aria-modal=true]")
   );
 }
 export function shortcutsBlocked(event: KeyboardEvent): boolean {

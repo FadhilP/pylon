@@ -48,6 +48,7 @@ import type {
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
+  StateQLWorkspace,
   TimelineCheckpointDiff,
   TimelineCheckpointFiles,
   TurnDiffQuery,
@@ -389,14 +390,15 @@ export interface PiDriver {
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   fileHistory?(input: FileHistoryQuery, signal?: AbortSignal): Promise<WorkspaceFileHistory>;
   fileHistoryContext?(): Promise<FileHistoryContext | undefined>;
-  stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport>;
-  stateqlSnapshot?(historyLimit: number): Promise<StateQLSnapshot>;
-  stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage>;
+  stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal, workspace?: StateQLWorkspace): Promise<StateQLExport>;
+  stateqlSnapshot?(historyLimit: number, workspace?: StateQLWorkspace): Promise<StateQLSnapshot>;
+  stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal, workspace?: StateQLWorkspace): Promise<StateQLRowsPage>;
   stateqlCommand?(
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
     operationId?: string,
+    workspace?: StateQLWorkspace,
   ): Promise<StateQLCommandResult>;
   papercutList?(
     status: PapercutStatusReadModel | "all",

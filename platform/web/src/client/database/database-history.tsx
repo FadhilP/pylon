@@ -4,7 +4,7 @@ import { isStateQLSnapshot } from "../../shared/protocol/validation";
 import { databaseRecord } from "./database-workspace";
 import { buildStateQLActivity, stateqlActivityStatus, isInternalStateQLActivity } from "./stateql-notebook";
 import { IconEye, IconEyeOff } from "@tabler/icons-react";
-import type { StateQLSnapshot } from "../../shared/protocol/snapshots";
+import type { StateQLSnapshot, StateQLWorkspace } from "../../shared/protocol/snapshots";
 import { displayTime } from "../ui/display-format";
 import { DatabaseSyntax } from "./database-query-editor";
 import type { StateQLActivityItem } from "./stateql-notebook";
@@ -44,6 +44,7 @@ function activityLabel(item: StateQLActivityItem): string {
 export function DatabaseHistory({
   snapshot,
   onOpen,
+  workspace,
   onResult,
   onReceipt,
 }: {
@@ -51,6 +52,7 @@ export function DatabaseHistory({
   onOpen: (text: string) => void;
   onResult: (handle: string, total: number) => void;
   onReceipt: (handle: string) => void;
+  workspace: StateQLWorkspace;
 }) {
   const [origin, setOrigin] = useState("all");
   const [facet, setFacet] = useState("all");
@@ -65,6 +67,7 @@ export function DatabaseHistory({
     if (showInternal && snapshot)
       void runtimeStore
         .stateqlCommand(
+          workspace,
           { command: "history", limit: 100 },
           controller.signal,
           snapshot.connection?.connection_id ?? null,
@@ -90,7 +93,7 @@ export function DatabaseHistory({
           if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load history.");
         });
     return () => controller.abort();
-  }, [showInternal, snapshot?.session.session_id, snapshot?.connection?.connection_id]);
+  }, [showInternal, snapshot?.session.session_id, snapshot?.connection?.connection_id, workspace]);
   const activity = useMemo(() => {
     const source = showInternal ? internalSnapshot : snapshot;
     return source ? buildStateQLActivity(source) : [];

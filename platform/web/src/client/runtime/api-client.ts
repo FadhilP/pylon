@@ -34,6 +34,7 @@ import type {
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
+  StateQLWorkspace,
   TimelineCheckpointDiff,
   TimelineCheckpointFiles,
   TurnDiffResult,
@@ -458,8 +459,13 @@ export class ApiClient {
     );
   }
 
-  async stateqlSnapshot(generation: number, historyLimit = 50, signal?: AbortSignal): Promise<StateQLSnapshot> {
-    const query = new URLSearchParams({ generation: String(generation), historyLimit: String(historyLimit) });
+  async stateqlSnapshot(
+    generation: number,
+    workspace: StateQLWorkspace,
+    historyLimit = 50,
+    signal?: AbortSignal,
+  ): Promise<StateQLSnapshot> {
+    const query = new URLSearchParams({ generation: String(generation), workspace, historyLimit: String(historyLimit) });
     return json<StateQLSnapshot>(
       await fetch(`/api/v1/stateql?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },
@@ -471,6 +477,7 @@ export class ApiClient {
 
   async stateqlExport(
     generation: number,
+    workspace: StateQLWorkspace,
     handle: string,
     format: "json" | "jsonl" | "csv",
     signal?: AbortSignal,
@@ -479,7 +486,7 @@ export class ApiClient {
       method: "POST",
       credentials: "same-origin",
       headers: this.headers(),
-      body: JSON.stringify({ generation, handle, format }),
+      body: JSON.stringify({ generation, workspace, handle, format }),
       signal,
     });
     if (!response.ok) {
@@ -495,6 +502,7 @@ export class ApiClient {
 
   async stateqlCommand(
     generation: number,
+    workspace: StateQLWorkspace,
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
@@ -505,7 +513,7 @@ export class ApiClient {
         method: "POST",
         credentials: "same-origin",
         headers: this.headers(),
-        body: JSON.stringify({ generation, input, expectedConnectionId, operationId }),
+        body: JSON.stringify({ generation, workspace, input, expectedConnectionId, operationId }),
         signal,
       }),
     );
@@ -513,6 +521,7 @@ export class ApiClient {
 
   async stateqlRows(
     generation: number,
+    workspace: StateQLWorkspace,
     handle: string,
     offset: number,
     limit: number,
@@ -523,7 +532,7 @@ export class ApiClient {
         method: "POST",
         credentials: "same-origin",
         headers: this.headers(),
-        body: JSON.stringify({ generation, handle, offset, limit }),
+        body: JSON.stringify({ generation, workspace, handle, offset, limit }),
         signal,
       }),
     );

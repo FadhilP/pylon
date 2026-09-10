@@ -34,6 +34,29 @@ Browser calls can batch up to 20 already-known ordered steps. A semantic browser
 
 In Pylon Web, an agent-started owned browser opens a Browser panel with a local bounded JPEG mirror. The panel may launch or directly control an owned browser; control has an idle lease and pauses agent actions. Attached browsers are never mirrored/controlled. The stream stays local to Pylon and outside Pi history/provider context.
 
+### Efficient browser workflow
+
+- Reuse adequate action output. Prefer a narrow `find` query or `snapshot` with a current `target` ref over another whole-page snapshot. Use depth 4–6 for an initial broad view only when needed. For truncated output, narrow the observation first; use `continue` when the remaining content is actually needed.
+- Every snapshot, find result, or continuation replaces usable refs. Mutations such as `fill` and `press` clear refs when they return no snapshot; the result reports this. Refresh with `find` or an untargeted snapshot before using another target. `fill` accepts `text`; `select` accepts `value`.
+- Batch predictable action-observation pairs to avoid another model turn. Actions still run sequentially and validate refs at each step; do not guess future refs or assume asynchronous search/loading has finished. Semantic plans remain limited to unique, non-consequential matches.
+
+```json
+{ "actions": [{ "action": "resize", "width": 600, "height": 900 }, { "action": "screenshot" }] }
+```
+
+```json
+{
+  "actions": [
+    { "action": "press", "key": "Escape" },
+    { "action": "snapshot", "depth": 4 }
+  ]
+}
+```
+
+- For component inspection, use `screenshot` with a current `target` ref to crop unrelated surroundings. Keep viewport screenshots for responsive/layout checks and `fullPage` for genuinely whole-page context. Image dimensions/content, not compressed file size alone, affect provider cost.
+- Compact snapshots remove redundant pointer hints on semantic controls, retaining refs, state, and hints on generic clickable elements. `snapshotMode: "full"` preserves the original structure and hints; redaction and size bounds still apply.
+- On a blocked click, inspect the bounded failure reason and confirm the test server is serving the edited build before retrying. Diagnostics strip terminal escapes and redact credentials, prioritize interaction blockers, and retain the error header/tail when shortened. Timeouts and fail-closed behavior are unchanged.
+
 ## Android emulator setup and safety
 
 Helios starts one existing AVD or attaches to one running emulator. Install user-managed Android SDK `platform-tools`, `emulator`, and an AVD; set `ANDROID_SDK_ROOT`/`ANDROID_HOME` or use detected platform paths. In Pylon Web, **Android tooling → Install** installs pinned Appium/UiAutomator2 into Pylon data only after confirmation; it never changes global npm and preserves a valid install on failed repair. A global Appium or absolute non-symlink `APPIUM_PATH` is accepted if managed tooling is absent. `/helios doctor android` checks prerequisites.

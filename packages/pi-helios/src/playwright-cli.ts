@@ -3,9 +3,10 @@ import { access, chmod, lstat, mkdir, mkdtemp, open, rm, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { TextDecoder } from "node:util";
+import { stripVTControlCharacters, TextDecoder } from "node:util";
 import { fileURLToPath } from "node:url";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
+import { redact } from "pylon-core/redact";
 import { validatePngFile, type Exec } from "./capture.ts";
 import { elementReferences, ELEMENT_REF_FRAGMENT, isElementReference } from "./element-ref.ts";
 import { PlaywrightClient, PlaywrightClientError } from "./playwright-client.ts";
@@ -430,6 +431,9 @@ export function compactSnapshotLines(lines: string[]): string[] {
     return lines;
 
   const wrapper = new RegExp(`^( *)- generic \\[ref=(${ELEMENT_REF_FRAGMENT})\\](:?)$`);
+  const controlPointer = new RegExp(
+    `^( *- (?:button|link|tab|checkbox|radio|combobox|listbox|option|textbox|searchbox|menuitem|menuitemcheckbox|menuitemradio|slider|spinbutton)\\b.*\\[ref=${ELEMENT_REF_FRAGMENT}\\](?: \\[(?!ref=)[^\\]]+\\])*) \\[cursor=pointer\\](:.*)?$`,
+  );
   const removed: number[] = [];
   const compacted: string[] = [];
   for (const [index, line] of lines.entries()) {
@@ -444,7 +448,7 @@ export function compactSnapshotLines(lines: string[]): string[] {
       if (match[3]) removed.push(indent);
       continue;
     }
-    compacted.push(line.slice(removed.length * 2));
+    compacted.push(line.slice(removed.length * 2).replace(controlPointer, "$1$2"));
   }
   return compacted;
 }
@@ -518,6 +522,31 @@ function snapshotSource(value: unknown): SnapshotSource | undefined {
   throw new HeliosCliError("invalid-output", "Playwright CLI returned an invalid snapshot");
 }
 
+function cliErrorMessage(raw: string, privateDirectory: string): string {
+  const sanitized = redact(
+    stripVTControlCharacters(raw).replaceAll(privateDirectory, "<private Helios directory>"),
+  ).text;
+  const lines = sanitized
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+  const blocker = lines
+    .slice(1)
+    .reverse()
+    .find(line =>
+      /intercepts pointer events|outside of the viewport|element is not (?:visible|enabled|stable|editable)|element was detached|not attached to the DOM/i.test(
+        line,
+      ),
+    );
+  const message =
+    (blocker ? `${lines[0]} ${blocker}` : sanitized)
+      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Playwright CLI command failed";
+  // Keep the failure header and diagnostic tail, rather than only the setup log.
+  return message.length <= 500 ? message : `${message.slice(0, 200)} … ${message.slice(-297)}`;
+}
+
 function parseJson(result: ExecResult, privateDirectory: string, sessionName: string): Record<string, unknown> {
   if (Buffer.byteLength(result.stdout) > MAX_STDOUT_BYTES)
     throw new HeliosCliError("invalid-output", "Playwright CLI output exceeded 256KB limit");
@@ -546,10 +575,7 @@ function parseJson(result: ExecResult, privateDirectory: string, sessionName: st
         : nested?.isError === true && typeof nested.error === "string"
           ? nested.error
           : "Playwright CLI command failed";
-    const sanitized = raw
-      .replaceAll(privateDirectory, "<private Helios directory>")
-      .replace(/[\r\n]+/g, " ")
-      .slice(0, 500);
+    const sanitized = cliErrorMessage(raw, privateDirectory);
     const category =
       raw === `The browser '${sessionName}' is not open, please run open first` ? "session-missing" : "command-failed";
     throw new HeliosCliError(category, sanitized);

@@ -54,6 +54,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_GUARD_RULES } from "../../shared/settings/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
+import { STATEQL_GLOBAL_UI_ACTOR } from "../../shared/protocol/snapshots.ts";
 import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
 import type {
@@ -114,6 +115,7 @@ import type {
   StateQLCommandResponseReadModel,
   StateQLRowsPage,
   StateQLSnapshot,
+  StateQLWorkspace,
   TimelineCheckpointDiff,
   TimelineCheckpointFiles,
   TurnDiffQuery,
@@ -542,7 +544,7 @@ function heliosPage(value: unknown): HeliosPageIdentity | undefined {
   return { index: page.index as number, title: page.title, url: page.url };
 }
 
-function stateqlResult(value: unknown, sessionId: string, sessionGeneration: number): StateQLSnapshot {
+function stateqlResult(value: unknown, sessionId: string, sessionGeneration: number, workspace: StateQLWorkspace): StateQLSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("StateQL returned an invalid snapshot");
   const raw = value as Record<string, any>;
@@ -551,6 +553,7 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
     ...raw,
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration,
+    workspace,
     history: Array.isArray(raw.history)
       ? raw.history.map((item: any) => ({
           ...item,
@@ -559,12 +562,14 @@ function stateqlResult(value: unknown, sessionId: string, sessionGeneration: num
       : raw.history,
     ...(closed ? { connection: null, transaction: null } : {}),
   };
-  if (!isStateQLSnapshot(candidate) || candidate.actor_id !== sessionId)
+  const actorId = workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : sessionId;
+  if (!isStateQLSnapshot(candidate) || candidate.actor_id !== actorId || candidate.workspace !== workspace)
     throw new Error("StateQL returned an invalid snapshot");
   const snapshot = candidate as StateQLSnapshot;
   const result: StateQLSnapshot = {
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration,
+    workspace,
     session: { session_id: snapshot.session.session_id, name: snapshot.session.name, status: snapshot.session.status },
     actor_id: snapshot.actor_id,
     connection: snapshot.connection
@@ -664,6 +669,7 @@ function stateqlRowsResult(
   limit: number,
   actorId: string,
   sessionGeneration: number,
+  workspace: StateQLWorkspace,
 ): StateQLRowsPage {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("StateQL returned invalid rows");
   const raw = value as Record<string, unknown>;
@@ -675,6 +681,7 @@ function stateqlRowsResult(
   const candidate = {
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration,
+    workspace,
     actor_id: actorId,
     handle,
     ...(Array.isArray(raw.columns)
@@ -706,10 +713,12 @@ function stateqlCommandResult(
   input: StateQLCommandInput,
   actorId: string,
   sessionGeneration: number,
+  workspace: StateQLWorkspace,
 ): StateQLCommandResult {
   const base = {
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration,
+    workspace,
     actor_id: actorId,
     command: input.command,
   } as const;
@@ -2145,7 +2154,12 @@ export class SessionRuntime implements PiDriver {
     };
   }
 
-  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport> {
+  async stateqlExport(
+    handle: string,
+    format: "json" | "jsonl" | "csv",
+    signal?: AbortSignal,
+    workspace: StateQLWorkspace = "session",
+  ): Promise<StateQLExport> {
     const runtime = this.requireRuntime();
     const generation = this.gate.generation;
     const controller = new AbortController();
@@ -2156,6 +2170,7 @@ export class SessionRuntime implements PiDriver {
     let claimed = false;
     this.eventBus.emit("pylon:stateql-export-request", {
       version: 1,
+      workspace,
       sessionId: runtime.session.sessionId,
       handle,
       format,
@@ -2185,7 +2200,8 @@ export class SessionRuntime implements PiDriver {
       return {
         protocolVersion: PROTOCOL_VERSION,
         sessionGeneration: generation,
-        actor_id: runtime.session.sessionId,
+        workspace,
+        actor_id: workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.session.sessionId,
         content: data.content,
         format,
       };
@@ -2195,7 +2211,7 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-  async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+  async stateqlSnapshot(historyLimit: number, workspace: StateQLWorkspace = "session"): Promise<StateQLSnapshot> {
     const runtime = this.requireRuntime();
     const controller = new AbortController();
     let response: Promise<unknown> | undefined;
@@ -2203,6 +2219,7 @@ export class SessionRuntime implements PiDriver {
     let answered = false;
     this.eventBus.emit("pylon:stateql-snapshot-request", {
       version: 1,
+      workspace,
       sessionId: runtime.session.sessionId,
       historyLimit,
       signal: controller.signal,
@@ -2229,14 +2246,20 @@ export class SessionRuntime implements PiDriver {
           }),
         ),
       ]);
-      return stateqlResult(value, runtime.session.sessionId, this.gate.generation);
+      return stateqlResult(value, runtime.session.sessionId, this.gate.generation, workspace);
     } finally {
       clearTimeout(timeout);
       controller.abort();
     }
   }
 
-  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
+  async stateqlRows(
+    handle: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+    workspace: StateQLWorkspace = "session",
+  ): Promise<StateQLRowsPage> {
     if (
       !handle.trim() ||
       handle.length > 200 ||
@@ -2258,6 +2281,7 @@ export class SessionRuntime implements PiDriver {
     let answered = false;
     this.eventBus.emit("pylon:stateql-rows-request", {
       version: 1,
+      workspace,
       sessionId: runtime.session.sessionId,
       handle,
       offset,
@@ -2290,7 +2314,15 @@ export class SessionRuntime implements PiDriver {
           }),
         ),
       ]);
-      return stateqlRowsResult(value, handle, offset, limit, runtime.session.sessionId, this.gate.generation);
+      return stateqlRowsResult(
+        value,
+        handle,
+        offset,
+        limit,
+        workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.session.sessionId,
+        this.gate.generation,
+        workspace,
+      );
     } finally {
       clearTimeout(timeout);
       controller.abort();
@@ -2298,12 +2330,12 @@ export class SessionRuntime implements PiDriver {
     }
   }
 
-
   async stateqlCommand(
     input: StateQLCommandInput,
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
     operationId?: string,
+    workspace: StateQLWorkspace = "session",
   ): Promise<StateQLCommandResult> {
     if (!isStateQLCommandInput(input)) throw new Error("StateQL command request is invalid");
     if (
@@ -2321,6 +2353,7 @@ export class SessionRuntime implements PiDriver {
     let answered = false;
     this.eventBus.emit("pylon:stateql-command-request", {
       version: 1,
+      workspace,
       sessionId: runtime.session.sessionId,
       command: input,
       expectedConnectionId,
@@ -2351,7 +2384,13 @@ export class SessionRuntime implements PiDriver {
           }),
         ),
       ]);
-      return stateqlCommandResult(value, input, runtime.session.sessionId, this.gate.generation);
+      return stateqlCommandResult(
+        value,
+        input,
+        workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : runtime.session.sessionId,
+        this.gate.generation,
+        workspace,
+      );
     } finally {
       clearTimeout(timeout);
       controller.abort();

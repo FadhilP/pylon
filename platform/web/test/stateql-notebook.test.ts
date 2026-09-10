@@ -8,6 +8,7 @@ function snapshot(overrides: Partial<StateQLSnapshot> = {}): StateQLSnapshot {
   return {
     protocolVersion: PROTOCOL_VERSION,
     sessionGeneration: 1,
+    workspace: "session",
     session: { session_id: "session-1", name: "main", status: "active" },
     actor_id: "actor-1",
     connection: null,

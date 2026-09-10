@@ -68,7 +68,7 @@ class FakeStateQL {
   }
 }
 
-function harness(real = false) {
+function harness(real = false, workspace = true) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const events = new Map<string, Function[]>();
@@ -78,11 +78,7 @@ function harness(real = false) {
     events: {
       on(name: string, handler: Function) {
         events.set(name, [...(events.get(name) ?? []), handler]);
-        return () =>
-          events.set(
-            name,
-            (events.get(name) ?? []).filter(item => item !== handler),
-          );
+        return () => events.set(name, (events.get(name) ?? []).filter(item => item !== handler));
       },
       emit(name: string, value: unknown) {
         emitted.push({ name, value });
@@ -97,14 +93,19 @@ function harness(real = false) {
     },
   };
   if (real) stateqlExtension(pi as any);
-  else
+  else {
+    const create = (options: StateQLActorOptions) => {
+      const stateql = new FakeStateQL(options);
+      instances.push(stateql);
+      return stateql;
+    };
     stateqlExtension(pi as any, {
-      createStateQL(options) {
-        const stateql = new FakeStateQL(options);
-        instances.push(stateql);
-        return stateql;
-      },
+      createStateQL: create,
+      ...(workspace
+        ? { createWorkspaceStateQL: (options: StateQLActorOptions) => create(options) }
+        : {}),
     });
+  }
   return { tools, handlers, events, emitted, instances };
 }
 
@@ -139,6 +140,96 @@ async function persistedText(root: string): Promise<string> {
   await visit(root);
   return output.join("\n");
 }
+
+test("routes model calls by selected and one-call workspaces", async () => {
+  const value = await start();
+  const tool = value.tools.get("stateql");
+  await tool.execute("session", { command: "query", sql: "SELECT 1" }, undefined, undefined, context());
+  assert.equal(value.instances.length, 1);
+  assert.equal(value.instances[0].commands[0].command, "query");
+
+  await tool.execute("select", { command: "workspace.select", workspace: "global" }, undefined, undefined, context());
+  const status = await tool.execute("status", { command: "workspace.status" }, undefined, undefined, context());
+  assert.match(status.content[0].text, /"global"/);
+  const global = await tool.execute("global", { command: "query", sql: "SELECT 2" }, undefined, undefined, context());
+  assert.equal(value.instances.length, 2);
+  assert.match(global.content[0].text, /"workspace": "global"/);
+
+  const override = await tool.execute(
+    "override",
+    { command: "query", sql: "SELECT 3", workspace: "session" },
+    undefined,
+    undefined,
+    context(),
+  );
+  assert.match(override.content[0].text, /"selected_workspace": "global"/);
+  assert.equal(value.instances[0].commands.length, 2);
+});
+
+test("does not switch away from an actor-owned transaction", async () => {
+  const value = await start();
+  value.instances[0].snapshot = () => ({
+    ...structuredClone(baseSnapshot),
+    transaction: { transaction_id: "tx_1", owner_actor_id: "pi-session", state: "active" },
+  });
+  await assert.rejects(
+    value.tools.get("stateql").execute(
+      "select",
+      { command: "workspace.select", workspace: "global" },
+      undefined,
+      undefined,
+      context(),
+    ),
+    /Commit or roll back.*before switching workspaces/,
+  );
+  await assert.rejects(
+    value.tools.get("stateql").execute(
+      "status",
+      { command: "workspace.status", workspace: "global" },
+      undefined,
+      undefined,
+      context(),
+    ),
+    /workspace.status does not accept workspace/,
+  );
+});
+
+test("uses stable distinct global actors and closes every client", async () => {
+  const value = await start();
+  const tool = value.tools.get("stateql");
+  await tool.execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context());
+  const agentActor = value.instances[1].options.actor;
+  assert.notEqual(agentActor, "pi-session");
+
+  let response: Promise<unknown> | undefined;
+  value.events.get("pylon:stateql-command-request")![0]({
+    version: 1,
+    sessionId: "pi-session",
+    workspace: "global",
+    command: { command: "query", sql: "SELECT 1" },
+    ui: { confirm: async () => true, requestStateQLCredential: async () => undefined },
+    claim: () => true,
+    respond: (value: Promise<unknown>) => (response = value),
+  });
+  assert.ok(response);
+  await response;
+  assert.equal(value.instances.length, 3);
+  assert.notEqual(value.instances[2].options.actor, agentActor);
+  await value.handlers.get("session_shutdown")![0]();
+  await value.handlers.get("session_start")![0]({}, context());
+  await tool.execute("global-again", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context());
+  assert.equal(value.instances[4].options.actor, agentActor);
+  await value.handlers.get("session_shutdown")![0]();
+  assert.ok(value.instances.every(instance => instance.closed));
+});
+
+test("fails clearly when the installed runtime lacks global workspace support", async () => {
+  const value = await start(harness(false, false));
+  await assert.rejects(
+    value.tools.get("stateql").execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context()),
+    /forWorkspace/,
+  );
+});
 
 test("composes environment and active Pylon credential resolution without retaining the host", async () => {
   const value = await start();

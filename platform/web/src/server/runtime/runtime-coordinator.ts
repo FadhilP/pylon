@@ -78,6 +78,7 @@ import type {
   StateQLCommandResult,
   StateQLRowsPage,
   StateQLSnapshot,
+  StateQLWorkspace,
   TimelineCheckpointDiff,
   TimelineCheckpointFiles,
   TurnDiffQuery,
@@ -966,31 +967,42 @@ export class RuntimeCoordinator implements PiDriver {
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, ...result };
   }
 
-  async stateqlExport(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal): Promise<StateQLExport> {
+  async stateqlExport(
+    handle: string,
+    format: "json" | "jsonl" | "csv",
+    signal?: AbortSignal,
+    workspace: StateQLWorkspace = "session",
+  ): Promise<StateQLExport> {
     const generation = this.generation;
     const slot = this.selected();
     if (!slot.driver.stateqlExport) throw new Error("StateQL exports are unavailable");
-    const result = await slot.driver.stateqlExport(handle, format, signal);
+    const result = await slot.driver.stateqlExport(handle, format, signal, workspace);
     if (generation !== this.generation) throw new Error("Session changed during export");
-    return { ...result, sessionGeneration: generation };
+    return { ...result, sessionGeneration: generation, workspace };
   }
 
-  async stateqlSnapshot(historyLimit: number): Promise<StateQLSnapshot> {
+  async stateqlSnapshot(historyLimit: number, workspace: StateQLWorkspace = "session"): Promise<StateQLSnapshot> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlSnapshot) throw new Error("StateQL snapshot is unavailable");
-    const result = await slot.driver.stateqlSnapshot(historyLimit);
+    const result = await slot.driver.stateqlSnapshot(historyLimit, workspace);
     this.assertSelected(slot, generation, "loading StateQL status");
-    return { ...result, sessionGeneration: generation };
+    return { ...result, sessionGeneration: generation, workspace };
   }
 
-  async stateqlRows(handle: string, offset: number, limit: number, signal?: AbortSignal): Promise<StateQLRowsPage> {
+  async stateqlRows(
+    handle: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+    workspace: StateQLWorkspace = "session",
+  ): Promise<StateQLRowsPage> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
-    const result = await slot.driver.stateqlRows(handle, offset, limit, signal);
+    const result = await slot.driver.stateqlRows(handle, offset, limit, signal, workspace);
     this.assertSelected(slot, generation, "loading StateQL rows");
-    return { ...result, sessionGeneration: generation };
+    return { ...result, sessionGeneration: generation, workspace };
   }
 
   async stateqlCommand(
@@ -998,13 +1010,14 @@ export class RuntimeCoordinator implements PiDriver {
     signal?: AbortSignal,
     expectedConnectionId?: string | null,
     operationId?: string,
+    workspace: StateQLWorkspace = "session",
   ): Promise<StateQLCommandResult> {
     const slot = this.selected();
     const generation = this.generation;
     if (!slot.driver.stateqlCommand) throw new Error("StateQL commands are unavailable");
-    const result = await slot.driver.stateqlCommand(input, signal, expectedConnectionId, operationId);
+    const result = await slot.driver.stateqlCommand(input, signal, expectedConnectionId, operationId, workspace);
     this.assertSelected(slot, generation, `running StateQL ${input.command}`);
-    return { ...result, sessionGeneration: generation };
+    return { ...result, sessionGeneration: generation, workspace };
   }
 
   async papercutList(

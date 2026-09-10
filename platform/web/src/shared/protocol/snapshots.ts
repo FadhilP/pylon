@@ -210,6 +210,10 @@ export interface TimelineCheckpointDiff {
   truncated?: boolean;
 }
 
+export type StateQLWorkspace = "session" | "global";
+/** Stable actor used by the web UI's global StateQL workspace. */
+export const STATEQL_GLOBAL_UI_ACTOR = "pylon:stateql:global:ui:v1";
+
 export type StateQLCommandOrigin = "legacy" | "user" | "model" | "system" | "api";
 
 export interface StateQLHistoryEntryReadModel {
@@ -255,6 +259,7 @@ export type StateQLCommandResult = {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
   actor_id: string;
+  workspace: StateQLWorkspace;
   command: StateQLCommandInput["command"];
 } & ({ status: "completed"; response: StateQLCommandResponseReadModel } | { status: "declined" });
 
@@ -262,6 +267,7 @@ export interface StateQLExport {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
   actor_id: string;
+  workspace: StateQLWorkspace;
   content: string;
   format: "json" | "jsonl" | "csv";
 }
@@ -274,6 +280,7 @@ export interface StateQLRowsPage {
   editing_reason?: string;
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
+  workspace: StateQLWorkspace;
   actor_id: string;
   handle: string;
   offset: number;
@@ -324,6 +331,7 @@ export interface StateQLSnapshot {
   protocolVersion: typeof PROTOCOL_VERSION;
   sessionGeneration: number;
   session: { session_id: string; name: string; status: "active" | "closed" };
+  workspace: StateQLWorkspace;
   actor_id: string;
   connection: {
     connection_id: string;
