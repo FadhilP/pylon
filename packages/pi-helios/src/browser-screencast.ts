@@ -206,7 +206,7 @@ export class BrowserScreencast {
           JSON.stringify({
             id: 1,
             method: "Page.startScreencast",
-            params: { format: "jpeg", quality: 65, maxWidth: width, maxHeight: height, everyNthFrame: 1 },
+            params: { format: "jpeg", quality: 85, maxWidth: width, maxHeight: height, everyNthFrame: 1 },
           }),
         );
       });

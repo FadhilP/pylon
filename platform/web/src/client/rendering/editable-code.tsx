@@ -14,6 +14,7 @@ import {
   gutter,
   highlightActiveLine,
   keymap,
+  scrollPastEnd,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { createPortal } from "react-dom";
@@ -259,7 +260,13 @@ export function EditableCode(props: Props) {
         extensions: [
           history(),
           editorAssistance(current.current.path, { onLoadError: () => setLanguageError(true) }),
-          search({ top: true, literal: true, createPanel: findWidget }),
+          search({
+            top: true,
+            literal: true,
+            createPanel: findWidget,
+            scrollToMatch: range => EditorView.scrollIntoView(range, { y: "center" }),
+          }),
+          scrollPastEnd(),
           drawSelection(),
           highlightActiveLine(),
           paintedCode,

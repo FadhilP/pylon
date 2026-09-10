@@ -3,8 +3,10 @@ import { createRoot } from "react-dom/client";
 import { App } from "./client/app/app";
 import "./client/app/styles.css";
 import {
+  applyInterfaceScale,
   applyTheme,
   readStoredPreference,
+  readStoredInterfaceScalePreference,
   readStoredThemePreference,
   resolveTheme,
   type PreferenceStorage,
@@ -25,6 +27,8 @@ function storage(): PreferenceStorage | undefined {
     return undefined;
   }
 }
+
+applyInterfaceScale(readStoredInterfaceScalePreference(storage()));
 
 const colorTheme = resolveTheme(readStoredThemePreference(storage()), matchMedia("(prefers-color-scheme: light)").matches);
 applyTheme(colorTheme);

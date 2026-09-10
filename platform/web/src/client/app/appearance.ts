@@ -1,5 +1,10 @@
 export const THEME_KEY = "pylon-theme";
 
+export const INTERFACE_SCALE_KEY = "pylon-interface-scale";
+export const INTERFACE_SCALES = [0.85, 1, 1.15, 1.3] as const;
+export type InterfaceScale = (typeof INTERFACE_SCALES)[number];
+export const DEFAULT_INTERFACE_SCALE: InterfaceScale = 1;
+
 export const COLOR_THEMES = ["light", "dark", "warm"] as const;
 export type ColorTheme = (typeof COLOR_THEMES)[number];
 export type Theme = ColorTheme | "system";
@@ -38,6 +43,16 @@ export function applyTheme(theme: ColorTheme): void {
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[theme]);
 }
 
+export function readInterfaceScalePreference(value: unknown): InterfaceScale {
+  const scale = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  return INTERFACE_SCALES.includes(scale as InterfaceScale) ? (scale as InterfaceScale) : DEFAULT_INTERFACE_SCALE;
+}
+
+export function applyInterfaceScale(scale: InterfaceScale): void {
+  document.documentElement.style.setProperty("--interface-scale", String(scale));
+  document.documentElement.style.setProperty("--interface-viewport-height", `${window.innerHeight / scale}px`);
+}
+
 export function readStoredPreference<T>(
   storage: Pick<PreferenceStorage, "getItem"> | undefined,
   key: string,
@@ -69,4 +84,21 @@ export function readStoredThemePreference(storage: Pick<PreferenceStorage, "getI
 
 export function rememberThemePreference(storage: Pick<PreferenceStorage, "setItem"> | undefined, theme: Theme): void {
   rememberStoredPreference(storage, THEME_KEY, theme);
+}
+export function readStoredInterfaceScalePreference(
+  storage: Pick<PreferenceStorage, "getItem"> | undefined,
+): InterfaceScale {
+  return readStoredPreference(
+    storage,
+    INTERFACE_SCALE_KEY,
+    readInterfaceScalePreference,
+    DEFAULT_INTERFACE_SCALE,
+  );
+}
+
+export function rememberInterfaceScalePreference(
+  storage: Pick<PreferenceStorage, "setItem"> | undefined,
+  scale: InterfaceScale,
+): void {
+  rememberStoredPreference(storage, INTERFACE_SCALE_KEY, String(scale));
 }

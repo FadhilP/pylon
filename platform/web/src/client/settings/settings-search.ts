@@ -28,6 +28,7 @@ export type SettingsSearchControl =
   | { kind: "tool"; packageId: string; tool: string }
   | { kind: "model"; modelKey: string }
   | { kind: "theme" }
+  | { kind: "interface-scale" }
   | { kind: "syntax-theme" }
   | { kind: "sound"; cue: "turn-complete" | "attention" };
 
@@ -236,6 +237,15 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
     description: "Choose whether Pylon follows your system appearance or uses a fixed theme.",
     keywords: "system automatic auto dark light warm",
     control: { kind: "theme" },
+  }),
+  entry({
+    id: "appearance-interface-scale",
+    tab: "appearance",
+    section: "Appearance",
+    label: "Interface scale",
+    description: "Scale text, controls, and spacing across Pylon.",
+    keywords: "font size zoom multiplier accessibility",
+    control: { kind: "interface-scale" },
   }),
   entry({
     id: "appearance-syntax",

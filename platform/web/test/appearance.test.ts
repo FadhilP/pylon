@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_INTERFACE_SCALE,
   DEFAULT_THEME,
+  INTERFACE_SCALE_KEY,
+  readInterfaceScalePreference,
+  readStoredInterfaceScalePreference,
+  rememberInterfaceScalePreference,
   readStoredThemePreference,
   rememberStoredPreference,
   rememberThemePreference,
@@ -60,4 +65,32 @@ test("explicit appearance preferences remain fixed when the OS changes", () => {
     "dracula",
   );
   assert.equal(readStoredThemePreference({ getItem: () => "invalid" }), DEFAULT_THEME);
+});
+
+test("interface scale preferences persist only supported values", () => {
+  const saved = storage();
+  rememberInterfaceScalePreference(saved, 1.15);
+
+  assert.equal(saved.getItem(INTERFACE_SCALE_KEY), "1.15");
+  assert.equal(readStoredInterfaceScalePreference(saved), 1.15);
+  assert.equal(readInterfaceScalePreference("0.85"), 0.85);
+  assert.equal(readInterfaceScalePreference(1.3), 1.3);
+
+  for (const invalid of [null, "", "1.1", "1.5", "NaN", 0, 2]) {
+    assert.equal(readInterfaceScalePreference(invalid), DEFAULT_INTERFACE_SCALE);
+  }
+});
+
+test("interface scale falls back when browser storage is unavailable", () => {
+  const unavailable = {
+    getItem(): string | null {
+      throw new Error("storage unavailable");
+    },
+    setItem(): void {
+      throw new Error("storage unavailable");
+    },
+  };
+
+  assert.equal(readStoredInterfaceScalePreference(unavailable), DEFAULT_INTERFACE_SCALE);
+  assert.doesNotThrow(() => rememberInterfaceScalePreference(unavailable, 1.3));
 });

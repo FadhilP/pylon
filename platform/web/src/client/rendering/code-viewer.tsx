@@ -596,7 +596,9 @@ function Viewer({
   };
   const hoverNote = (id?: string) => root.current?.querySelectorAll<HTMLElement>(".annotation-edge").forEach(edge => edge.classList.toggle("is-note-hot", edge.dataset.noteId === id));
   if (mode === "diff" && !files.length) return <RawText text={unifiedDiff ?? text} />;
-  const totalHeight = rows.length ? rows.at(-1)!.top + rows.at(-1)!.height + 8 : 36;
+  const finalRow = rows.at(-1);
+  const trailingSpace = mode === "file" && finalRow ? Math.max(8, viewport.height - finalRow.height) : 8;
+  const totalHeight = finalRow ? finalRow.top + finalRow.height + trailingSpace : 36;
   const first = Math.max(0, rowAt(rows, viewport.top) - 12);
   const last = Math.min(rows.length, rowAt(rows, viewport.top + viewport.height) + 13);
   const selectionStart = selection ? Math.min(selection.start, selection.end) : -1;

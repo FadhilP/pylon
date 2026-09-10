@@ -77,7 +77,14 @@ import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
 import { UiDialog } from "../runtime/remote-ui-dialog";
 import { modelKey, selectableModels, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
 import { OverviewOrb, type OverviewState } from "../ui/overview-primitives";
-import { DEFAULT_THEME, type Theme } from "../app/use-chrome";
+import {
+  DEFAULT_INTERFACE_SCALE,
+  DEFAULT_THEME,
+  INTERFACE_SCALES,
+  readInterfaceScalePreference,
+  type InterfaceScale,
+  type Theme,
+} from "../app/use-chrome";
 
 export type SettingsTab =
   | "providers"
@@ -157,6 +164,8 @@ interface SettingsDialogProps {
   modelRefreshBusy: boolean;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  interfaceScale: InterfaceScale;
+  onInterfaceScaleChange: (scale: InterfaceScale) => void;
   syntaxTheme: SyntaxThemePreference;
   onSyntaxThemeChange: (theme: SyntaxThemePreference) => void;
   onClose: () => void;
@@ -211,6 +220,8 @@ export function SettingsDialog({
   modelRefreshBusy,
   theme,
   onThemeChange,
+  interfaceScale,
+  onInterfaceScaleChange,
   syntaxTheme,
   onSyntaxThemeChange,
   onClose,
@@ -490,6 +501,9 @@ export function SettingsDialog({
     }
     if (control.kind === "theme") {
       return <ColorThemeOptions theme={theme} onChange={onThemeChange} />;
+    }
+    if (control.kind === "interface-scale") {
+      return <InterfaceScaleSelect value={interfaceScale} onChange={onInterfaceScaleChange} />;
     }
     if (control.kind === "syntax-theme") {
       return <SyntaxThemeSelect value={syntaxTheme} onChange={onSyntaxThemeChange} />;
@@ -1261,8 +1275,15 @@ export function SettingsDialog({
               />
               <ColorThemeOptions theme={theme} onChange={onThemeChange} />
               <SettingsSectionHead
+                label="Interface scale"
+                className="settings-appearance-kicker"
+                changed={interfaceScale !== DEFAULT_INTERFACE_SCALE}
+                onReset={() => onInterfaceScaleChange(DEFAULT_INTERFACE_SCALE)}
+              />
+              <InterfaceScaleSelect value={interfaceScale} onChange={onInterfaceScaleChange} />
+              <SettingsSectionHead
                 label="Syntax theme"
-                className="settings-syntax-kicker"
+                className="settings-appearance-kicker"
                 changed={syntaxTheme !== DEFAULT_SYNTAX_THEME_PREFERENCE}
                 onReset={() => onSyntaxThemeChange(DEFAULT_SYNTAX_THEME_PREFERENCE)}
               />
@@ -1399,6 +1420,28 @@ function ColorThemeOptions({ theme, onChange }: { theme: Theme; onChange: (theme
   );
 }
 
+function InterfaceScaleSelect({
+  value,
+  onChange,
+}: {
+  value: InterfaceScale;
+  onChange: (scale: InterfaceScale) => void;
+}) {
+  return (
+    <label className="settings-appearance-select" data-settings-search-target="interface-scale">
+      <span>Interface scale</span>
+      <select value={value} onChange={event => onChange(readInterfaceScalePreference(event.target.value))}>
+        {INTERFACE_SCALES.map(option => (
+          <option value={option} key={option}>
+            {Math.round(option * 100)}%
+          </option>
+        ))}
+      </select>
+      <small>Scales text, controls, and spacing across Pylon.</small>
+    </label>
+  );
+}
+
 function SyntaxThemeSelect({
   value,
   onChange,
@@ -1407,7 +1450,7 @@ function SyntaxThemeSelect({
   onChange: (theme: SyntaxThemePreference) => void;
 }) {
   return (
-    <label className="settings-syntax-theme" data-settings-search-target="code-highlighting">
+    <label className="settings-appearance-select" data-settings-search-target="code-highlighting">
       <span>Code highlighting</span>
       <select value={value} onChange={event => onChange(event.target.value as SyntaxThemePreference)}>
         {SYNTAX_THEME_PREFERENCES.map(option => (

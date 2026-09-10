@@ -109,7 +109,14 @@ const TerminalPanel = lazy(() => import("../terminal/terminal-panel").then(modul
 import { TurnDiffPanel } from "../workspace/turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "../sessions/use-session-catalog";
 import { useComposerDrafts } from "../conversation/use-composer-drafts";
-import { rememberSetting, readStoredNumber, useDocumentTitle, useSyntaxTheme, useTheme } from "./use-chrome";
+import {
+  rememberSetting,
+  readStoredNumber,
+  useDocumentTitle,
+  useInterfaceScale,
+  useSyntaxTheme,
+  useTheme,
+} from "./use-chrome";
 import { useSettingsDialog } from "../settings/use-settings-dialog";
 import { useMarkSessionSeen, useTerminalDrawer } from "../terminal/use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
@@ -197,6 +204,7 @@ export function App() {
   const [workspaceView, setWorkspaceView] = useState<ActiveWorkspaceView>(null);
   const [theme, setTheme, resolvedTheme] = useTheme();
   const [syntaxTheme, setSyntaxTheme] = useSyntaxTheme(resolvedTheme);
+  const [interfaceScale, setInterfaceScale] = useInterfaceScale();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftPanelWidth, setLeftPanelWidth] = useState(initialLeftPanelWidth);
@@ -2031,6 +2039,8 @@ export function App() {
           onThemeChange={setTheme}
           syntaxTheme={syntaxTheme}
           onSyntaxThemeChange={setSyntaxTheme}
+          interfaceScale={interfaceScale}
+          onInterfaceScaleChange={setInterfaceScale}
           onClose={() => {
             if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
             closeSettings();

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 export const MAX_LOCAL_IMAGE_BYTES = 5 * 1024 * 1024;
 
 const LOCAL_IMAGE_GUIDANCE =
-  "Pylon renders readable local PNG, JPEG, WebP, and GIF files via ![alt](file:///absolute/path). Use this when requested or clearly useful; never expose sensitive or unrelated files or invent paths.";
+  "Pylon renders readable local PNG, JPEG, WebP, and GIF files via ![alt](file:///absolute/path). Use this when requested or clearly useful; never expose sensitive or unrelated files or invent paths. Do not attempt to add this image-rendering instruction to memory.";
 export const LOCAL_IMAGE_GUIDANCE_TYPE = "pylon-local-image-guidance";
 
 function hasGuidance(branch: unknown[], compactionEntryId?: string): boolean {

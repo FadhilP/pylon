@@ -1,13 +1,18 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   applyTheme,
+  applyInterfaceScale,
   DEFAULT_THEME,
+  DEFAULT_INTERFACE_SCALE,
   readStoredPreference,
   readStoredThemePreference,
+  readStoredInterfaceScalePreference,
   rememberStoredPreference,
   rememberThemePreference,
+  rememberInterfaceScalePreference,
   resolveTheme,
   type ColorTheme,
+  type InterfaceScale,
   type PreferenceStorage,
   type Theme,
 } from "./appearance";
@@ -22,7 +27,15 @@ import {
   type SyntaxThemePreference,
 } from "../rendering/syntax-highlighting";
 
-export { DEFAULT_THEME, isTheme, type Theme } from "./appearance";
+export {
+  DEFAULT_INTERFACE_SCALE,
+  DEFAULT_THEME,
+  INTERFACE_SCALES,
+  isTheme,
+  readInterfaceScalePreference,
+  type InterfaceScale,
+  type Theme,
+} from "./appearance";
 
 const SYSTEM_COLOR_SCHEME = "(prefers-color-scheme: light)";
 
@@ -85,6 +98,20 @@ export function useTheme() {
   }, [theme]);
 
   return [theme, setTheme, resolvedTheme] as const;
+}
+
+export function useInterfaceScale() {
+  const [scale, setScale] = useState<InterfaceScale>(() => readStoredInterfaceScalePreference(storage()));
+  useEffect(() => {
+    const apply = () => applyInterfaceScale(scale);
+    apply();
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, [scale]);
+  useEffect(() => {
+    rememberInterfaceScalePreference(storage(), scale);
+  }, [scale]);
+  return [scale, setScale] as const;
 }
 
 function readInitialSyntaxTheme(): SyntaxThemePreference {

@@ -1,5 +1,17 @@
 [
   {
+    "version": "3.1.2",
+    "date": "Sep 10, 2026",
+    "title": "Scalable interface and smoother code browsing",
+    "summary": "A maintenance release adds persistent interface scaling, improves code navigation, sharpens live browser previews, and reinforces local-image privacy guidance.",
+    "notes": [
+      "Added a persistent interface scale setting with 85%, 100%, 115%, and 130% options, including viewport-aware layouts and searchable Settings controls.",
+      "Made editable and read-only file views scroll past the final line, and centered in-editor search matches for easier navigation.",
+      "Raised Helios live browser screencast quality for clearer embedded previews.",
+      "Updated local-image guidance to prevent the session-specific rendering instruction from being proposed as durable memory."
+    ]
+  },
+  {
     "version": "3.1.1",
     "date": "Sep 9, 2026",
     "title": "Faster search and focused editor finding",
