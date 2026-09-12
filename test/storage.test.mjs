@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { link as hardLink, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -83,14 +83,124 @@ test("failed automatic migration cleans up and falls back to legacy state", asyn
   assert.deepEqual(await readdir(join(root, ".pylon")), []);
 });
 
-test("migration never overwrites an existing Pylon agent directory", async () => {
+test("existing-target recovery never overwrites current files", async () => {
   const root = await home();
   await legacy(root, { "auth.json": "legacy" });
   await mkdir(join(root, ".pylon", "agent"), { recursive: true });
   await writeFile(join(root, ".pylon", "agent", "auth.json"), "current");
   const result = await migratePylonStorage({ homeDir: root });
-  assert.equal(result.status, "already-present");
+  assert.equal(result.status, "recovered");
+  assert.equal(result.importedFiles, 0);
   assert.equal(await readFile(join(root, ".pylon", "agent", "auth.json"), "utf8"), "current");
+  assert.equal(await readFile(join(root, ".pi", "agent", "auth.json"), "utf8"), "legacy");
+});
+
+test("existing-target recovery preserves a file created during publication", async () => {
+  const root = await home();
+  const targetAgent = join(root, ".pylon", "agent");
+  await legacy(root, { "race.txt": "legacy" });
+  await mkdir(targetAgent, { recursive: true });
+  const result = await migratePylonStorage({
+    homeDir: root,
+    link: async (source, target) => {
+      if (target === join(targetAgent, "race.txt")) {
+        await writeFile(target, "current");
+        const error = new Error("target appeared");
+        error.code = "EEXIST";
+        throw error;
+      }
+      await hardLink(source, target);
+    },
+  });
+  assert.equal(result.status, "recovered");
+  assert.equal(result.importedFiles, 0);
+  assert.equal(result.conflicts, 1);
+  assert.equal(await readFile(join(targetAgent, "race.txt"), "utf8"), "current");
+});
+
+test("existing-target recovery merges missing projects, backs up the registry, and runs once", async () => {
+  const root = await home();
+
+  const targetAgent = join(root, ".pylon", "agent");
+  const legacyAgent = join(root, ".pi", "agent");
+  const shared = join(root, "code", "shared");
+  const restored = join(root, "code", "restored");
+  const later = join(root, "code", "later");
+  const targetRegistry = {
+    version: 13,
+    targetOnly: "preserved",
+    projects: [{ directory: shared, label: "Current label" }],
+    archivedSessions: [],
+  };
+  const legacyRegistry = {
+    version: 12,
+    projects: [
+      { directory: shared, label: "Legacy label" },
+      { directory: restored, label: "Restored" },
+    ],
+    archivedSessions: [],
+  };
+  await legacy(root, {
+    "auth.json": "legacy auth",
+    "sessions/repo/session.jsonl": "legacy session",
+    "pylon-web/projects.json": `${JSON.stringify(legacyRegistry)}\n`,
+  });
+  await mkdir(join(targetAgent, "pylon-web"), { recursive: true });
+  await writeFile(join(targetAgent, "auth.json"), "current auth");
+  const original = `${JSON.stringify(targetRegistry, null, 2)}\n`;
+  await writeFile(join(targetAgent, "pylon-web", "projects.json"), original);
+
+  const messages = [];
+  const env = { PI_CODING_AGENT_DIR: targetAgent };
+  const result = await preparePylonStorage({ homeDir: root, env, log: message => messages.push(message) });
+  assert.equal(result.status, "recovered");
+  assert.equal(env.PI_CODING_AGENT_DIR, targetAgent);
+  assert.equal(result.importedProjects, 1);
+  assert.equal(result.importedFiles, 1);
+  assert.match(messages[0], /Recovered 1 legacy project and 1 missing file/);
+  const merged = JSON.parse(await readFile(join(targetAgent, "pylon-web", "projects.json"), "utf8"));
+  assert.equal(merged.targetOnly, "preserved");
+  assert.deepEqual(merged.projects, [
+    { directory: shared, label: "Current label" },
+    { directory: restored, label: "Restored" },
+  ]);
+  assert.equal(await readFile(result.backupPath, "utf8"), original);
+  assert.equal(await readFile(join(targetAgent, "auth.json"), "utf8"), "current auth");
+  assert.equal(await readFile(join(targetAgent, "sessions", "repo", "session.jsonl"), "utf8"), "legacy session");
+  assert.equal(
+    await readFile(join(legacyAgent, "pylon-web", "projects.json"), "utf8"),
+    `${JSON.stringify(legacyRegistry)}\n`,
+  );
+
+  legacyRegistry.projects.push({ directory: later, label: "Must not be resurrected later" });
+  await writeFile(join(legacyAgent, "pylon-web", "projects.json"), `${JSON.stringify(legacyRegistry)}\n`);
+  await writeFile(join(legacyAgent, "later.txt"), "later");
+  const second = await migratePylonStorage({ homeDir: root });
+  assert.equal(second.status, "already-present");
+  assert.deepEqual(
+    JSON.parse(await readFile(join(targetAgent, "pylon-web", "projects.json"), "utf8")).projects,
+    merged.projects,
+  );
+  await assert.rejects(stat(join(targetAgent, "later.txt")), { code: "ENOENT" });
+});
+
+test("failed existing-target recovery keeps using current Pylon state without rewriting it", async () => {
+  const root = await home();
+  const targetAgent = join(root, ".pylon", "agent");
+  await legacy(root, { "missing.txt": "must not copy", "pylon-web/projects.json": "not json" });
+  await mkdir(join(targetAgent, "pylon-web"), { recursive: true });
+  const current = `${JSON.stringify({ version: 13, projects: [], archivedSessions: [] })}\n`;
+  await writeFile(join(targetAgent, "pylon-web", "projects.json"), current);
+  const warnings = [];
+  const env = {};
+  const result = await preparePylonStorage({ homeDir: root, env, warn: message => warnings.push(message) });
+  assert.equal(result.status, "already-present");
+  assert.ok(result.recoveryError instanceof Error);
+  assert.equal(env.PI_CODING_AGENT_DIR, targetAgent);
+  assert.match(warnings[0], /Continuing with/);
+  assert.equal(await readFile(join(targetAgent, "pylon-web", "projects.json"), "utf8"), current);
+  await assert.rejects(stat(join(targetAgent, "missing.txt")), { code: "ENOENT" });
+  await assert.rejects(stat(join(targetAgent, "pylon-web", ".legacy-recovery-v1.json")), { code: "ENOENT" });
 });
 
 test("a concurrent migration winner is accepted and only the losing temporary copy is removed", async () => {

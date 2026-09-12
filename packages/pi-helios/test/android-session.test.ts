@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import { AndroidSessionManager } from "../src/android-session.ts";
+import { AndroidEmulatorStartupCleanupError } from "../src/android-sdk.ts";
 
 const SOURCE = `<hierarchy><android.widget.FrameLayout package="com.example.app" bounds="[0,0][1080,1920]"><android.widget.EditText package="com.example.app" class="android.widget.EditText" text="Continue" clickable="true" focusable="true" enabled="true" bounds="[20,100][400,220]"/></android.widget.FrameLayout></hierarchy>`;
 const PNG = Buffer.from(
@@ -140,6 +141,41 @@ test("failed owned startup cleans server and emulator", async () => {
   assert.ok(log.includes("server-stop"));
   assert.ok(log.includes("emulator-cleanup"));
   assert.equal(manager.get("failed"), undefined);
+});
+
+test("uncertain SDK startup ownership remains available for cleanup retry", async () => {
+  const { manager, sdk } = harness();
+  let cleanupAttempts = 0;
+  const uncertain = {
+    serial: "emulator-5554",
+    avd: "Pixel_Uncertain",
+    async cleanupUncertainStart() {
+      cleanupAttempts++;
+      if (cleanupAttempts === 1) throw new Error("still running");
+    },
+  };
+  sdk.start = async () => {
+    throw new AndroidEmulatorStartupCleanupError(
+      uncertain,
+      new Error("boot failed"),
+      new Error("first cleanup failed"),
+    );
+  };
+
+  await assert.rejects(manager.start("uncertain", "Pixel_Uncertain", "com.example.app"), /cleanup is uncertain/);
+  assert.deepEqual(manager.get("uncertain"), {
+    piSessionId: "uncertain",
+    ownership: "owned",
+    state: "cleanup-required",
+    serial: "emulator-5554",
+    avd: "Pixel_Uncertain",
+    packageName: "com.example.app",
+    createdAt: manager.get("uncertain")!.createdAt,
+  });
+
+  await manager.close("uncertain", "close");
+  assert.equal(cleanupAttempts, 2);
+  assert.equal(manager.get("uncertain"), undefined);
 });
 
 test("Android operations reject foreground package escape", async () => {

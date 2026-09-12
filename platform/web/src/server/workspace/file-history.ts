@@ -70,7 +70,13 @@ class HistoryGit {
   private deadline = Date.now() + 12_000;
   private remaining = 24 * 1024 * 1024;
   constructor(private signal: AbortSignal) {}
-  async run(root: string, args: string[], input?: string, maxBytes = MAX_OUTPUT, maxDuration?: number): Promise<Buffer> {
+  async run(
+    root: string,
+    args: string[],
+    input?: string,
+    maxBytes = MAX_OUTPUT,
+    maxDuration?: number,
+  ): Promise<Buffer> {
     this.signal.throwIfAborted();
     const remainingTime = this.deadline - Date.now();
     const timeout = Math.min(remainingTime, maxDuration ?? remainingTime);
@@ -455,10 +461,7 @@ export class FileHistoryReader {
     }
     const gitStops = [...commits].reverse().map(commit => {
       const { sha, parent, previousPath, ...stop } = commit;
-      return {
-        ...stop,
-        path: prefix ? `${prefix}/${stop.path}` : stop.path,
-      };
+      return { ...stop, path: prefix ? `${prefix}/${stop.path}` : stop.path };
     });
     const result: FileHistoryResult = {
       path: requestedPath,
@@ -483,7 +486,17 @@ export class FileHistoryReader {
       result.selected = input.query.selected;
       result.view = input.query.view ?? "file";
       const historyInput = unknownBaseline && context ? { ...input, context: { ...context, partial: true } } : input;
-      result.content = await this.content(git, historyInput, baseSource, seed, checkpoints, commits, anchor, unknownBaseline, signal);
+      result.content = await this.content(
+        git,
+        historyInput,
+        baseSource,
+        seed,
+        checkpoints,
+        commits,
+        anchor,
+        unknownBaseline,
+        signal,
+      );
     }
     return sources.some(source => source.state === "unavailable") ||
       (result.content && !result.content.attributionComplete)
@@ -914,7 +927,8 @@ export class FileHistoryReader {
         attributionComplete: newOwned.complete,
         ...(changes ? { changes } : {}),
       };
-    if (!before) return { state: "unavailable", owners: [], attributionComplete: false, ...(changes ? { changes } : {}) };
+    if (!before)
+      return { state: "unavailable", owners: [], attributionComplete: false, ...(changes ? { changes } : {}) };
     const beforeText = await this.text(git, before);
     if (beforeText === undefined)
       return { state: before.state, owners: [], attributionComplete: false, ...(changes ? { changes } : {}) };

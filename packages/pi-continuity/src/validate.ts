@@ -4,7 +4,6 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 export const SHA256 = /^[0-9a-f]{64}$/;
 export const COMMIT = /^[0-9a-f]{40,64}$/;
 
-export const isUuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value);
 export const isSha256 = (value: unknown): value is string => typeof value === "string" && SHA256.test(value);
 export const isCommit = (value: unknown): value is string => typeof value === "string" && COMMIT.test(value);
 

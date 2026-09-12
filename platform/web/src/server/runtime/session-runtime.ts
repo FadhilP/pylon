@@ -208,6 +208,7 @@ import {
   stateqlRowsResult,
 } from "./package-results.ts";
 import { compactionTranscriptMessage, projectedCompactionMessage } from "./compaction-display.ts";
+import { cloneProjectAgentModels } from "../../shared/settings/agent-models.ts";
 
 interface TrashAttempt {
   status: number | null;
@@ -3497,6 +3498,7 @@ export class SessionRuntime {
       sessionGeneration: this.gate.generation,
       ready: this.gate.ready,
       cwdLabel: selectedProject?.label ?? this.displayCwdLabel(runtime.cwd, session.sessionId),
+      ...(selectedProject ? { projectId: selectedProject.id } : {}),
       projectAvailable: !this.target?.inMemory && Boolean(selectedProject && !selectedProject.archivedAt),
       sessionName: session.sessionManager.getSessionName(),
       gitBranch: this.gitBranch,
@@ -3601,6 +3603,7 @@ export class SessionRuntime {
         guard: this.runtimePolicy.effective.guardTimeoutSeconds,
         clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,
       },
+      agentModels: cloneProjectAgentModels(this.runtimePolicy.effective.agentModels) ?? {},
     });
     this.eventBus.emit("pylon:tool-overrides", {
       version: 1,

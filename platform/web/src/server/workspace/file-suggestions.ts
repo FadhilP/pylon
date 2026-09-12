@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { rankFilePaths, validRelativePath } from "../../shared/workspace/file-search.ts";
-export { rankFilePaths } from "../../shared/workspace/file-search.ts";
 import { collectPlainWorkspaceFiles } from "pylon-core/src/worktree.ts";
 
 const CACHE_MS = 30_000;
@@ -61,40 +60,40 @@ async function inventory(cwd: string): Promise<string[] | undefined> {
   if (cache.size >= MAX_CACHES) cache.delete(cache.keys().next().value!);
   cache.set(cwd, entry);
   entry.pending = (async () => {
-    const files = (await gitFiles(cwd)) ?? (await collectPlainWorkspaceFiles({ cwd })).files.map(file => file.kind ? `${file.path}/` : file.path);
+    const files =
+      (await gitFiles(cwd)) ??
+      (await collectPlainWorkspaceFiles({ cwd })).files.map(file => (file.kind ? `${file.path}/` : file.path));
     return includeDirectories(files.slice(0, MAX_PATHS));
-  })().then(paths => {
-    if (cache.get(cwd) === entry) {
-      entry.paths = paths;
-      entry.expiresAt = Date.now() + CACHE_MS;
-      entry.pending = undefined;
-    }
-    return paths;
-  }, error => {
-    if (cache.get(cwd) === entry) cache.delete(cwd);
-    throw error;
-  });
+  })().then(
+    paths => {
+      if (cache.get(cwd) === entry) {
+        entry.paths = paths;
+        entry.expiresAt = Date.now() + CACHE_MS;
+        entry.pending = undefined;
+      }
+      return paths;
+    },
+    error => {
+      if (cache.get(cwd) === entry) cache.delete(cwd);
+      throw error;
+    },
+  );
   return entry.pending;
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string | undefined> {
   return new Promise<string | undefined>((resolveOutput, reject) => {
-    execFile(
-      "git",
-      args,
-      { cwd, windowsHide: true, encoding: "utf8", maxBuffer: MAX_BUFFER },
-      (error, output) => {
-        if (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT" || ("code" in error && error.code === 128)) {
-            resolveOutput(undefined);
-            return;
-          }
-          reject(error);
+    execFile("git", args, { cwd, windowsHide: true, encoding: "utf8", maxBuffer: MAX_BUFFER }, (error, output) => {
+      if (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || ("code" in error && error.code === 128)) {
+          resolveOutput(undefined);
           return;
         }
-        resolveOutput(output);
-      },
-    );
+        reject(error);
+        return;
+      }
+      resolveOutput(output);
+    });
   });
 }
 
@@ -105,11 +104,7 @@ function outside(root: string, child: string): boolean {
   return path === ".." || path.startsWith("../") || path.startsWith("..\\") || isAbsolute(path);
 }
 
-async function childRepository(
-  cwd: string,
-  path: string,
-  traversal: GitTraversal,
-): Promise<string | undefined> {
+async function childRepository(cwd: string, path: string, traversal: GitTraversal): Promise<string | undefined> {
   if (!validRelativePath(path)) return undefined;
   const absolute = resolve(cwd, path.endsWith("/") ? path.slice(0, -1) : path);
   const info = await lstat(absolute).catch(() => undefined);

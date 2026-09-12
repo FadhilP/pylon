@@ -186,7 +186,7 @@ export function ReferenceRail({
             badge={item.badge?.(runtime, context)}
             ariaControls={item.ariaId}
             buttonRef={node => registerButton(item.id, node)}
-            onClick={() => (disabled ? undefined : onReference(item.id))}
+            onClick={() => (disabled && item.id !== "android" ? undefined : onReference(item.id))}
           />
         ),
       )}

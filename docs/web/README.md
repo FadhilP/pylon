@@ -13,6 +13,8 @@ Pylon Web is the local, browser-based Pylon workspace. It is for people who want
 - [Getting started](./getting-started.md) — install, launch, providers, storage migration, and updates.
 - [Workspaces and sessions](./workspaces-and-sessions.md) — projects, General, session history, Git workspaces, handoff, and apply.
 - [Surfaces](./surfaces.md) — the main workspace views, Inspector references, Archive, and Usage.
+- [Android Runner](./android-runner.md) — local Android SDK prerequisites, one-time AVD setup, ownership, and emulator lifecycle.
+- [Android Runner release checklist](./android-runner-release-checklist.md) — opt-in live testing, cross-platform smoke evidence, and initial release scope.
 - [Settings](./settings.md) — providers, models, packages, extensions, hooks, policy, notifications, and appearance.
 - [Safety and storage](./safety-and-storage.md) — loopback access, confirmations, trust, data boundaries, and recovery.
 - [Troubleshooting](./troubleshooting.md) — startup, connection, provider, package, Git, and storage problems.

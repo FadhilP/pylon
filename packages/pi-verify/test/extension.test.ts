@@ -262,6 +262,7 @@ test("verify runs checks from independent child-package directories concurrently
     await writeFile(join(cwd, name, "package.json"), JSON.stringify({ scripts: { test: "node test.js" } }));
   }
   let tool: any;
+  let checkOptions: Record<string, unknown> | undefined;
   let active = 0;
   let peak = 0;
   let release!: () => void;
@@ -275,9 +276,10 @@ test("verify runs checks from independent child-package directories concurrently
     on: () => {},
     events: { emit: () => {} },
     appendEntry: () => {},
-    exec: async (command: string, args: string[]) => {
+    exec: async (command: string, args: string[], options: Record<string, unknown>) => {
       if (command === "git" && args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "" };
       if (command === "git") return { code: 0, stdout: "", stderr: "" };
+      checkOptions = options;
       active++;
       peak = Math.max(peak, active);
       await gate;
@@ -291,6 +293,7 @@ test("verify runs checks from independent child-package directories concurrently
   release();
   const result = await running;
   assert.equal(result.details.state, "passed");
+  assert.equal(Object.hasOwn(checkOptions!, "timeout"), false);
   assert.deepEqual(
     result.details.results.map((item: any) => item.id),
     ["a/npm:test", "b/npm:test"],

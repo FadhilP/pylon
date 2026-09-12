@@ -1,6 +1,7 @@
 import type { KeyboardSettings } from "../settings/keyboard.ts";
 import type { HostPreferences } from "../settings/web-state.ts";
 import type { EffectiveGuardRules, GuardRuleOverrides } from "../settings/guard-policy.ts";
+import type { AgentModelThinkingLevel, ProjectAgentModels } from "../settings/agent-models.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type {
   ConversationReadModel,
@@ -49,6 +50,7 @@ export interface RuntimeSnapshot {
   sessionGeneration: number;
   ready: boolean;
   cwdLabel: string;
+  projectId?: string;
   projectAvailable?: boolean;
   sessionName?: string;
   gitBranch?: string;
@@ -75,6 +77,9 @@ export type DialogTimeoutSeconds = number | null;
 export type ToolExposureMode = "active" | "deferred" | "disabled";
 export type ToolOverrideReadModel = Record<string, ToolExposureMode>;
 
+export type ProjectAgentModelsReadModel = ProjectAgentModels;
+export type ProjectAgentModelThinkingReadModel = AgentModelThinkingLevel;
+
 export interface RuntimePolicyReadModel {
   revision: number;
   global: {
@@ -95,6 +100,7 @@ export interface RuntimePolicyReadModel {
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
+    agentModels?: ProjectAgentModelsReadModel;
   };
   session: {
     verify?: VerifyPolicyReadModel;
@@ -105,6 +111,7 @@ export interface RuntimePolicyReadModel {
     workspace?: WorkspacePolicyMode;
     guardTimeoutSeconds?: DialogTimeoutSeconds;
     clarifyTimeoutSeconds?: DialogTimeoutSeconds;
+    agentModels?: ProjectAgentModelsReadModel;
   };
   effective: {
     verify: VerifyPolicyReadModel;
@@ -115,6 +122,7 @@ export interface RuntimePolicyReadModel {
     guardTimeoutSeconds: DialogTimeoutSeconds;
     clarifyTimeoutSeconds: DialogTimeoutSeconds;
     toolOverrides?: ToolOverrideReadModel;
+    agentModels?: ProjectAgentModelsReadModel;
   };
   availableVerifyChecks: VerifyOptionReadModel[];
 }

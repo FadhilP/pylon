@@ -1,7 +1,18 @@
-import { IconArrowLeft, IconBotId, IconTool, IconX } from "@tabler/icons-react";
+import { IconArrowLeft, IconBotId, IconSettings, IconTool, IconX } from "@tabler/icons-react";
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { formatCacheHitRate, formatCompactNumber, formatWorkDuration, modelLabel } from "../ui/session-format";
-import type { DelegatedAgentKind, DelegatedAgentRunReadModel, ModelOptionReadModel } from "../../shared/protocol/events";
+import type {
+  DelegatedAgentKind,
+  DelegatedAgentRunReadModel,
+  ModelOptionReadModel,
+  ThinkingLevelReadModel,
+} from "../../shared/protocol/events";
+import type {
+  PackageSummary,
+  ProjectAgentModelsReadModel,
+  RuntimePolicyReadModel,
+} from "../../shared/protocol/snapshots";
+import { modelKey, selectableModels, useHiddenModels } from "../settings/model-visibility";
 import { CopyMessageButton, MarkdownContent, WorkTimer } from "../conversation/conversation-panel";
 import { agentRequestLabel, thinkingLabel } from "../ui/display-format";
 import { agentColor, type AgentColorMap } from "./agent-color";
@@ -32,16 +43,31 @@ export function AgentPanel({
   models,
   colors,
   selectedId,
+  agentPackages,
+  projectId,
+  runtimePolicy,
+  settingsDisabled,
   onSelect,
+  onUpdateSessionAgentModels,
   onClose,
 }: {
   runs: DelegatedAgentRunReadModel[];
   models: ModelOptionReadModel[];
   colors: AgentColorMap;
   selectedId?: string;
+  agentPackages: PackageSummary[];
+  projectId?: string;
+  runtimePolicy?: RuntimePolicyReadModel;
+  settingsDisabled: boolean;
   onSelect: (id?: string) => void;
+  onUpdateSessionAgentModels: (
+    projectId: string,
+    agentModels: ProjectAgentModelsReadModel,
+    expectedRevision: number,
+  ) => Promise<void>;
   onClose: () => void;
 }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const ordered = useMemo(() => [...runs].reverse(), [runs]);
   const selected = ordered.find(run => run.id === selectedId);
   const threadRuns =
@@ -58,34 +84,417 @@ export function AgentPanel({
   return (
     <aside
       id="agents-panel"
-      className={`inspector agents-panel is-open${selected ? " has-selection" : ""}`}
+      className={`inspector agents-panel is-open${selected && !settingsOpen ? " has-selection" : ""}`}
       aria-labelledby="agents-title"
-      style={selected ? agentColor(selected, colors) : undefined}>
+      style={selected && !settingsOpen ? agentColor(selected, colors) : undefined}>
       <header className="inspector-header">
         <div>
-          {selected && (
+          {(selected || settingsOpen) && (
             <button
               className="icon-button"
               type="button"
-              onClick={() => onSelect(undefined)}
+              onClick={() => settingsOpen ? setSettingsOpen(false) : onSelect(undefined)}
               aria-label="Back to agents">
               <IconArrowLeft size={17} />
             </button>
           )}
-          <IconBotId size={18} />
-          <strong id="agents-title">{selected ? <AgentIdentity run={selected} /> : "Agents"}</strong>
+          {settingsOpen ? <IconSettings size={18} /> : <IconBotId size={18} />}
+          <strong id="agents-title">
+            {settingsOpen ? "Session agent defaults" : selected ? <AgentIdentity run={selected} /> : "Agents"}
+          </strong>
         </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Close agents">
-          <IconX size={17} />
-        </button>
+        <div>
+          {!settingsOpen && (
+            <button
+              className="icon-button"
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Configure session agent defaults">
+              <IconSettings size={17} />
+            </button>
+          )}
+          <button className="icon-button" type="button" onClick={onClose} aria-label="Close agents">
+            <IconX size={17} />
+          </button>
+        </div>
       </header>
-      <p className="inspector-description">{referenceDefinition("agents")?.description}</p>
-      {selected ? (
+      <p className="inspector-description">
+        {settingsOpen
+          ? "Override agent models for this session. Changes apply to the next agent operation."
+          : referenceDefinition("agents")?.description}
+      </p>
+      {settingsOpen ? (
+        <SessionAgentModelSettings
+          packages={agentPackages}
+          projectId={projectId}
+          policy={runtimePolicy}
+          models={models}
+          disabled={settingsDisabled}
+          onUpdate={onUpdateSessionAgentModels}
+        />
+      ) : selected ? (
         <AgentDetails run={selected} threadRuns={threadRuns} models={models} />
       ) : (
         <AgentList runs={ordered} models={models} colors={colors} onSelect={onSelect} />
       )}
     </aside>
+  );
+}
+
+type SessionAgentRole = "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
+type SessionAgentProfile = { model: string; thinking?: ThinkingLevelReadModel };
+const AGENT_THINKING_LEVELS: ThinkingLevelReadModel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function SessionAgentModelSettings({
+  packages,
+  projectId,
+  policy,
+  models,
+  disabled,
+  onUpdate,
+}: {
+  packages: PackageSummary[];
+  projectId?: string;
+  policy?: RuntimePolicyReadModel;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onUpdate: (
+    projectId: string,
+    agentModels: ProjectAgentModelsReadModel,
+    expectedRevision: number,
+  ) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const value = policy?.session.agentModels ?? {};
+  const inherited = policy?.project.agentModels ?? {};
+  const continuityEnabled = packages.some(item => item.enabled && item.settings?.kind === "continuity");
+  const advisorEnabled = packages.some(item => item.enabled && item.settings?.kind === "advisor");
+  const setHere =
+    Object.keys(value.continuity ?? {}).length +
+    (value.advisor?.model !== undefined || value.advisor?.useMainModel !== undefined ? 1 : 0) +
+    (value.advisor?.thinking !== undefined ? 1 : 0);
+
+  useEffect(() => setError(""), [projectId, policy?.revision]);
+
+  const save = async (next: ProjectAgentModelsReadModel) => {
+    if (!projectId || !policy || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onUpdate(projectId, next, policy.revision);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!projectId || !policy) {
+    return (
+      <div className="settings-empty">
+        <strong>No active session</strong>
+        <span>Open a project session to configure session agent defaults.</span>
+      </div>
+    );
+  }
+  if (!continuityEnabled && !advisorEnabled) {
+    return (
+      <div className="settings-empty">
+        <strong>No session-scoped agent models</strong>
+        <span>Enable Continuity or Advisor first.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="runtime-policy session-agent-settings">
+      <div className="policy-toolbar">
+        <div className="policy-scope" role="tablist" aria-label="Agent model scope">
+          <button type="button" role="tab" aria-selected="true" className="is-active" disabled>
+            This session
+          </button>
+        </div>
+        <span className="policy-set-count">{setHere} set here</span>
+        {setHere > 0 && (
+          <button className="policy-global-link" type="button" disabled={disabled || saving} onClick={() => void save({})}>
+            Reset all to Project
+          </button>
+        )}
+      </div>
+      <div className="agent-model-groups">
+        {continuityEnabled && (
+          <section className="agent-model-group">
+            <header><h3>Continuity</h3></header>
+            <div className="package-list">
+              {([
+                ["planner", "Planner", "Breaks a goal into the task list."],
+                ["executor", "Executor", "Carries out each task in the list."],
+                ["memoryReviewer", "Memory reviewer", "Approves memories before they are stored."],
+                ["compactionReviewer", "Compaction reviewer", "Checks summaries before history is dropped."],
+              ] as const).map(([role, label, description]) => (
+                <SessionProfileRow
+                  key={role}
+                  label={label}
+                  description={description}
+                  profile={value.continuity?.[role]}
+                  inherited={inherited.continuity?.[role]}
+                  models={models}
+                  disabled={disabled || saving}
+                  onChange={profile => void save(updateSessionProfile(value, role, profile))}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+        {advisorEnabled && (
+          <SessionAdvisorSettings
+            value={value}
+            inherited={inherited.advisor}
+            models={models}
+            disabled={disabled || saving}
+            onChange={next => void save(next)}
+          />
+        )}
+      </div>
+      {error && <p className="settings-inline-error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+function updateSessionProfile(
+  value: ProjectAgentModelsReadModel,
+  role: SessionAgentRole,
+  profile: SessionAgentProfile | undefined,
+): ProjectAgentModelsReadModel {
+  const next = { ...value };
+  const continuity = { ...(value.continuity ?? {}) };
+  if (profile) continuity[role] = profile;
+  else delete continuity[role];
+  if (Object.keys(continuity).length) next.continuity = continuity;
+  else delete next.continuity;
+  return next;
+}
+
+function updateSessionAdvisor(
+  value: ProjectAgentModelsReadModel,
+  advisor: ProjectAgentModelsReadModel["advisor"],
+): ProjectAgentModelsReadModel {
+  const next = { ...value };
+  if (advisor && Object.keys(advisor).length) next.advisor = advisor;
+  else delete next.advisor;
+  return next;
+}
+
+function SessionProfileRow({
+  label,
+  description,
+  profile,
+  inherited,
+  models,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  profile?: SessionAgentProfile;
+  inherited?: SessionAgentProfile;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (profile?: SessionAgentProfile) => void;
+}) {
+  return (
+    <div className="package-row">
+      <OverviewOrb state={profile ? "done" : "neutral"} label={profile ? "set for session" : "inherited"} />
+      <span className="package-row-copy"><strong>{label}</strong><small>{description}</small></span>
+      <span className="package-row-control is-pair">
+        <SessionModelSelect
+          label={`${label} session model`}
+          value={profile?.model}
+          inheritLabel={inherited ? `Inherit from Project (${inherited.model})` : "Inherit from Project / Global"}
+          models={models}
+          disabled={disabled}
+          onChange={model => onChange(model ? { model } : undefined)}
+        />
+        <SessionThinkingSelect
+          label={`${label} session thinking`}
+          value={profile?.thinking}
+          inheritLabel={inherited?.thinking ? `Inherit from Project (${thinkingLabel(inherited.thinking)})` : "Inherit from Project / Global"}
+          modelRef={profile?.model}
+          models={models}
+          disabled={disabled || !profile}
+          onChange={thinking => profile && onChange({ ...profile, thinking })}
+        />
+      </span>
+    </div>
+  );
+}
+
+function SessionAdvisorSettings({
+  value,
+  inherited,
+  models,
+  disabled,
+  onChange,
+}: {
+  value: ProjectAgentModelsReadModel;
+  inherited?: ProjectAgentModelsReadModel["advisor"];
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: ProjectAgentModelsReadModel) => void;
+}) {
+  const advisor = value.advisor;
+  const mode = advisor?.model
+    ? advisor.model
+    : advisor?.useMainModel === true
+      ? "session"
+      : advisor?.useMainModel === false
+        ? "disabled"
+        : "inherit";
+  const inheritedLabel = inherited?.model
+    ? `Project (${inherited.model})`
+    : inherited?.useMainModel === true
+      ? "Project (session model)"
+      : inherited?.useMainModel === false
+        ? "Project (disabled)"
+        : "Project / Global";
+  const setMode = (nextMode: string) => {
+    const thinking = advisor?.thinking;
+    const next =
+      nextMode === "inherit"
+        ? thinking ? { thinking } : undefined
+        : nextMode === "session"
+          ? { useMainModel: true, ...(thinking ? { thinking } : {}) }
+          : nextMode === "disabled"
+            ? { useMainModel: false }
+            : { model: nextMode, ...(thinking ? { thinking } : {}) };
+    onChange(updateSessionAdvisor(value, next));
+  };
+  return (
+    <section className="agent-model-group">
+      <header><h3>Advisor</h3></header>
+      <div className="package-list">
+        <div className="package-row">
+          <OverviewOrb state={advisor ? "done" : "neutral"} label={advisor ? "set for session" : "inherited"} />
+          <span className="package-row-copy"><strong>Model</strong><small>Choose a model, use the session model, or disable Advisor for this session.</small></span>
+          <span className="package-row-control">
+            <SessionAdvisorModelSelect
+              value={mode}
+              inheritLabel={`Inherit from ${inheritedLabel}`}
+              models={models}
+              disabled={disabled}
+              onChange={setMode}
+            />
+          </span>
+        </div>
+        <div className="package-row">
+          <OverviewOrb state={advisor?.thinking ? "done" : "neutral"} label={advisor?.thinking ? "set for session" : "inherited"} />
+          <span className="package-row-copy"><strong>Thinking</strong><small>Override only the Advisor thinking level for this session.</small></span>
+          <span className="package-row-control">
+            <SessionThinkingSelect
+              label="Advisor session thinking"
+              value={advisor?.thinking}
+              inheritLabel={inherited?.thinking ? `Inherit from Project (${thinkingLabel(inherited.thinking)})` : "Inherit from Project / Global"}
+              modelRef={advisor?.model}
+              models={models}
+              disabled={disabled || mode === "disabled"}
+              onChange={thinking => {
+                const next = { ...(advisor ?? {}) };
+                if (thinking) next.thinking = thinking;
+                else delete next.thinking;
+                onChange(updateSessionAdvisor(value, next));
+              }}
+            />
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SessionModelSelect({
+  label,
+  value,
+  inheritLabel,
+  models,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value?: string;
+  inheritLabel: string;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const hiddenModels = useHiddenModels();
+  const options = selectableModels(models, hiddenModels, value ? [value] : []);
+  const missing = value && !options.some(model => modelKey(model) === value);
+  return (
+    <select aria-label={label} value={value ?? ""} disabled={disabled} onChange={event => onChange(event.target.value)}>
+      <option value="">{inheritLabel}</option>
+      {missing && <option value={value}>{value}</option>}
+      {options.map(model => <option value={modelKey(model)} key={modelKey(model)}>{model.name}</option>)}
+    </select>
+  );
+}
+
+function SessionAdvisorModelSelect({
+  value,
+  inheritLabel,
+  models,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  inheritLabel: string;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const hiddenModels = useHiddenModels();
+  const options = selectableModels(models, hiddenModels, value.includes("/") ? [value] : []);
+  const missing = value.includes("/") && !options.some(model => modelKey(model) === value);
+  return (
+    <select aria-label="Advisor session model" value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
+      <option value="inherit">{inheritLabel}</option>
+      <option value="disabled">Disabled</option>
+      <option value="session">Use session model</option>
+      {missing && <option value={value}>{value}</option>}
+      {options.map(model => <option value={modelKey(model)} key={modelKey(model)}>{model.name}</option>)}
+    </select>
+  );
+}
+
+function SessionThinkingSelect({
+  label,
+  value,
+  inheritLabel,
+  modelRef,
+  models,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value?: ThinkingLevelReadModel;
+  inheritLabel: string;
+  modelRef?: string;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value?: ThinkingLevelReadModel) => void;
+}) {
+  const levels = modelRef
+    ? models.find(model => modelKey(model) === modelRef)?.thinkingLevels ?? []
+    : AGENT_THINKING_LEVELS;
+  return (
+    <select
+      aria-label={label}
+      value={value ?? ""}
+      disabled={disabled}
+      onChange={event => onChange(event.target.value ? event.target.value as ThinkingLevelReadModel : undefined)}>
+      <option value="">{inheritLabel}</option>
+      {levels.map(level => <option value={level} key={level}>{thinkingLabel(level)}</option>)}
+    </select>
   );
 }
 

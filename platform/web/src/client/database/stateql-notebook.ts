@@ -112,22 +112,6 @@ export function buildStateQLActivity(snapshot: StateQLSnapshot): StateQLActivity
   return [...history, ...metadata];
 }
 
-export function filterStateQLActivity(
-  items: StateQLActivityItem[],
-  filter: StateQLActivityFilter,
-): StateQLActivityItem[] {
-  return filter === "all" ? items : items.filter(item => item.tags.includes(filter));
-}
-
-/* No pressed tag means no filter: the ledger is already everything. */
-export function selectStateQLActivity(
-  items: StateQLActivityItem[],
-  tags: ReadonlySet<StateQLActivityTag>,
-): StateQLActivityItem[] {
-  if (tags.size === 0) return items;
-  return items.filter(item => item.tags.some(tag => tags.has(tag)));
-}
-
 export function stateqlActivityStatus(item: StateQLActivityItem): { label: string; tone: StateQLActivityTone } {
   if (item.source === "history" && !item.success) return { label: item.errorCode ?? "failed", tone: "danger" };
   if (item.operation)

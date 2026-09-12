@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   buildContext,
-  buildMemoryInjection,
   promptQuery,
-  retrievalQueries,
   shortlistNotes,
   shortlistResolvedNotes,
   shortlistResolvedQueries,
@@ -68,13 +66,8 @@ test("promptQuery uses active work only for content-free continuation", () => {
 
 test("retrieval queries score prompt and planned intent independently", () => {
   const rule = note("running database migrations", "Create a backup before schema changes.");
-  const work: any = {
-    goal: "Add account history",
-    planSummary: "Apply the database migration after reconnaissance",
-    currentTodoId: "todo_1",
-    todos: [{ id: "todo_1", text: "Inspect account schema" }],
-  };
-  assert.equal(shortlistResolvedQueries([rule], retrievalQueries("Add account history", work))[0]?.id, rule.id);
+  const queries = ["Add account history", "Apply the database migration after reconnaissance", "Inspect account schema"];
+  assert.equal(shortlistResolvedQueries([rule], queries)[0]?.id, rule.id);
   assert.equal(
     shortlistResolvedQueries([note("database packages", "Keep both stable.")], ["database", "packages"]).length,
     0,
@@ -107,35 +100,6 @@ test("multi-query ties remain deterministic regardless of note order", () => {
   assert.deepEqual(
     shortlistResolvedQueries([second, first], ["package configuration"], 2).map(item => item.id),
     expected,
-  );
-});
-
-test("memory injection reports only complete newly rendered notes", () => {
-  const first = note("database migrations", "Create a backup first.");
-  const oversized = note("database migration schema", `Oversized ${"guidance ".repeat(80)}`);
-  const injection = buildMemoryInjection([oversized, first], ["database migration schema"], 100, new Set());
-  assert.deepEqual(
-    injection.notes.map(item => item.id),
-    [first.id],
-  );
-  assert.match(injection.text, /Create a backup first/);
-  assert.doesNotMatch(injection.text, /Oversized/);
-  assert.equal(buildMemoryInjection([first], ["database migration"], 100, new Set([first.id])).text, "");
-
-  const surfaced = Array.from({ length: 8 }, (_, index) =>
-    note(`database migration schema ${index}`, "Create a backup first."),
-  );
-  const ninth = note("database migration schema fallback", "Use the final fallback rule.");
-  const backfilled = buildMemoryInjection(
-    [...surfaced, ninth],
-    ["database migration schema"],
-    100,
-    new Set(surfaced.map(item => item.id)),
-  );
-  assert.deepEqual(
-    backfilled.notes.map(item => item.id),
-    [ninth.id],
-    "surfaced candidates must not consume the discovery limit",
   );
 });
 

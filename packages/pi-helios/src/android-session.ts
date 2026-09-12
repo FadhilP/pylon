@@ -2,7 +2,12 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { AndroidSdk, type OwnedEmulator } from "./android-sdk.ts";
+import {
+  AndroidEmulatorStartupCleanupError,
+  AndroidSdk,
+  type AndroidUncertainEmulator,
+  type OwnedEmulator,
+} from "./android-sdk.ts";
 import { androidSnapshot, sameAndroidElement, type AndroidElementRef, type AndroidSnapshot } from "./android-source.ts";
 import { AppiumClient, AppiumServer, resolveAppium, type AppiumInvocation } from "./appium.ts";
 import type { Exec } from "./capture.ts";
@@ -82,6 +87,7 @@ interface Managed {
   sdk?: SdkLike;
   directory?: string;
   emulator?: OwnedEmulator;
+  uncertainEmulator?: AndroidUncertainEmulator;
   server?: ServerLike;
   client?: ClientLike;
   references: Map<string, AndroidElementRef>;
@@ -100,7 +106,7 @@ export interface AndroidSessionDependencies {
 
 const DEFAULT_DEPENDENCIES: AndroidSessionDependencies = {
   acquireToolingLease: () => new AndroidToolingManager().acquireUsageLease(),
-  createSdk: exec => AndroidSdk.create(exec),
+  createSdk: () => AndroidSdk.create(),
   resolveAppium,
   startServer: (invocation, signal) => AppiumServer.start(invocation, signal),
   createClient: endpoint => new AppiumClient(endpoint),
@@ -181,9 +187,18 @@ export class AndroidSessionManager {
         managed.releaseToolingLease = await this.dependencies.acquireToolingLease();
         await this.prepare(managed);
         this.assertStartupActive(managed);
-        managed.emulator = await managed.sdk!.start(avd, headless, signal, startupTimeoutMs);
-        managed.record.serial = managed.emulator.serial;
-        managed.record.avd = managed.emulator.avd;
+        try {
+          managed.emulator = await managed.sdk!.start(avd, headless, signal, startupTimeoutMs);
+          managed.record.serial = managed.emulator.serial;
+          managed.record.avd = managed.emulator.avd;
+        } catch (error) {
+          if (error instanceof AndroidEmulatorStartupCleanupError) {
+            managed.uncertainEmulator = error.emulator;
+            managed.record.serial = error.emulator.serial;
+            managed.record.avd = error.emulator.avd;
+          }
+          throw error;
+        }
         this.assertStartupActive(managed);
         return await this.startAutomation(managed, activity, signal);
       } catch (error) {
@@ -483,7 +498,13 @@ export class AndroidSessionManager {
     let emulatorFailure: unknown;
     if (managed.record.ownership === "owned") {
       try {
-        await managed.emulator?.stop();
+        if (managed.uncertainEmulator) {
+          await managed.uncertainEmulator.cleanupUncertainStart();
+          managed.uncertainEmulator = undefined;
+        } else if (managed.emulator) {
+          await managed.emulator.stop();
+          managed.emulator = undefined;
+        }
       } catch (error) {
         emulatorFailure = error;
       }
@@ -508,8 +529,19 @@ export class AndroidSessionManager {
     const warnings: unknown[] = [];
     await managed.client?.deleteSession().catch(error => warnings.push(error));
     await managed.server?.stop().catch(error => warnings.push(error));
-    if (managed.record.ownership === "owned")
-      await managed.emulator?.cleanupUncertainStart().catch(error => warnings.push(error));
+    if (managed.record.ownership === "owned") {
+      try {
+        if (managed.uncertainEmulator) {
+          await managed.uncertainEmulator.cleanupUncertainStart();
+          managed.uncertainEmulator = undefined;
+        } else if (managed.emulator) {
+          await managed.emulator.cleanupUncertainStart();
+          managed.emulator = undefined;
+        }
+      } catch (error) {
+        warnings.push(error);
+      }
+    }
     if (warnings.length) {
       managed.record.state = "cleanup-required";
       return;

@@ -10,6 +10,12 @@ import {
   validGuardRules,
   type GuardRuleOverrides,
 } from "../../shared/settings/guard-policy.ts";
+import {
+  cloneProjectAgentModels,
+  mergeProjectAgentModels,
+  validProjectAgentModels,
+  type ProjectAgentModels,
+} from "../../shared/settings/agent-models.ts";
 import { DEFAULT_DIALOG_TIMEOUT_SECONDS, defaultGlobalPolicy } from "../../shared/settings/policy-defaults.ts";
 import type {
   DialogTimeoutSeconds,
@@ -23,6 +29,7 @@ import { GENERAL_PROJECT_ID, GENERAL_PROJECT_LABEL } from "../../shared/sessions
 
 // Increment only when persisted meaning changes or migration is required; additive fields stay compatible.
 const VERSION = 13;
+const PINNED_SESSIONS_VERSION = 13;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;
 const MAX_PINNED_SESSIONS = 10_000;
@@ -49,6 +56,7 @@ export interface RegisteredProject {
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
   toolOverrides?: ToolOverrideReadModel;
+  agentModels?: ProjectAgentModels;
 }
 
 interface SessionPolicyRecord {
@@ -62,6 +70,7 @@ interface SessionPolicyRecord {
   guardTimeoutSeconds?: DialogTimeoutSeconds;
   clarifyTimeoutSeconds?: DialogTimeoutSeconds;
   toolOverrides?: ToolOverrideReadModel;
+  agentModels?: ProjectAgentModels;
 }
 
 export interface ToolPolicyUpdate {
@@ -70,6 +79,14 @@ export interface ToolPolicyUpdate {
   sessionId: string;
   tool: string;
   mode: ToolExposureMode | "inherit";
+  expectedRevision: number;
+}
+
+export interface AgentModelsUpdate {
+  scope: "project" | "session";
+  projectId: string;
+  sessionId: string;
+  agentModels: ProjectAgentModels;
   expectedRevision: number;
 }
 
@@ -205,13 +222,16 @@ export class ProjectRegistry {
         const directories = value.directories.filter(
           (item): item is string => typeof item === "string" && item.length > 0 && item.length <= 4_096,
         );
-        this.projects = await this.resolveProjects(directories.map(directory => ({ directory })));
+        this.projects = await this.resolveProjects(
+          directories.map(directory => ({ directory })),
+          true,
+        );
         this.loaded = true;
         await this.save();
         return;
       }
       if (
-        ![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, VERSION].includes(Number(value.version)) ||
+        !(Number(value.version) >= 2 && Number(value.version) <= VERSION) ||
         !Array.isArray(value.projects) ||
         !Array.isArray(value.archivedSessions)
       ) {
@@ -265,6 +285,7 @@ export class ProjectRegistry {
           guardTimeoutSeconds?: unknown;
           clarifyTimeoutSeconds?: unknown;
           toolOverrides?: unknown;
+          agentModels?: unknown;
         };
         const workspacePolicy =
           record.workspacePolicy === undefined ? undefined : migrateWorkspacePolicy(record.workspacePolicy);
@@ -295,6 +316,13 @@ export class ProjectRegistry {
         if (record.guardTimeoutSeconds !== undefined && !validDialogTimeout(record.guardTimeoutSeconds)) return [];
         if (record.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(record.clarifyTimeoutSeconds)) return [];
         if (record.toolOverrides !== undefined && !validToolOverrides(record.toolOverrides)) return [];
+        // A corrupt agent-models field must never drop the project; ignore it and self-heal on save.
+        const agentModels =
+          record.agentModels === undefined
+            ? undefined
+            : validProjectAgentModels(record.agentModels)
+              ? cloneProjectAgentModels(record.agentModels)
+              : undefined;
         return [
           {
             directory: record.directory,
@@ -321,10 +349,11 @@ export class ProjectRegistry {
             ...(record.toolOverrides && Object.keys(record.toolOverrides as ToolOverrideReadModel).length
               ? { toolOverrides: cloneToolOverrides(record.toolOverrides as ToolOverrideReadModel) }
               : {}),
+            ...(agentModels ? { agentModels } : {}),
           },
         ];
       });
-      this.projects = await this.resolveProjects(projects);
+      this.projects = await this.resolveProjects(projects, true);
       this.archivedSessions = value.archivedSessions
         .flatMap(item => {
           if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -350,7 +379,7 @@ export class ProjectRegistry {
         : [];
       // v9 active order did not encode pin intent; do not infer pins during migration.
       this.pinnedSessionIds =
-        Number(value.version) >= VERSION && Array.isArray(value.pinnedSessionIds)
+        Number(value.version) >= PINNED_SESSIONS_VERSION && Array.isArray(value.pinnedSessionIds)
           ? [
               ...new Set(
                 value.pinnedSessionIds.filter(
@@ -640,6 +669,7 @@ export class ProjectRegistry {
           ...(policy.verify ? { verify: cloneVerifyPolicy(policy.verify) } : {}),
           ...(policy.guardRules ? { guardRules: { ...policy.guardRules } } : {}),
           ...(policy.toolOverrides ? { toolOverrides: cloneToolOverrides(policy.toolOverrides) } : {}),
+          ...(policy.agentModels ? { agentModels: cloneProjectAgentModels(policy.agentModels) } : {}),
         });
       } else policy.sessionId = sessionId;
     }
@@ -677,6 +707,9 @@ export class ProjectRegistry {
     const globalTools = cloneToolOverrides(this.globalPolicy.toolOverrides);
     const projectTools = cloneToolOverrides(project.toolOverrides ?? {});
     const sessionTools = cloneToolOverrides(session?.toolOverrides ?? {});
+    const projectAgentModels = cloneProjectAgentModels(project.agentModels);
+    const sessionAgentModels = cloneProjectAgentModels(session?.agentModels);
+    const effectiveAgentModels = mergeProjectAgentModels(projectAgentModels, sessionAgentModels);
     return {
       revision: this.policyRevision,
       global: { ...this.globalPolicy, guardRules: globalGuardRules, toolOverrides: globalTools },
@@ -691,6 +724,7 @@ export class ProjectRegistry {
         ...(project.clarifyTimeoutSeconds !== undefined
           ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds }
           : {}),
+        ...(projectAgentModels ? { agentModels: projectAgentModels } : {}),
       },
       session: {
         toolOverrides: sessionTools,
@@ -703,6 +737,7 @@ export class ProjectRegistry {
         ...(session?.clarifyTimeoutSeconds !== undefined
           ? { clarifyTimeoutSeconds: session.clarifyTimeoutSeconds }
           : {}),
+        ...(sessionAgentModels ? { agentModels: sessionAgentModels } : {}),
       },
       effective: {
         verify: cloneVerifyPolicy(session?.verify ?? projectVerify),
@@ -715,6 +750,7 @@ export class ProjectRegistry {
           session?.guardTimeoutSeconds === undefined ? projectGuardTimeout : session.guardTimeoutSeconds,
         clarifyTimeoutSeconds:
           session?.clarifyTimeoutSeconds === undefined ? projectClarifyTimeout : session.clarifyTimeoutSeconds,
+        ...(effectiveAgentModels ? { agentModels: effectiveAgentModels } : {}),
       },
       availableVerifyChecks: [],
     };
@@ -794,16 +830,7 @@ export class ProjectRegistry {
       else session.guardTimeoutSeconds = input.guardTimeoutSeconds;
       if (input.clarifyTimeoutSeconds === "inherit") delete session.clarifyTimeoutSeconds;
       else session.clarifyTimeoutSeconds = input.clarifyTimeoutSeconds;
-      if (
-        !session.verify &&
-        session.timelineEnabled === undefined &&
-        session.guardEnabled === undefined &&
-        !session.guardRules &&
-        !session.workspace &&
-        session.guardTimeoutSeconds === undefined &&
-        session.clarifyTimeoutSeconds === undefined &&
-        !session.toolOverrides
-      ) {
+      if (!sessionPolicyHasOverrides(session)) {
         this.sessionPolicies = this.sessionPolicies.filter(item => item !== session);
       }
     }
@@ -852,16 +879,7 @@ export class ProjectRegistry {
     if (input.scope === "session") {
       const session = this.sessionPolicies.find(item => item.sessionId === input.sessionId)!;
       if (!Object.keys(overrides).length) delete session.toolOverrides;
-      if (
-        !session.verify &&
-        session.timelineEnabled === undefined &&
-        session.guardEnabled === undefined &&
-        !session.guardRules &&
-        !session.workspace &&
-        session.guardTimeoutSeconds === undefined &&
-        session.clarifyTimeoutSeconds === undefined &&
-        !session.toolOverrides
-      ) {
+      if (!sessionPolicyHasOverrides(session)) {
         this.sessionPolicies = this.sessionPolicies.filter(item => item !== session);
       }
     }
@@ -875,6 +893,49 @@ export class ProjectRegistry {
         if (previousProject) project.toolOverrides = previousProject;
         else delete project.toolOverrides;
       } else if (previousSessions) this.sessionPolicies = previousSessions;
+      throw error;
+    }
+    return this.runtimePolicy(input.projectId, input.sessionId);
+  }
+
+  async updateAgentModels(input: AgentModelsUpdate): Promise<RuntimePolicyReadModel> {
+    if (input.expectedRevision !== this.policyRevision)
+      throw new Error("runtime policy changed; refresh and try again");
+    if (!validProjectAgentModels(input.agentModels)) throw new Error("invalid agent models");
+    const project =
+      input.projectId === GENERAL_PROJECT_ID ? this.generalProject() : this.requireProject(input.projectId);
+    if (input.scope === "project" && input.projectId === GENERAL_PROJECT_ID)
+      throw new Error("General does not support project agent models");
+    const previousRevision = this.policyRevision;
+    const previousProject = cloneProjectAgentModels(project.agentModels);
+    const previousSessions = this.sessionPolicies.map(item => ({
+      ...item,
+      ...(item.agentModels ? { agentModels: cloneProjectAgentModels(item.agentModels) } : {}),
+    }));
+    const next = cloneProjectAgentModels(input.agentModels);
+    if (input.scope === "project") {
+      if (next) project.agentModels = next;
+      else delete project.agentModels;
+    } else {
+      let session = this.sessionPolicies.find(item => item.sessionId === input.sessionId);
+      if (!session) {
+        session = { sessionId: input.sessionId, projectId: input.projectId };
+        this.sessionPolicies.push(session);
+      }
+      if (session.projectId !== input.projectId) throw new Error("session policy project mismatch");
+      if (next) session.agentModels = next;
+      else delete session.agentModels;
+      if (!sessionPolicyHasOverrides(session))
+        this.sessionPolicies = this.sessionPolicies.filter(item => item !== session);
+    }
+    this.policyRevision++;
+    try {
+      await this.save();
+    } catch (error) {
+      this.policyRevision = previousRevision;
+      if (previousProject) project.agentModels = previousProject;
+      else delete project.agentModels;
+      this.sessionPolicies = previousSessions;
       throw error;
     }
     return this.runtimePolicy(input.projectId, input.sessionId);
@@ -995,34 +1056,38 @@ export class ProjectRegistry {
 
   private async resolveProjects(
     records: Array<Omit<RegisteredProject, "id" | "cwd" | "label"> & { directory: string; label?: string }>,
+    preserveUnavailable = false,
   ): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {
+      let cwd: string;
       try {
-        const cwd = await canonicalDirectory(record.directory);
-        const id = projectIdForCwd(cwd);
-        if (!projects.some(project => project.id === id)) {
-          projects.push({
-            id,
-            cwd,
-            label: record.label?.trim() || basename(cwd) || cwd,
-            ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
-            ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
-            ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
-            ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
-            ...(record.guardEnabled !== undefined ? { guardEnabled: record.guardEnabled } : {}),
-            ...(record.guardRules ? { guardRules: { ...record.guardRules } } : {}),
-            ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
-            ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
-            ...(record.clarifyTimeoutSeconds !== undefined
-              ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds }
-              : {}),
-            ...(record.toolOverrides ? { toolOverrides: cloneToolOverrides(record.toolOverrides) } : {}),
-          });
-        }
+        cwd = await canonicalDirectory(record.directory);
       } catch {
-        // Missing directories remain absent until explicitly added again.
+        if (!preserveUnavailable) continue;
+        // Persisted registrations survive temporary drive, mount, and permission failures.
+        cwd = resolve(record.directory);
       }
+      const id = projectIdForCwd(cwd);
+      if (projects.some(project => project.id === id)) continue;
+      projects.push({
+        id,
+        cwd,
+        label: record.label?.trim() || basename(cwd) || cwd,
+        ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
+        ...(record.setupCommand ? { setupCommand: record.setupCommand } : {}),
+        ...(record.verifyPolicy ? { verifyPolicy: cloneVerifyPolicy(record.verifyPolicy) } : {}),
+        ...(record.timelineEnabled !== undefined ? { timelineEnabled: record.timelineEnabled } : {}),
+        ...(record.guardEnabled !== undefined ? { guardEnabled: record.guardEnabled } : {}),
+        ...(record.guardRules ? { guardRules: { ...record.guardRules } } : {}),
+        ...(record.workspacePolicy ? { workspacePolicy: record.workspacePolicy } : {}),
+        ...(record.guardTimeoutSeconds !== undefined ? { guardTimeoutSeconds: record.guardTimeoutSeconds } : {}),
+        ...(record.clarifyTimeoutSeconds !== undefined ? { clarifyTimeoutSeconds: record.clarifyTimeoutSeconds } : {}),
+        ...(record.toolOverrides ? { toolOverrides: cloneToolOverrides(record.toolOverrides) } : {}),
+        ...(record.agentModels && validProjectAgentModels(record.agentModels)
+          ? { agentModels: cloneProjectAgentModels(record.agentModels) }
+          : {}),
+      });
     }
     return projects;
   }
@@ -1057,6 +1122,7 @@ export class ProjectRegistry {
               ? { clarifyTimeoutSeconds: project.clarifyTimeoutSeconds }
               : {}),
             ...(project.toolOverrides ? { toolOverrides: project.toolOverrides } : {}),
+            ...(project.agentModels ? { agentModels: project.agentModels } : {}),
           })),
           archivedSessions: this.archivedSessions,
           sessionWorkspaces: this.sessionWorkspaces,
@@ -1131,6 +1197,12 @@ export class ProjectRegistry {
     if (!value || typeof value !== "object" || Array.isArray(value)) return [];
     const record = value as Record<string, unknown>;
     const workspace = record.workspace === undefined ? undefined : migrateWorkspacePolicy(record.workspace);
+    const agentModels =
+      record.agentModels === undefined
+        ? undefined
+        : validProjectAgentModels(record.agentModels)
+          ? cloneProjectAgentModels(record.agentModels)
+          : undefined;
     if (
       typeof record.sessionId !== "string" ||
       !record.sessionId ||
@@ -1164,9 +1236,24 @@ export class ProjectRegistry {
         ...(record.toolOverrides && Object.keys(record.toolOverrides as ToolOverrideReadModel).length
           ? { toolOverrides: cloneToolOverrides(record.toolOverrides as ToolOverrideReadModel) }
           : {}),
+        ...(agentModels ? { agentModels } : {}),
       },
     ];
   }
+}
+
+function sessionPolicyHasOverrides(session: SessionPolicyRecord): boolean {
+  return Boolean(
+    session.verify ||
+    session.timelineEnabled !== undefined ||
+    session.guardEnabled !== undefined ||
+    session.guardRules ||
+    session.workspace ||
+    session.guardTimeoutSeconds !== undefined ||
+    session.clarifyTimeoutSeconds !== undefined ||
+    session.toolOverrides ||
+    session.agentModels,
+  );
 }
 
 function validVerifyPolicy(value: unknown): value is VerifyPolicyReadModel {

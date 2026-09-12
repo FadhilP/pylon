@@ -108,6 +108,7 @@ const REDIS_WRITE_COMMANDS = new Set([
   "EXPIRE", "PEXPIRE", "PERSIST", "INCR", "INCRBY", "DECR", "DECRBY", "HINCRBY",
 ]);
 
+
 function nativeStatementMode(driver: Extract<DatabaseDriver, "mongodb" | "redis">, value: unknown): DatabaseStatementMode {
   if (!databaseRecord(value)) throw new Error(`Enter a valid ${driver === "mongodb" ? "MongoDB" : "Redis"} command object.`);
   const field = driver === "mongodb" ? "operation" : "command";

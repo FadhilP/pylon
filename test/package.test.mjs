@@ -65,6 +65,7 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "bin", "storage.mjs")));
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
+    assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-android", "dist", "index.js")));
     assert.ok(existsSync(join(packageRoot, "docs", "web", "README.md")));
     assert.ok(existsSync(join(packageRoot, "docs", "pylon-web.png")));
     assert.ok(existsSync(join(packageRoot, "CHANGELOG.json")));
@@ -154,6 +155,26 @@ test("packed package installs and launches its production web app", { timeout: 2
       env: { ...process.env, PI_OFFLINE: "1" },
     });
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
+    const androidCheck = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createRequire } from "node:module";
+       import { join } from "node:path";
+       import { pathToFileURL } from "node:url";
+       const packageRoot = process.argv[1];
+       const installedRequire = createRequire(join(packageRoot, "package.json"));
+       const { AndroidRunner } = await import(pathToFileURL(installedRequire.resolve("pylon-android")).href);
+       let androidSdkCreated = false;
+       const runner = new AndroidRunner({ createSdk: async () => { androidSdkCreated = true; throw new Error("unexpected discovery"); } });
+       await runner.dispose();
+       if (androidSdkCreated || runner.snapshot().lifecycle !== "disposed") throw new Error("Installed AndroidRunner was not inert");`,
+        packageRoot,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(androidCheck.status, 0, androidCheck.stderr || androidCheck.stdout);
 
     const webSmoke = join(packageRoot, "codemode-web-smoke.mjs");
     await copyFile(join(root, "test", "package-codemode-smoke.mjs"), webSmoke);

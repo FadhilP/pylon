@@ -126,6 +126,48 @@ test("project registry seeds, deduplicates, persists, and removes canonical dire
   }
 });
 
+
+test("project registry preserves unavailable registrations and v13 pins across settings saves", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-unavailable-project-"));
+  const available = join(root, "available");
+  const unavailable = join(root, "unavailable");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await Promise.all([mkdir(available), mkdir(unavailable)]);
+  try {
+    const initial = new ProjectRegistry(config);
+    await initial.load([available, unavailable]);
+    await initial.pinSession("pinned-session");
+    const unavailableId = projectIdForCwd(unavailable);
+    await rm(unavailable, { recursive: true });
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load();
+    assert.equal(reloaded.list().length, 2);
+    assert.ok(reloaded.get(unavailableId));
+    assert.deepEqual(reloaded.listPinnedSessionIds(), ["pinned-session"]);
+
+    await reloaded.updateAgentModels({
+      scope: "project",
+      projectId: projectIdForCwd(available),
+      sessionId: "active-session",
+      agentModels: { continuity: { planner: { model: "test/planner" } } },
+      expectedRevision: 0,
+    });
+    const stored = JSON.parse(await readFile(config, "utf8"));
+    assert.equal(stored.version, 13);
+    assert.equal(stored.projects.length, 2);
+    assert.deepEqual(stored.pinnedSessionIds, ["pinned-session"]);
+
+    await mkdir(unavailable);
+    const recovered = new ProjectRegistry(config);
+    await recovered.load();
+    assert.ok(recovered.get(unavailableId));
+    assert.equal(recovered.list().length, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("project and active-session ordering persists and rejects stale members", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-project-order-"));
   const config = join(root, "agent", "pylon-web", "projects.json");
@@ -205,6 +247,13 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
       mode: "disabled",
       expectedRevision: 1,
     });
+    await registry.updateAgentModels({
+      scope: "session",
+      projectId,
+      sessionId: "local-source",
+      agentModels: { continuity: { executor: { model: "test/session-executor" } } },
+      expectedRevision: 2,
+    });
     await registry.activateSession("local-source");
     await registry.pinSession("local-source");
 
@@ -214,6 +263,10 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
     assert.equal(registry.workspaceForSession("local-fork")?.mode, "local");
     assert.equal(registry.runtimePolicy(projectId, "local-source").session.guardTimeoutSeconds, 120);
     assert.equal(registry.runtimePolicy(projectId, "local-fork").session.guardTimeoutSeconds, 120);
+    assert.equal(
+      registry.runtimePolicy(projectId, "local-fork").session.agentModels?.continuity?.executor?.model,
+      "test/session-executor",
+    );
     assert.deepEqual(registry.listActiveSessionOrder(), ["local-fork"]);
     assert.equal(registry.isSessionPinned("local-source"), false);
     assert.equal(registry.isSessionPinned("local-fork"), true);
@@ -223,10 +276,12 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
       sessionId: "local-source",
       tool: "spawn_agent",
       mode: "active",
-      expectedRevision: 2,
+      expectedRevision: 3,
     });
     assert.equal(registry.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
     assert.equal(registry.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
+    await registry.removeSessionPolicy("local-fork");
+    assert.equal(registry.runtimePolicy(projectId, "local-fork").session.agentModels, undefined);
 
     const worktree = {
       sessionId: "worktree-source",
@@ -250,7 +305,8 @@ test("fork rekey copies shareable metadata without duplicating exclusive workspa
     assert.equal(reloaded.workspaceForSession("worktree-source"), undefined);
     assert.equal(reloaded.workspaceForSession("worktree-fork")?.mode, "worktree");
     assert.equal(reloaded.runtimePolicy(projectId, "local-source").session.toolOverrides?.spawn_agent, "active");
-    assert.equal(reloaded.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, "disabled");
+    assert.equal(reloaded.runtimePolicy(projectId, "local-fork").session.toolOverrides?.spawn_agent, undefined);
+    assert.equal(reloaded.runtimePolicy(projectId, "local-fork").session.agentModels, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -450,6 +506,106 @@ test("runtime policy persists project defaults and session overrides", async () 
       reloaded.runtimePolicy(projectId, "session-one").session.guardRules?.["command.recursive-deletion"],
       "block",
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("project and session agent models inherit, override, reset, and persist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-agent-models-"));
+  const project = join(root, "project");
+  const config = join(root, "agent", "pylon-web", "projects.json");
+  await mkdir(project);
+  try {
+    const registry = new ProjectRegistry(config);
+    await registry.load([project]);
+    const projectId = projectIdForCwd(project);
+    assert.equal(registry.runtimePolicy(projectId, "session-one").effective.agentModels, undefined);
+
+    await registry.updateAgentModels({
+      scope: "project",
+      projectId,
+      sessionId: "session-one",
+      agentModels: {
+        continuity: {
+          planner: { model: "openai/project-planner", thinking: "high" },
+          executor: { model: "openai/project-executor" },
+        },
+        advisor: { useMainModel: true, thinking: "medium" },
+      },
+      expectedRevision: 0,
+    });
+    await registry.updateAgentModels({
+      scope: "session",
+      projectId,
+      sessionId: "session-one",
+      agentModels: {
+        continuity: { planner: { model: "anthropic/session-planner", thinking: "xhigh" } },
+        advisor: { thinking: "high" },
+      },
+      expectedRevision: 1,
+    });
+    const policy = registry.runtimePolicy(projectId, "session-one");
+    assert.deepEqual(policy.session.agentModels, {
+      continuity: { planner: { model: "anthropic/session-planner", thinking: "xhigh" } },
+      advisor: { thinking: "high" },
+    });
+    assert.deepEqual(policy.effective.agentModels, {
+      continuity: {
+        planner: { model: "anthropic/session-planner", thinking: "xhigh" },
+        executor: { model: "openai/project-executor" },
+      },
+      advisor: { useMainModel: true, thinking: "high" },
+    });
+
+    await assert.rejects(
+      registry.updateAgentModels({
+        scope: "session",
+        projectId,
+        sessionId: "session-one",
+        agentModels: { continuity: { planner: { model: "no-slash" } } },
+        expectedRevision: 2,
+      }),
+      /invalid agent models/,
+    );
+    await assert.rejects(
+      registry.updateAgentModels({
+        scope: "session",
+        projectId,
+        sessionId: "session-one",
+        agentModels: {},
+        expectedRevision: 1,
+      }),
+      /runtime policy changed/,
+    );
+
+    const reloaded = new ProjectRegistry(config);
+    await reloaded.load();
+    assert.equal(
+      reloaded.runtimePolicy(projectId, "session-one").effective.agentModels?.continuity?.planner?.model,
+      "anthropic/session-planner",
+    );
+
+    await reloaded.updateAgentModels({
+      scope: "session",
+      projectId,
+      sessionId: "session-one",
+      agentModels: {},
+      expectedRevision: 2,
+    });
+    assert.equal(
+      reloaded.runtimePolicy(projectId, "session-one").effective.agentModels?.continuity?.planner?.model,
+      "openai/project-planner",
+    );
+    await reloaded.updateAgentModels({
+      scope: "project",
+      projectId,
+      sessionId: "session-one",
+      agentModels: {},
+      expectedRevision: 3,
+    });
+    assert.equal(reloaded.runtimePolicy(projectId, "session-one").effective.agentModels, undefined);
+    assert.equal(reloaded.get(projectId)?.agentModels, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

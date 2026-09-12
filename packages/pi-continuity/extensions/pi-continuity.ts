@@ -357,29 +357,31 @@ export default function continuityExtension(pi: ExtensionAPI) {
       calls.some((part: any) => part.name === "continuity_update" && part.arguments?.action === "clarify")
     );
   };
+  let projectProfiles:
+    | Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>>
+    | undefined;
   const disposeRuntimePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
     if (event?.version !== 2) return;
     const value = event.dialogTimeouts?.clarify;
     if (value === null || (Number.isInteger(value) && value >= 15 && value <= 86_400)) {
       clarifyTimeoutSeconds = value;
     }
-    // Project-scoped agent-model overrides published by Pylon Web. Absent roles inherit globals.
+    // Every runtime-policy event replaces the project override, including inherit/reset.
     const overrides = event.agentModels?.continuity;
-    if (overrides !== undefined) {
-      const valid =
-        overrides &&
-        typeof overrides === "object" &&
-        !Array.isArray(overrides) &&
-        Object.entries(overrides).every(
-          ([role, profile]: [string, any]) =>
-            ["planner", "executor", "memoryReviewer", "compactionReviewer"].includes(role) &&
-            profile &&
-            typeof profile.model === "string" &&
-            profile.model.includes("/") &&
-            (profile.thinking === undefined || (thinkingLevels as readonly string[]).includes(profile.thinking)),
-        );
-      projectProfiles = valid ? overrides : undefined;
-    }
+    const valid =
+      overrides !== undefined &&
+      overrides &&
+      typeof overrides === "object" &&
+      !Array.isArray(overrides) &&
+      Object.entries(overrides).every(
+        ([role, profile]: [string, any]) =>
+          ["planner", "executor", "memoryReviewer", "compactionReviewer"].includes(role) &&
+          profile &&
+          typeof profile.model === "string" &&
+          profile.model.includes("/") &&
+          (profile.thinking === undefined || (thinkingLevels as readonly string[]).includes(profile.thinking)),
+      );
+    projectProfiles = valid ? overrides : undefined;
   });
   const clarifyDialogOptions = () =>
     clarifyTimeoutSeconds === undefined
@@ -406,8 +408,6 @@ export default function continuityExtension(pi: ExtensionAPI) {
     recentCalls.delete(key);
     return true;
   };
-  let projectProfiles:
-    Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>> | undefined;
   const effectiveProfile = (
     role: "planner" | "executor" | "memoryReviewer" | "compactionReviewer",
     global: ModelProfile | undefined,
@@ -1354,6 +1354,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       abandonAutomaticCompaction();
       session.generation++;
       session.context = undefined;
+      projectProfiles = undefined;
       terminatingToolCalls.clear();
       memory.legacyMigrationAvailable = false;
       planApproval.pending = undefined;
@@ -2091,7 +2092,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     renderShell: "self",
     renderCall: () => new Container(),
     promptGuidelines: [
-      "At the end of each task, explicitly check whether the user stated a durable preference or instruction, or the repository revealed an intentional, recurring project convention or contract. If concrete evidence could plausibly help a future session, prefer proposing it over silently skipping it; do not require certainty because the Memory Reviewer may accept, rewrite, merge, defer, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
+      "At the end of each task, explicitly check whether the user stated a durable preference or instruction, or the repository revealed an intentional, recurring project convention or contract. Propose only when the evidence clearly establishes a behavioral rule that should govern future tasks or sessions; possible future usefulness is not enough. Keep current-task constraints and implementation details in the active context or Continuity state instead. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {

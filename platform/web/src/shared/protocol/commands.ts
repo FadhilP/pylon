@@ -5,6 +5,7 @@ import type {
   DialogTimeoutSeconds,
   HookSettingsReadModel,
   PackageSettingsReadModel,
+  ProjectAgentModelsReadModel,
   ToolExposureMode,
   VerifyPolicyReadModel,
   WorkspacePolicyMode,
@@ -64,6 +65,7 @@ export const COMMAND_NAMES = [
   "updateProjectWorktreeSettings",
   "updateRuntimePolicy",
   "updateToolPolicy",
+  "updateProjectAgentModels",
   "dismissCommandResult",
   "gitAction",
 ] as const;
@@ -192,6 +194,14 @@ export type WebCommand =
       scope: "global" | "project" | "session";
       tool: string;
       mode: ToolExposureMode | "inherit";
+      expectedRevision: number;
+    } & CommandBase)
+  | ({
+      type: "updateProjectAgentModels";
+      scope: "project" | "session";
+      projectId: string;
+      sessionId: string;
+      agentModels: ProjectAgentModelsReadModel;
       expectedRevision: number;
     } & CommandBase)
   | ({ type: "dismissCommandResult"; resultId: string } & CommandBase);

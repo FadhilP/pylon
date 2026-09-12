@@ -125,45 +125,6 @@ function dedupeStrings(values: string[]) {
   });
 }
 
-export function retrievalQueries(latest = "", work?: Work) {
-  const current = work?.todos.find(todo => todo.id === work.currentTodoId)?.text;
-  return dedupeStrings([
-    promptQuery(latest, work),
-    work?.goal ?? "",
-    current ?? "",
-    work?.planSummary ?? "",
-    work?.nextAction ?? "",
-  ]);
-}
-
-export function buildMemoryInjection(
-  notes: NotebookNote[],
-  queryTexts: string[],
-  budget = 100,
-  excludedIds: ReadonlySet<string> = new Set(),
-  candidateLimit = 8,
-) {
-  const header = "Continuity state. Memory may be stale; direct instructions and repository evidence win.";
-  const max = budget * 4,
-    available = Math.min(600, max - header.length - 1);
-  const selected: NotebookNote[] = [];
-  let used = 0;
-  for (const note of shortlistResolvedQueries(
-    notes.filter(note => !excludedIds.has(note.id)),
-    queryTexts,
-    candidateLimit,
-  )) {
-    const line = renderNote(note),
-      size = line.length + (selected.length ? 1 : 0);
-    if (size <= available - used) {
-      selected.push(note);
-      used += size;
-    }
-    if (selected.length >= 2) break;
-  }
-  return { text: selected.length ? `${header}\n${selected.map(renderNote).join("\n")}` : "", notes: selected };
-}
-
 export function buildContext(
   work: Work | undefined,
   notes: NotebookNote[],

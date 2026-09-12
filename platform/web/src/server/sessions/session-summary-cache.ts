@@ -4,11 +4,11 @@ import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
+import { mapLimit } from "pylon-core/session-inventory";
 import { UsageHistoryAccumulator, type PersistedUsageAtom } from "../usage/usage-history.ts";
 
 const VERSION = 5;
 const MAX_CACHE_BYTES = 256 * 1024 * 1024;
-const CONCURRENCY = 16;
 const CACHE_FILE = "session-summaries-v4.json";
 const canonicalPath = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
 
@@ -224,21 +224,6 @@ function sameFingerprint(left: Fingerprint, right: Fingerprint): boolean {
   );
 }
 
-export async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
-      while (true) {
-        const index = next++;
-        if (index >= items.length) return;
-        results[index] = await transform(items[index]!);
-      }
-    }),
-  );
-  return results;
-}
-
 async function sessionFiles(root: string): Promise<Array<{ path: string; fingerprint: Fingerprint }>> {
   let directories;
   try {
@@ -305,7 +290,12 @@ function ownerMarker(value: any): SessionOwner | undefined {
   return { id: value.ownerSessionId, file: value.ownerSessionFile };
 }
 
-async function parseSession(path: string, before: Fingerprint, retries = 1, metadataOnly = false): Promise<CacheRecord | undefined> {
+async function parseSession(
+  path: string,
+  before: Fingerprint,
+  retries = 1,
+  metadataOnly = false,
+): Promise<CacheRecord | undefined> {
   let header: any;
   let name: string | undefined;
   let messageCount = 0;
@@ -328,7 +318,8 @@ async function parseSession(path: string, before: Fingerprint, retries = 1, meta
       if (!header) {
         if (entry.type !== "session") return;
         header = entry;
-        usage = !metadataOnly && typeof entry.id === "string" && entry.id ? new UsageHistoryAccumulator(entry.id) : undefined;
+        usage =
+          !metadataOnly && typeof entry.id === "string" && entry.id ? new UsageHistoryAccumulator(entry.id) : undefined;
         continue;
       }
       usage?.accept(entry);
@@ -351,7 +342,8 @@ async function parseSession(path: string, before: Fingerprint, retries = 1, meta
     }
     if (!header || typeof header.id !== "string" || !header.id || typeof header.timestamp !== "string") return;
     const after = fingerprint(await stat(path));
-    if (!sameFingerprint(before, after)) return retries > 0 ? parseSession(path, after, retries - 1, metadataOnly) : undefined;
+    if (!sameFingerprint(before, after))
+      return retries > 0 ? parseSession(path, after, retries - 1, metadataOnly) : undefined;
     const owner = owners[0];
     const consistentOwner =
       owner &&
@@ -393,7 +385,10 @@ async function parseSession(path: string, before: Fingerprint, retries = 1, meta
 }
 
 /** Reads only summary metadata from a session transcript without opening an SDK session. */
-export async function readSessionMetadata(path: string, expectedSessionId: string): Promise<SessionFileMetadata | undefined> {
+export async function readSessionMetadata(
+  path: string,
+  expectedSessionId: string,
+): Promise<SessionFileMetadata | undefined> {
   try {
     const before = fingerprint(await stat(path));
     const record = await parseSession(path, before, 1, true);
@@ -443,7 +438,8 @@ export class SessionSummaryCache {
     this.sessionsRoot = resolve(process.env.PI_CODING_AGENT_DIR || agentDir, "sessions");
     this.deferredPersistence = options.deferredPersistence === true;
     this.persistenceDelayMs = Math.max(0, options.persistenceDelayMs ?? 1_000);
-    this.onBackgroundError = options.onBackgroundError ?? (error => console.error("Session summary cache persistence failed", error));
+    this.onBackgroundError =
+      options.onBackgroundError ?? (error => console.error("Session summary cache persistence failed", error));
   }
 
   scan(): Promise<IndexedSession[]> {

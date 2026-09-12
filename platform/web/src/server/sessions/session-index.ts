@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { mapLimit } from "pylon-core/session-inventory";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type {
@@ -17,12 +18,7 @@ import type {
 } from "../../shared/protocol/snapshots.ts";
 import type { SessionListQuery } from "../../shared/protocol/snapshots.ts";
 import { projectIdForCwd, type ProjectRegistry } from "../workspace/project-registry.ts";
-import {
-  mapLimit,
-  readSessionMetadata,
-  SessionSummaryCache,
-  type SessionFileMetadata,
-} from "./session-summary-cache.ts";
+import { readSessionMetadata, SessionSummaryCache, type SessionFileMetadata } from "./session-summary-cache.ts";
 import { aggregateUsage, type UsageRateLookup } from "../usage/usage-aggregation.ts";
 import type { PersistedUsageAtom } from "../usage/usage-history.ts";
 
@@ -365,11 +361,13 @@ export class SessionIndex {
     if (this.scannedAt && Date.now() - this.scannedAt < REFRESH_MS && !this.dirtySessions.size) return;
     const epoch = this.epoch;
     let scan: Promise<void>;
-    scan = this.refreshPending(epoch).then(() => {
-      if (epoch !== this.epoch || this.closed) throw new Error("Session index changed while loading sessions");
-    }).finally(() => {
-      if (this.scan === scan) this.scan = undefined;
-    });
+    scan = this.refreshPending(epoch)
+      .then(() => {
+        if (epoch !== this.epoch || this.closed) throw new Error("Session index changed while loading sessions");
+      })
+      .finally(() => {
+        if (this.scan === scan) this.scan = undefined;
+      });
     this.scan = scan;
     return scan;
   }

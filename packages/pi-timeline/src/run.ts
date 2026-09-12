@@ -24,16 +24,6 @@ export function isRunEntry(value: any): value is RunEntry {
 
 export const runTimelineId = (run: RunEntry) => run.timelineId;
 
-export function hasTimeline(entries: readonly any[], timelineId: string): boolean {
-  return entries.some(
-    item =>
-      item.type === "custom" &&
-      item.customType === RUN_ENTRY_TYPE &&
-      isRunEntry(item.data) &&
-      runTimelineId(item.data) === timelineId,
-  );
-}
-
 export function findRunEntry(entries: readonly any[]): RunEntry | undefined {
   const entry = [...entries]
     .reverse()

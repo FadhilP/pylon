@@ -19,6 +19,7 @@ test("navigation", async t => {
     browserSurfaceAfterSessionStatus,
     displacesConversation,
     referenceRailItems,
+    sessionPreparationBlocksReference,
     surfaceDefinition,
   } = navigation;
 
@@ -27,6 +28,7 @@ test("navigation", async t => {
     stateqlEnabled: true,
     browserAvailable: true,
     browserActive: false,
+    androidActive: false,
     timelineEnabled: true,
     memoryEnabled: true,
     papercutEnabled: false,
@@ -118,6 +120,12 @@ test("navigation", async t => {
 
     const returned = beginBrowserSessionSurfaceTransition(departed.browserSessions, "session-b", "session-a", "chat");
     assert.equal(returned.requested, false);
+  });
+
+  await t.test("session preparation leaves host-global Android controls interactive", () => {
+    assert.equal(sessionPreparationBlocksReference("overview", true), true);
+    assert.equal(sessionPreparationBlocksReference("android", true), false);
+    assert.equal(sessionPreparationBlocksReference("android", false), false);
   });
 
   await t.test("rail groups are separated exactly once each", () => {

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { ADVISOR_MAX_OUTPUT_TOKENS, capAdvice } from "../src/advisor.ts";
 import { runConsultation } from "../src/consult.ts";
-import { isTransientProviderFailure } from "../src/retry.ts";
+import { isTransientProviderFailure } from "pylon-core/delegate-retry";
 
 test("advice cap is explicit", () => {
   const value = capAdvice("a".repeat(33_000));
