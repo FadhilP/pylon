@@ -8,6 +8,7 @@
       "Added independent Session and Global StateQL workspaces for agents and the Web Database panel, with persisted UI selection, periodic shared-state refresh, workspace-tagged requests and responses, guarded switching when table edits are pending, and strict actor and generation isolation.",
       "Added model-facing StateQL workspace selection and per-command overrides that default and reset safely to the private session scope, and upgraded the StateQL runtime to 0.11.1 for global workspace support.",
       "Made Helios browser work more efficient and predictable with focused observations, element-targeted snapshots and screenshots, ready action-observation batches, explicit stale-reference handling, stricter action validation, and bounded redacted CLI diagnostics.",
+      "Added Android Runner as a host-global Pylon Web panel for existing Android emulators, with static project discovery, explicit Gradle-wrapper trust, bounded builds, inspected replacement-only APK deployment, app lifecycle controls, PID-scoped local logs, reconnect and multi-tab hardening, and a standalone reusable runtime package.",
       "Improved the global search popup with outside-click closing, initial focus, contained Tab navigation, and background shortcut blocking only while the popup is open."
     ]
   },

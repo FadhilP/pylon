@@ -49,20 +49,28 @@ import { AgentPanel } from "../sessions/agent-panel";
 import { AttachmentPanel } from "../conversation/attachment-panel";
 import { agentColor, useAgentColors } from "../sessions/agent-color";
 import { copyText } from "../ui/clipboard";
-const ArchiveDialog = lazy(() => import("../sessions/archive-dialog").then(module => ({ default: module.ArchiveDialog })));
-const ChangelogDialog = lazy(() => import("../settings/changelog-dialog").then(module => ({ default: module.ChangelogDialog })));
+const ArchiveDialog = lazy(() =>
+  import("../sessions/archive-dialog").then(module => ({ default: module.ArchiveDialog })),
+);
+const ChangelogDialog = lazy(() =>
+  import("../settings/changelog-dialog").then(module => ({ default: module.ChangelogDialog })),
+);
 import { version } from "../../../../../package.json";
 import { ConversationPanel, type ComposerSelection } from "../conversation/conversation-panel";
 import { CompactionPanel } from "../conversation/compaction-panel";
 const BrowserPanel = lazy(() => import("../browser/browser-panel").then(module => ({ default: module.BrowserPanel })));
-const DatabasePanel = lazy(() => import("../database/database-panel").then(module => ({ default: module.DatabasePanel })));
+const DatabasePanel = lazy(() =>
+  import("../database/database-panel").then(module => ({ default: module.DatabasePanel })),
+);
 import { FilesPanel } from "../workspace/files-panel";
 // Keep the workspace shell synchronous; file viewers and editors have local lazy boundaries.
 import { FileWorkspace } from "../workspace/file-workspace";
 import { useGitWorkspace } from "../workspace/git-controller";
 import type { GitDetailQuery } from "../../shared/workspace/git";
 const GitPanel = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitPanel })));
-const ReviewSurface = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.ReviewSurface })));
+const ReviewSurface = lazy(() =>
+  import("../workspace/git-workspace").then(module => ({ default: module.ReviewSurface })),
+);
 const GitDialogs = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitDialogs })));
 import type { FileView } from "../workspace/files-panel";
 import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
@@ -85,6 +93,7 @@ import {
   initialPanelWidths,
   panelWidthSlot,
   referenceDefinition,
+  sessionPreparationBlocksReference,
   surfaceDefinition,
   workspaceViewDefinition,
   type ActiveReference,
@@ -97,6 +106,8 @@ import {
 } from "./navigation";
 import { startsHeliosBrowser } from "../browser/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
+import { AndroidPanel } from "../android/android-panel";
+import { androidStore, useAndroidStore } from "../android/android-store";
 import {
   currentSessionProgress,
   SessionProgress,
@@ -104,8 +115,12 @@ import {
   sessionTitle,
   type SessionProject,
 } from "../sessions/session-sidebar";
-const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
-const TerminalPanel = lazy(() => import("../terminal/terminal-panel").then(module => ({ default: module.TerminalPanel })));
+const SettingsDialog = lazy(() =>
+  import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })),
+);
+const TerminalPanel = lazy(() =>
+  import("../terminal/terminal-panel").then(module => ({ default: module.TerminalPanel })),
+);
 import { TurnDiffPanel } from "../workspace/turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "../sessions/use-session-catalog";
 import { useComposerDrafts } from "../conversation/use-composer-drafts";
@@ -122,7 +137,12 @@ import { useMarkSessionSeen, useTerminalDrawer } from "../terminal/use-terminal-
 import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
 import { exitDelay } from "../ui/motion";
 
-type RequestedFile = FileReference & { requestId: number; sessionId?: string; view?: FileView; searchQuery?: WorkspaceSearchQuery };
+type RequestedFile = FileReference & {
+  requestId: number;
+  sessionId?: string;
+  view?: FileView;
+  searchQuery?: WorkspaceSearchQuery;
+};
 type FileNavigation = "explorer" | "sessions";
 type SelectedCompaction = { sessionId: string; message: MessageReadModel };
 type SelectedAttachment = {
@@ -268,6 +288,7 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
+  const android = useAndroidStore();
   const agentColors = useAgentColors(live.runtime?.sessionId, live.runtime?.conversation.delegatedRuns ?? []);
   const toSessionProject = (page: SessionProjectPage): SessionProject => ({
     id: page.id,
@@ -358,19 +379,43 @@ export function App() {
       : undefined;
   const stateqlEnabled = activePackages.has("pi-stateql");
   const git = useGitWorkspace(live, reference === "git" || surface === "review");
-  const reviewAvailable = !reviewDismissed && (!!live.runtime?.workspace?.changedCount || !!git.state?.files.length || !!git.state?.operation);
+  const reviewAvailable =
+    !reviewDismissed &&
+    (!!live.runtime?.workspace?.changedCount || !!git.state?.files.length || !!git.state?.operation);
+  const androidActive =
+    Boolean(android.busy) ||
+    (android.service?.runner.devices.some(device =>
+      ["starting", "booting", "ready", "stopping", "cleanup-required"].includes(device.state),
+    ) ??
+      false) ||
+    (android.service?.build ? ["queued", "running", "cancelling"].includes(android.service.build.state) : false) ||
+    (android.service?.run
+      ? ["building", "inspecting", "installing", "launching", "running"].includes(android.service.run.phase) ||
+        ["starting", "running"].includes(android.service.run.logs.state)
+      : false);
   const navContext = useMemo<NavContext>(
     () => ({
       surface,
       stateqlEnabled,
       browserAvailable,
       browserActive,
+      androidActive,
       timelineEnabled,
       memoryEnabled,
       papercutEnabled,
       reviewAvailable,
     }),
-    [surface, stateqlEnabled, browserAvailable, browserActive, timelineEnabled, memoryEnabled, papercutEnabled, reviewAvailable],
+    [
+      surface,
+      stateqlEnabled,
+      browserAvailable,
+      browserActive,
+      androidActive,
+      timelineEnabled,
+      memoryEnabled,
+      papercutEnabled,
+      reviewAvailable,
+    ],
   );
   const rightPanelWidth = panelWidths[panelWidthSlot(reference).key];
   const shellModeClass = surfaceDefinition(surface).shellClass;
@@ -413,6 +458,10 @@ export function App() {
   useEffect(() => {
     runtimeStore.start();
   }, []);
+
+  useEffect(() => {
+    if (live.connection === "connected") androidStore.start();
+  }, [live.connection]);
 
   useEffect(() => {
     const unlock = () => unlockWebAudio();
@@ -546,7 +595,7 @@ export function App() {
   useLayoutEffect(() => {
     const drawer = workspaceRef.current?.querySelector<HTMLElement>(":scope > .inspector");
     if (!drawer) return;
-    drawer.inert = Boolean(pendingSession);
+    drawer.inert = sessionPreparationBlocksReference(reference, Boolean(pendingSession));
     return () => {
       drawer.inert = false;
     };
@@ -567,8 +616,10 @@ export function App() {
         sessionId: runtimeStore.getSnapshot().runtime?.sessionId,
         requestId: Date.now(),
       });
-      if ("annotationNote" in reference && reference.annotationNote) { setSurface("files"); setReference("notes"); }
-      else if (surface !== "files") setReference("changes");
+      if ("annotationNote" in reference && reference.annotationNote) {
+        setSurface("files");
+        setReference("notes");
+      } else if (surface !== "files") setReference("changes");
     };
     window.addEventListener("pylon:open-file", open);
     return () => window.removeEventListener("pylon:open-file", open);
@@ -990,7 +1041,9 @@ export function App() {
         return;
       const liveFields = currentSessionLiveFields();
       const updateSession = (session: SessionSummary) => applySessionLiveFields(session, liveFields);
-      setActiveSessions(result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
+      setActiveSessions(
+        result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"),
+      );
       const next = result.projects[0];
       if (!next) return;
       updateSessionPages(pages =>
@@ -1041,7 +1094,9 @@ export function App() {
       const next = result.projects[0];
       if (!next) return;
       const nextWithLiveFields = { ...next, sessions: next.sessions.map(updateSession) };
-      setActiveSessions(result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"));
+      setActiveSessions(
+        result.activeSessions.map(updateSession).filter(session => session.runtimeState !== "sleeping"),
+      );
       updateSessionPages(pages => pages.map(page => (page.id === project.id ? nextWithLiveFields : page)));
     } catch (cause) {
       reportError(cause, "Unable to show fewer sessions");
@@ -1195,6 +1250,11 @@ export function App() {
     pendingSession?.project ??
     (currentProjectPage ? toSessionProject(currentProjectPage) : live.runtime ? undefined : currentProject);
   const composerProjectLabel = composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
+  const policyEditingDisabled =
+    live.connection !== "connected" ||
+    live.runtime?.ready !== true ||
+    Boolean(live.pendingUi) ||
+    activeSessions.some(session => session.runtimeState === "running" || session.runtimeState === "attention");
   const toggleTerminal = () => {
     openTerminalDrawer();
     if (mobile) setSidebarOpen(false);
@@ -1251,7 +1311,11 @@ export function App() {
     }
   };
   changeSurfaceRef.current = changeSurface;
-  const openGitReview = (query?: GitDetailQuery) => { git.select(query); changeSurface("review"); setReference(null); };
+  const openGitReview = (query?: GitDetailQuery) => {
+    git.select(query);
+    changeSurface("review");
+    setReference(null);
+  };
   const openGitFile = (path: string, view: FileView = "current") => {
     setRequestedFile({ path, view, sessionId: live.runtime?.sessionId, requestId: Date.now() });
     changeSurface("files");
@@ -1295,29 +1359,67 @@ export function App() {
   };
   const [applyRequest, setApplyRequest] = useState<{ sessionId: string; revision: string }>();
   const keyboardReady = live.connection === "connected" && !!live.runtime?.ready && !pendingSession;
-  const reviewChanges = () => { changeSurface("chat"); setReference("changes"); };
+  const reviewChanges = () => {
+    changeSurface("chat");
+    setReference("changes");
+  };
   const keyboardHandlers: ShortcutHandlers = {
     "find-file": keyboardReady ? () => openSearch("files") : undefined,
     "find-text": keyboardReady ? () => openSearch("text") : undefined,
     "find-symbol": keyboardReady ? () => openSearch("symbols") : undefined,
     "last-tab": keyboardReady ? () => window.dispatchEvent(new CustomEvent("pylon:search")) : undefined,
-    sessions: () => { setSidebarCollapsed(false); if (mobile) setSidebarOpen(true); requestAnimationFrame(() => searchRef.current?.focus()); },
-    "new-session": live.connection === "connected" && currentProject && !sessionBusy && !sessionDeleting && !projectBusy && !pendingSession ? () => newSession(currentProject) : undefined,
-    "stop-turn": keyboardReady && live.runtime?.conversation.workStartedAt && !live.runtime.conversation.stopping ? () => runtimeStore.abort() : undefined,
-    archive: keyboardReady && activeSession && !sessionBusy && !sessionDeleting && !projectBusy ? () => setSidebarAction({
-      key: `archive-session-${activeSession.id}`, title: "Archive this session?", description: "The session will move to the archive. Saved history is retained.",
-      confirmLabel: "Archive session", busyLabel: "Archiving…", onConfirm: () => { void archiveSession(activeSession).then(() => setSidebarAction(undefined)); },
-    }) : undefined,
-    worktree: keyboardReady && live.runtime?.workspace?.canMoveToWorktree ? () => runtimeStore.handoffSession("worktree") : undefined,
+    sessions: () => {
+      setSidebarCollapsed(false);
+      if (mobile) setSidebarOpen(true);
+      requestAnimationFrame(() => searchRef.current?.focus());
+    },
+    "new-session":
+      live.connection === "connected" &&
+      currentProject &&
+      !sessionBusy &&
+      !sessionDeleting &&
+      !projectBusy &&
+      !pendingSession
+        ? () => newSession(currentProject)
+        : undefined,
+    "stop-turn":
+      keyboardReady && live.runtime?.conversation.workStartedAt && !live.runtime.conversation.stopping
+        ? () => runtimeStore.abort()
+        : undefined,
+    archive:
+      keyboardReady && activeSession && !sessionBusy && !sessionDeleting && !projectBusy
+        ? () =>
+            setSidebarAction({
+              key: `archive-session-${activeSession.id}`,
+              title: "Archive this session?",
+              description: "The session will move to the archive. Saved history is retained.",
+              confirmLabel: "Archive session",
+              busyLabel: "Archiving…",
+              onConfirm: () => {
+                void archiveSession(activeSession).then(() => setSidebarAction(undefined));
+              },
+            })
+        : undefined,
+    worktree:
+      keyboardReady && live.runtime?.workspace?.canMoveToWorktree
+        ? () => runtimeStore.handoffSession("worktree")
+        : undefined,
     terminal: keyboardReady && live.runtime?.projectAvailable !== false ? toggleTerminal : undefined,
     changes: keyboardReady ? reviewChanges : undefined,
-    inspector: keyboardReady ? () => setReference(current => current ? null : "overview") : undefined,
+    inspector: keyboardReady ? () => setReference(current => (current ? null : "overview")) : undefined,
     theme: () => runAmbient("theme"),
     settings: openSettings,
-    apply: keyboardReady && live.runtime?.workspace?.canApplyChanges && live.runtime.workspace.revision ? () => {
-      setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! }); reviewChanges();
-    } : undefined,
-    reindex: keyboardReady && live.runtime?.discoverIndex && live.runtime.discoverIndex.state !== "indexing" ? () => runtimeStore.rebuildDiscoverIndex() : undefined,
+    apply:
+      keyboardReady && live.runtime?.workspace?.canApplyChanges && live.runtime.workspace.revision
+        ? () => {
+            setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! });
+            reviewChanges();
+          }
+        : undefined,
+    reindex:
+      keyboardReady && live.runtime?.discoverIndex && live.runtime.discoverIndex.state !== "indexing"
+        ? () => runtimeStore.rebuildDiscoverIndex()
+        : undefined,
   };
   useGlobalShortcuts(keyboardHandlers, !!live.pendingUi);
 
@@ -1328,16 +1430,22 @@ export function App() {
     : `${live.runtime?.gitBranch || "No Git branch"} · Turn ${live.runtime?.metrics.userMessages ?? 0}`;
   const topbar = (
     <div className="workspace-search-surface-header">
-    <SurfaceTabs
-      surface={surface}
-      context={navContext}
-      runtime={pendingSession ? undefined : live.runtime}
-      disabled={Boolean(pendingSession)}
-      branchLabel={branchLabel}
-      onSurface={changeSurface}
-    />
-      <button type="button" className="workspace-search-launcher" disabled={!live.runtime?.ready || Boolean(pendingSession)}
-        title={`Search workspace · Files: ${shortcutLabel("find-file")} · Text: ${shortcutLabel("find-text")}`} onClick={() => openSearch()}>Search</button>
+      <SurfaceTabs
+        surface={surface}
+        context={navContext}
+        runtime={pendingSession ? undefined : live.runtime}
+        disabled={Boolean(pendingSession)}
+        branchLabel={branchLabel}
+        onSurface={changeSurface}
+      />
+      <button
+        type="button"
+        className="workspace-search-launcher"
+        disabled={!live.runtime?.ready || Boolean(pendingSession)}
+        title={`Search workspace · Files: ${shortcutLabel("find-file")} · Text: ${shortcutLabel("find-text")}`}
+        onClick={() => openSearch()}>
+        Search
+      </button>
     </div>
   );
   /**
@@ -1351,7 +1459,16 @@ export function App() {
   const sidebarVisible = workspaceView ? true : surface !== "files" || fileNavigation === "sessions";
   const surfaceMain =
     surface === "review" ? (
-      <ReviewSurface key={`review:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`} live={live} git={git} onClose={() => { setReviewDismissed(true); changeSurface("files"); }} onOpenFile={openGitFile} />
+      <ReviewSurface
+        key={`review:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`}
+        live={live}
+        git={git}
+        onClose={() => {
+          setReviewDismissed(true);
+          changeSurface("files");
+        }}
+        onOpenFile={openGitFile}
+      />
     ) : surface === "database" ? (
       <DatabasePanel
         key={`database:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`}
@@ -1425,7 +1542,10 @@ export function App() {
         catalog: { activeSessions, projects: sessionPages },
         catalogRevision: live.sessionRevision ?? 0,
         canLoadCatalog:
-          live.connection === "connected" && live.generation !== undefined && live.runtime?.ready !== false && !pendingSession,
+          live.connection === "connected" &&
+          live.generation !== undefined &&
+          live.runtime?.ready !== false &&
+          !pendingSession,
         branchAvailable: live.runtime?.workspace?.gitAvailable === true && !pendingSession,
         unseenCompletions: live.unseenCompletions,
         busy: sessionBusy || projectBusy,
@@ -1573,6 +1693,15 @@ export function App() {
           />
         </ReferencePanel>
       )}
+      {reference === "android" && (
+        <ReferencePanel reference="android" overlay={inspectorOverlay} onClose={() => setReference(null)}>
+          <AndroidPanel
+            workspaceLabel={live.runtime?.cwdLabel}
+            sessionGeneration={live.runtime?.ready ? live.runtime.sessionGeneration : undefined}
+          />
+        </ReferencePanel>
+      )}
+
       {reference === "agents" && (
         <AgentPanel
           key={`agents:${live.runtime?.sessionId ?? "loading"}`}
@@ -1580,7 +1709,14 @@ export function App() {
           models={live.runtime?.sessionControls.models ?? []}
           colors={agentColors}
           selectedId={selectedAgentId}
+          agentPackages={packages}
+          projectId={live.runtime?.projectId ?? activeSession?.projectId}
+          runtimePolicy={live.runtime?.runtimePolicy}
+          settingsDisabled={policyEditingDisabled}
           onSelect={setSelectedAgentId}
+          onUpdateSessionAgentModels={(projectId, agentModels, expectedRevision) =>
+            runtimeStore.updateAgentModels("session", projectId, agentModels, expectedRevision)
+          }
           onClose={() => setReference(null)}
         />
       )}
@@ -1609,18 +1745,52 @@ export function App() {
           onClose={() => setReference(null)}
         />
       )}
-      {reference === "git" && <GitPanel key={`git:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`} live={live} git={git}
-        onClose={() => setReference(null)} onReview={openGitReview} onOpenFile={openGitFile}
-        onApply={live.runtime?.workspace?.canApplyChanges ? () => {
-          setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! });
-          reviewChanges();
-        } : undefined}
-        onHandoff={live.runtime?.workspace?.canMoveToWorktree ? () => { void runtimeStore.handoffSession("worktree").catch(error => reportError(error, "Could not move to worktree")); } : undefined}
-        onCheckout={live.runtime?.workspace?.mode === "local" ? branch => {
-          setSidebarAction({ key: `git-checkout-${branch}`, title: "Switch branch?", description: `Switch this Local workspace to ${branch}. Git will refuse to overwrite conflicting local work.`, confirmLabel: "Switch branch", busyLabel: "Switching…", onConfirm: () => {
-            void runtimeStore.checkoutBranch(branch).then(() => setSidebarAction(undefined)).catch(error => reportError(error, "Could not switch branch"));
-          } });
-        } : undefined} />}
+      {reference === "git" && (
+        <GitPanel
+          key={`git:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`}
+          live={live}
+          git={git}
+          onClose={() => setReference(null)}
+          onReview={openGitReview}
+          onOpenFile={openGitFile}
+          onApply={
+            live.runtime?.workspace?.canApplyChanges
+              ? () => {
+                  setApplyRequest({ sessionId: live.runtime!.sessionId, revision: live.runtime!.workspace!.revision! });
+                  reviewChanges();
+                }
+              : undefined
+          }
+          onHandoff={
+            live.runtime?.workspace?.canMoveToWorktree
+              ? () => {
+                  void runtimeStore
+                    .handoffSession("worktree")
+                    .catch(error => reportError(error, "Could not move to worktree"));
+                }
+              : undefined
+          }
+          onCheckout={
+            live.runtime?.workspace?.mode === "local"
+              ? branch => {
+                  setSidebarAction({
+                    key: `git-checkout-${branch}`,
+                    title: "Switch branch?",
+                    description: `Switch this Local workspace to ${branch}. Git will refuse to overwrite conflicting local work.`,
+                    confirmLabel: "Switch branch",
+                    busyLabel: "Switching…",
+                    onConfirm: () => {
+                      void runtimeStore
+                        .checkoutBranch(branch)
+                        .then(() => setSidebarAction(undefined))
+                        .catch(error => reportError(error, "Could not switch branch"));
+                    },
+                  });
+                }
+              : undefined
+          }
+        />
+      )}
       {reference === "changes" && (
         <FilesPanel
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
@@ -1672,410 +1842,452 @@ export function App() {
   );
 
   return (
-    <AnnotationProvider sessionId={live.runtime?.sessionId ?? ""} generation={live.runtime?.sessionGeneration ?? 0} onOpen={() => setReference("notes")}>
-    {git.confirmation && <DeferredPanel><GitDialogs git={git} /></DeferredPanel>}
-    <div
-      ref={appShellRef}
-      className={`app-shell has-scope-rail has-session-strip ${
-        sidebarCollapsed ? "sidebar-collapsed" : ""
-      }${shellModeClass ? ` ${shellModeClass}` : ""}`}
-      style={
-        {
-          "--sidebar-width": `${leftPanelWidth}px`,
-          "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px",
-        } as CSSProperties
-      }>
-      <a className="skip-link" href="#main-content">
-        Skip to content
-      </a>
-      <ScopeRail
-        workspaceView={workspaceView}
-        theme={resolvedTheme}
-        terminalOpen={terminalOpen}
-        terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
-        onWorkspaceView={openWorkspaceView}
-        onAmbient={runAmbient}
-      />
-      {/* The bar's leading segment: it claims the cell above the panel, so the
+    <AnnotationProvider
+      sessionId={live.runtime?.sessionId ?? ""}
+      generation={live.runtime?.sessionGeneration ?? 0}
+      onOpen={() => setReference("notes")}>
+      {git.confirmation && (
+        <DeferredPanel>
+          <GitDialogs git={git} />
+        </DeferredPanel>
+      )}
+      <div
+        ref={appShellRef}
+        className={`app-shell has-scope-rail has-session-strip ${
+          sidebarCollapsed ? "sidebar-collapsed" : ""
+        }${shellModeClass ? ` ${shellModeClass}` : ""}`}
+        style={
+          {
+            "--sidebar-width": `${leftPanelWidth}px`,
+            "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px",
+          } as CSSProperties
+        }>
+        <a className="skip-link" href="#main-content">
+          Skip to content
+        </a>
+        <ScopeRail
+          workspaceView={workspaceView}
+          theme={resolvedTheme}
+          terminalOpen={terminalOpen}
+          terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
+          onWorkspaceView={openWorkspaceView}
+          onAmbient={runAmbient}
+        />
+        {/* The bar's leading segment: it claims the cell above the panel, so the
           strip's rule runs unbroken and the corner is not a hole in Files, where
           the explorer sits a row lower than the session list does. Kept beside
           the strip rather than inside it so the strip still measures only the
           width its tabs actually get. The version is the changelog's handle —
           the one place the build number is worth being, and worth clicking. */}
-      <button
-        className="session-workspace-lead"
-        type="button"
-        onClick={() => setChangelogOpen(true)}
-        title={`Pylon v${version} — what's new`}>
-        Pylon
-        <small>v{version}</small>
-      </button>
-      <ActiveSessionStrip
-        sessions={activeSessions}
-        unseenCompletions={live.unseenCompletions}
-        selectedId={pendingSession ? undefined : live.runtime?.sessionId}
-        pendingLabel={pendingSession?.project.label}
-        busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
-        busySessionId={sessionBusy}
-        deletingSessionId={sessionDeleting}
-        onSelect={session => void switchSession(session)}
-        onDelete={requestDeleteSession}
-        onRename={requestRenameSession}
-        onArchive={session => void archiveSession(session)}
-        onSetActive={(session, active) => void setSessionActive(session, active)}
-        onSetPinned={(session, pinned) => void setSessionPinned(session, pinned)}
-        onNew={() => {
-          if (!currentProject) return;
-          changeSurface("chat");
-          void newSession(currentProject);
-        }}
-      />
-      {sidebarVisible && (
-        <SessionSidebar
-          activeSessions={activeSessions}
+        <button
+          className="session-workspace-lead"
+          type="button"
+          onClick={() => setChangelogOpen(true)}
+          title={`Pylon v${version} — what's new`}>
+          Pylon
+          <small>v{version}</small>
+        </button>
+        <ActiveSessionStrip
+          sessions={activeSessions}
           unseenCompletions={live.unseenCompletions}
-          projects={projects}
-          pages={sessionPages}
-          query={query}
-          searchRef={searchRef}
-          expandedProjects={expandedProjects}
-          loading={sessionsLoading}
-          busy={sessionBusy}
-          deleting={sessionDeleting}
-          projectLoading={projectLoading}
-          projectBusy={projectBusy}
-          isOpen={sidebarOpen}
-          mobile={mobile}
-          onClose={() => setSidebarOpen(false)}
-          onShowFiles={
-            surface === "files"
-              ? () => {
-                  setFileNavigation("explorer");
-                  if (mobile) setSidebarOpen(false);
-                }
-              : undefined
-          }
-          onQuery={setQuery}
-          onToggleProject={projectId =>
-            setExpandedProjects(current => {
-              const next = new Set(current);
-              if (next.has(projectId)) next.delete(projectId);
-              else next.add(projectId);
-              return next;
-            })
-          }
-          onSelectSession={session => void switchSession(session)}
-          onDeleteSession={requestDeleteSession}
-          onRenameSession={requestRenameSession}
-          onSetSessionActive={(session, active) => void setSessionActive(session, active)}
-          onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
-          onLoadMore={project => void loadMoreSessions(project)}
-          onShowLess={project => void showLessSessions(project)}
-          onAddProject={() => void addProject()}
-          general={general}
-          onOpenArchives={() => {
-            setArchivesOpen(true);
-            if (mobile) setSidebarOpen(false);
-          }}
-          onArchiveProject={project => void archiveProject(project)}
-          onRenameProject={project =>
-            setSidebarAction({
-              key: `rename-project-${project.id}`,
-              title: "Rename project",
-              description: "This changes only the project name shown in Pylon. Folder name and files stay unchanged.",
-              confirmLabel: "Save name",
-              busyLabel: "Saving…",
-              inputLabel: "Project name",
-              initialValue: project.label,
-              onConfirm: value => void renameProject(project, value),
-            })
-          }
-          onRemoveProject={project => {
-            const count =
-              sessionPages.find(candidate => candidate.id === project.id)?.totalCount ?? project.sessions.length;
-            setSidebarAction({
-              key: `remove-project-${project.id}`,
-              title: `Remove “${project.label}”?`,
-              description: `This deletes ${count} saved session${count === 1 ? "" : "s"}. Project files and Continuity memory stay unchanged.`,
-              confirmLabel: "Remove project",
-              busyLabel: "Removing…",
-              danger: true,
-              onConfirm: () => void removeProject(project),
-            });
-          }}
-          onArchiveSession={session => void archiveSession(session)}
-          onNewSession={project => {
-            const unfiltered = projects.find(candidate => candidate.id === project.id);
-            if (unfiltered) void newSession(unfiltered);
-          }}
-          onNewGeneral={() => {
-            if (general) void newSession(general);
-          }}
-          onWorktreeSetup={project =>
-            setSidebarAction({
-              key: `worktree-setup-${project.id}`,
-              title: `Worktree setup for ${project.label}`,
-              description: "This command runs once after Pylon creates a new isolated worktree.",
-              confirmLabel: "Save setup",
-              busyLabel: "Saving…",
-              inputLabel: "Setup command",
-              multiline: true,
-              maxLength: 2_000,
-              allowEmpty: true,
-              onConfirm: value => void updateWorktreeSetup(project, value),
-            })
-          }
-          onReorderProject={(projectId, beforeProjectId) =>
-            runtimeStore.reorderProject(projectId, beforeProjectId).catch(cause => {
-              reportError(cause, "Unable to reorder project");
-              throw cause;
-            })
-          }
-          onReorderActiveSession={(sessionId, beforeSessionId) =>
-            runtimeStore.reorderActiveSession(sessionId, beforeSessionId).catch(cause => {
-              reportError(cause, "Unable to reorder active session");
-              throw cause;
-            })
-          }
-        />
-      )}
-      {!mobile && !sidebarCollapsed && (
-        <SidebarResizer
-          container={appShellRef}
-          width={leftPanelWidth}
-          onCommit={width => {
-            setLeftPanelWidth(width);
-            rememberSetting(LEFT_PANEL_WIDTH_KEY, width);
+          selectedId={pendingSession ? undefined : live.runtime?.sessionId}
+          pendingLabel={pendingSession?.project.label}
+          busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
+          busySessionId={sessionBusy}
+          deletingSessionId={sessionDeleting}
+          onSelect={session => void switchSession(session)}
+          onDelete={requestDeleteSession}
+          onRename={requestRenameSession}
+          onArchive={session => void archiveSession(session)}
+          onSetActive={(session, active) => void setSessionActive(session, active)}
+          onSetPinned={(session, pinned) => void setSessionPinned(session, pinned)}
+          onNew={() => {
+            if (!currentProject) return;
+            changeSurface("chat");
+            void newSession(currentProject);
           }}
         />
-      )}
-      {mobile && sidebarOpen && sidebarVisible && (
-        <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />
-      )}
+        {sidebarVisible && (
+          <SessionSidebar
+            activeSessions={activeSessions}
+            unseenCompletions={live.unseenCompletions}
+            projects={projects}
+            pages={sessionPages}
+            query={query}
+            searchRef={searchRef}
+            expandedProjects={expandedProjects}
+            loading={sessionsLoading}
+            busy={sessionBusy}
+            deleting={sessionDeleting}
+            projectLoading={projectLoading}
+            projectBusy={projectBusy}
+            isOpen={sidebarOpen}
+            mobile={mobile}
+            onClose={() => setSidebarOpen(false)}
+            onShowFiles={
+              surface === "files"
+                ? () => {
+                    setFileNavigation("explorer");
+                    if (mobile) setSidebarOpen(false);
+                  }
+                : undefined
+            }
+            onQuery={setQuery}
+            onToggleProject={projectId =>
+              setExpandedProjects(current => {
+                const next = new Set(current);
+                if (next.has(projectId)) next.delete(projectId);
+                else next.add(projectId);
+                return next;
+              })
+            }
+            onSelectSession={session => void switchSession(session)}
+            onDeleteSession={requestDeleteSession}
+            onRenameSession={requestRenameSession}
+            onSetSessionActive={(session, active) => void setSessionActive(session, active)}
+            onSetSessionPinned={(session, pinned) => void setSessionPinned(session, pinned)}
+            onLoadMore={project => void loadMoreSessions(project)}
+            onShowLess={project => void showLessSessions(project)}
+            onAddProject={() => void addProject()}
+            general={general}
+            onOpenArchives={() => {
+              setArchivesOpen(true);
+              if (mobile) setSidebarOpen(false);
+            }}
+            onArchiveProject={project => void archiveProject(project)}
+            onRenameProject={project =>
+              setSidebarAction({
+                key: `rename-project-${project.id}`,
+                title: "Rename project",
+                description: "This changes only the project name shown in Pylon. Folder name and files stay unchanged.",
+                confirmLabel: "Save name",
+                busyLabel: "Saving…",
+                inputLabel: "Project name",
+                initialValue: project.label,
+                onConfirm: value => void renameProject(project, value),
+              })
+            }
+            onRemoveProject={project => {
+              const count =
+                sessionPages.find(candidate => candidate.id === project.id)?.totalCount ?? project.sessions.length;
+              setSidebarAction({
+                key: `remove-project-${project.id}`,
+                title: `Remove “${project.label}”?`,
+                description: `This deletes ${count} saved session${count === 1 ? "" : "s"}. Project files and Continuity memory stay unchanged.`,
+                confirmLabel: "Remove project",
+                busyLabel: "Removing…",
+                danger: true,
+                onConfirm: () => void removeProject(project),
+              });
+            }}
+            onArchiveSession={session => void archiveSession(session)}
+            onNewSession={project => {
+              const unfiltered = projects.find(candidate => candidate.id === project.id);
+              if (unfiltered) void newSession(unfiltered);
+            }}
+            onNewGeneral={() => {
+              if (general) void newSession(general);
+            }}
+            onWorktreeSetup={project =>
+              setSidebarAction({
+                key: `worktree-setup-${project.id}`,
+                title: `Worktree setup for ${project.label}`,
+                description: "This command runs once after Pylon creates a new isolated worktree.",
+                confirmLabel: "Save setup",
+                busyLabel: "Saving…",
+                inputLabel: "Setup command",
+                multiline: true,
+                maxLength: 2_000,
+                allowEmpty: true,
+                onConfirm: value => void updateWorktreeSetup(project, value),
+              })
+            }
+            onReorderProject={(projectId, beforeProjectId) =>
+              runtimeStore.reorderProject(projectId, beforeProjectId).catch(cause => {
+                reportError(cause, "Unable to reorder project");
+                throw cause;
+              })
+            }
+            onReorderActiveSession={(sessionId, beforeSessionId) =>
+              runtimeStore.reorderActiveSession(sessionId, beforeSessionId).catch(cause => {
+                reportError(cause, "Unable to reorder active session");
+                throw cause;
+              })
+            }
+          />
+        )}
+        {!mobile && !sidebarCollapsed && (
+          <SidebarResizer
+            container={appShellRef}
+            width={leftPanelWidth}
+            onCommit={width => {
+              setLeftPanelWidth(width);
+              rememberSetting(LEFT_PANEL_WIDTH_KEY, width);
+            }}
+          />
+        )}
+        {mobile && sidebarOpen && sidebarVisible && (
+          <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />
+        )}
 
-      {/* A workspace view replaces the session column entirely; the strip
+        {/* A workspace view replaces the session column entirely; the strip
           above stays, so the session you left is one click away. Otherwise
           the surface decides which shell fills the main area — Files brings
           its own, everything else uses the card. */}
-      {workspaceView ? (
-        <main className="content-card is-workspace-view" id="main-content">
-          <WorkspaceViewHeader view={workspaceView} onClose={() => setWorkspaceView(null)} />
-          <div className="workspace-view-body">
-            {workspaceView === "usage" && (
-              <DeferredPanel>
-                <UsageView onSelectSession={id => void switchSession({ id, active: live.runtime?.sessionId === id })} />
-              </DeferredPanel>
+        {workspaceView ? (
+          <main className="content-card is-workspace-view" id="main-content">
+            <WorkspaceViewHeader view={workspaceView} onClose={() => setWorkspaceView(null)} />
+            <div className="workspace-view-body">
+              {workspaceView === "usage" && (
+                <DeferredPanel>
+                  <UsageView
+                    onSelectSession={id => void switchSession({ id, active: live.runtime?.sessionId === id })}
+                  />
+                </DeferredPanel>
+              )}
+            </div>
+          </main>
+        ) : surface !== "files" ? (
+          <main className="content-card" id="main-content">
+            {topbar}
+            {(toast || live.connection === "disconnected" || live.recovery) && (
+              <div className="app-toast-stack">
+                {live.connection === "disconnected" && !live.recovery && (
+                  <div className="app-connection-toast" role="status">
+                    Disconnected. Waiting to reconnect…
+                  </div>
+                )}
+                {live.recovery && (
+                  <RecoveryToast
+                    recovery={live.recovery}
+                    onAction={() => {
+                      if (live.recovery?.action === "reload") window.location.reload();
+                      else runtimeStore.retryBootstrap();
+                    }}
+                  />
+                )}
+                {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
+              </div>
             )}
-          </div>
-        </main>
-      ) : surface !== "files" ? (
-        <main className="content-card" id="main-content">
-          {topbar}
-          {(toast || live.connection === "disconnected" || live.recovery) && (
-            <div className="app-toast-stack">
-              {live.connection === "disconnected" && !live.recovery && (
-                <div className="app-connection-toast" role="status">
-                  Disconnected. Waiting to reconnect…
-                </div>
-              )}
-              {live.recovery && (
-                <RecoveryToast
-                  recovery={live.recovery}
-                  onAction={() => {
-                    if (live.recovery?.action === "reload") window.location.reload();
-                    else runtimeStore.retryBootstrap();
-                  }}
-                />
-              )}
-              {toast && <ErrorToast key={toast.id} message={toast.message} onClose={() => setToast(undefined)} />}
-            </div>
-          )}
-          <div
-            ref={workspaceRef}
-            className={`workspace-layout ${reference ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
-            style={
-              {
-                "--inspector-width": `${rightPanelWidth}px`,
-                ...(referenceDefinition(reference)?.tone
-                  ? { "--rail-tone": referenceDefinition(reference)?.tone }
-                  : {}),
-              } as CSSProperties
-            }>
-            {surface === "chat" ? conversationPanel : <DeferredPanel key={surface}>{surfaceMain}</DeferredPanel>}
-            {sidePanel}
-            {referenceRail}
-          </div>
-          {(sessionTransition || packageBusy) && (
-            <div className="session-transition" role="status">
-              <span className="status-orb success" />
-              {packageBusy ? "Reloading packages..." : "Changing session..."}
-            </div>
-          )}
-        </main>
-      ) : (
-        <DeferredPanel>
-        <FileWorkspace
-          live={live}
-          projectId={activeSession?.projectId}
-          requestedPath={requestedFile}
-          stateStore={fileWorkspaceStates}
-          dock={
-            pinnedSearch?.scope === `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}` ? (
-              <PinnedSearchPanel
-                pinned={pinnedSearch}
-                onOpen={(path, line, searchQuery) => {
-                  setRequestedFile({ path, line, view: "current", searchQuery, sessionId: live.runtime?.sessionId, requestId: Date.now() });
-                }}
-                onSearchAgain={() => openSearch("text", pinnedSearch.query)}
-                onClose={() => setPinnedSearch(undefined)}
-              />
-            ) : undefined
-          }
-          header={topbar}
-          workspaceRef={workspaceRef}
-          sidePanel={
-            <>
+            <div
+              ref={workspaceRef}
+              className={`workspace-layout ${reference ? "has-inspector" : ""}${pendingSession ? " is-session-pending" : ""}`}
+              style={
+                {
+                  "--inspector-width": `${rightPanelWidth}px`,
+                  ...(referenceDefinition(reference)?.tone
+                    ? { "--rail-tone": referenceDefinition(reference)?.tone }
+                    : {}),
+                } as CSSProperties
+              }>
+              {surface === "chat" ? conversationPanel : <DeferredPanel key={surface}>{surfaceMain}</DeferredPanel>}
               {sidePanel}
               {referenceRail}
-            </>
-          }
-          rightPanelOpen={Boolean(reference)}
-          inspectorWidth={rightPanelWidth}
-          showExplorer={fileNavigation === "explorer" && (mobile || !sidebarCollapsed)}
-          navigationOpen={sidebarOpen}
-          mobile={mobile}
-          onCloseNavigation={() => setSidebarOpen(false)}
-          onSessions={() => {
-            setFileNavigation("sessions");
-            setSidebarCollapsed(false);
-            if (mobile) setSidebarOpen(true);
-          }}
+            </div>
+            {(sessionTransition || packageBusy) && (
+              <div className="session-transition" role="status">
+                <span className="status-orb success" />
+                {packageBusy ? "Reloading packages..." : "Changing session..."}
+              </div>
+            )}
+          </main>
+        ) : (
+          <DeferredPanel>
+            <FileWorkspace
+              live={live}
+              projectId={activeSession?.projectId}
+              requestedPath={requestedFile}
+              stateStore={fileWorkspaceStates}
+              dock={
+                pinnedSearch?.scope === `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}` ? (
+                  <PinnedSearchPanel
+                    pinned={pinnedSearch}
+                    onOpen={(path, line, searchQuery) => {
+                      setRequestedFile({
+                        path,
+                        line,
+                        view: "current",
+                        searchQuery,
+                        sessionId: live.runtime?.sessionId,
+                        requestId: Date.now(),
+                      });
+                    }}
+                    onSearchAgain={() => openSearch("text", pinnedSearch.query)}
+                    onClose={() => setPinnedSearch(undefined)}
+                  />
+                ) : undefined
+              }
+              header={topbar}
+              workspaceRef={workspaceRef}
+              sidePanel={
+                <>
+                  {sidePanel}
+                  {referenceRail}
+                </>
+              }
+              rightPanelOpen={Boolean(reference)}
+              inspectorWidth={rightPanelWidth}
+              showExplorer={fileNavigation === "explorer" && (mobile || !sidebarCollapsed)}
+              navigationOpen={sidebarOpen}
+              mobile={mobile}
+              onCloseNavigation={() => setSidebarOpen(false)}
+              onSessions={() => {
+                setFileNavigation("sessions");
+                setSidebarCollapsed(false);
+                if (mobile) setSidebarOpen(true);
+              }}
+              onError={reportError}
+            />
+          </DeferredPanel>
+        )}
+        <div className="terminal-layer">
+          <DeferredPanel>{terminalChrome}</DeferredPanel>
+        </div>
+        <SearchPopup
+          live={live}
           onError={reportError}
+          onPin={setPinnedSearch}
+          onOpen={(path, line, searchQuery) => {
+            setRequestedFile({
+              path,
+              line,
+              view: "current",
+              searchQuery,
+              sessionId: live.runtime?.sessionId,
+              requestId: Date.now(),
+            });
+            changeSurface("files");
+          }}
+          actions={[
+            { id: "files", label: "Open workspace files", run: () => changeSurface("files") },
+            ...KEY_COMMANDS.filter(
+              command =>
+                command.scope === "global" &&
+                !["find-file", "find-text", "find-symbol", "last-tab"].includes(command.id),
+            ).map(command => ({
+              id: command.id,
+              label: command.label,
+              shortcut: shortcutLabel(command.id),
+              disabled: !keyboardHandlers[command.id],
+              run: () => {
+                const result = keyboardHandlers[command.id]?.();
+                return result instanceof Promise ? result : undefined;
+              },
+            })),
+          ]}
         />
-        </DeferredPanel>
-      )}
-      <div className="terminal-layer"><DeferredPanel>{terminalChrome}</DeferredPanel></div>
-      <SearchPopup live={live} onError={reportError} onPin={setPinnedSearch}
-        onOpen={(path, line, searchQuery) => {
-          setRequestedFile({ path, line, view: "current", searchQuery, sessionId: live.runtime?.sessionId, requestId: Date.now() });
-          changeSurface("files");
-        }}
-        actions={[
-          { id: "files", label: "Open workspace files", run: () => changeSurface("files") },
-          ...KEY_COMMANDS.filter(command => command.scope === "global" && !["find-file", "find-text", "find-symbol", "last-tab"].includes(command.id)).map(command => ({
-            id: command.id, label: command.label, shortcut: shortcutLabel(command.id), disabled: !keyboardHandlers[command.id],
-            run: () => { const result = keyboardHandlers[command.id]?.(); return result instanceof Promise ? result : undefined; },
-          })),
-        ]} />
 
-      {sidebarAction && (
-        <ActionDialog
-          key={sidebarAction.key}
-          title={sidebarAction.title}
-          description={sidebarAction.description}
-          confirmLabel={sidebarAction.confirmLabel}
-          busyLabel={sidebarAction.busyLabel}
-          busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
-          danger={sidebarAction.danger}
-          inputLabel={sidebarAction.inputLabel}
-          initialValue={sidebarAction.initialValue}
-          multiline={sidebarAction.multiline}
-          maxLength={sidebarAction.maxLength}
-          allowEmpty={sidebarAction.allowEmpty}
-          onCancel={() => setSidebarAction(undefined)}
-          onConfirm={sidebarAction.onConfirm}
-        />
-      )}
-      {changelogOpen && <DeferredPanel><ChangelogDialog onClose={() => setChangelogOpen(false)} /></DeferredPanel>}
-      {archivesOpen && (
-        <DeferredPanel>
-        <ArchiveDialog
-          revision={live.sessionRevision ?? 0}
-          onClose={() => setArchivesOpen(false)}
-          onError={reportError}
-        />
-        </DeferredPanel>
-      )}
-      {settings && (
-        <DeferredPanel>
-        <SettingsDialog
-          initialTab={settings.tab}
-          initialProviderQuery={settings.providerQuery}
-          initialPackageQuery={settings.packageQuery}
-          providerAuth={live.runtime?.providerAuth}
-          pendingUi={live.pendingUi}
-          packages={packages}
-          projects={projects.map(({ id, label }) => ({ id, label }))}
-          extensions={extensions}
-          skills={skills}
-          hookSettings={hookSettings}
-          runtimePolicy={live.runtime?.runtimePolicy}
-          toolPolicies={live.runtime?.operational.tools.policies ?? []}
-          policyDisabled={
-            live.connection !== "connected" ||
-            live.runtime?.ready !== true ||
-            Boolean(live.pendingUi) ||
-            activeSessions.some(session => session.runtimeState === "running" || session.runtimeState === "attention")
-          }
-          loading={packagesLoading}
-          extensionLoading={extensionsLoading}
-          skillLoading={skillsLoading}
-          hookLoading={hooksLoading}
-          busy={packageBusy}
-          extensionBusy={Boolean(extensionBusy)}
-          hookBusy={hooksBusy}
-          androidTooling={androidTooling}
-          androidToolingBusy={androidToolingBusy}
-          onAndroidTooling={manageAndroidTooling}
-          providerLogoutDisabled={activeSessions.some(
-            session => session.runtimeState === "running" || session.runtimeState === "attention",
-          )}
-          models={live.runtime?.sessionControls.models ?? []}
-          modelRefreshBusy={modelRefreshBusy}
-          modelRefreshDisabled={live.connection !== "connected" || live.runtime?.ready !== true}
-          onRefreshModels={refreshModels}
-          sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
-          theme={theme}
-          onThemeChange={setTheme}
-          syntaxTheme={syntaxTheme}
-          onSyntaxThemeChange={setSyntaxTheme}
-          interfaceScale={interfaceScale}
-          onInterfaceScaleChange={setInterfaceScale}
-          onClose={() => {
-            if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
-            closeSettings();
-          }}
-          onProviderLogin={(provider, authType) => void runtimeStore.startProviderLogin(provider, authType)}
-          onProviderLogout={provider => void runtimeStore.logoutProvider(provider)}
-          onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
-          onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
-          onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
-          onToggleExtension={toggleExtension}
-          onInstallExtensionPackage={installExtensionPackage}
-          onRemoveExtensionPackage={removeExtensionPackage}
-          onSetProjectTrust={setProjectTrust}
-          onReloadExtensions={reloadExtensions}
-          onUpdateHooks={updateHookSettings}
-          onUpdateGlobalPolicy={(settings, expectedRevision) =>
-            runtimeStore.updateRuntimePolicy(
-              "global",
-              "inherit",
-              settings.timelineEnabled,
-              settings.guardEnabled,
-              settings.workspace,
-              settings.guardTimeoutSeconds,
-              settings.clarifyTimeoutSeconds,
-              expectedRevision,
-              settings.guardRules ?? DEFAULT_GUARD_RULES,
-            )
-          }
-          onUpdateGlobalToolPolicy={(tool, mode, expectedRevision) =>
-            runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)
-          }
-        />
-        </DeferredPanel>
-      )}
-    </div>
+        {sidebarAction && (
+          <ActionDialog
+            key={sidebarAction.key}
+            title={sidebarAction.title}
+            description={sidebarAction.description}
+            confirmLabel={sidebarAction.confirmLabel}
+            busyLabel={sidebarAction.busyLabel}
+            busy={Boolean(sessionBusy || sessionDeleting || projectBusy)}
+            danger={sidebarAction.danger}
+            inputLabel={sidebarAction.inputLabel}
+            initialValue={sidebarAction.initialValue}
+            multiline={sidebarAction.multiline}
+            maxLength={sidebarAction.maxLength}
+            allowEmpty={sidebarAction.allowEmpty}
+            onCancel={() => setSidebarAction(undefined)}
+            onConfirm={sidebarAction.onConfirm}
+          />
+        )}
+        {changelogOpen && (
+          <DeferredPanel>
+            <ChangelogDialog onClose={() => setChangelogOpen(false)} />
+          </DeferredPanel>
+        )}
+        {archivesOpen && (
+          <DeferredPanel>
+            <ArchiveDialog
+              revision={live.sessionRevision ?? 0}
+              onClose={() => setArchivesOpen(false)}
+              onError={reportError}
+            />
+          </DeferredPanel>
+        )}
+        {settings && (
+          <DeferredPanel>
+            <SettingsDialog
+              initialTab={settings.tab}
+              initialProviderQuery={settings.providerQuery}
+              initialPackageQuery={settings.packageQuery}
+              providerAuth={live.runtime?.providerAuth}
+              pendingUi={live.pendingUi}
+              packages={packages}
+              projects={projects.map(({ id, label }) => ({ id, label }))}
+              activeProjectId={live.runtime?.projectId ?? activeSession?.projectId}
+              extensions={extensions}
+              skills={skills}
+              hookSettings={hookSettings}
+              runtimePolicy={live.runtime?.runtimePolicy}
+              toolPolicies={live.runtime?.operational.tools.policies ?? []}
+              policyDisabled={policyEditingDisabled}
+              loading={packagesLoading}
+              extensionLoading={extensionsLoading}
+              skillLoading={skillsLoading}
+              hookLoading={hooksLoading}
+              busy={packageBusy}
+              extensionBusy={Boolean(extensionBusy)}
+              hookBusy={hooksBusy}
+              androidTooling={androidTooling}
+              androidToolingBusy={androidToolingBusy}
+              onAndroidTooling={manageAndroidTooling}
+              providerLogoutDisabled={activeSessions.some(
+                session => session.runtimeState === "running" || session.runtimeState === "attention",
+              )}
+              models={live.runtime?.sessionControls.models ?? []}
+              modelRefreshBusy={modelRefreshBusy}
+              modelRefreshDisabled={live.connection !== "connected" || live.runtime?.ready !== true}
+              onRefreshModels={refreshModels}
+              sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
+              theme={theme}
+              onThemeChange={setTheme}
+              syntaxTheme={syntaxTheme}
+              onSyntaxThemeChange={setSyntaxTheme}
+              interfaceScale={interfaceScale}
+              onInterfaceScaleChange={setInterfaceScale}
+              onClose={() => {
+                if (live.runtime?.providerAuth?.flow?.status === "running") void runtimeStore.cancelProviderLogin();
+                closeSettings();
+              }}
+              onProviderLogin={(provider, authType) => void runtimeStore.startProviderLogin(provider, authType)}
+              onProviderLogout={provider => void runtimeStore.logoutProvider(provider)}
+              onProviderCancel={() => void runtimeStore.cancelProviderLogin()}
+              onSetEnabled={(item, enabled) => void setPackageEnabled(item, enabled)}
+              onUpdate={(item, settings) => void updatePackageSettings(item, settings)}
+              onUpdateProjectAgentModels={(projectId, agentModels, expectedRevision) =>
+                runtimeStore.updateAgentModels("project", projectId, agentModels, expectedRevision)
+              }
+              onToggleExtension={toggleExtension}
+              onInstallExtensionPackage={installExtensionPackage}
+              onRemoveExtensionPackage={removeExtensionPackage}
+              onSetProjectTrust={setProjectTrust}
+              onReloadExtensions={reloadExtensions}
+              onUpdateHooks={updateHookSettings}
+              onUpdateGlobalPolicy={(settings, expectedRevision) =>
+                runtimeStore.updateRuntimePolicy(
+                  "global",
+                  "inherit",
+                  settings.timelineEnabled,
+                  settings.guardEnabled,
+                  settings.workspace,
+                  settings.guardTimeoutSeconds,
+                  settings.clarifyTimeoutSeconds,
+                  expectedRevision,
+                  settings.guardRules ?? DEFAULT_GUARD_RULES,
+                )
+              }
+              onUpdateGlobalToolPolicy={(tool, mode, expectedRevision) =>
+                runtimeStore.updateToolPolicy("global", tool, mode, expectedRevision)
+              }
+            />
+          </DeferredPanel>
+        )}
+      </div>
     </AnnotationProvider>
   );
 }
@@ -2083,11 +2295,29 @@ export function App() {
 /** A failed optional chunk must not take down the conversation or its drafts. */
 class DeferredPanel extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch(error: unknown) { console.error("Optional panel failed to load", error); }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: unknown) {
+    console.error("Optional panel failed to load", error);
+  }
   render() {
-    if (this.state.failed) return <div className="conversation-state" role="alert">This panel could not be loaded. Reload the page to retry.</div>;
-    return <Suspense fallback={<div className="conversation-state" role="status">Loading…</div>}>{this.props.children}</Suspense>;
+    if (this.state.failed)
+      return (
+        <div className="conversation-state" role="alert">
+          This panel could not be loaded. Reload the page to retry.
+        </div>
+      );
+    return (
+      <Suspense
+        fallback={
+          <div className="conversation-state" role="status">
+            Loading…
+          </div>
+        }>
+        {this.props.children}
+      </Suspense>
+    );
   }
 }
 
@@ -2493,7 +2723,9 @@ function ActiveSessionStrip({
                 )}
                 <span className="active-session-label">
                   <strong title={sessionTitle(session)}>{sessionTitle(session).slice(0, 50)}</strong>
-                  <small>{session.cwdLabel} · {activity}</small>
+                  <small>
+                    {session.cwdLabel} · {activity}
+                  </small>
                 </span>
                 <SessionProgress progress={progress} className="active-session-progress" />
               </button>
@@ -2564,7 +2796,9 @@ function ActiveSessionStrip({
                 }}>
                 <i className={`session-runtime-state is-${state}`} aria-hidden="true" />
                 <strong>{sessionTitle(session)}</strong>
-                <small>{session.cwdLabel} · {activity}</small>
+                <small>
+                  {session.cwdLabel} · {activity}
+                </small>
               </button>
             );
           })}

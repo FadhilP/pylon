@@ -1,6 +1,7 @@
 node_modules/
 */node_modules/
 /packages/*/package-lock.json
+/packages/pylon-android/dist/
 .pi/
 .env
 *.log

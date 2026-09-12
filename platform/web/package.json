@@ -44,6 +44,7 @@
     "node-sql-parser": "^5.4.0",
     "pi-stateql": "0.1.0",
     "pylon-core": "0.1.0",
+    "pylon-android": "0.1.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "shiki": "^4.4.3",

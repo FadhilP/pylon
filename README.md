@@ -61,6 +61,7 @@ Use each command without arguments to show status; `set provider/model[:thinking
 | Package | What it does |
 | --- | --- |
 | [pylon-core](./packages/pylon-core) | Coordinates tool policies across packages; adds revision-guarded numbered read/edit tools and per-tool token reporting. |
+| [pylon-android](./packages/pylon-android) | Standalone Android SDK/emulator lifecycle, static Gradle builds, APK inspection, non-destructive deployment, app lifecycle, and bounded package logs. |
 | [pi-continuity](./packages/pi-continuity) | Plan mode, task lists, clarifications, deterministic compaction, and durable tool-aware memory. |
 | [pi-advisor](./packages/pi-advisor) | Asks a tool-free model for help on hard planning, architecture review, and failure recovery. |
 | [pi-grunt](./packages/pi-grunt) | Delegates implementation slices to a worker running in an isolated Git worktree. |
@@ -77,7 +78,7 @@ Use each command without arguments to show status; `set provider/model[:thinking
 | [pi-papercut](./packages/pi-papercut) | Durable backlog for small workflow frictions. |
 | [pi-focus](./packages/pi-focus) | Low-noise Pi terminal UI and the `focus-dark` theme. |
 
-Each package works standalone; with Pylon installed they coordinate through bounded, versioned event-bus metadata — Verify results gate Continuity completion and mark Timeline checkpoints, Guard requests a checkpoint before destructive confirmation, Heartbeat publishes job lifecycle, and Scout receives bounded verification context. Raw verification and Heartbeat logs never cross package events. See each package README for details.
+Each package works standalone. With Pylon installed, the Pi-facing packages coordinate through bounded, versioned event-bus metadata — Verify results gate Continuity completion and mark Timeline checkpoints, Guard requests a checkpoint before destructive confirmation, Heartbeat publishes job lifecycle, and Scout receives bounded verification context. Raw verification and Heartbeat logs never cross package events. See each package README for details.
 
 ## Development
 

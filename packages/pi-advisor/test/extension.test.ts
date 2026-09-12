@@ -375,3 +375,71 @@ test("Advisor retries transient failures and only successful consultations consu
     else process.env.PI_CODING_AGENT_DIR = previousDir;
   }
 });
+
+
+test("project runtime policy disables and restores the global Advisor model", async () => {
+  const previousDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = await mkdtemp(join(tmpdir(), "pi-advisor-project-model-"));
+  await saveConfig({ version: 1, advisorModel: "global/advisor" });
+  const handlers = new Map<string, Function[]>();
+  const listeners = new Map<string, Set<(value: any) => void>>();
+  const policies: any[] = [];
+  let activeTools: string[] = [];
+  const events = {
+    on: (channel: string, listener: (value: any) => void) => {
+      const current = listeners.get(channel) ?? new Set();
+      current.add(listener);
+      listeners.set(channel, current);
+      return () => current.delete(listener);
+    },
+    emit: (channel: string, value: any) => {
+      if (channel === "pylon:tool-policy") policies.push(value);
+      for (const listener of listeners.get(channel) ?? []) listener(value);
+    },
+  };
+  advisor({
+    on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
+    registerTool: () => {},
+    registerCommand: () => {},
+    events,
+    getActiveTools: () => activeTools,
+    setActiveTools: (next: string[]) => {
+      activeTools = next;
+    },
+  } as any);
+  const globalModel = { provider: "global", id: "advisor" };
+  const ctx = {
+    model: { provider: "session", id: "model" },
+    modelRegistry: {
+      find: (provider: string, id: string) => provider === "global" && id === "advisor" ? globalModel : undefined,
+      hasConfiguredAuth: () => true,
+    },
+  };
+  const waitForPolicyAfter = async (count: number) => {
+    for (let attempt = 0; attempt < 50 && policies.length <= count; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    assert.ok(policies.length > count, "runtime policy refresh should republish Advisor availability");
+  };
+  try {
+    await handlers.get("session_start")?.[0]?.({}, ctx);
+    assert.deepEqual(policies.at(-1)?.enabledTools, ["advisor"]);
+
+    const disabledAt = policies.length;
+    events.emit("pylon:runtime-policy", {
+      version: 2,
+      agentModels: { advisor: { useMainModel: false } },
+    });
+    await waitForPolicyAfter(disabledAt);
+    assert.deepEqual(policies.at(-1)?.enabledTools, []);
+
+    const inheritedAt = policies.length;
+    events.emit("pylon:runtime-policy", { version: 2, agentModels: {} });
+    await waitForPolicyAfter(inheritedAt);
+    assert.deepEqual(policies.at(-1)?.enabledTools, ["advisor"]);
+  } finally {
+    await handlers.get("session_shutdown")?.[0]?.();
+    if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousDir;
+  }
+});

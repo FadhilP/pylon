@@ -23,6 +23,8 @@ Credentials handled through supported provider dialogs remain machine-local wher
 | Workspace handoff/apply | Requires the session to be idle and a compatible project checkout; apply needs explicit approval and reports conflicts/errors. |
 | StateQL connection/write/transaction action | StateQL requires interactive confirmation for connection changes, writes, plan application, transaction commit/rollback, and profile removal. |
 | Helios attachment/Android action | Some browser attachment, user-owned tab, Android start/attach, and tooling actions require visible confirmation. |
+| Android Runner device action | Direct Web controls can launch an existing AVD, cancel startup, and stop only a retained Pylon-owned emulator. Discovered external emulators are never stop targets. |
+| Android Runner project build | Static project discovery runs no repository code. Saving a configuration does not grant execution trust. A direct **Trust this wrapper** action binds authorization to the exact project/workspace, configuration revision, and wrapper file-set hash before a bounded generated Gradle assemble task can run. |
 | Extension package or project trust change | Installing/removing extension packages, reloading, and trust-sensitive project changes require deliberate action; extensions execute code. |
 | Package settings through an agent | `pylon_settings` needs a fresh revision and explicit confirmation, and is restricted to validated package settings. |
 
@@ -38,6 +40,12 @@ Confirmations reduce accidental action; they are not a substitute for reviewing 
 
 Packages and extensions have authority to run their own code in the local host process context. Enable only packages you intend to use, inspect load errors, and review third-party extension sources before installation.
 
+Android Runner is a user-facing host service, not a Pi or Helios tool. Its bounded device snapshots and events stay in local server/browser memory and do not enter prompts, runtime projections, telemetry, or durable session records. It does not kill the shared ADB server or create, wipe, or delete AVDs. A graceful shutdown attempts to stop Pylon-owned emulators; after a crash or restart, survivors are treated as external.
+
+Android Gradle trust is separate from Pi project-extension trust. It authorizes the selected repository's wrapper and build logic to run with your local user permissions and possible file/network access; it is not a sandbox. Trust is invalidated by wrapper, configuration, registration-root, or selected-workspace changes. Build output is bounded, kept in host/browser memory, and never added to prompts or session history.
+
+Android deployment hashes the staged APK and rechecks the installed package APK identity before later stop, relaunch, or Logcat actions. Installation is replacement-only and is never automatically retried after an interrupted or response-ambiguous operation. Browser reconnects refresh authoritative host state; they do not replay commands or transfer emulator ownership between tabs.
+
 ## Storage scopes
 
 Pylon Web and independently installed Pi packages do **not** share an implied storage root.
@@ -51,13 +59,15 @@ Pylon Web and independently installed Pi packages do **not** share an implied st
 | `<Pylon agent dir>/pylon-web/packages.json` | Pylon Web enabled-package selection. |
 | `<Pylon agent dir>/pylon-web/hooks.json` | Pylon Web hook settings. |
 | `<Pylon agent dir>/pylon-web/annotations/notes.sqlite` | Server-owned, project/session-scoped code-note drafts. Shared across browsers using this Pylon server; independent of StateQL and never automatically injected into model context. |
+| `<Pylon agent dir>/pylon-web/android.sqlite` | Versioned project-scoped Android run configuration and wrapper trust revisions. It stores no build output, environment values, APKs, emulator ownership, or device serial claims. |
+| `<Pylon agent dir>/pylon-web/android-gradle/` | Pylon-owned Gradle user directories for explicitly trusted builds. These may contain Gradle dependency/cache data from repository execution; stop Pylon before backup or removal. |
+| `<Pylon agent dir>/pylon-web/android-staging/` | Temporary private APK copies used only to prove inspection/install byte identity. Completed, cancelled, and failed operations remove their staging directory; stale service-owned entries are cleaned on startup without following links. Do not back up this directory. |
 | Host Pi agent directory | Independently installed packages use the host Pi agent directory, normally `~/.pi/agent`, unless that host Pi is separately given `PI_CODING_AGENT_DIR`. This is not changed merely because Pylon Web uses `~/.pylon/agent`. |
 | StateQL platform data directory | StateQL uses its own platform data location; `STQL_HOME` overrides it. See [StateQL](../../packages/pi-stateql/README.md). |
 
 Pylon's default migration copies `~/.pi/agent` to `~/.pylon/agent` only when the target is absent. It does not delete the legacy directory or overwrite an existing Pylon target. If an automatic migration fails and legacy data exists, Pylon may use the legacy directory for that run and tells you to run `pylon migrate` later. `pylon migrate` retries the default-path copy; an explicit `PI_CODING_AGENT_DIR` is a separate choice.
 
-Saved code notes contain user-authored text and source excerpts in plaintext SQLite storage; this is not a credential vault. Restrict access to the agent-data directory. Include the annotations directory in backups with Pylon stopped; while running, SQLite may also use `-wal` and `-shm` sidecars. Deleting a session or project removes its notes. Unfinished editor text and attachment selections are page-local until explicitly saved/submitted.
-
+Saved code notes contain user-authored text and source excerpts in plaintext SQLite storage; Android settings contain project build configuration and trust metadata. Neither is a credential vault. Restrict access to the agent-data directory. Include these SQLite files and their `-wal`/`-shm` sidecars in backups with Pylon stopped. Deleting a session or project does not currently garbage-collect Android configuration or Gradle cache data automatically. APK staging, build output, run metadata, and Logcat are not durable records. Unfinished editor text and attachment selections are page-local until explicitly saved/submitted.
 
 ## Backups, migration, and recovery
 

@@ -13,7 +13,6 @@ import {
   timestamp,
 } from "./validate.ts";
 
-export const MEMORY_SCHEMA_VERSION = 6 as const;
 export const MEMORY_MAX_NOTES_PER_OWNER = 1_000;
 export const MEMORY_MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MEMORY_MAX_REVIEWS = 200;
@@ -271,8 +270,6 @@ export const sha256 = (value: string | Uint8Array) => createHash("sha256").updat
 export const normalizeRuleText = (value: string) => value.trim().replace(/\s+/g, " ");
 export const semanticIdentity = (trigger: string, guidance: string) =>
   `${normalizeRuleText(trigger).toLowerCase()}\0${normalizeRuleText(guidance).toLowerCase()}`;
-export const noteIdentity = (note: Pick<NotebookNote, "scope" | "owner" | "trigger" | "guidance">) =>
-  `${note.scope}\0${note.owner}\0${semanticIdentity(note.trigger, note.guidance)}`;
 
 function activationDraft(value: unknown): value is ActivationDraft {
   try {

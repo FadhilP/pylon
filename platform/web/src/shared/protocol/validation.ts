@@ -1,5 +1,6 @@
 import { validWorkspaceMutation } from "../workspace/workspace-mutations.ts";
 import { validGuardRules } from "../settings/guard-policy.ts";
+import { validProjectAgentModels } from "../settings/agent-models.ts";
 import { validGitActionInput } from "../workspace/git.ts";
 import { parseStateQLPanelCommand } from "pi-stateql/stateql-command";
 import { COMMAND_NAMES, type WebCommand } from "./commands.ts";
@@ -868,6 +869,20 @@ function commandPolicyError(value: Record<string, unknown>, type: string): strin
     }
     if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
       return "invalid tool policy revision";
+    }
+  }
+  if (type === "updateProjectAgentModels") {
+    if (
+      (value.scope !== "project" && value.scope !== "session") ||
+      !identifier(value.projectId) ||
+      !identifier(value.sessionId) ||
+      !record(value.agentModels) ||
+      !validProjectAgentModels(value.agentModels)
+    ) {
+      return "invalid agent models";
+    }
+    if (!Number.isSafeInteger(value.expectedRevision) || (value.expectedRevision as number) < 0) {
+      return "invalid project agent models revision";
     }
   }
   return undefined;
@@ -1911,6 +1926,7 @@ function validRuntimePolicySnapshot(policy: unknown): boolean {
     (policy.project.workspace !== undefined && !workspaceModes.has(String(policy.project.workspace))) ||
     (policy.project.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.guardTimeoutSeconds)) ||
     (policy.project.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.project.clarifyTimeoutSeconds)) ||
+    (policy.project.agentModels !== undefined && !validProjectAgentModels(policy.project.agentModels)) ||
     !record(policy.session) ||
     (policy.session.toolOverrides !== undefined && !validToolOverrides(policy.session.toolOverrides)) ||
     (policy.session.verify !== undefined && !validVerifyPolicy(policy.session.verify)) ||
@@ -1919,11 +1935,13 @@ function validRuntimePolicySnapshot(policy: unknown): boolean {
     (policy.session.workspace !== undefined && !workspaceModes.has(String(policy.session.workspace))) ||
     (policy.session.guardTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.guardTimeoutSeconds)) ||
     (policy.session.clarifyTimeoutSeconds !== undefined && !validDialogTimeout(policy.session.clarifyTimeoutSeconds)) ||
+    (policy.session.agentModels !== undefined && !validProjectAgentModels(policy.session.agentModels)) ||
     !record(policy.effective) ||
     !validVerifyPolicy(policy.effective.verify) ||
     typeof policy.effective.timelineEnabled !== "boolean" ||
     typeof policy.effective.guardEnabled !== "boolean" ||
     (policy.effective.toolOverrides !== undefined && !validToolOverrides(policy.effective.toolOverrides)) ||
+    (policy.effective.agentModels !== undefined && !validProjectAgentModels(policy.effective.agentModels)) ||
     !workspaceModes.has(String(policy.effective.workspace)) ||
     !validDialogTimeout(policy.effective.guardTimeoutSeconds) ||
     !validDialogTimeout(policy.effective.clarifyTimeoutSeconds) ||
@@ -2533,6 +2551,7 @@ export function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
   if (typeof value.cwdLabel !== "string" || !Array.isArray(value.activeTools) || !Array.isArray(value.availableTools))
     return false;
   if (value.projectAvailable !== undefined && typeof value.projectAvailable !== "boolean") return false;
+  if (value.projectId !== undefined && !identifier(value.projectId)) return false;
   if (value.sessionName !== undefined && (typeof value.sessionName !== "string" || value.sessionName.length > 200))
     return false;
   if (value.gitBranch !== undefined && (typeof value.gitBranch !== "string" || value.gitBranch.length > 200))

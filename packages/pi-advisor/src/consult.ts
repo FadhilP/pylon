@@ -8,7 +8,7 @@ import {
 } from "pylon-core/child-process";
 import { ADVISOR_TIMEOUT_MS } from "./config.ts";
 import { redact } from "./redact.ts";
-import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "./retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "pylon-core/delegate-retry";
 
 export { ADVISOR_TIMEOUT_MS };
 const FAILURE_MESSAGE_MAX_LENGTH = 500;

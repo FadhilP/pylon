@@ -50,7 +50,7 @@ export function DatabaseHistory({
 }: {
   snapshot?: StateQLSnapshot;
   onOpen: (text: string) => void;
-  onResult: (handle: string, total: number) => void;
+  onResult: (handle: string, total: number, text?: string) => void;
   onReceipt: (handle: string) => void;
   workspace: StateQLWorkspace;
 }) {
@@ -217,7 +217,7 @@ export function DatabaseHistory({
                   <button
                     className="text-button"
                     type="button"
-                    onClick={() => onResult(item.result!.handle, item.result!.rows)}>
+                    onClick={() => onResult(item.result!.handle, item.result!.rows, item.sql)}>
                     Open {item.result.rows.toLocaleString()} stored rows
                   </button>
                 )}

@@ -407,12 +407,31 @@ export default function continuityExtension(pi: ExtensionAPI) {
       calls.some((part: any) => part.name === "continuity_update" && part.arguments?.action === "clarify")
     );
   };
+  let projectProfiles:
+    | Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>>
+    | undefined;
   const disposeRuntimePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
     if (event?.version !== 2) return;
     const value = event.dialogTimeouts?.clarify;
     if (value === null || (Number.isInteger(value) && value >= 15 && value <= 86_400)) {
       clarifyTimeoutSeconds = value;
     }
+    // Every runtime-policy event replaces the project override, including inherit/reset.
+    const overrides = event.agentModels?.continuity;
+    const valid =
+      overrides !== undefined &&
+      overrides &&
+      typeof overrides === "object" &&
+      !Array.isArray(overrides) &&
+      Object.entries(overrides).every(
+        ([role, profile]: [string, any]) =>
+          ["planner", "executor", "memoryReviewer", "compactionReviewer"].includes(role) &&
+          profile &&
+          typeof profile.model === "string" &&
+          profile.model.includes("/") &&
+          (profile.thinking === undefined || (thinkingLevels as readonly string[]).includes(profile.thinking)),
+      );
+    projectProfiles = valid ? overrides : undefined;
   });
   const clarifyDialogOptions = () =>
     clarifyTimeoutSeconds === undefined
@@ -439,6 +458,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     recentCalls.delete(key);
     return true;
   };
+  const effectiveProfile = (
+    role: "planner" | "executor" | "memoryReviewer" | "compactionReviewer",
+    global: ModelProfile | undefined,
+  ): ModelProfile | undefined => projectProfiles?.[role] ?? global;
   const configuredModel = async (
     ctx: any,
     profile: ModelProfile | undefined,
@@ -1018,7 +1041,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       expectedWorkspaceId = workspace?.id;
     if (!expectedWorkspaceId) throw Error("migration workspace identity is unavailable");
     const config = await loadConfig(),
-      profile = config.memoryReviewer;
+      profile = effectiveProfile("memoryReviewer", config.memoryReviewer);
     if (!profile) throw Error("Memory Reviewer is not configured");
     const model = await configuredModel(ctx, profile);
     if (!model) throw Error("Memory Reviewer model or credentials are unavailable");
@@ -1237,7 +1260,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       planApproval.context = ctx;
       const config = await loadConfig();
       memory.enabled = config.memoryEnabled !== false;
-      memory.reviewerConfigured = Boolean(config.memoryReviewer);
+      memory.reviewerConfigured = Boolean(effectiveProfile("memoryReviewer", config.memoryReviewer));
       recentCalls.clear();
       pendingMutations.clear();
       deniedToolCalls.clear();
@@ -1364,6 +1387,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       abandonAutomaticCompaction();
       session.generation++;
       session.context = undefined;
+      projectProfiles = undefined;
       terminatingToolCalls.clear();
       memory.legacyMigrationAvailable = false;
       planApproval.pending = undefined;
@@ -1675,7 +1699,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (!draft) return { cancel: true };
 
       const focus = event.customInstructions?.trim();
-      const profile = config.compactionReviewer;
+      const profile = effectiveProfile("compactionReviewer", config.compactionReviewer);
       if (focus && !profile) throw Error("Compaction review instructions require a configured Compaction Reviewer.");
       let additions: CompactionSupplement[] = [];
       if (profile) {
@@ -2101,7 +2125,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     renderShell: "self",
     renderCall: () => new Container(),
     promptGuidelines: [
-      "At the end of each task, explicitly check whether the user stated a durable preference or instruction, or the repository revealed an intentional, recurring project convention or contract. If concrete evidence could plausibly help a future session, prefer proposing it over silently skipping it; do not require certainty because the Memory Reviewer may accept, rewrite, merge, defer, or reject. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
+      "At the end of each task, explicitly check whether the user stated a durable preference or instruction, or the repository revealed an intentional, recurring project convention or contract. Propose only when the evidence clearly establishes a behavioral rule that should govern future tasks or sessions; possible future usefulness is not enough. Keep current-task constraints and implementation details in the active context or Continuity state instead. Never propose progress, implementation summaries, guesses, generic advice, one-off details, duplicates, or secrets.",
       "Use memory list first when duplication is uncertain. Submit at most two proposals in one call. User scope requires an exact quote from the current active branch; project contracts require at most three exact repository ranges totaling at most 120 lines.",
     ],
     renderResult: (result, _options, theme) => {
@@ -2133,7 +2157,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       try {
         const resolved = await resolveProject(proposalCwd),
           config = await loadConfig(),
-          profile = config.memoryReviewer;
+          profile = effectiveProfile("memoryReviewer", config.memoryReviewer);
         if (!profile) return memoryFailure("Memory Reviewer unavailable: configure a dedicated reviewer model.");
         const model = await configuredModel(ctx, profile);
         if (!model)
@@ -2667,7 +2691,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (work.revisionFeedback?.revision === work.planRevision)
         throw Error("Plan has requested changes; review the next revision before approval.");
       const config = await loadConfig();
-      const executor = await configuredModel(ctx, config.executor, work.baseModel);
+      const executorProfile = effectiveProfile("executor", config.executor);
+      const executor = await configuredModel(ctx, executorProfile, work.baseModel);
       if (!executor) {
         ctx.ui?.notify?.("Executor model unavailable.", "error");
         return false;
@@ -2678,8 +2703,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
         revision: work.planRevision ?? 1,
         resetContext,
         executorModel: { provider: executor.provider, id: executor.id },
-        ...((config.executor?.thinking ?? work.baseThinking)
-          ? { thinking: config.executor?.thinking ?? work.baseThinking }
+        ...((executorProfile?.thinking ?? work.baseThinking)
+          ? { thinking: executorProfile?.thinking ?? work.baseThinking }
           : {}),
         createdAt: now,
       };
@@ -2801,7 +2826,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const config = await loadConfig();
       const baseModel = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
       const baseThinking = pi.getThinkingLevel();
-      if (!(await applyProfile(ctx, config.planner))) {
+      if (!(await applyProfile(ctx, effectiveProfile("planner", config.planner)))) {
         ctx.ui.notify("Planner model unavailable.", "error");
         return;
       }
@@ -2915,9 +2940,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
         "compaction-reviewer": "compactionReviewer",
       } as const;
       const config = await loadConfig();
+      const show = {
+        planner: effectiveProfile("planner", config.planner),
+        executor: effectiveProfile("executor", config.executor),
+        memoryReviewer: effectiveProfile("memoryReviewer", config.memoryReviewer),
+        compactionReviewer: effectiveProfile("compactionReviewer", config.compactionReviewer),
+      };
       if ((action === "status" && parts.length === 1) || parts.length === 0) {
         ctx.ui.notify(
-          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${config.compactionReviewer?.model ?? "not configured"} · thinking: ${config.compactionReviewer?.thinking ?? "default"}`,
+          `Planner: ${show.planner?.model ?? "current session model"} · thinking: ${show.planner?.thinking ?? "current session level"}\nExecutor: ${show.executor?.model ?? "current session model"} · thinking: ${show.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${show.memoryReviewer?.model ?? "not configured"} · thinking: ${show.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${show.compactionReviewer?.model ?? "not configured"} · thinking: ${show.compactionReviewer?.thinking ?? "default"}`,
           "info",
         );
         return;

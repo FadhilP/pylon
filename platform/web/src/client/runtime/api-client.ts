@@ -8,6 +8,7 @@ import type {
   HeliosAndroidToolingCommand,
   HeliosAndroidToolingResult,
 } from "../../shared/protocol/helios-android-tooling";
+import type { AndroidCommand, AndroidCommandResult, AndroidServiceSnapshot } from "../../shared/protocol/android";
 import type {
   ArchiveListQuery,
   ArchiveListSnapshot,
@@ -44,7 +45,11 @@ import type {
   WorkspaceFilePage,
 } from "../../shared/protocol/snapshots";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
-import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search";
+import type {
+  WorkspaceSearchQuery,
+  WorkspaceSearchResult,
+  WorkspaceSymbolResult,
+} from "../../shared/workspace/workspace-search";
 import { readSearchStream } from "./workspace-search-stream";
 
 const TAB_KEY = "pylon-tab-id";
@@ -105,18 +110,51 @@ export class ApiClient {
   }
 
   async keyboardSettings(): Promise<KeyboardSettings> {
-    return json(await fetch("/api/v1/settings/keyboard", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+    return json(
+      await fetch("/api/v1/settings/keyboard", {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+      }),
+    );
   }
 
   async saveKeyboardSettings(revision: number, keymap: Keymap): Promise<KeyboardSettings> {
-    return json(await fetch("/api/v1/settings/keyboard", {
-      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ revision, keymap }),
-    }));
+    return json(
+      await fetch("/api/v1/settings/keyboard", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: this.headers(),
+        body: JSON.stringify({ revision, keymap }),
+      }),
+    );
   }
 
   events(cursor: string): EventSource {
     const query = new URLSearchParams({ tabId: this.tabId, cursor });
     return new EventSource(`/api/v1/events?${query.toString()}`, { withCredentials: true });
+  }
+
+  async androidSnapshot(): Promise<AndroidServiceSnapshot> {
+    return json<AndroidServiceSnapshot>(
+      await fetch("/api/v1/android", { credentials: "same-origin", headers: { "x-pylon-tab-id": this.tabId } }),
+    );
+  }
+
+  androidEvents(cursor: string): EventSource {
+    if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
+    const query = new URLSearchParams({ tabId: this.tabId, cursor, csrf: this.csrfToken });
+    return new EventSource(`/api/v1/android/events?${query.toString()}`, { withCredentials: true });
+  }
+
+  async androidCommand(command: AndroidCommand): Promise<AndroidCommandResult> {
+    return json<AndroidCommandResult>(
+      await fetch("/api/v1/android/command", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: this.headers(),
+        body: JSON.stringify(command),
+      }),
+    );
   }
 
   terminalUrl(generation: number): string {
@@ -256,18 +294,30 @@ export class ApiClient {
     onUpdate?: (result: WorkspaceSearchResult) => void,
   ): Promise<WorkspaceSearchResult> {
     const query = new URLSearchParams({ q: input.query, generation: String(generation) });
-    if (input.regex) query.set("regex", "1"); if (input.caseSensitive) query.set("caseSensitive", "1");
-    if (input.wholeWord) query.set("wholeWord", "1"); if (input.touched) query.set("touched", "1"); if (input.glob) query.set("glob", input.glob);
-    const response = await fetch(`/api/v1/workspace/search?${query}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal });
+    if (input.regex) query.set("regex", "1");
+    if (input.caseSensitive) query.set("caseSensitive", "1");
+    if (input.wholeWord) query.set("wholeWord", "1");
+    if (input.touched) query.set("touched", "1");
+    if (input.glob) query.set("glob", input.glob);
+    const response = await fetch(`/api/v1/workspace/search?${query}`, {
+      headers: { "x-pylon-tab-id": this.tabId },
+      credentials: "same-origin",
+      signal,
+    });
     if (!response.ok || !response.body) return json<WorkspaceSearchResult>(response);
     return readSearchStream(response.body, generation, onUpdate);
   }
 
   async workspaceSymbols(queryValue: string, generation: number, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
     const query = new URLSearchParams({ q: queryValue, generation: String(generation) });
-    return json<WorkspaceSymbolResult>(await fetch(`/api/v1/workspace/symbols?${query}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal }));
+    return json<WorkspaceSymbolResult>(
+      await fetch(`/api/v1/workspace/symbols?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
   }
-
 
   async workspaceFiles(
     generation: number,
@@ -313,31 +363,49 @@ export class ApiClient {
 
   async annotationNotes(input: AnnotationRequest): Promise<AnnotationList> {
     const query = new URLSearchParams({ sessionId: input.sessionId, generation: String(input.expectedGeneration) });
-    return json<AnnotationList>(await fetch(`/api/v1/annotations?${query}`, {
-      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin",
-    }));
+    return json<AnnotationList>(
+      await fetch(`/api/v1/annotations?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+      }),
+    );
   }
   async mutateAnnotation(input: AnnotationMutation): Promise<AnnotationList> {
-    return json<AnnotationList>(await fetch("/api/v1/annotations", {
-      method: "POST", headers: this.headers(), credentials: "same-origin", body: JSON.stringify(input),
-    }));
+    return json<AnnotationList>(
+      await fetch("/api/v1/annotations", {
+        method: "POST",
+        headers: this.headers(),
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      }),
+    );
   }
 
-
-  async workspaceEntry(generation: number, path: string, moveDestination?: string, includeGitIndex = true): Promise<WorkspaceEntry> {
+  async workspaceEntry(
+    generation: number,
+    path: string,
+    moveDestination?: string,
+    includeGitIndex = true,
+  ): Promise<WorkspaceEntry> {
     const query = new URLSearchParams({ generation: String(generation), path });
     if (moveDestination !== undefined) query.set("moveDestination", moveDestination);
     if (!includeGitIndex) query.set("gitIndex", "false");
-    return json<WorkspaceEntry>(await fetch(`/api/v1/workspace/entry?${query}`, {
-      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin",
-    }));
+    return json<WorkspaceEntry>(
+      await fetch(`/api/v1/workspace/entry?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+      }),
+    );
   }
 
   async workspaceGitIndex(generation: number, path: string): Promise<WorkspaceGitIndex> {
     const query = new URLSearchParams({ generation: String(generation), path });
-    return json<WorkspaceGitIndex>(await fetch(`/api/v1/workspace/index?${query}`, {
-      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin",
-    }));
+    return json<WorkspaceGitIndex>(
+      await fetch(`/api/v1/workspace/index?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+      }),
+    );
   }
 
   async workspaceGitState(
@@ -345,9 +413,13 @@ export class ApiClient {
     signal?: AbortSignal,
   ): Promise<GitState & { sessionId: string; sessionGeneration: number }> {
     const query = new URLSearchParams({ sessionGeneration: String(generation) });
-    return json<GitState & { sessionId: string; sessionGeneration: number }>(await fetch(`/api/v1/workspace/git?${query}`, {
-      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal,
-    }));
+    return json<GitState & { sessionId: string; sessionGeneration: number }>(
+      await fetch(`/api/v1/workspace/git?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
   }
 
   async workspaceGitDetail(
@@ -356,9 +428,13 @@ export class ApiClient {
     signal?: AbortSignal,
   ): Promise<GitDetail & { sessionId: string; sessionGeneration: number }> {
     const query = new URLSearchParams({ sessionGeneration: String(generation), query: JSON.stringify(detail) });
-    return json<GitDetail & { sessionId: string; sessionGeneration: number }>(await fetch(`/api/v1/workspace/git-detail?${query}`, {
-      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal,
-    }));
+    return json<GitDetail & { sessionId: string; sessionGeneration: number }>(
+      await fetch(`/api/v1/workspace/git-detail?${query}`, {
+        headers: { "x-pylon-tab-id": this.tabId },
+        credentials: "same-origin",
+        signal,
+      }),
+    );
   }
 
   async gitAction(command: Extract<WebCommand, { type: "gitAction" }>): Promise<AcceptedCommand> {
@@ -465,7 +541,11 @@ export class ApiClient {
     historyLimit = 50,
     signal?: AbortSignal,
   ): Promise<StateQLSnapshot> {
-    const query = new URLSearchParams({ generation: String(generation), workspace, historyLimit: String(historyLimit) });
+    const query = new URLSearchParams({
+      generation: String(generation),
+      workspace,
+      historyLimit: String(historyLimit),
+    });
     return json<StateQLSnapshot>(
       await fetch(`/api/v1/stateql?${query}`, {
         headers: { "x-pylon-tab-id": this.tabId },

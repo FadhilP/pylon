@@ -176,6 +176,7 @@ import type {
   UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
   UpdateToolPolicyInput,
+  UpdateProjectAgentModelsInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-bridge.ts";
 import type { StateQLCredentialVault } from "../database/stateql-credential-vault.ts";
@@ -225,6 +226,7 @@ import { invalidateFileSuggestions, suggestGitFiles } from "../workspace/file-su
 import { modelRateLookup, type UsageRateLookup } from "../usage/usage-aggregation.ts";
 import { projectIdForCwd, SessionIndex } from "../sessions/session-index.ts";
 import { ProjectRegistry } from "../workspace/project-registry.ts";
+import { cloneProjectAgentModels } from "../../shared/settings/agent-models.ts";
 
 interface TrashAttempt {
   status: number | null;
@@ -276,10 +278,20 @@ function defaultRuntimePolicy(): RuntimePolicyReadModel {
 function isHistoryTree(value: unknown, nested = false): value is HistoryTree {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const tree = value as Record<string, unknown>;
-  if (typeof tree.path !== "string" || typeof tree.tree !== "string" || typeof tree.head !== "string" ||
-    (tree.commonDir !== undefined && typeof tree.commonDir !== "string")) return false;
-  return tree.repositories === undefined || (!nested && Array.isArray(tree.repositories) &&
-    tree.repositories.length <= 100 && tree.repositories.every(repository => isHistoryTree(repository, true)));
+  if (
+    typeof tree.path !== "string" ||
+    typeof tree.tree !== "string" ||
+    typeof tree.head !== "string" ||
+    (tree.commonDir !== undefined && typeof tree.commonDir !== "string")
+  )
+    return false;
+  return (
+    tree.repositories === undefined ||
+    (!nested &&
+      Array.isArray(tree.repositories) &&
+      tree.repositories.length <= 100 &&
+      tree.repositories.every(repository => isHistoryTree(repository, true)))
+  );
 }
 
 function isHistoryCheckpoint(value: unknown): value is HistoryCheckpoint {
@@ -544,7 +556,12 @@ function heliosPage(value: unknown): HeliosPageIdentity | undefined {
   return { index: page.index as number, title: page.title, url: page.url };
 }
 
-function stateqlResult(value: unknown, sessionId: string, sessionGeneration: number, workspace: StateQLWorkspace): StateQLSnapshot {
+function stateqlResult(
+  value: unknown,
+  sessionId: string,
+  sessionGeneration: number,
+  workspace: StateQLWorkspace,
+): StateQLSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("StateQL returned an invalid snapshot");
   const raw = value as Record<string, any>;
@@ -1875,6 +1892,7 @@ export class SessionRuntime implements PiDriver {
         verify: cloneVerifyPolicy(policy.project.verify),
         ...(policy.project.guardRules ? { guardRules: { ...policy.project.guardRules } } : {}),
         toolOverrides: cloneToolOverrides(policy.project.toolOverrides),
+        ...(policy.project.agentModels ? { agentModels: cloneProjectAgentModels(policy.project.agentModels) } : {}),
       },
       session: {
         toolOverrides: cloneToolOverrides(policy.session.toolOverrides),
@@ -1889,12 +1907,14 @@ export class SessionRuntime implements PiDriver {
         ...(policy.session.clarifyTimeoutSeconds !== undefined
           ? { clarifyTimeoutSeconds: policy.session.clarifyTimeoutSeconds }
           : {}),
+        ...(policy.session.agentModels ? { agentModels: cloneProjectAgentModels(policy.session.agentModels) } : {}),
       },
       effective: {
         ...policy.effective,
         verify: cloneVerifyPolicy(policy.effective.verify),
         guardRules: { ...DEFAULT_GUARD_RULES, ...policy.effective.guardRules },
         toolOverrides: cloneToolOverrides(policy.effective.toolOverrides),
+        ...(policy.effective.agentModels ? { agentModels: cloneProjectAgentModels(policy.effective.agentModels) } : {}),
       },
       availableVerifyChecks: policy.availableVerifyChecks.map(check => ({ ...check })),
     };
@@ -1908,6 +1928,10 @@ export class SessionRuntime implements PiDriver {
 
   updateToolPolicy(_input: UpdateToolPolicyInput): Promise<void> {
     return Promise.reject(new Error("tool policy updates require the runtime coordinator"));
+  }
+
+  updateProjectAgentModels(_input: UpdateProjectAgentModelsInput): Promise<void> {
+    return Promise.reject(new Error("agent model updates require the runtime coordinator"));
   }
 
   addProject(_input: ProjectInput): Promise<ReplacementResult> {
@@ -2019,7 +2043,6 @@ export class SessionRuntime implements PiDriver {
     this.workspaceApplyTool.recordResult(result);
   }
 
-
   async workspaceSymbols(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
     const runtime = this.requireRuntime();
     const generation = this.gate.generation;
@@ -2028,22 +2051,72 @@ export class SessionRuntime implements PiDriver {
     const value = await new Promise<any>((resolvePromise, reject) => {
       let handled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const abort = () => { cleanup(); reject(signal?.reason ?? new Error("Workspace symbol search cancelled")); };
-      const cleanup = () => { if (timer) clearTimeout(timer); signal?.removeEventListener("abort", abort); };
+      const abort = () => {
+        cleanup();
+        reject(signal?.reason ?? new Error("Workspace symbol search cancelled"));
+      };
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      };
       signal?.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(() => { cleanup(); reject(new Error("Workspace symbol search timed out")); }, 15_000);
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Workspace symbol search timed out"));
+      }, 15_000);
       this.eventBus.emit("pi-discover:symbol-query", {
-        version: 1, cwd: runtime.session.sessionManager.getCwd(), query: query.trim(),
-        acknowledge: () => { handled = true; },
-        resolve: (result: unknown) => { cleanup(); resolvePromise(result); },
-        reject: (error: unknown) => { cleanup(); reject(error); },
+        version: 1,
+        cwd: runtime.session.sessionManager.getCwd(),
+        query: query.trim(),
+        acknowledge: () => {
+          handled = true;
+        },
+        resolve: (result: unknown) => {
+          cleanup();
+          resolvePromise(result);
+        },
+        reject: (error: unknown) => {
+          cleanup();
+          reject(error);
+        },
       });
-      if (!handled) { cleanup(); reject(new Error("pi-discover symbol indexing is unavailable")); }
+      if (!handled) {
+        cleanup();
+        reject(new Error("pi-discover symbol indexing is unavailable"));
+      }
     });
     this.gate.assert(generation);
-    if (this.requireRuntime().session.sessionId !== runtime.session.sessionId) throw new Error("session changed while searching workspace symbols");
-    const symbols: WorkspaceSymbol[] = Array.isArray(value?.symbols) ? value.symbols.slice(0, 200).flatMap((item: any) => typeof item?.name === "string" && typeof item.kind === "string" && typeof item.path === "string" && Number.isSafeInteger(item.line) && Number.isSafeInteger(item.column) && typeof item.signature === "string" ? [{ name: item.name.slice(0, 500), kind: item.kind.slice(0, 100), path: item.path.slice(0, 500), line: item.line, column: item.column, signature: item.signature.slice(0, 1000) }] : []) : [];
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, symbols, moreAvailable: value?.moreAvailable === true };
+    if (this.requireRuntime().session.sessionId !== runtime.session.sessionId)
+      throw new Error("session changed while searching workspace symbols");
+    const symbols: WorkspaceSymbol[] = Array.isArray(value?.symbols)
+      ? value.symbols
+          .slice(0, 200)
+          .flatMap((item: any) =>
+            typeof item?.name === "string" &&
+            typeof item.kind === "string" &&
+            typeof item.path === "string" &&
+            Number.isSafeInteger(item.line) &&
+            Number.isSafeInteger(item.column) &&
+            typeof item.signature === "string"
+              ? [
+                  {
+                    name: item.name.slice(0, 500),
+                    kind: item.kind.slice(0, 100),
+                    path: item.path.slice(0, 500),
+                    line: item.line,
+                    column: item.column,
+                    signature: item.signature.slice(0, 1000),
+                  },
+                ]
+              : [],
+          )
+      : [];
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: generation,
+      symbols,
+      moreAvailable: value?.moreAvailable === true,
+    };
   }
 
   async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
@@ -2145,13 +2218,10 @@ export class SessionRuntime implements PiDriver {
       throw new Error("session changed while loading file history context");
     const context = asFileHistoryContext(value);
     if (!context) throw new Error("Timeline returned an invalid file history context");
-    if (context.sessionId !== sessionId) throw new Error("Timeline returned a file history context for another session");
+    if (context.sessionId !== sessionId)
+      throw new Error("Timeline returned a file history context for another session");
     const checkpoints = context.checkpoints.slice(-200);
-    return {
-      ...context,
-      checkpoints,
-      partial: context.partial || checkpoints.length !== context.checkpoints.length,
-    };
+    return { ...context, checkpoints, partial: context.partial || checkpoints.length !== context.checkpoints.length };
   }
 
   async stateqlExport(
@@ -4219,6 +4289,7 @@ export class SessionRuntime implements PiDriver {
       sessionGeneration: this.gate.generation,
       ready: this.gate.ready,
       cwdLabel: selectedProject?.label ?? this.displayCwdLabel(runtime.cwd, session.sessionId),
+      ...(selectedProject ? { projectId: selectedProject.id } : {}),
       projectAvailable: !this.target?.inMemory && Boolean(selectedProject && !selectedProject.archivedAt),
       sessionName: session.sessionManager.getSessionName(),
       gitBranch: this.gitBranch,
@@ -4294,6 +4365,9 @@ export class SessionRuntime implements PiDriver {
             ? { guardRules: { ...this.runtimePolicy.project.guardRules } }
             : {}),
           toolOverrides: cloneToolOverrides(this.runtimePolicy.project.toolOverrides),
+          ...(this.runtimePolicy.project.agentModels
+            ? { agentModels: cloneProjectAgentModels(this.runtimePolicy.project.agentModels) }
+            : {}),
         },
         session: {
           toolOverrides: cloneToolOverrides(this.runtimePolicy.session.toolOverrides),
@@ -4316,12 +4390,18 @@ export class SessionRuntime implements PiDriver {
           ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined
             ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds }
             : {}),
+          ...(this.runtimePolicy.session.agentModels
+            ? { agentModels: cloneProjectAgentModels(this.runtimePolicy.session.agentModels) }
+            : {}),
         },
         effective: {
           ...this.runtimePolicy.effective,
           verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
           guardRules: { ...(this.runtimePolicy.effective.guardRules ?? DEFAULT_GUARD_RULES) },
           toolOverrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides),
+          ...(this.runtimePolicy.effective.agentModels
+            ? { agentModels: cloneProjectAgentModels(this.runtimePolicy.effective.agentModels) }
+            : {}),
         },
         availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map(check => ({ ...check })),
       },
@@ -4358,6 +4438,7 @@ export class SessionRuntime implements PiDriver {
         guard: this.runtimePolicy.effective.guardTimeoutSeconds,
         clarify: this.runtimePolicy.effective.clarifyTimeoutSeconds,
       },
+      agentModels: cloneProjectAgentModels(this.runtimePolicy.effective.agentModels) ?? {},
     });
     this.eventBus.emit("pylon:tool-overrides", {
       version: 1,

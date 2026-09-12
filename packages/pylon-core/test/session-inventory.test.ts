@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listSessionInventory, resolveUniqueSession } from "../src/session-inventory.ts";
+import { listSessionInventory, mapLimit, resolveUniqueSession } from "../src/session-inventory.ts";
 
 async function sessionFile(agentDir: string, directory: string, name: string, content: string) {
   const root = join(agentDir, "sessions", directory);
@@ -12,6 +12,36 @@ async function sessionFile(agentDir: string, directory: string, name: string, co
   await writeFile(path, content);
   return path;
 }
+
+test("session mapping stays bounded, preserves input order, and propagates failures", { timeout: 5_000 }, async () => {
+  let active = 0;
+  let peak = 0;
+  let releaseFirst!: () => void;
+  const first = new Promise<void>(resolve => {
+    releaseFirst = resolve;
+  });
+  const inputs = Array.from({ length: 48 }, (_, index) => index);
+  const values = await mapLimit(inputs, async value => {
+    peak = Math.max(peak, ++active);
+    if (value === 0) await first;
+    else await Promise.resolve();
+    if (value === inputs.length - 1) releaseFirst();
+    active--;
+    return value * 2;
+  });
+  assert.equal(peak, 16);
+  assert.deepEqual(
+    values,
+    inputs.map(value => value * 2),
+  );
+  assert.deepEqual(await mapLimit([], async () => assert.fail("empty input must not invoke the transform")), []);
+  await assert.rejects(
+    mapLimit([0], async () => {
+      throw new Error("metadata unavailable");
+    }),
+    /metadata unavailable/,
+  );
+});
 
 test("session inventory reads headers without parsing transcripts and preserves duplicate paths", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pylon-session-inventory-"));

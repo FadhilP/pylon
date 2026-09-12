@@ -1,0 +1,92 @@
+{
+  "name": "pylon-android",
+  "version": "0.1.0",
+  "description": "Standalone Android emulator, build, deployment, and bounded log runtime",
+  "type": "module",
+  "keywords": [
+    "android",
+    "emulator",
+    "gradle",
+    "developer-tools"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "dist",
+    "live",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./android-runner": {
+      "types": "./dist/android-runner.d.ts",
+      "import": "./dist/android-runner.js",
+      "default": "./dist/android-runner.js"
+    },
+    "./android-sdk": {
+      "types": "./dist/android-sdk.d.ts",
+      "import": "./dist/android-sdk.js",
+      "default": "./dist/android-sdk.js"
+    },
+    "./port-reservation": {
+      "types": "./dist/port-reservation.d.ts",
+      "import": "./dist/port-reservation.js",
+      "default": "./dist/port-reservation.js"
+    },
+    "./project-discovery": {
+      "types": "./dist/project-discovery.d.ts",
+      "import": "./dist/project-discovery.js",
+      "default": "./dist/project-discovery.js"
+    },
+    "./gradle-runner": {
+      "types": "./dist/gradle-runner.d.ts",
+      "import": "./dist/gradle-runner.js",
+      "default": "./dist/gradle-runner.js"
+    },
+    "./process": {
+      "types": "./dist/process.d.ts",
+      "import": "./dist/process.js",
+      "default": "./dist/process.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js",
+      "default": "./dist/types.js"
+    },
+    "./apk-artifact": {
+      "types": "./dist/apk-artifact.d.ts",
+      "import": "./dist/apk-artifact.js",
+      "default": "./dist/apk-artifact.js"
+    },
+    "./android-exec": {
+      "types": "./dist/android-exec.d.ts",
+      "import": "./dist/android-exec.js",
+      "default": "./dist/android-exec.js"
+    },
+    "./app-runner": {
+      "types": "./dist/app-runner.d.ts",
+      "import": "./dist/app-runner.js",
+      "default": "./dist/app-runner.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run build && node --test test/*.test.ts",
+    "test:live": "node --test live/*.test.ts",
+    "check": "npm run build && tsc --noEmit",
+    "smoke": "npm run check && npm pack --dry-run",
+    "prepare": "npm run build",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^7.0.2"
+  },
+  "license": "MIT"
+}

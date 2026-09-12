@@ -1181,7 +1181,8 @@ export class RuntimeProjection {
         method: method as UiRequestReadModel["method"],
         payload: browserValue(payload) as Record<string, unknown>,
         ...(raw.surface === "database" ? { surface: "database" as const } : {}),
-        ...(typeof raw.operationId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(raw.operationId)
+        ...(typeof raw.operationId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(raw.operationId)
           ? { operationId: raw.operationId }
           : {}),
         owned: false,
@@ -1484,7 +1485,9 @@ export class RuntimeProjection {
     if (current.text === previous) return;
     this.pendingUpdate = { id: messageId, text: current.text };
     // Native updates carry cumulative message.content, not a top-level delta.
-    this.updateBytes += Buffer.byteLength(current.text.startsWith(previous) ? current.text.slice(previous.length) : current.text);
+    this.updateBytes += Buffer.byteLength(
+      current.text.startsWith(previous) ? current.text.slice(previous.length) : current.text,
+    );
     if (this.updateBytes >= MAX_PAYLOAD_TEXT) this.flush();
     else if (!this.updateTimer) {
       this.updateTimer = setTimeout(() => this.flush(), STREAM_FLUSH_MS);

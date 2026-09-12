@@ -1,5 +1,4 @@
 import {
-  IconAdjustmentsHorizontal,
   IconArchive,
   IconBook,
   IconContrast,
@@ -19,6 +18,8 @@ import {
   IconTool,
   IconBotId,
   IconWorld,
+  IconDeviceMobile,
+  IconAdjustmentsHorizontal,
 } from "@tabler/icons-react";
 import type { RuntimeStoreSnapshot } from "../runtime/event-store";
 
@@ -44,6 +45,7 @@ export type NavContext = {
   stateqlEnabled: boolean;
   browserAvailable: boolean;
   browserActive: boolean;
+  androidActive: boolean;
   timelineEnabled: boolean;
   memoryEnabled: boolean;
   papercutEnabled: boolean;
@@ -95,7 +97,13 @@ export type SurfaceDefinition = {
 export const SURFACES: SurfaceDefinition[] = [
   { id: "chat", label: "Chat", icon: IconMessageCircle },
   { id: "files", label: "Files", icon: IconFiles, requiresSession: true },
-  { id: "review", label: "Review", icon: IconGitCompare, requiresSession: true, available: context => context.surface === "review" || !!context.reviewAvailable },
+  {
+    id: "review",
+    label: "Review",
+    icon: IconGitCompare,
+    requiresSession: true,
+    available: context => context.surface === "review" || !!context.reviewAvailable,
+  },
   {
     id: "database",
     label: "Database",
@@ -162,6 +170,7 @@ export type ReferenceId =
   | "changes"
   | "git"
   | "agents"
+  | "android"
   | "compaction"
   | "attachment"
   | "turn-diff";
@@ -186,7 +195,15 @@ export type ReferenceDefinition = {
 };
 
 export const REFERENCES: ReferenceDefinition[] = [
-  { id: "notes", label: "Notes", description: "Code notes to send with a message.", icon: IconNote, ariaId: "reference-notes", group: "conversation", tone: "var(--violet)" },
+  {
+    id: "notes",
+    label: "Notes",
+    description: "Code notes to send with a message.",
+    icon: IconNote,
+    ariaId: "reference-notes",
+    group: "conversation",
+    tone: "var(--violet)",
+  },
   {
     id: "chat",
     label: "Chat",
@@ -245,10 +262,16 @@ export const REFERENCES: ReferenceDefinition[] = [
     group: "session",
     tone: "var(--red)",
   },
-  { id: "git", label: "Git", description: "Branch state, commits, stashes and review.", icon: IconGitBranch, ariaId: "git-panel", group: "run", tone: "var(--accent)" },
   {
-    // Named for what it shows rather than what it browses: the Files surface
-    // is the explorer, this is the changed set and its diffs.
+    id: "git",
+    label: "Git",
+    description: "Branch state, commits, stashes and review.",
+    icon: IconGitBranch,
+    ariaId: "git-panel",
+    group: "run",
+    tone: "var(--accent)",
+  },
+  {
     id: "changes",
     label: "Changes",
     description: "Files this session has touched, and their diffs.",
@@ -278,10 +301,28 @@ export const REFERENCES: ReferenceDefinition[] = [
       };
     },
   },
+  {
+    id: "android",
+    label: "Android",
+    description: "Host-global Android emulator lifecycle and setup.",
+    icon: IconDeviceMobile,
+    ariaId: "android-panel",
+    group: "run",
+    tone: "var(--green)",
+    width: { key: "pylon-android-panel-width", default: 350 },
+    badge: (_runtime, context) => ({
+      live: context.androidActive,
+      ariaLabel: `Android Runner${context.androidActive ? ", active" : ""}`,
+    }),
+  },
 ];
 
 export function referenceDefinition(reference: ActiveReference): ReferenceDefinition | undefined {
   return reference ? REFERENCES.find(item => item.id === reference) : undefined;
+}
+
+export function sessionPreparationBlocksReference(reference: ActiveReference, pending: boolean): boolean {
+  return pending && reference !== "android";
 }
 
 /** Rail items in order, with `null` marking a hairline between groups. */

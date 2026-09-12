@@ -52,19 +52,6 @@ export function mergeGuardRules(...rules: GuardRuleOverrides[]): EffectiveGuardR
   return Object.assign({}, DEFAULT_GUARD_RULES, ...rules);
 }
 
-export type GuardRuleSource = "Global" | "Project" | "This session";
-
-export function resolveGuardRule(
-  category: GuardRiskCategory,
-  global: GuardRuleOverrides,
-  project: GuardRuleOverrides = {},
-  session: GuardRuleOverrides = {},
-): { value: GuardAction; source: GuardRuleSource } {
-  if (session[category]) return { value: session[category], source: "This session" };
-  if (project[category]) return { value: project[category], source: "Project" };
-  return { value: global[category] ?? DEFAULT_GUARD_RULES[category], source: "Global" };
-}
-
 export const GUARD_RULE_LABELS: Record<GuardRiskCategory, string> = {
   "command.privilege-escalation": "Privilege escalation",
   "command.recursive-deletion": "Recursive deletion",

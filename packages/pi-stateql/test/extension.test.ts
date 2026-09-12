@@ -1104,14 +1104,16 @@ test("rows bridge forwards bounded actor-scoped requests and only returns data",
   assert.equal(value.events.get("pylon:stateql-rows-request")?.length, 0);
 });
 
-test("panel command bridge forwards reads and writes with user attribution, filtering history, and confirming mutations", async () => {
+test("panel command bridge forwards writes without confirmation, preserves user attribution, and confirms profile changes", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];
+  let panelConfirmations = 0;
   const ui = {
     async requestStateQLCredential() {
       return undefined;
     },
     async confirm() {
+      panelConfirmations++;
       return true;
     },
     setStatus() {},
@@ -1149,6 +1151,7 @@ test("panel command bridge forwards reads and writes with user attribution, filt
   await write.response();
   assert.deepEqual(value.instances[0].commands[1], { command: "exec", sql: "DELETE FROM users" });
   assert.equal(value.instances[0].contexts[1]?.origin, "user");
+  assert.equal(panelConfirmations, 0);
 
   let confirms = 0;
   const declined = run(
@@ -1182,7 +1185,7 @@ test("panel command bridge forwards reads and writes with user attribution, filt
   assert.equal(value.events.get("pylon:stateql-command-request")?.length, 0);
 });
 
-test("panel bridge dispatches catalog and batch APIs and confirms Redis writes", async () => {
+test("panel bridge dispatches catalog and batch APIs and executes Redis writes without confirmation", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];
   const stateql = value.instances[0] as any;
@@ -1217,19 +1220,21 @@ test("panel bridge dispatches catalog and batch APIs and confirms Redis writes",
     confirmations++;
     return false;
   });
-  assert.equal(confirmations, 1);
+  assert.equal(confirmations, 0);
   assert.equal(
     stateql.commands.some((command: BatchCommand) => command.command === "redis.exec"),
-    false,
+    true,
   );
   await value.handlers.get("session_shutdown")![0]();
 });
 
-test("panel approval cannot execute against a replacement connection", async () => {
+test("panel writes fail closed when the expected connection has changed", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];
   let response: Promise<unknown> | undefined;
   try {
+    value.instances[0].snapshot = () =>
+      ({ ...baseSnapshot, connection: { connection_id: "replacement" } }) as StateQLSnapshot;
     handler({
       version: 1,
       sessionId: "pi-session",
@@ -1244,9 +1249,7 @@ test("panel approval cannot execute against a replacement connection", async () 
         requestStateQLCredential: async () => undefined,
         setStatus() {},
         confirm: async () => {
-          value.instances[0].snapshot = () =>
-            ({ ...baseSnapshot, connection: { connection_id: "replacement" } }) as StateQLSnapshot;
-          return true;
+          throw new Error("direct panel writes must not request confirmation");
         },
       },
     });
@@ -1257,7 +1260,7 @@ test("panel approval cannot execute against a replacement connection", async () 
   }
 });
 
-test("panel forwards Mongo reads, filters history without changing origin, confirms Mongo writes, and rejects malformed payloads", async () => {
+test("panel forwards Mongo reads and writes without changing user origin or requesting write confirmation", async () => {
   const value = await start();
   const handler = value.events.get("pylon:stateql-command-request")![0];
   let confirmations = 0;
@@ -1317,13 +1320,14 @@ test("panel forwards Mongo reads, filters history without changing origin, confi
   assert.equal((history as any).ok, true);
   assert.deepEqual(value.instances[0].commands[1], { command: "history", limit: 5, history_origin: "model" });
   assert.equal(value.instances[0].contexts[1]?.origin, "user");
-  const declined = await invoke({
+  const write = await invoke({
     command: "mongo.exec",
     mongo: { operation: "deleteMany", collection: "users", filter: { active: false } },
   });
-  assert.deepEqual(declined, { declined: true });
-  assert.equal(confirmations, 1);
-  assert.equal(value.instances[0].commands.length, 2);
+  assert.equal((write as any).ok, true);
+  assert.equal(confirmations, 0);
+  assert.equal(value.instances[0].commands.length, 3);
+  assert.equal(value.instances[0].contexts[2]?.origin, "user");
   await assert.rejects(
     value.tools
       .get("stateql")
@@ -1336,7 +1340,7 @@ test("panel forwards Mongo reads, filters history without changing origin, confi
       ),
     /invalid MongoDB command/,
   );
-  assert.equal(value.instances[0].commands.length, 2);
+  assert.equal(value.instances[0].commands.length, 3);
 });
 
 test("confirmed operations fail closed and declined commands do not execute", async () => {

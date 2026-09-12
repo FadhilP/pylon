@@ -355,6 +355,14 @@ const CONFIRMED_COMMANDS = new Set<StateQLToolInput["command"]>([
   "transaction.commit",
   "transaction.rollback",
 ]);
+const PANEL_DIRECT_WRITE_COMMANDS = new Set<StateQLToolInput["command"]>([
+  "exec",
+  "mongo.exec",
+  "redis.exec",
+  "apply",
+  "transaction.commit",
+  "transaction.rollback",
+]);
 const MAX_PARAMS_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 40 * 1024;
 const BROKERED_REFERENCE_PREFIX = "PYLON_STATEQL_BROKERED_";
@@ -1158,6 +1166,7 @@ export default function stateqlExtension(
             : 0;
         if (
           CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
+          !PANEL_DIRECT_WRITE_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
           (!(target && (input.command === "connect" || remembers) && !profileBrokered?.fromProfile) ||
             insecureBrokeredConnect)
         ) {

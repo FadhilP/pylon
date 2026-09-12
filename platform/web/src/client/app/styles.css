@@ -588,6 +588,7 @@
   .workspace-layout { grid-template-columns: minmax(0, 1fr) auto; }
   .workspace-layout.has-inspector { grid-template-columns: minmax(0, 1fr) var(--inspector-width) auto; }
   .workspace-layout.is-session-pending > .inspector { opacity: 0.55; filter: blur(1.5px); pointer-events: none; }
+  .workspace-layout.is-session-pending > #android-panel { opacity: 1; filter: none; pointer-events: auto; }
   .workspace-layout.is-session-pending > .panel-resizer { pointer-events: none; }
   .terminal-layer { position: relative; z-index: 42; min-width: 0; min-height: 0; grid-column: 2; grid-row: 2; pointer-events: none; }
   .terminal-layer > * { pointer-events: auto; }
@@ -2210,6 +2211,15 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
    Declared after the auto width above so the pair fills its cell. */
 .package-row-control.is-pair { display: grid; grid-template-columns: 168px 176px; gap: 8px; }
 .package-row-control.is-pair select { width: 100%; min-width: 0; }
+/* Session agent defaults reuse settings rows inside the narrow Policy-style inspector. */
+.agents-panel > .session-agent-settings { min-height: 0; flex: 1; overflow: auto; margin: 0; scrollbar-color: var(--line-strong) transparent; }
+.session-agent-settings .policy-scope { width: 112px; grid-template-columns: 1fr; }
+.session-agent-settings .agent-model-groups { gap: 0; }
+.session-agent-settings .agent-model-group > header { padding: 13px 14px 9px; border-bottom: 1px solid var(--line); }
+.session-agent-settings .package-row { grid-template-columns: 22px minmax(0, 1fr); padding: 11px 14px; margin: 0; }
+.session-agent-settings .package-row-control { grid-column: 2; width: 100%; margin-top: 5px; }
+.session-agent-settings .package-row-control.is-pair { grid-template-columns: minmax(0, 1fr); width: 100%; }
+.session-agent-settings .package-row-control select { width: 100%; min-width: 0; }
 .package-subgroup { padding: 10px 13px 7px; background: var(--surface-subtle); }
 .package-subgroup strong { font-size: 12px; font-weight: 650; }
 .package-subgroup small { display: block; margin-top: 2px; color: var(--text-muted); font-size: 12px; }

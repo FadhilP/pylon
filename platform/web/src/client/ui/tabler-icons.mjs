@@ -80,3 +80,4 @@ export { default as IconChevronsUp } from "@tabler/icons-react/dist/esm/icons/Ic
 export { default as IconCrosshair } from "@tabler/icons-react/dist/esm/icons/IconCrosshair.mjs";
 export { default as IconLayoutList } from "@tabler/icons-react/dist/esm/icons/IconLayoutList.mjs";
 export { default as IconListTree } from "@tabler/icons-react/dist/esm/icons/IconListTree.mjs";
+export { default as IconDeviceMobile } from "@tabler/icons-react/dist/esm/icons/IconDeviceMobile.mjs";

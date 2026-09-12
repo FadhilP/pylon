@@ -848,7 +848,7 @@ export default function heliosExtension(
             healthDiagnostic = Promise.resolve(version);
             ctx.ui.notify(`Helios CLI ready: ${version}. CLI compatibility is verified.`, "info");
           } else {
-            const [android, appium] = await Promise.all([diagnoseAndroid(exec), resolveAppium(exec)]);
+            const [android, appium] = await Promise.all([diagnoseAndroid(), resolveAppium(exec)]);
             ctx.ui.notify(
               `Helios Android ready: ${android.adbVersion}; Appium ${appium.version}; ${android.avds.length} AVD(s): ${android.avds.join(", ") || "none"}.`,
               "info",
@@ -899,7 +899,7 @@ export default function heliosExtension(
       const id = sessionId(ctx);
       if (params.action === "avds") {
         rejectAndroidExtra(params, []);
-        const avds = await (await AndroidSdk.create(exec)).listAvds(signal);
+        const avds = await (await AndroidSdk.create()).listAvds(signal);
         return {
           content: [{ type: "text" as const, text: `Android AVDs (${avds.length}): ${avds.join(", ") || "none"}.` }],
           details: { avds },
@@ -925,7 +925,7 @@ export default function heliosExtension(
         });
         if (ctx.hasUI) ctx.ui.setStatus?.("pi-helios", `android: listing packages on ${serial}`);
         try {
-          const inventory = await (await AndroidSdk.create(exec)).listInstalledPackages(serial, signal);
+          const inventory = await (await AndroidSdk.create()).listInstalledPackages(serial, signal);
           const heading = `Installed Android packages on ${inventory.serial} / ${inventory.avd} (${inventory.packages.length})`;
           return {
             content: [

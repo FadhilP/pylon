@@ -315,6 +315,35 @@ test("project and session policies defer effective changes until a running turn 
   await internal.settleAgentRun(selected);
   assert.equal(selected.policy().effective.toolOverrides.bash, "disabled");
 
+  await assert.rejects(
+    coordinator.updateProjectAgentModels({
+      type: "updateProjectAgentModels",
+      scope: "session",
+      projectId,
+      sessionId: "other-session",
+      agentModels: { continuity: { executor: { model: "test/session-executor" } } },
+      expectedRevision: selected.policy().revision,
+      commandId: "wrong-agent-session",
+      expectedGeneration: 1,
+    }),
+    /selected session changed/,
+  );
+  await coordinator.updateProjectAgentModels({
+    type: "updateProjectAgentModels",
+    scope: "session",
+    projectId,
+    sessionId: selected.id,
+    agentModels: { continuity: { executor: { model: "test/session-executor" } } },
+    expectedRevision: selected.policy().revision,
+    commandId: "agent-session",
+    expectedGeneration: 1,
+  });
+  assert.equal(
+    selected.policy().session.agentModels?.continuity?.executor?.model,
+    "test/session-executor",
+  );
+  assert.equal(idle.policy().session.agentModels, undefined);
+
   await rm(root, { recursive: true, force: true });
 });
 
@@ -2354,6 +2383,12 @@ test("new sessions apply the effective workspace policy before the first prompt"
     assert.equal(movedSnapshot.workspace?.mode, movedSnapshot.runtimePolicy.effective.workspace);
     assert.equal(movedSnapshot.workspace?.mode, "worktree");
     assert.equal(registry.workspaceForSession(movedSnapshot.sessionId)?.mode, "worktree");
+    const androidWorkspace = driver.androidWorkspaceContext(movedSnapshot.sessionGeneration);
+    assert.equal(androidWorkspace.projectId, projectId);
+    assert.equal(androidWorkspace.workspaceKind, "session-worktree");
+    assert.equal(androidWorkspace.root, driver.terminalTarget().cwd);
+    assert.equal(androidWorkspace.registeredRoot, cwd);
+    assert.throws(() => driver.androidWorkspaceContext(movedSnapshot.sessionGeneration - 1), /stale/);
 
     const isolated = await driver.newSession({ expectedGeneration: movedSnapshot.sessionGeneration });
     const isolatedSnapshot = await driver.snapshot();

@@ -1060,8 +1060,14 @@ export async function runGitAction(cwd: string, input: GitActionInput): Promise<
         await git(repo.root, ["stash", "pop", input.selector]);
       } catch (error) {
         const status = await git(repo.root, ["status", "--porcelain=v1", "-z", "--untracked-files=no"]);
-        if (parseStatus(status).files.some(file => file.indexStatus === "U" || file.worktreeStatus === "U" ||
-          ["AA", "DD"].includes(file.indexStatus + file.worktreeStatus)))
+        if (
+          parseStatus(status).files.some(
+            file =>
+              file.indexStatus === "U" ||
+              file.worktreeStatus === "U" ||
+              ["AA", "DD"].includes(file.indexStatus + file.worktreeStatus),
+          )
+        )
           throw Error("Stash pop conflicted; the stash was not dropped.");
         throw error;
       }

@@ -1,5 +1,10 @@
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations.ts";
-import type { WorkspaceEntry, WorkspaceGitIndex, WorkspaceMutationInput, WorkspaceMutationResult } from "../../shared/workspace/workspace-mutations.ts";
+import type {
+  WorkspaceEntry,
+  WorkspaceGitIndex,
+  WorkspaceMutationInput,
+  WorkspaceMutationResult,
+} from "../../shared/workspace/workspace-mutations.ts";
 import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
@@ -8,7 +13,11 @@ import type {
   HeliosAndroidToolingResult,
 } from "../../shared/protocol/helios-android-tooling.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search.ts";
+import type {
+  WorkspaceSearchQuery,
+  WorkspaceSearchResult,
+  WorkspaceSymbolResult,
+} from "../../shared/workspace/workspace-search.ts";
 import type {
   ProviderAuthReadModel,
   QueueReadModel,
@@ -75,6 +84,16 @@ export interface RuntimeTarget {
 export interface RuntimeHandle {
   sessionId: string;
   sessionGeneration: number;
+}
+
+export interface AndroidWorkspaceContext {
+  projectId: string;
+  sessionId: string;
+  sessionGeneration: number;
+  root: string;
+  registeredRoot: string;
+  workspaceKind: "local" | "project-folder" | "session-worktree";
+  workspaceLabel: string;
 }
 
 export interface TerminalTarget extends RuntimeHandle {
@@ -220,6 +239,7 @@ export interface ForkInput {
 
 export type UpdateRuntimePolicyInput = Extract<WebCommand, { type: "updateRuntimePolicy" }>;
 export type UpdateToolPolicyInput = Extract<WebCommand, { type: "updateToolPolicy" }>;
+export type UpdateProjectAgentModelsInput = Extract<WebCommand, { type: "updateProjectAgentModels" }>;
 
 export interface EditPromptInput extends PromptInput {
   entryId: string;
@@ -367,6 +387,8 @@ export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
   terminalTarget?(): TerminalTarget;
+  androidWorkspaceContext?(expectedGeneration: number): AndroidWorkspaceContext | Promise<AndroidWorkspaceContext>;
+  validateAndroidWorkspaceContext?(context: AndroidWorkspaceContext): void | Promise<void>;
   annotationNotes?(input: AnnotationRequest): Promise<AnnotationList>;
   mutateAnnotation?(input: AnnotationMutation): Promise<AnnotationList>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;
@@ -382,17 +404,37 @@ export interface PiDriver {
   mutateWorkspace?(input: WorkspaceMutationInput): Promise<WorkspaceMutationResult | void>;
   workspaceGitState?(signal?: AbortSignal): Promise<GitState & RuntimeHandle>;
   workspaceGitDetail?(query: GitDetailQuery, signal?: AbortSignal): Promise<GitDetail & RuntimeHandle>;
-  gitAction?(input: { commandId: string; sessionId: string; expectedGeneration: number; input: GitActionInput }): Promise<AcceptedCommand>;
+  gitAction?(input: {
+    commandId: string;
+    sessionId: string;
+    expectedGeneration: number;
+    input: GitActionInput;
+  }): Promise<AcceptedCommand>;
   workspaceDiff?(input: WorkspaceFileInput): Promise<WorkspaceFileDiff>;
-  workspaceSearch?(input: WorkspaceSearchInput, send: (result: WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal): Promise<WorkspaceSearchResult>;
+  workspaceSearch?(
+    input: WorkspaceSearchInput,
+    send: (result: WorkspaceSearchResult) => void | Promise<void>,
+    signal: AbortSignal,
+  ): Promise<WorkspaceSearchResult>;
   workspaceSymbols?(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult>;
   timelineCheckpointFiles?(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles>;
   timelineCheckpointDiff?(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff>;
   fileHistory?(input: FileHistoryQuery, signal?: AbortSignal): Promise<WorkspaceFileHistory>;
   fileHistoryContext?(): Promise<FileHistoryContext | undefined>;
-  stateqlExport?(handle: string, format: "json" | "jsonl" | "csv", signal?: AbortSignal, workspace?: StateQLWorkspace): Promise<StateQLExport>;
+  stateqlExport?(
+    handle: string,
+    format: "json" | "jsonl" | "csv",
+    signal?: AbortSignal,
+    workspace?: StateQLWorkspace,
+  ): Promise<StateQLExport>;
   stateqlSnapshot?(historyLimit: number, workspace?: StateQLWorkspace): Promise<StateQLSnapshot>;
-  stateqlRows?(handle: string, offset: number, limit: number, signal?: AbortSignal, workspace?: StateQLWorkspace): Promise<StateQLRowsPage>;
+  stateqlRows?(
+    handle: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+    workspace?: StateQLWorkspace,
+  ): Promise<StateQLRowsPage>;
   stateqlCommand?(
     input: StateQLCommandInput,
     signal?: AbortSignal,
@@ -454,6 +496,7 @@ export interface PiDriver {
   fork(input: ForkInput): Promise<ReplacementResult>;
   updateRuntimePolicy(input: UpdateRuntimePolicyInput): Promise<void>;
   updateToolPolicy?(input: UpdateToolPolicyInput): Promise<void>;
+  updateProjectAgentModels?(input: UpdateProjectAgentModelsInput): Promise<void>;
   setPackageEnabled(input: SetPackageEnabledInput): Promise<ReplacementResult>;
   updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult>;
   setExtensionEnabled?(input: SetExtensionEnabledInput): Promise<ReplacementResult>;

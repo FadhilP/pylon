@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findRunEntry, hasTimeline, isRunEntry, runTimelineId } from "../src/run.ts";
+import { findRunEntry, isRunEntry, runTimelineId } from "../src/run.ts";
 import { classifyCompatibility } from "../src/compatibility.ts";
 
 test("checkpoint compatibility keeps refs informational", () => {
@@ -55,17 +55,5 @@ test("latest valid run metadata preserves explicit timeline lineage", () => {
     { type: "custom", customType: "other", data: {} },
     { type: "custom", customType: "pylon-run", data: nextPlan },
   ];
-  assert.equal(hasTimeline(entries, "run-1"), true);
-  assert.equal(hasTimeline(entries, "unrelated"), false);
   assert.deepEqual(findRunEntry(entries), nextPlan);
-  assert.equal(
-    hasTimeline(
-      [
-        ...entries,
-        { type: "custom", customType: "pylon-run", data: { ...planner, runId: "unrelated", timelineId: "unrelated" } },
-      ],
-      "run-1",
-    ),
-    true,
-  );
 });

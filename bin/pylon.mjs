@@ -26,7 +26,7 @@ Usage:
   pylon                         Start Pylon for the current directory
   pylon changelog [version]     Show the installed or selected release
   pylon changelog --list        List available releases
-  pylon migrate                 Retry migration from ~/.pi/agent
+  pylon migrate                 Import missing state and projects from ~/.pi/agent
 
 Options:
   -h, --help                    Show this help
@@ -73,8 +73,12 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
     const result = await migratePylonStorage();
     if (result.status === "migrated")
       console.log(`Migrated Pylon data to ${result.agentDir}. The original remains at ${result.legacyDir}.`);
+    else if (result.status === "recovered")
+      console.log(
+        `Recovered ${result.importedProjects} legacy project${result.importedProjects === 1 ? "" : "s"} and ${result.importedFiles} missing file${result.importedFiles === 1 ? "" : "s"} into ${result.agentDir}.`,
+      );
     else if (result.status === "already-present")
-      console.log(`Pylon data already exists at ${result.agentDir}; nothing was overwritten.`);
+      console.log(`Pylon data at ${result.agentDir} is already recovered; nothing was overwritten.`);
     else console.log(`No legacy Pylon data found at ${result.legacyDir}.`);
   } catch (error) {
     console.error(`Pylon migration failed: ${error instanceof Error ? error.message : String(error)}`);

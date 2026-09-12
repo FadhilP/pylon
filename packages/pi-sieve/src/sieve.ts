@@ -2195,15 +2195,6 @@ function projectNewResultPrepared<T extends ContextMessage>(
     : unchanged();
 }
 
-export function projectNewResult<T extends ContextMessage>(
-  messages: readonly T[],
-  resultIndex: number,
-  threshold = SIEVE_THRESHOLD,
-  options: SieveOptions = {},
-): NewProjection<T> {
-  return projectNewResultPrepared(messages, resultIndex, threshold, options);
-}
-
 function contentCharacters(content: unknown): number {
   return textOnlyContentLength(content) ?? mixedContentBlocks(content)?.sourceChars ?? serializedContentLength(content);
 }

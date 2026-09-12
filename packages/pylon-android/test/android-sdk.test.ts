@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { AndroidSdk, OwnedEmulator, parseInstalledPackages, resolveAndroidSdk } from "../src/android-sdk.ts";
+import {
+  AndroidEmulatorStartupCleanupError,
+  AndroidSdk,
+  OwnedEmulator,
+  parseInstalledPackages,
+  resolveAndroidSdk,
+} from "pylon-android/android-sdk";
+import { terminateProcessTree } from "pylon-android/process";
 
 function packageSpawn(
   calls: string[][],
@@ -201,6 +208,9 @@ test(
         async verifySerialGone() {
           verified = true;
         },
+        async terminateOwnedProcess(child: any, label: string, gracefulMs?: number, forceMs?: number) {
+          await terminateProcessTree(child, label, gracefulMs, forceMs);
+        },
       };
       await new OwnedEmulator(sdk as any, child, "emulator-5554", "Pixel_Test").stop();
       assert.equal(serialKill, false);
@@ -209,3 +219,178 @@ test(
     }
   },
 );
+
+test("uncertain startup cleanup never sends a serial-directed emulator kill", async () => {
+  const child = new EventEmitter() as any;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 12345;
+  child.exitCode = null;
+  child.signalCode = null;
+  let adbCalls = 0;
+  let terminations = 0;
+  let verified = 0;
+  const sdk = {
+    async avdName() {
+      return "Pixel_Test";
+    },
+    async runAdb() {
+      adbCalls++;
+      return "";
+    },
+    async terminateOwnedProcess(target: any) {
+      terminations++;
+      target.signalCode = "SIGTERM";
+    },
+    async verifySerialGone() {
+      verified++;
+    },
+  };
+
+  await new OwnedEmulator(sdk as any, child, "emulator-5554", "Pixel_Test").cleanupUncertainStart();
+  assert.equal(adbCalls, 0);
+  assert.equal(terminations, 1);
+  assert.equal(verified, 1);
+});
+
+test("signal-terminated emulator handles are not treated as running", async () => {
+  const child = new EventEmitter() as any;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 12345;
+  child.exitCode = null;
+  child.signalCode = "SIGTERM";
+  let mutations = 0;
+  let verified = 0;
+  const sdk = {
+    async avdName() {
+      mutations++;
+      return "Pixel_Test";
+    },
+    async runAdb() {
+      mutations++;
+      return "";
+    },
+    async terminateOwnedProcess() {
+      mutations++;
+    },
+    async verifySerialGone() {
+      verified++;
+    },
+  };
+
+  await new OwnedEmulator(sdk as any, child, "emulator-5554", "Pixel_Test").stop();
+  assert.equal(mutations, 0);
+  assert.equal(verified, 1);
+});
+
+test("injected SDK commands reject killed and oversized executor results", async () => {
+  const limits: Array<number | undefined> = [];
+  const killedSdk = new AndroidSdk({ root: "root", adb: "adb", emulator: "emulator" }, (async (
+    _command: string,
+    _args: string[],
+    options?: { maxOutputBytes?: number },
+  ) => {
+    limits.push(options?.maxOutputBytes);
+    return { code: 0, stdout: "partial", stderr: "", killed: true };
+  }) as any);
+  await assert.rejects(killedSdk.runAdb(["version"]), /cancelled/);
+  await assert.rejects(killedSdk.listAvds(), /cancelled/);
+  assert.deepEqual(limits, [256 * 1024, 64 * 1024]);
+
+  const oversizedSdk = new AndroidSdk({ root: "root", adb: "adb", emulator: "emulator" }, (async (
+    _command: string,
+    args: string[],
+  ) => ({
+    code: 0,
+    stdout: "x".repeat(args[0] === "-list-avds" ? 64 * 1024 + 1 : 256 * 1024 + 1),
+    stderr: "",
+  })) as any);
+  await assert.rejects(oversizedSdk.runAdb(["version"]), /output exceeds 256KB/);
+  await assert.rejects(oversizedSdk.listAvds(), /output exceeds 64KB/);
+});
+
+test("package-owned command capture terminates immediately on streamed overflow", async () => {
+  let terminations = 0;
+  const sdk = new AndroidSdk(
+    { root: "root", adb: "adb", emulator: "emulator" },
+    undefined,
+    packageSpawn([], Buffer.alloc(256 * 1024 + 1, 0x61)),
+    async child => {
+      terminations++;
+      child.kill();
+    },
+  );
+
+  await assert.rejects(sdk.runAdb(["version"]), /output exceeds 256KB/);
+  assert.equal(terminations, 1);
+});
+
+test("AVD and device inventories enforce structure and count bounds", async () => {
+  const sdkForAvds = (stdout: string) =>
+    new AndroidSdk({ root: "root", adb: "adb", emulator: "emulator" }, (async () => ({
+      code: 0,
+      stdout,
+      stderr: "",
+    })) as any);
+  await assert.rejects(sdkForAvds("Pixel_Test\n\nOther").listAvds(), /malformed AVD inventory/);
+  await assert.rejects(
+    sdkForAvds(Array.from({ length: 1_025 }, (_, index) => `Pixel_${index}`).join("\n")).listAvds(),
+    /exceeds 1024 entries/,
+  );
+
+  const devices = Array.from({ length: 513 }, (_, index) => `emulator-${6000 + index * 2} device`).join("\n");
+  const deviceSdk = new AndroidSdk({ root: "root", adb: "adb", emulator: "emulator" }, (async () => ({
+    code: 0,
+    stdout: `List of devices attached\n${devices}\n`,
+    stderr: "",
+  })) as any);
+  await assert.rejects(deviceSdk.devices(), /exceeds 512 entries/);
+});
+
+test("real SDK startup failures retain uncertain ownership for cleanup retry", async () => {
+  const controller = new AbortController();
+  const calls: string[][] = [];
+  const phases: string[] = [];
+  const child = new EventEmitter() as any;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 12345;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  let terminations = 0;
+  const exec = async (command: string, args: string[]) => {
+    calls.push(args);
+    if (command === "emulator") return { code: 0, stdout: "Pixel_Test\n", stderr: "" };
+    if (args[0] === "devices") return { code: 0, stdout: "List of devices attached\n", stderr: "" };
+    return { code: 1, stdout: "", stderr: "unavailable" };
+  };
+  const sdk = new AndroidSdk(
+    { root: "root", adb: "adb", emulator: "emulator" },
+    exec as any,
+    (() => {
+      queueMicrotask(() => controller.abort());
+      return child;
+    }) as any,
+    async target => {
+      terminations++;
+      if (terminations === 1) throw new Error("cleanup failed");
+      (target as any).signalCode = "SIGTERM";
+    },
+  );
+
+  const error = await sdk
+    .start("Pixel_Test", false, controller.signal, 100, phase => phases.push(phase))
+    .catch(value => value);
+  assert.ok(error instanceof AndroidEmulatorStartupCleanupError);
+  assert.equal(error.emulator.serial.startsWith("emulator-"), true);
+  assert.deepEqual(phases, ["starting"]);
+  assert.equal(
+    calls.some(args => args.join(" ").endsWith("emu kill")),
+    false,
+  );
+
+  await error.emulator.cleanupUncertainStart();
+  assert.equal(terminations, 2);
+});

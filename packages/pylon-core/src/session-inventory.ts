@@ -9,7 +9,7 @@ export type SessionInventoryEntry = { id: string; cwd: string; path: string; mod
 
 export type SessionInventoryOptions = { strict?: boolean };
 
-async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(

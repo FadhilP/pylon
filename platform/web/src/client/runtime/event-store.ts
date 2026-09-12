@@ -64,6 +64,7 @@ import type {
   TimelineCheckpointFiles,
   TurnDiffResult,
   VerifyPolicyReadModel,
+  ProjectAgentModelsReadModel,
   WorkspaceFileContent,
   WorkspaceFileDiff,
   WorkspaceFileHistory,
@@ -626,6 +627,26 @@ export class RuntimeEventStore {
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });
+  }
+
+  async updateAgentModels(
+    scope: "project" | "session",
+    projectId: string,
+    agentModels: ProjectAgentModelsReadModel,
+    expectedRevision: number,
+  ): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      type: "updateProjectAgentModels",
+      scope,
+      projectId,
+      sessionId: runtime.sessionId,
+      agentModels,
+      expectedRevision,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+    await this.waitForRuntimePolicyRevision(runtime.sessionId, expectedRevision);
   }
 
   async fileSuggestions(query: string): Promise<FileSuggestionList> {

@@ -196,15 +196,24 @@ export async function searchWorkspace(options: WorkspaceSearchOptions): Promise<
       while (at < files.length && candidates.length < Math.min(8, 32 - group.size) && candidateSize < 12_000) {
         signal.throwIfAborted();
         const file = files[at++];
-        if (!safePath(file.path)) { skipped++; continue; }
+        if (!safePath(file.path)) {
+          skipped++;
+          continue;
+        }
         candidates.push(file);
         candidateSize += file.path.length + 5;
       }
       const valid = await Promise.all(candidates.map(file => containedRegular(root, file.path, signal, deadline)));
       signal.throwIfAborted();
-      if (Date.now() >= deadline) { timedOut = true; break; }
+      if (Date.now() >= deadline) {
+        timedOut = true;
+        break;
+      }
       for (const [index, file] of candidates.entries()) {
-        if (!valid[index]) { skipped++; continue; }
+        if (!valid[index]) {
+          skipped++;
+          continue;
+        }
         argumentSize += file.path.length + 5;
         group.set(file.path, { path: file.path, changed: !!file.status, matches: [], capped: false });
       }

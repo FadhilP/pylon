@@ -54,6 +54,7 @@ import type {
   NativeExtensionReadModel,
   PackageSettingsReadModel,
   PackageSummary,
+  ProjectAgentModelsReadModel,
   RuntimePolicyReadModel,
   SkillListSnapshot,
   ToolExposureMode,
@@ -142,6 +143,7 @@ interface SettingsDialogProps {
   pendingUi?: UiRequestReadModel;
   packages: PackageSummary[];
   projects: { id: string; label: string }[];
+  activeProjectId?: string;
   extensions?: ExtensionListSnapshot;
   skills?: SkillListSnapshot;
   hookSettings?: HookSettingsReadModel;
@@ -175,6 +177,11 @@ interface SettingsDialogProps {
   onRefreshModels: () => Promise<void>;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
+  onUpdateProjectAgentModels: (
+    projectId: string,
+    agentModels: ProjectAgentModelsReadModel,
+    expectedRevision: number,
+  ) => Promise<void>;
   onAndroidTooling: (action: "status" | "install" | "remove") => Promise<void>;
   onToggleExtension: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
   onInstallExtensionPackage: (source: string, scope: "user" | "project", projectId?: string) => Promise<void>;
@@ -198,6 +205,7 @@ export function SettingsDialog({
   pendingUi,
   packages,
   projects,
+  activeProjectId,
   extensions,
   skills,
   hookSettings,
@@ -231,6 +239,7 @@ export function SettingsDialog({
   onRefreshModels,
   onSetEnabled,
   onUpdate,
+  onUpdateProjectAgentModels,
   onAndroidTooling,
   onToggleExtension,
   onInstallExtensionPackage,
@@ -1249,10 +1258,15 @@ export function SettingsDialog({
               <AgentModelSettings
                 packages={agentModelPackages}
                 models={models}
+                projects={projects}
+                activeProjectId={activeProjectId}
+                runtimePolicy={runtimePolicy}
                 sessionThinkingLevels={sessionThinkingLevels}
                 loading={loading}
                 disabled={Boolean(busy)}
                 onUpdate={onUpdate}
+                projectDisabled={policyDisabled}
+                onUpdateProject={onUpdateProjectAgentModels}
               />
             </section>
 
@@ -2426,50 +2440,388 @@ function hasAgentModelFields(settings: PackageSettingsReadModel | undefined): bo
   return ["advisor", "scout", "grunt", "spawn", "timeline", "continuity"].includes(settings.kind);
 }
 
+type ContinuityPackageSettings = Extract<PackageSettingsReadModel, { kind: "continuity" }>;
+type AdvisorPackageSettings = Extract<PackageSettingsReadModel, { kind: "advisor" }>;
+type ContinuityRole = "planner" | "executor" | "memoryReviewer" | "compactionReviewer";
+type AgentModelProfileOverride = { model: string; thinking?: ThinkingLevelReadModel };
+
 function AgentModelSettings({
   packages,
+  projects,
+  activeProjectId,
+  runtimePolicy,
   models,
   sessionThinkingLevels,
   loading,
   disabled,
+  projectDisabled,
   onUpdate,
+  onUpdateProject,
 }: {
   packages: PackageSummary[];
+  projects: { id: string; label: string }[];
+  activeProjectId?: string;
+  runtimePolicy?: RuntimePolicyReadModel;
   models: ModelOptionReadModel[];
   sessionThinkingLevels: ThinkingLevelReadModel[];
   loading: boolean;
   disabled: boolean;
+  projectDisabled: boolean;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
+  onUpdateProject: (
+    projectId: string,
+    agentModels: ProjectAgentModelsReadModel,
+    expectedRevision: number,
+  ) => Promise<void>;
 }) {
-  if (loading && packages.length === 0) return <div className="settings-empty">Detecting agent settings…</div>;
-  if (packages.length === 0) {
-    return (
+  const [scope, setScope] = useState<"global" | "project">("global");
+  const [savingProject, setSavingProject] = useState(false);
+  const [projectError, setProjectError] = useState("");
+  const project = projects.find(item => item.id === activeProjectId);
+  const projectModels = runtimePolicy?.project.agentModels ?? {};
+  const continuitySettings = packages
+    .map(item => item.settings)
+    .find((settings): settings is ContinuityPackageSettings => settings?.kind === "continuity");
+  const advisorSettings = packages
+    .map(item => item.settings)
+    .find((settings): settings is AdvisorPackageSettings => settings?.kind === "advisor");
+
+  useEffect(() => setProjectError(""), [activeProjectId, runtimePolicy?.revision, scope]);
+
+  const saveProject = async (next: ProjectAgentModelsReadModel) => {
+    if (!project || !runtimePolicy || savingProject) return;
+    setSavingProject(true);
+    setProjectError("");
+    try {
+      await onUpdateProject(project.id, next, runtimePolicy.revision);
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavingProject(false);
+    }
+  };
+
+  const globalContent =
+    loading && packages.length === 0 ? (
+      <div className="settings-empty">Detecting agent settings…</div>
+    ) : packages.length === 0 ? (
       <div className="settings-empty">
         <strong>No configurable agent models</strong>
         <span>Install or enable a supported package first.</span>
       </div>
+    ) : (
+      <div className="agent-model-groups">
+        {packages.map(item => (
+          <section className="agent-model-group" key={item.id}>
+            <header>
+              <h3>{AGENT_MODEL_LABELS[item.id] ?? item.name}</h3>
+              {!item.enabled && <span>Package disabled</span>}
+            </header>
+            <div className="package-list">
+              <PackageModelFields
+                settings={item.settings!}
+                models={models}
+                sessionThinkingLevels={sessionThinkingLevels}
+                disabled={disabled}
+                onUpdate={settings => onUpdate(item, settings)}
+              />
+            </div>
+          </section>
+        ))}
+      </div>
     );
-  }
+
+  return (
+    <>
+      <div className="policy-toolbar">
+        <div className="policy-scope" role="tablist" aria-label="Agent model settings scope">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === "global"}
+            className={scope === "global" ? "is-active" : ""}
+            onClick={() => setScope("global")}>
+            Global
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={scope === "project"}
+            className={scope === "project" ? "is-active" : ""}
+            onClick={() => setScope("project")}>
+            Project
+          </button>
+        </div>
+        {scope === "project" && project && <span className="policy-set-count">{project.label}</span>}
+      </div>
+      {scope === "global" ? (
+        globalContent
+      ) : !project || !runtimePolicy ? (
+        <div className="settings-empty">
+          <strong>No active registered project</strong>
+          <span>Open a project session to configure project overrides.</span>
+        </div>
+      ) : !continuitySettings && !advisorSettings ? (
+        <div className="settings-empty">
+          <strong>No project-scoped agent models</strong>
+          <span>Enable Continuity or Advisor first.</span>
+        </div>
+      ) : (
+        <>
+          <ProjectAgentModelFields
+            value={projectModels}
+            continuitySettings={continuitySettings}
+            advisorSettings={advisorSettings}
+            models={models}
+            disabled={projectDisabled || savingProject}
+            onChange={next => void saveProject(next)}
+          />
+          {Object.keys(projectModels).length > 0 && (
+            <button
+              className="policy-global-link"
+              type="button"
+              disabled={projectDisabled || savingProject}
+              onClick={() => void saveProject({})}>
+              Reset all to Global
+            </button>
+          )}
+          {projectError && <p className="settings-inline-error" role="alert">{projectError}</p>}
+          <div className="settings-empty">
+            <span>Spawn and Agent naming are global-only because they initialize before project policy.</span>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function updateProjectProfile(
+  value: ProjectAgentModelsReadModel,
+  role: ContinuityRole,
+  profile: AgentModelProfileOverride | undefined,
+): ProjectAgentModelsReadModel {
+  const next: ProjectAgentModelsReadModel = { ...value };
+  const continuity = { ...(value.continuity ?? {}) };
+  if (profile) continuity[role] = profile;
+  else delete continuity[role];
+  if (Object.keys(continuity).length) next.continuity = continuity;
+  else delete next.continuity;
+  return next;
+}
+
+function updateProjectAdvisor(
+  value: ProjectAgentModelsReadModel,
+  advisor: ProjectAgentModelsReadModel["advisor"],
+): ProjectAgentModelsReadModel {
+  const next = { ...value };
+  if (advisor && Object.keys(advisor).length) next.advisor = advisor;
+  else delete next.advisor;
+  return next;
+}
+
+function ProjectAgentModelFields({
+  value,
+  continuitySettings,
+  advisorSettings,
+  models,
+  disabled,
+  onChange,
+}: {
+  value: ProjectAgentModelsReadModel;
+  continuitySettings?: ContinuityPackageSettings;
+  advisorSettings?: AdvisorPackageSettings;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: ProjectAgentModelsReadModel) => void;
+}) {
   return (
     <div className="agent-model-groups">
-      {packages.map(item => (
-        <section className="agent-model-group" key={item.id}>
-          <header>
-            <h3>{AGENT_MODEL_LABELS[item.id] ?? item.name}</h3>
-            {!item.enabled && <span>Package disabled</span>}
-          </header>
+      {continuitySettings && (
+        <section className="agent-model-group">
+          <header><h3>Continuity</h3></header>
           <div className="package-list">
-            <PackageModelFields
-              settings={item.settings!}
-              models={models}
-              sessionThinkingLevels={sessionThinkingLevels}
-              disabled={disabled}
-              onUpdate={settings => onUpdate(item, settings)}
-            />
+            {([
+              ["planner", "Planner", "Breaks a goal into the task list."],
+              ["executor", "Executor", "Carries out each task in the list."],
+              ["memoryReviewer", "Memory reviewer", "Approves memories before they are stored."],
+              ["compactionReviewer", "Compaction reviewer", "Checks summaries before history is dropped."],
+            ] as const).map(([role, label, description]) => (
+              <ProjectProfileRow
+                key={role}
+                label={label}
+                description={description}
+                profile={value.continuity?.[role]}
+                inherited={continuitySettings[role]}
+                models={models}
+                disabled={disabled}
+                onChange={profile => onChange(updateProjectProfile(value, role, profile))}
+              />
+            ))}
           </div>
         </section>
-      ))}
+      )}
+      {advisorSettings && (
+        <ProjectAdvisorFields
+          value={value}
+          settings={advisorSettings}
+          models={models}
+          disabled={disabled}
+          onChange={onChange}
+        />
+      )}
     </div>
+  );
+}
+
+function ProjectProfileRow({
+  label,
+  description,
+  profile,
+  inherited,
+  models,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  profile?: AgentModelProfileOverride;
+  inherited?: AgentModelProfileOverride;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (profile?: AgentModelProfileOverride) => void;
+}) {
+  const levels = thinkingLevels(profile?.model, models, []);
+  return (
+    <div className="package-row">
+      <OverviewOrb state={profile ? "done" : "neutral"} label={profile ? "overridden" : "inherited"} />
+      <span className="package-row-copy">
+        <strong>{label}</strong>
+        <small>{description}</small>
+      </span>
+      <span className="package-row-control is-pair">
+        <OptionalModelSelect
+          label={`${label} project model`}
+          emptyLabel={`Inherit (${inherited?.model ?? "session model"})`}
+          value={profile?.model}
+          models={models}
+          disabled={disabled}
+          onChange={model => onChange(model ? { model } : undefined)}
+        />
+        <ThinkingSelect
+          label={`${label} project thinking`}
+          emptyLabel={`Inherit (${inherited?.thinking ?? "session level"})`}
+          value={profile?.thinking}
+          levels={levels}
+          disabled={disabled || !profile}
+          onChange={thinking => profile && onChange({ ...profile, thinking })}
+        />
+      </span>
+    </div>
+  );
+}
+
+function ProjectAdvisorFields({
+  value,
+  settings,
+  models,
+  disabled,
+  onChange,
+}: {
+  value: ProjectAgentModelsReadModel;
+  settings: AdvisorPackageSettings;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: ProjectAgentModelsReadModel) => void;
+}) {
+  const advisor = value.advisor;
+  const mode = advisor?.model
+    ? advisor.model
+    : advisor?.useMainModel === true
+      ? "session"
+      : advisor?.useMainModel === false
+        ? "disabled"
+        : "inherit";
+  const inheritedMode = settings.mode === "model" ? settings.model! : settings.mode;
+  const levels = thinkingLevels(advisor?.model ?? (settings.mode === "model" ? settings.model : undefined), models, []);
+  const setMode = (nextMode: string) => {
+    const thinking = advisor?.thinking;
+    const next =
+      nextMode === "inherit"
+        ? thinking
+          ? { thinking }
+          : undefined
+        : nextMode === "session"
+          ? { useMainModel: true, ...(thinking ? { thinking } : {}) }
+          : nextMode === "disabled"
+            ? { useMainModel: false }
+            : { model: nextMode, ...(thinking ? { thinking } : {}) };
+    onChange(updateProjectAdvisor(value, next));
+  };
+  return (
+    <section className="agent-model-group">
+      <header><h3>Advisor</h3></header>
+      <div className="package-list">
+        <div className="package-row">
+          <OverviewOrb state={advisor ? "done" : "neutral"} label={advisor ? "overridden" : "inherited"} />
+          <span className="package-row-copy"><strong>Model</strong><small>Choose a project model, the session model, or disable Advisor here.</small></span>
+          <span className="package-row-control">
+            <ProjectAdvisorModeSelect
+              value={mode}
+              inherited={inheritedMode}
+              models={models}
+              disabled={disabled}
+              onChange={setMode}
+            />
+          </span>
+        </div>
+        <div className="package-row">
+          <OverviewOrb state={advisor?.thinking ? "done" : "neutral"} label={advisor?.thinking ? "overridden" : "inherited"} />
+          <span className="package-row-copy"><strong>Thinking</strong><small>Overrides only the Advisor thinking level for this project.</small></span>
+          <span className="package-row-control">
+            <ThinkingSelect
+              label="Advisor project thinking"
+              emptyLabel={`Inherit (${settings.thinking ?? "session level"})`}
+              value={advisor?.thinking}
+              levels={levels}
+              disabled={disabled || mode === "disabled"}
+              onChange={thinking => {
+                const next = { ...(advisor ?? {}) };
+                if (thinking) next.thinking = thinking;
+                else delete next.thinking;
+                onChange(updateProjectAdvisor(value, next));
+              }}
+            />
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProjectAdvisorModeSelect({
+  value,
+  inherited,
+  models,
+  disabled,
+  onChange,
+}: {
+  value: string;
+  inherited: string;
+  models: ModelOptionReadModel[];
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  const hiddenModels = useHiddenModels();
+  const options = selectableModels(models, hiddenModels, value.includes("/") ? [value] : []);
+  const missing = value.includes("/") && !options.some(model => modelKey(model) === value);
+  return (
+    <select aria-label="Advisor project model" value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
+      <option value="inherit">Inherit from Global ({inherited})</option>
+      <option value="disabled">Disabled</option>
+      <option value="session">Use session model</option>
+      {missing && <option value={value}>{value}</option>}
+      {options.map(model => <option value={modelKey(model)} key={modelKey(model)}>{model.name}</option>)}
+    </select>
   );
 }
 
@@ -3459,12 +3811,14 @@ function ProfileRow({
 
 function ThinkingSelect({
   label,
+  emptyLabel = "Inherit session thinking",
   value,
   levels,
   disabled,
   onChange,
 }: {
   label: string;
+  emptyLabel?: string;
   value?: ThinkingLevelReadModel;
   levels: ThinkingLevelReadModel[];
   disabled: boolean;
@@ -3476,7 +3830,7 @@ function ThinkingSelect({
       value={value ?? ""}
       disabled={disabled}
       onChange={event => onChange(event.target.value ? (event.target.value as ThinkingLevelReadModel) : undefined)}>
-      <option value="">Inherit session thinking</option>
+      <option value="">{emptyLabel}</option>
       {levels.map(level => (
         <option value={level} key={level}>
           {thinkingLabel(level)}

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { mapLimit, SessionSummaryCache, type SessionSummaryCacheOptions } from "../src/server/sessions/session-summary-cache.ts";
+import { SessionSummaryCache, type SessionSummaryCacheOptions } from "../src/server/sessions/session-summary-cache.ts";
 import { SessionIndex } from "../src/server/sessions/session-index.ts";
 
 const message = JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }) + "\n";
@@ -152,20 +152,6 @@ test("close drains accepted changes even with a queued timer and rejects later w
     const records = JSON.parse(await readFile(join(root, "pylon-web", "session-summaries-v4.json"), "utf8")).records;
     assert.equal(records.find((record: any) => record.session.id === "0").userMessageCount, 2);
   }, { deferredPersistence: true });
-});
-
-test("metadata loading stays bounded and preserves input order", async () => {
-  let active = 0;
-  let peak = 0;
-  const inputs = Array.from({ length: 48 }, (_, index) => index);
-  const values = await mapLimit(inputs, async value => {
-    peak = Math.max(peak, ++active);
-    await Promise.resolve();
-    active--;
-    return value * 2;
-  });
-  assert.equal(peak, 16);
-  assert.deepEqual(values, inputs.map(value => value * 2));
 });
 
 test("session index metadata observes edits without waiting for the inventory TTL", async () => {

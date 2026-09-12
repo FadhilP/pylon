@@ -31,7 +31,7 @@ import {
   type Snapshot,
 } from "../src/context.ts";
 import { loadEvidenceRecords, type EvidenceRef } from "../src/evidence.ts";
-import { waitForDelegateRetry } from "../src/retry.ts";
+import { waitForDelegateRetry } from "pylon-core/delegate-retry";
 
 type Details = {
   agentName?: string;
@@ -77,6 +77,38 @@ const configuredModel = (ctx: any, config: AdvisorConfig): Model<any> | undefine
   const ref = parseModelRef(config.advisorModel);
   return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
 };
+type AdvisorModelOverride = { model?: string; thinking?: ThinkingLevel; useMainModel?: boolean };
+/** Project-scoped override wins over global config; unset keys inherit. */
+function effectiveAdvisor(config: AdvisorConfig, projectAdvisor: AdvisorModelOverride | undefined): AdvisorConfig {
+  if (!projectAdvisor) return config;
+  const next = { ...config };
+  if (projectAdvisor.model !== undefined) {
+    next.advisorModel = projectAdvisor.model;
+    next.useMainModel = false;
+  } else if (projectAdvisor.useMainModel !== undefined) {
+    next.useMainModel = projectAdvisor.useMainModel;
+    delete next.advisorModel;
+  }
+  if (projectAdvisor.thinking !== undefined) next.thinking = projectAdvisor.thinking;
+  return next;
+}
+const projectAdvisorOverride = (value: unknown): AdvisorModelOverride | undefined => {
+  const valid =
+    value !== undefined &&
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).every(key => ["model", "thinking", "useMainModel"].includes(key)) &&
+    ((value as AdvisorModelOverride).model === undefined ||
+      (typeof (value as AdvisorModelOverride).model === "string" &&
+        (value as AdvisorModelOverride).model!.includes("/"))) &&
+    ((value as AdvisorModelOverride).thinking === undefined ||
+      (thinkingLevels as readonly string[]).includes((value as AdvisorModelOverride).thinking!)) &&
+    ((value as AdvisorModelOverride).useMainModel === undefined ||
+      typeof (value as AdvisorModelOverride).useMainModel === "boolean") &&
+    !((value as AdvisorModelOverride).model !== undefined && (value as AdvisorModelOverride).useMainModel === true);
+  return valid ? (value as AdvisorModelOverride) : undefined;
+};
 
 type CallLifecycle = { signal: AbortSignal; isTimedOut: () => boolean };
 /** Owns the abort chain, the hard timeout, and the progress heartbeat for one consultation. */
@@ -112,6 +144,7 @@ export default function advisorExtension(
   retryWait = waitForDelegateRetry,
 ) {
   let calls = 0;
+  let projectAdvisor: AdvisorModelOverride | undefined;
   let previousAdvice: string | undefined;
   let advisorQueue = Promise.resolve();
   const serializeAdvisor = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -128,7 +161,8 @@ export default function advisorExtension(
     }
   };
   const refreshTool = async (ctx: any, agentDir?: string) => {
-    const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
+    const raw = await loadConfig(agentDir ? configPath(agentDir) : undefined);
+    const config = effectiveAdvisor(raw, projectAdvisor);
     const model = configuredModel(ctx, config);
     const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
     let coordinated = false;
@@ -177,13 +211,21 @@ export default function advisorExtension(
           : Promise.reject(new Error("Advisor session is unavailable")),
       );
     }) ?? (() => {});
+  const disposeProjectModels =
+    pi.events.on?.("pylon:runtime-policy", (event: any) => {
+      if (event?.version !== 2) return;
+      projectAdvisor = projectAdvisorOverride(event.agentModels?.advisor);
+      if (sessionContext) void refreshTool(sessionContext).catch(() => undefined);
+    }) ?? (() => {});
   pi.on("session_start", async (_event, ctx) => {
     sessionContext = ctx;
     await refreshTool(ctx);
   });
   pi.on("session_shutdown", () => {
     sessionContext = undefined;
+    projectAdvisor = undefined;
     disposeSettingsRefresh();
+    disposeProjectModels();
     pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-advisor" });
   });
 
@@ -208,7 +250,7 @@ export default function advisorExtension(
   /** Everything that must hold before a provider call: quota, model, credentials, snapshot, budget. */
   const prepareCall = async (id: string, params: any, ctx: any): Promise<PrepareResult> => {
     const cacheRetention: "short" | "long" = process.env.PI_CACHE_RETENTION === "long" ? "long" : "short";
-    const config = await loadConfig();
+    const config = effectiveAdvisor(await loadConfig(), projectAdvisor);
     const maxCalls = advisorMaxCalls(config.maxCalls);
     const maxCostUsd = advisorMaxCostUsd(config.maxCostUsd);
     const maxOutputTokens = advisorMaxOutputTokens(config.maxOutputTokens);
@@ -552,7 +594,7 @@ export default function advisorExtension(
     ctx.ui.notify("Advisor enabled; uses current main model and thinking level.", "info");
   };
   const showAdvisorStatus = async (ctx: any) => {
-    const config = await loadConfig();
+    const config = effectiveAdvisor(await loadConfig(), projectAdvisor);
     const model = configuredModel(ctx, config);
     ctx.ui.notify(
       `Selected: ${config.useMainModel ? "current main model" : (config.advisorModel ?? "none")}\nThinking: ${config.useMainModel ? "current main level" : (config.thinking ?? "provider default")}\nState: ${model && ctx.modelRegistry.hasConfiguredAuth(model) ? "active" : "inactive"}\nLimit: ${advisorMaxCalls(config.maxCalls)} calls per original user prompt`,

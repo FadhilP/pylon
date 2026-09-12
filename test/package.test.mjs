@@ -65,6 +65,7 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "bin", "storage.mjs")));
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
+    assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-android", "dist", "index.js")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
     assert.ok(existsSync(join(packageRoot, "docs", "web", "README.md")));
     assert.ok(existsSync(join(packageRoot, "docs", "pylon-web.png")));
@@ -108,6 +109,24 @@ test("packed package installs and launches its production web app", { timeout: 2
          const hits = await index.searchSymbols(project, { query: "packagedSymbol" });
          if (hits.length !== 1 || hits[0].path !== "source.ts") throw new Error("Installed filesystem indexing failed");
        } finally { await index.close(); }
+       `,
+        packageRoot,
+        project,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
+
+    const stateqlCheck = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { join } from "node:path";
+       import { pathToFileURL } from "node:url";
+       import { writeFile } from "node:fs/promises";
+       const packageRoot = process.argv[1];
+       const project = process.argv[2];
        const smokeModule = join(packageRoot, "packages", "pi-stateql", "package-smoke.mjs");
        await writeFile(smokeModule, 'export { StateQL } from "@fadhilp/stateql";');
        const { StateQL } = await import(pathToFileURL(smokeModule).href);
@@ -136,7 +155,28 @@ test("packed package installs and launches its production web app", { timeout: 2
       ],
       { encoding: "utf8", timeout: 30_000 },
     );
-    assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
+    assert.equal(stateqlCheck.status, 0, stateqlCheck.stderr || stateqlCheck.stdout);
+
+    const androidCheck = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createRequire } from "node:module";
+       import { join } from "node:path";
+       import { pathToFileURL } from "node:url";
+       const packageRoot = process.argv[1];
+       const installedRequire = createRequire(join(packageRoot, "package.json"));
+       const { AndroidRunner } = await import(pathToFileURL(installedRequire.resolve("pylon-android")).href);
+       let androidSdkCreated = false;
+       const runner = new AndroidRunner({ createSdk: async () => { androidSdkCreated = true; throw new Error("unexpected discovery"); } });
+       await runner.dispose();
+       if (androidSdkCreated || runner.snapshot().lifecycle !== "disposed") throw new Error("Installed AndroidRunner was not inert");`,
+        packageRoot,
+      ],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    assert.equal(androidCheck.status, 0, androidCheck.stderr || androidCheck.stdout);
 
     launch = spawn(process.execPath, [join(packageRoot, "bin", "pylon.mjs")], {
       cwd: project,

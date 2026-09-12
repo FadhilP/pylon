@@ -1,7 +1,12 @@
 import { AnnotationStore } from "../workspace/annotation-store.ts";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import { readWorkspaceEntry, mutateWorkspace } from "../workspace/workspace-mutations.ts";
-import type { WorkspaceEntry, WorkspaceGitIndex, WorkspaceMutationInput, WorkspaceMutationResult } from "../../shared/workspace/workspace-mutations.ts";
+import type {
+  WorkspaceEntry,
+  WorkspaceGitIndex,
+  WorkspaceMutationInput,
+  WorkspaceMutationResult,
+} from "../../shared/workspace/workspace-mutations.ts";
 import { readGitIndexText } from "../workspace/git-index.ts";
 import { readGitDetail, readGitState, readGitOperation, runGitAction } from "../workspace/git.ts";
 import { GitReadPool } from "../workspace/git-reads.ts";
@@ -89,7 +94,11 @@ import type {
   WorkspaceFilePage,
   WorkspaceReadModel,
 } from "../../shared/protocol/snapshots.ts";
-import type { WorkspaceSearchQuery, WorkspaceSearchResult, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search.ts";
+import type {
+  WorkspaceSearchQuery,
+  WorkspaceSearchResult,
+  WorkspaceSymbolResult,
+} from "../../shared/workspace/workspace-search.ts";
 import { searchWorkspace } from "../workspace/workspace-search.ts";
 import { describeRuntimeSnapshotIssue } from "../../shared/protocol/validation.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
@@ -148,6 +157,7 @@ import type {
   UpdateHookSettingsInput,
   UpdateRuntimePolicyInput,
   UpdateToolPolicyInput,
+  UpdateProjectAgentModelsInput,
   WorkspaceFileInput,
   WorkspaceFilesInput,
   WorkspaceSearchInput,
@@ -157,7 +167,11 @@ import { SessionIndex } from "../sessions/session-index.ts";
 import { pickProjectDirectory, ProjectRegistry, projectIdForCwd } from "../workspace/project-registry.ts";
 import type { SessionWorkspaceRecord } from "../workspace/project-registry.ts";
 import { FileHistoryReader } from "../workspace/file-history.ts";
-import { WorkspaceInventories, workspaceInventoryKey, WORKSPACE_TOUCH_LIMIT } from "../workspace/workspace-inventory.ts";
+import {
+  WorkspaceInventories,
+  workspaceInventoryKey,
+  WORKSPACE_TOUCH_LIMIT,
+} from "../workspace/workspace-inventory.ts";
 
 const SLEEP_AFTER_MS = 30 * 60 * 1000;
 const VIEW_ONLY_SLEEP_AFTER_MS = 60 * 1000;
@@ -203,7 +217,6 @@ interface ExternalSpawnRun {
   state: "running" | "attention";
   startedAt: string;
 }
-
 
 function runSetupCommand(cwd: string, command: string, signal?: AbortSignal): Promise<void> {
   if (!command.trim()) return Promise.resolve();
@@ -344,7 +357,6 @@ function applyUnavailableReason(state: {
   return undefined;
 }
 
-
 type SessionReplacedEvent = Extract<DriverEvent, { type: "session.replaced" | "session.unavailable" }>;
 
 const uiDialogMethods = new Set(["select", "confirm", "input", "editor", "questionnaire"]);
@@ -411,7 +423,9 @@ export class RuntimeCoordinator implements PiDriver {
   private annotationStore?: AnnotationStore;
   private noteStore(): AnnotationStore {
     if (!this.target || this.disposed) throw new Error("Runtime is unavailable");
-    return this.annotationStore ??= new AnnotationStore(resolve(this.target.agentDir, "pylon-web", "annotations", "notes.sqlite"));
+    return (this.annotationStore ??= new AnnotationStore(
+      resolve(this.target.agentDir, "pylon-web", "annotations", "notes.sqlite"),
+    ));
   }
   private noteContext(input: AnnotationRequest) {
     this.assertGeneration(input.expectedGeneration);
@@ -424,12 +438,22 @@ export class RuntimeCoordinator implements PiDriver {
   }
   async annotationNotes(input: AnnotationRequest): Promise<AnnotationList> {
     const { slot, project, store } = this.noteContext(input);
-    return { sessionId: slot.id, sessionGeneration: this.generation, scope: store.scope(project, slot.id), notes: store.list(project, slot.id) };
+    return {
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      scope: store.scope(project, slot.id),
+      notes: store.list(project, slot.id),
+    };
   }
   async mutateAnnotation(input: AnnotationMutation): Promise<AnnotationList> {
     const { slot, project, store } = this.noteContext(input);
     store.mutate(project, slot.id, input);
-    return { sessionId: slot.id, sessionGeneration: this.generation, scope: store.scope(project, slot.id), notes: store.list(project, slot.id) };
+    return {
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      scope: store.scope(project, slot.id),
+      notes: store.list(project, slot.id),
+    };
   }
 
   constructor(private readonly options: RuntimeCoordinatorOptions = {}) {}
@@ -516,6 +540,64 @@ export class RuntimeCoordinator implements PiDriver {
   terminalTarget() {
     const slot = this.selected();
     return { sessionId: slot.id, sessionGeneration: this.generation, cwd: slot.driver.runtimeDetails().cwd };
+  }
+
+  androidWorkspaceContext(expectedGeneration: number) {
+    this.assertGeneration(expectedGeneration);
+    if (this.lifecycleBusy || this.disposed) {
+      throw Object.assign(new Error("Android workspace is changing or unavailable"), { statusCode: 409 });
+    }
+    const slot = this.selected();
+    const cwd = slot.driver.runtimeDetails().cwd;
+    const registry = this.registry();
+    const project = registry.projectForSession(slot.id, cwd);
+    if (!project || project.archivedAt) throw new Error("Android project is unavailable");
+    const root = registry.effectiveCwd(slot.id, cwd);
+    if (resolve(root) !== resolve(cwd)) throw new Error("Android workspace mapping is inconsistent");
+    const workspace = registry.workspaceForSession(slot.id);
+    const workspaceKind =
+      workspace?.mode === "worktree" ? "session-worktree" : workspace?.mode === "local" ? "local" : "project-folder";
+    return {
+      projectId: project.id,
+      sessionId: slot.id,
+      sessionGeneration: this.generation,
+      root,
+      registeredRoot: project.cwd,
+      workspaceKind,
+      workspaceLabel: project.label,
+    } as const;
+  }
+
+  validateAndroidWorkspaceContext(context: {
+    projectId: string;
+    sessionId: string;
+    root: string;
+    registeredRoot: string;
+    workspaceKind: "local" | "project-folder" | "session-worktree";
+  }): void {
+    if (this.disposed) throw new Error("Android workspace is unavailable");
+    const registry = this.registry();
+    const project = registry.get(context.projectId);
+    if (
+      !project ||
+      project.archivedAt ||
+      registry.isSessionArchived(context.sessionId) ||
+      resolve(project.cwd) !== resolve(context.registeredRoot)
+    ) {
+      throw new Error("Android project or session is unavailable");
+    }
+    const workspace = registry.workspaceForSession(context.sessionId);
+    if (workspace && workspace.projectId !== context.projectId) {
+      throw new Error("Android session workspace registration changed");
+    }
+    const expectedRoot =
+      workspace?.mode === "worktree" && workspace.worktreePath ? workspace.worktreePath : project.cwd;
+    if (resolve(expectedRoot) !== resolve(context.root)) {
+      throw new Error("Android session workspace changed");
+    }
+    const expectedKind =
+      workspace?.mode === "worktree" ? "session-worktree" : workspace?.mode === "local" ? "local" : "project-folder";
+    if (expectedKind !== context.workspaceKind) throw new Error("Android workspace mode changed");
   }
 
   async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
@@ -744,16 +826,30 @@ export class RuntimeCoordinator implements PiDriver {
     const generation = this.generation;
     const inventory = await this.workspaceInventory(slot, input.refresh === true);
     const query = (input.query ?? "").trim().toLocaleLowerCase();
-    const filtered = query ? inventory.files.filter(file => file.path.toLocaleLowerCase().includes(query)) : inventory.files;
+    const filtered = query
+      ? inventory.files.filter(file => file.path.toLocaleLowerCase().includes(query))
+      : inventory.files;
     const offset = decodeWorkspaceFileCursor(input.cursor, filtered.length);
     const limit = Math.min(200, Math.max(1, input.limit ?? 200));
     const files = filtered.slice(offset, offset + limit);
     const next = offset + files.length;
     this.assertSelected(slot, generation, "listing workspace files");
-    return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, revision: inventory.revision, files, totalCount: filtered.length, truncated: inventory.truncated, ...(next < filtered.length ? { nextCursor: Buffer.from(String(next)).toString("base64url") } : {}) };
+    return {
+      protocolVersion: PROTOCOL_VERSION,
+      sessionGeneration: generation,
+      revision: inventory.revision,
+      files,
+      totalCount: filtered.length,
+      truncated: inventory.truncated,
+      ...(next < filtered.length ? { nextCursor: Buffer.from(String(next)).toString("base64url") } : {}),
+    };
   }
 
-  async workspaceSearch(input: WorkspaceSearchInput, send: (result: WorkspaceSearchResult) => void | Promise<void>, signal: AbortSignal): Promise<WorkspaceSearchResult> {
+  async workspaceSearch(
+    input: WorkspaceSearchInput,
+    send: (result: WorkspaceSearchResult) => void | Promise<void>,
+    signal: AbortSignal,
+  ): Promise<WorkspaceSearchResult> {
     this.assertGeneration(input.expectedGeneration);
     const slot = this.selected();
     const generation = this.generation;
@@ -761,16 +857,24 @@ export class RuntimeCoordinator implements PiDriver {
     const stale = new AbortController();
     const scopeSignal = AbortSignal.any([signal, stale.signal]);
     const watch = setInterval(() => {
-      try { this.assertSelected(slot, generation, "searching workspace"); }
-      catch (error) { stale.abort(error); }
+      try {
+        this.assertSelected(slot, generation, "searching workspace");
+      } catch (error) {
+        stale.abort(error);
+      }
     }, 100);
     try {
       const inventory = await this.workspaceInventory(slot, false);
       scopeSignal.throwIfAborted();
       this.assertSelected(slot, generation, "preparing workspace search");
       const result = await searchWorkspace({
-        cwd: inventory.cwd, files: inventory.files, inventoryTruncated: inventory.truncated,
-        generation, input, signal: scopeSignal, timeoutMs: Math.max(1, 30_000 - (Date.now() - started)),
+        cwd: inventory.cwd,
+        files: inventory.files,
+        inventoryTruncated: inventory.truncated,
+        generation,
+        input,
+        signal: scopeSignal,
+        timeoutMs: Math.max(1, 30_000 - (Date.now() - started)),
         onUpdate: update => {
           this.assertSelected(slot, generation, "streaming workspace search");
           return send(update);
@@ -778,7 +882,9 @@ export class RuntimeCoordinator implements PiDriver {
       });
       this.assertSelected(slot, generation, "completing workspace search");
       return result;
-    } finally { clearInterval(watch); }
+    } finally {
+      clearInterval(watch);
+    }
   }
 
   async workspaceSymbols(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
@@ -827,15 +933,19 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private async gitAffectedSlots(slot: RuntimeSlot, indexOnly: boolean): Promise<RuntimeSlot[]> {
-    const canonical = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+    const canonical = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
     const root = await realpath(slot.driver.runtimeDetails().cwd);
     const common = !indexOnly ? (await inspectGitWorkspace(root))?.commonDir : undefined;
     const affected: RuntimeSlot[] = [];
     for (const candidate of this.slots.values()) {
       const cwd = await realpath(candidate.driver.runtimeDetails().cwd).catch(() => undefined);
-      if (candidate === slot || !cwd || canonical(cwd) === canonical(root)) { affected.push(candidate); continue; }
+      if (candidate === slot || !cwd || canonical(cwd) === canonical(root)) {
+        affected.push(candidate);
+        continue;
+      }
       if (indexOnly) continue;
-      const other = this.registry().workspaceForSession(candidate.id)?.commonDir ??
+      const other =
+        this.registry().workspaceForSession(candidate.id)?.commonDir ??
         (await inspectGitWorkspace(cwd).catch(() => undefined))?.commonDir;
       // Unknown identity remains conservatively invalidated; known unrelated repositories do not.
       if (!common || !other || canonical(common) === canonical(other)) affected.push(candidate);
@@ -900,7 +1010,12 @@ export class RuntimeCoordinator implements PiDriver {
         }
         if (input.mutation.action === "save") {
           // The write receipt is authoritative. Repository status is an eventually refreshed read model.
-          if (slot.workspace) slot.workspace = { ...slot.workspace, canApplyChanges: false, applyUnavailableReason: "Refreshing workspace changes." };
+          if (slot.workspace)
+            slot.workspace = {
+              ...slot.workspace,
+              canApplyChanges: false,
+              applyUnavailableReason: "Refreshing workspace changes.",
+            };
           this.queueWorkspaceRefresh(slot);
         } else await this.refreshWorkspace(slot, true);
       }
@@ -955,14 +1070,17 @@ export class RuntimeCoordinator implements PiDriver {
     this.assertSelected(slot, generation, "loading file history");
     const context = await slot.driver.fileHistoryContext?.();
     this.assertSelected(slot, generation, "loading file history context");
-    const result = await this.fileHistoryReader.read({
-      cwd: slot.driver.runtimeDetails().cwd,
-      sessionId: slot.id,
-      baselineTree: record?.baselineTree,
-      baselineCommit: record?.baseline,
-      context,
-      query: input,
-    }, signal);
+    const result = await this.fileHistoryReader.read(
+      {
+        cwd: slot.driver.runtimeDetails().cwd,
+        sessionId: slot.id,
+        baselineTree: record?.baselineTree,
+        baselineCommit: record?.baseline,
+        context,
+        query: input,
+      },
+      signal,
+    );
     this.assertSelected(slot, generation, "loading file history");
     return { protocolVersion: PROTOCOL_VERSION, sessionGeneration: generation, ...result };
   }
@@ -1848,6 +1966,40 @@ export class RuntimeCoordinator implements PiDriver {
         sessionId: selected.id,
         tool: input.tool,
         mode: input.mode,
+        expectedRevision: input.expectedRevision,
+      });
+    } catch (error) {
+      for (const [slot, pending] of previousPending) slot.pendingPolicy = pending;
+      throw error;
+    }
+    for (const slot of affected) {
+      if (slot.pendingPolicy) slot.pendingPolicy.ready = true;
+      if (slot.driver.canSleep()) await this.activatePendingPolicy(slot);
+      else await this.publishConfiguredPolicy(slot);
+    }
+  }
+
+  async updateProjectAgentModels(input: UpdateProjectAgentModelsInput): Promise<void> {
+    this.assertGeneration(input.expectedGeneration);
+    const selected = this.selected();
+    const projectId = this.projectIdForSlot(selected);
+    if (!projectId) throw new Error("agent models require a project context");
+    if (input.projectId !== projectId || input.sessionId !== selected.id)
+      throw new Error("selected session changed; refresh and try again");
+    const affected =
+      input.scope === "project"
+        ? [...this.slots.values()].filter(slot => this.projectIdForSlot(slot) === projectId)
+        : [selected];
+    const previousPending = new Map(affected.map(slot => [slot, slot.pendingPolicy]));
+    for (const slot of affected) {
+      slot.pendingPolicy = { ready: false, reconcileWorkspace: slot.pendingPolicy?.reconcileWorkspace ?? false };
+    }
+    try {
+      await this.registry().updateAgentModels({
+        scope: input.scope,
+        projectId,
+        sessionId: selected.id,
+        agentModels: input.agentModels,
         expectedRevision: input.expectedRevision,
       });
     } catch (error) {
@@ -3378,47 +3530,61 @@ export class RuntimeCoordinator implements PiDriver {
     if (publish) slot.workspaceRefreshPublication = { sessionId: slot.id, generation: this.generation };
     if (slot.workspaceRefresh) return slot.workspaceRefresh;
     // All readers share a drain. A request arriving during a scan requires a fresh pass.
-    const refresh = Promise.resolve().then(async () => {
-      while (!this.disposed && this.slots.get(slot.id) === slot) {
-        const request = slot.workspaceRefreshRequest;
-        const generation = this.generation;
-        const driver = slot.driver;
-        const innerGeneration = slot.innerGeneration;
-        const cwd = driver.runtimeDetails().cwd;
-        const key = this.workspaceKey(slot);
-        const fileRevision = slot.workspace?.fileRevision;
-        const record = this.registry().workspaceForSession(slot.id);
-        let workspace: WorkspaceReadModel;
-        try {
-          workspace = isTrackedWorkspace(record)
-            ? await this.trackedWorkspace(slot, record)
-            : await this.plainWorkspace(slot, cwd, record);
-        } catch (error) {
-          workspace = {
-            gitAvailable: false, mode: "non-git", changedCount: 0, setupState: "failed",
-            setupError: error instanceof Error ? error.message.slice(0, 500) : "workspace unavailable",
-            canMoveToCheckout: false, canMoveToWorktree: false, canApplyChanges: false,
-            applyUnavailableReason: "Workspace changes are unavailable.",
-            ...(slot.applyState ? { applyState: slot.applyState } : {}),
-            ...(slot.lastApply ? { lastApply: slot.lastApply } : {}),
-          };
+    const refresh = Promise.resolve()
+      .then(async () => {
+        while (!this.disposed && this.slots.get(slot.id) === slot) {
+          const request = slot.workspaceRefreshRequest;
+          const generation = this.generation;
+          const driver = slot.driver;
+          const innerGeneration = slot.innerGeneration;
+          const cwd = driver.runtimeDetails().cwd;
+          const key = this.workspaceKey(slot);
+          const fileRevision = slot.workspace?.fileRevision;
+          const record = this.registry().workspaceForSession(slot.id);
+          let workspace: WorkspaceReadModel;
+          try {
+            workspace = isTrackedWorkspace(record)
+              ? await this.trackedWorkspace(slot, record)
+              : await this.plainWorkspace(slot, cwd, record);
+          } catch (error) {
+            workspace = {
+              gitAvailable: false,
+              mode: "non-git",
+              changedCount: 0,
+              setupState: "failed",
+              setupError: error instanceof Error ? error.message.slice(0, 500) : "workspace unavailable",
+              canMoveToCheckout: false,
+              canMoveToWorktree: false,
+              canApplyChanges: false,
+              applyUnavailableReason: "Workspace changes are unavailable.",
+              ...(slot.applyState ? { applyState: slot.applyState } : {}),
+              ...(slot.lastApply ? { lastApply: slot.lastApply } : {}),
+            };
+          }
+          if (this.disposed || this.slots.get(slot.id) !== slot) return;
+          if (
+            request !== slot.workspaceRefreshRequest ||
+            generation !== this.generation ||
+            driver !== slot.driver ||
+            innerGeneration !== slot.innerGeneration ||
+            cwd !== slot.driver.runtimeDetails().cwd ||
+            key !== this.workspaceKey(slot) ||
+            fileRevision !== slot.workspace?.fileRevision
+          )
+            continue;
+          if (fileRevision !== undefined) workspace.fileRevision = fileRevision;
+          slot.workspace = workspace;
+          const publication = slot.workspaceRefreshPublication;
+          slot.workspaceRefreshPublication = undefined;
+          // Release before publishing: a subscriber can request another refresh synchronously.
+          if (slot.workspaceRefresh === refresh) slot.workspaceRefresh = undefined;
+          if (publication) this.publishWorkspace(slot, publication.sessionId, publication.generation);
+          return;
         }
-        if (this.disposed || this.slots.get(slot.id) !== slot) return;
-        if (request !== slot.workspaceRefreshRequest || generation !== this.generation || driver !== slot.driver ||
-          innerGeneration !== slot.innerGeneration || cwd !== slot.driver.runtimeDetails().cwd || key !== this.workspaceKey(slot) ||
-          fileRevision !== slot.workspace?.fileRevision) continue;
-        if (fileRevision !== undefined) workspace.fileRevision = fileRevision;
-        slot.workspace = workspace;
-        const publication = slot.workspaceRefreshPublication;
-        slot.workspaceRefreshPublication = undefined;
-        // Release before publishing: a subscriber can request another refresh synchronously.
+      })
+      .finally(() => {
         if (slot.workspaceRefresh === refresh) slot.workspaceRefresh = undefined;
-        if (publication) this.publishWorkspace(slot, publication.sessionId, publication.generation);
-        return;
-      }
-    }).finally(() => {
-      if (slot.workspaceRefresh === refresh) slot.workspaceRefresh = undefined;
-    });
+      });
     slot.workspaceRefresh = refresh;
     return refresh;
   }
@@ -3741,7 +3907,8 @@ export class RuntimeCoordinator implements PiDriver {
     if (!workspace) return;
     await this.assertGitTrusted(slot);
     const operation = await readGitOperation(workspace.root);
-    if (operation) throw new Error(`Resolve or finish the ${operation.kind} in Git Review before starting another agent turn.`);
+    if (operation)
+      throw new Error(`Resolve or finish the ${operation.kind} in Git Review before starting another agent turn.`);
   }
 
   /** Git may run user hooks, filters, and helpers, so it requires a global idle barrier. */
@@ -4063,22 +4230,30 @@ export class RuntimeCoordinator implements PiDriver {
     const baselineTree = record?.baselineTree;
     const key = workspaceInventoryKey(cwd, baselineTree);
     const generation = slot.innerGeneration;
-    const isCurrent = () => !this.disposed && this.slots.get(slot.id) === slot &&
-      slot.driver === driver && slot.innerGeneration === generation &&
-      driver.runtimeDetails().cwd === cwd && this.workspaceKey(slot) === key;
-    const inventory = await this.workspaceInventories.read(key, {
-      isCurrent,
-      collect: async () => {
-        await this.refreshWorkspace(slot, true);
-        if (!isCurrent()) throw new Error("Workspace changed while collecting files.");
-        return slot.workspace?.gitAvailable
-          ? collectWorkspaceFiles({ cwd, baselineTree })
-          : collectPlainWorkspaceFiles({ cwd });
+    const isCurrent = () =>
+      !this.disposed &&
+      this.slots.get(slot.id) === slot &&
+      slot.driver === driver &&
+      slot.innerGeneration === generation &&
+      driver.runtimeDetails().cwd === cwd &&
+      this.workspaceKey(slot) === key;
+    const inventory = await this.workspaceInventories.read(
+      key,
+      {
+        isCurrent,
+        collect: async () => {
+          await this.refreshWorkspace(slot, true);
+          if (!isCurrent()) throw new Error("Workspace changed while collecting files.");
+          return slot.workspace?.gitAvailable
+            ? collectWorkspaceFiles({ cwd, baselineTree })
+            : collectPlainWorkspaceFiles({ cwd });
+        },
+        ...(slot.workspace?.gitAvailable
+          ? { collectDelta: (paths: string[]) => collectWorkspaceFileDelta({ cwd, baselineTree, paths }) }
+          : {}),
       },
-      ...(slot.workspace?.gitAvailable ? {
-        collectDelta: (paths: string[]) => collectWorkspaceFileDelta({ cwd, baselineTree, paths }),
-      } : {}),
-    }, refresh);
+      refresh,
+    );
     if (!isCurrent()) throw new Error("Workspace inventory belongs to an obsolete context.");
     return { ...inventory, cwd, baselineTree };
   }

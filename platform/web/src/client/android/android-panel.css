@@ -1,0 +1,164 @@
+.android-panel {
+  display: grid;
+  gap: 18px;
+  padding: 0 14px 18px;
+}
+
+.android-panel section,
+.android-panel article,
+.android-panel pre {
+  min-width: 0;
+}
+
+.android-panel section {
+  display: grid;
+  gap: 10px;
+}
+
+.android-panel h3,
+.android-panel p {
+  margin: 0;
+}
+
+.android-section-heading,
+.android-device > div,
+.android-setup > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.android-section-heading,
+.android-device > div {
+  flex-wrap: wrap;
+}
+
+.android-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.android-field select {
+  width: 100%;
+}
+
+.android-field select,
+.android-panel button {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.android-devices {
+  display: grid;
+  gap: 8px;
+}
+
+.android-device {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.android-device span,
+.android-device p,
+.android-muted,
+.android-empty,
+.android-setup {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.android-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.android-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.android-actions button {
+  flex: 1 1 auto;
+}
+
+.android-trust-warning {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--amber) 8%, transparent);
+  font-size: 12px;
+}
+
+.android-build-output {
+  max-height: 220px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--code-bg);
+  color: var(--text);
+  font: 11px/1.45 ui-monospace, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.android-warning {
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--line));
+  border-radius: 7px;
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+
+.android-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.android-panel h3:focus-visible,
+.android-build-output:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 420px) {
+  .android-panel {
+    gap: 14px;
+    padding-inline: 10px;
+  }
+
+  .android-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .android-section-heading > button,
+  .android-actions button {
+    width: 100%;
+  }
+}
+
+.android-setup {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.android-setup dd {
+  margin: 0;
+}

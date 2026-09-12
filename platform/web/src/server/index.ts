@@ -2,11 +2,14 @@ import { createServer, type Server } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { AndroidRunner } from "pylon-android/android-runner";
 import { RuntimeCoordinator } from "./runtime/runtime-coordinator.ts";
 import type { PiDriver } from "./runtime/pi-driver.ts";
 import { ServerTransport } from "./http/router.ts";
 import { applySecurityHeaders, hostAllowed } from "./http/security.ts";
 import { createAssetHost } from "./http/static.ts";
+import { PylonAndroidHost } from "./android/pylon-android-host.ts";
+import { cleanupPylonAndroidStagingBase, PylonAndroidAppRuntime } from "./android/android-app-runtime.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const webRoot = resolve(packageRoot, "platform/web");
@@ -19,11 +22,13 @@ export interface PylonServerOptions {
   port?: number;
   driver?: PiDriver;
   development?: boolean;
+  androidHost?: PylonAndroidHost;
 }
 
 export interface RunningPylonServer {
   server: Server;
   transport: ServerTransport;
+  androidHost: PylonAndroidHost;
   close(): Promise<void>;
 }
 
@@ -36,15 +41,45 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   const driver = options.driver ?? new RuntimeCoordinator();
   const repositoryRoot = options.repositoryRoot ?? resolve(webRoot, "../..");
   const agentDir = resolve(options.agentDir ?? getAgentDir());
-  await driver
-    .start({ cwd: options.cwd ?? repositoryRoot, repositoryRoot, agentDir })
-    .catch(async error => {
-      await driver.dispose().catch(() => undefined);
-      throw error;
+  const androidStagingDirectory = resolve(agentDir, "pylon-web/android-staging");
+  if (!options.androidHost) await cleanupPylonAndroidStagingBase(androidStagingDirectory);
+  const androidHost =
+    options.androidHost ??
+    new PylonAndroidHost(new AndroidRunner(), {
+      settingsPath: resolve(agentDir, "pylon-web/android.sqlite"),
+      buildStateDirectory: resolve(agentDir, "pylon-web/android-gradle"),
+      stagingStateDirectory: androidStagingDirectory,
+      appRuntime: new PylonAndroidAppRuntime(),
+      workspaceProvider: expectedGeneration => {
+        if (!driver.androidWorkspaceContext) throw new Error("Android workspace resolution is unavailable");
+        return driver.androidWorkspaceContext(expectedGeneration);
+      },
+      workspaceValidator: workspace => {
+        if (!driver.validateAndroidWorkspaceContext) {
+          throw new Error("Android workspace validation is unavailable");
+        }
+        return driver.validateAndroidWorkspaceContext({
+          projectId: workspace.projectId,
+          sessionId: workspace.sessionId,
+          sessionGeneration: workspace.sessionGeneration,
+          root: workspace.canonicalRoot,
+          registeredRoot: workspace.canonicalRegisteredRoot,
+          workspaceKind: workspace.workspaceKind,
+          workspaceLabel: workspace.workspaceLabel,
+        });
+      },
     });
+  await driver.start({ cwd: options.cwd ?? repositoryRoot, repositoryRoot, agentDir }).catch(async error => {
+    const cleanup = await Promise.allSettled([driver.dispose(), androidHost.dispose()]);
+    const failures = cleanup.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError([error, ...failures], "Pylon startup and cleanup failed");
+    throw error;
+  });
   const assets = await createAssetHost(webRoot, options.development ?? process.env.NODE_ENV !== "production").catch(
     async error => {
-      await driver.dispose().catch(() => undefined);
+      const cleanup = await Promise.allSettled([driver.dispose(), androidHost.dispose()]);
+      const failures = cleanup.filter(result => result.status === "rejected").map(result => result.reason);
+      if (failures.length) throw new AggregateError([error, ...failures], "Pylon startup and cleanup failed");
       throw error;
     },
   );
@@ -81,11 +116,20 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("server did not expose a TCP address");
     allowedHost = host === "::1" ? `[::1]:${address.port}` : `${host}:${address.port}`;
-    transport = await ServerTransport.create(driver, { allowedHosts: [allowedHost], keyboardSettingsPath: resolve(agentDir, "pylon-web/settings.sqlite") });
+    transport = await ServerTransport.create(driver, {
+      allowedHosts: [allowedHost],
+      keyboardSettingsPath: resolve(agentDir, "pylon-web/settings.sqlite"),
+      androidHost,
+    });
   } catch (error) {
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    await assets.close();
-    await driver.dispose();
+    const cleanup = await Promise.allSettled([
+      new Promise<void>(resolve => server.close(() => resolve())),
+      assets.close(),
+      androidHost.dispose(),
+      driver.dispose(),
+    ]);
+    const failures = cleanup.filter(result => result.status === "rejected").map(result => result.reason);
+    if (failures.length) throw new AggregateError([error, ...failures], "Pylon startup and cleanup failed");
     throw error;
   }
   if (!transport) throw new Error("transport did not initialize");
@@ -95,14 +139,34 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
   return {
     server,
     transport: readyTransport,
+    androidHost,
     close() {
       return (closePromise ??= (async () => {
+        const failures: unknown[] = [];
         server.off("upgrade", readyTransport.handleUpgrade);
-        try { readyTransport.dispose(); }
-        finally {
-          try { await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve()))); }
-          finally { try { await assets.close(); } finally { await driver.dispose(); } }
+        readyTransport.quiesceAndroid();
+        try {
+          await androidHost.dispose();
+        } catch (error) {
+          failures.push(error);
         }
+        try {
+          readyTransport.dispose();
+        } catch (error) {
+          failures.push(error);
+        }
+        for (const cleanup of [
+          () => new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve()))),
+          () => assets.close(),
+          () => driver.dispose(),
+        ]) {
+          try {
+            await cleanup();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length) throw new AggregateError(failures, "Pylon server cleanup failed");
       })());
     },
   };

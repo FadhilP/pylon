@@ -59,7 +59,7 @@
     "test:packages": "node scripts/run-packages.mjs test",
     "install:packages": "npm install --workspaces --include-workspace-root",
     "format": "prettier --write .",
-    "prepack": "npm run build --workspace @pylon/web",
+    "prepack": "npm run build --workspace pylon-android && npm run build --workspace @pylon/web",
     "prepublishOnly": "npm run verify && npm run test:package",
     "web": "node scripts/web.mjs",
     "web:update": "git pull --ff-only && npm run web",
@@ -98,11 +98,13 @@
     "jiti": "^2.7.0",
     "node-pty": "^1.1.0",
     "pi-sieve": "0.1.0",
+    "pylon-android": "0.1.0",
     "pylon-core": "0.1.0",
     "ws": "^8.21.1"
   },
   "bundleDependencies": [
     "pi-sieve",
+    "pylon-android",
     "pylon-core"
   ],
   "peerDependencies": {

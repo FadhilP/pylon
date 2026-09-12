@@ -1,0 +1,27 @@
+name: Android Runner smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test --workspace pylon-android
+      - run: npm run smoke --workspace pylon-android
+      - run: npm run check --workspace pi-helios
+      - run: npm test --workspace pi-helios
+      - run: npm run verify --workspace @pylon/web

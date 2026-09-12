@@ -56,7 +56,6 @@ Editing supports valid UTF-8 text up to 1 MiB, preserving a BOM and consistent L
 
 Delete is **permanent**, not a Recycle Bin operation, and requires confirmation. Non-empty folders are deleted from a revalidated manifest; unexpected entries stop deletion rather than being recursively swept away. A failed multi-entry deletion can be partial—refresh and inspect before retrying. Save/discard affected drafts before renaming, moving, or deleting. Manual operations do not run an agent tool or create an automatic Timeline checkpoint; they are not attributed to an agent turn. Later Timeline restore/rollback can replace manually edited files, so review restore confirmations and keep backups.
 
-
 ### Code notes
 
 Select new-side source lines in a file or diff, then choose **Note selected lines**. Drag over code or line numbers, or focus the viewer and use Arrow keys with Shift to extend a selection. Deleted-side lines and selections crossing folded context or file boundaries cannot create notes. Violet brackets are separate from line attribution; click a bracket to expand its note.
@@ -70,7 +69,6 @@ Tick **Include with next message** to attach notes to the normal chat composer, 
 One unfinished note editor is retained in page memory while switching files or versions; **Continue draft note** opens it in Notes when its inline location is gone. Save it before reloading or closing the browser. Attachment choices are also page-local and clear after accepted submission; notes themselves remain until explicitly deleted. Deleting the session or project deletes its saved notes, without rewriting already-sent chat messages.
 
 Notes never automatically move, resolve or acquire after-turn statuses. A source mismatch leaves the original snapshot available in Notes rather than putting a bracket on unrelated lines. Renames and forks do not transfer notes. Limits are 200 saved notes per session, 4 KiB per note body, 24 KiB per captured excerpt, and 64 KiB for the complete outgoing prompt. Storage and size failures are explicit; no saved notes are silently evicted. See [Safety and storage](./safety-and-storage.md) for the database location and backup boundary.
-
 
 ### Workspace search
 
@@ -86,7 +84,6 @@ Results stream in batches and are limited to 100 matching files, 20 matching lin
 
 Symbols use Discover's heuristic index, ranked by exact name, prefix, camel-hump initials (`bWT` → `buildWorkspaceTree`), then substring. They refresh before querying and may wait on indexing; the other sources remain usable. Symbol lists are capped at 200 entries, including an empty-query browse. Search does not run an agent turn or write files. Replace-across-files is not included.
 
-
 ### File history
 
 In **Files**, selecting a history timeline stop immediately displays that saved version without changing the workspace. Its stops support Left/Right and Home/End keyboard navigation. **Session** shows checkpoints on the current conversation branch; **All history** also shows Git commits. **Baseline** remains a separate anchor, and **Live** returns to the actual working copy. For a Git commit, **Diff** compares its parent with that selected commit. For a session checkpoint, **Diff** compares the session baseline with the selected checkpoint. **About this history** is available in the collapsible footer below the code.
@@ -98,6 +95,12 @@ The coloured gutter attributes saved lines to checkpoints or Git commits. Select
 Git history and blame follow first parents, including committed renames, anchored before the session baseline or at HEAD when no baseline exists. Synthetic Pylon baseline commits are not presented as authored project history. Session renames begin a new path history; checkpoints from another conversation branch or session are excluded. Git history remains usable without Timeline checkpoints.
 
 Reads are bounded: up to 200 recent session checkpoints, Git history in increments of 40 up to 200 commits, and UTF-8 versions up to 1 MiB / 20,000 lines. Missing objects, binary files, unsupported paths, and work limits have explicit unavailable states. Earlier or missing checkpoint ownership is never inferred. No file restore or Git checkout action is offered here.
+
+## Android Runner
+
+The **Android** Inspector reference is host-global and remains available independently of the selected coding session. It discovers a user-managed Android SDK, lists existing AVDs and running emulators, and can launch, cancel, retry cleanup, or stop only emulators whose process Pylon started and retained. External emulators are visible but cannot be stopped by Pylon.
+
+Panel collapse, session switching, and session sleep do not stop devices or retarget an accepted build. For the selected workspace, Android Runner statically suggests conventional application modules and standard variants, persists one project configuration, requires direct wrapper-hash trust, and runs one bounded generated Gradle assemble task. **Build & Run** resolves and inspects one supported APK, installs it with replacement-only semantics, launches its inspected component, and can show opt-in bounded package logs. Trust authorizes repository code with the local user's permissions; it is not sandboxing. Android Runner does not create AVDs, download SDK tools, accept licenses, support split APKs, mirror devices, debug apps, or expose an agent tool. See [Android Runner](./android-runner.md) for setup, trust, and ownership details.
 
 ## Browser
 
@@ -145,6 +148,7 @@ The Inspector rail follows the selected session. Depending on packages and state
 | **Tools** | Project/session overrides for registered tools. | Available for a session. |
 | **Changes** | Touched files and diffs. | Hidden while Files already shows it. |
 | **Agents** | Delegated runs spawned by the session. | Available; may be empty. |
+| **Android** | Host-global Android SDK, AVD, and emulator lifecycle. | Available independently of session readiness; setup state is shown when SDK tools are missing. |
 | **Compaction** | Inspect the current compaction workflow when it is present. | Contextual to compaction activity. |
 | **Attachments** | Inspect message attachments. | Contextual to a message with attachments. |
 | **Turn Diff** | Inspect changed files from one transcript turn. | Contextual to a turn with changes. |

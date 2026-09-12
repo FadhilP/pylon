@@ -35,7 +35,7 @@ import { runPi, type ScoutActivity, type ScoutRun } from "../src/runner.ts";
 import { sanitizeFailureMessage } from "pylon-core/redact";
 import { composePackagePrompt } from "pylon-core/package-settings";
 import { requestDelegateName } from "pylon-core/delegate-names";
-import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "pylon-core/delegate-retry";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const scoutChildToolsExtension = join(packageDir, "src", "scout-child-tools.ts");

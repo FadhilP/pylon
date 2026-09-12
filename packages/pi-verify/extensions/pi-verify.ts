@@ -498,7 +498,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         }, HEARTBEAT_MS);
         heartbeat.unref();
         const execution = await pi
-          .exec(check.command, check.args, { cwd: check.cwd, signal, timeout: 5 * 60_000 })
+          .exec(check.command, check.args, { cwd: check.cwd, signal })
           .catch((error: unknown) => ({
             code: null,
             stdout: "",
@@ -524,12 +524,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
         activeChecks.delete(check.id);
         publishRunning();
       };
-      await runGrouped(
-        [...groups.values()],
-        MAX_PARALLEL_DIRECTORIES,
-        runCheck,
-        () => Boolean(signal?.aborted),
-      );
+      await runGrouped([...groups.values()], MAX_PARALLEL_DIRECTORIES, runCheck, () => Boolean(signal?.aborted));
       const results = orderedResults();
 
       const finalIdentity = (await worktreeState(ctx.cwd, signal))?.id;

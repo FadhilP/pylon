@@ -70,9 +70,11 @@ export class WorkspaceInventories {
           const invalidation = state.invalidation;
           const running = this.collect(key, state, context, paths, full || !context.collectDelta, invalidation);
           state.running = running;
-          void running.finally(() => {
-            if (state.running === running) state.running = undefined;
-          }).catch(() => undefined);
+          void running
+            .finally(() => {
+              if (state.running === running) state.running = undefined;
+            })
+            .catch(() => undefined);
         }
         await state.running;
         // Joiners re-evaluate using their own context, including after a stale origin was discarded.
@@ -104,8 +106,10 @@ export class WorkspaceInventories {
         const files = new Map(state.inventory!.files.map(file => [file.path, file]));
         for (const path of delta.removed) files.delete(path);
         for (const file of delta.upserted) files.set(file.path, file);
-        const patched = [...files.values()].sort((left, right) =>
-          Number(Boolean(right.status)) - Number(Boolean(left.status)) || left.path.localeCompare(right.path));
+        const patched = [...files.values()].sort(
+          (left, right) =>
+            Number(Boolean(right.status)) - Number(Boolean(left.status)) || left.path.localeCompare(right.path),
+        );
         inventory = {
           revision: delta.revision,
           files: patched.slice(0, FILE_LIMIT),

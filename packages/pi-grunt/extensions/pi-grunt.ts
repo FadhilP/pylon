@@ -40,7 +40,7 @@ import {
   WORKER_PROMPT,
 } from "../src/prompts.ts";
 import { runPi, type WorkerActivity, type WorkerRun } from "../src/runner.ts";
-import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "../src/retry.ts";
+import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "pylon-core/delegate-retry";
 import { requestDelegateName } from "pylon-core/delegate-names";
 import { composePackagePrompt } from "pylon-core/package-settings";
 

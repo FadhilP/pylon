@@ -1333,3 +1333,47 @@ test("automatic completion waits for required verification but accepts a stale r
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
   }
 });
+
+test("project runtime policy selects and clears Continuity model overrides", async () => {
+  await saveConfig({
+    version: 2,
+    memoryEnabled: true,
+    planner: { model: "global/planner", thinking: "low" },
+  });
+  const app = runtime();
+  const available = new Map([
+    ["global/planner", { provider: "global", id: "planner" }],
+    ["project/planner", { provider: "project", id: "planner" }],
+  ]);
+  const ctx: any = {
+    cwd: process.cwd(),
+    hasUI: false,
+    mode: "json",
+    model: { provider: "session", id: "model" },
+    isIdle: () => true,
+    modelRegistry: {
+      find: (provider: string, id: string) => available.get(`${provider}/${id}`),
+      hasConfiguredAuth: () => true,
+    },
+    sessionManager: { getSessionId: () => "project-model-session", getEntries: () => [] },
+    ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+  };
+  for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+  const plan = app.commands.get("plan");
+
+  app.emit("pylon:runtime-policy", {
+    version: 2,
+    agentModels: { continuity: { planner: { model: "project/planner", thinking: "high" } } },
+  });
+  await plan.handler("start project override", ctx);
+  assert.deepEqual(app.selectedModel(), { provider: "project", id: "planner" });
+  assert.equal(app.thinking(), "high");
+  await plan.handler("cancel", ctx);
+
+  app.emit("pylon:runtime-policy", { version: 2, agentModels: {} });
+  await plan.handler("start inherited model", ctx);
+  assert.deepEqual(app.selectedModel(), { provider: "global", id: "planner" });
+  assert.equal(app.thinking(), "low");
+
+  for (const handler of app.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+});

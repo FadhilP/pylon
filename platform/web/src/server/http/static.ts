@@ -59,7 +59,7 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
         return;
       }
       const file = requestedInfo ? requested : index;
-      const info = requestedInfo ?? await fileInfo(file);
+      const info = requestedInfo ?? (await fileInfo(file));
       if (!info) {
         response.statusCode = 503;
         response.end("Web bundle not built");
@@ -69,7 +69,10 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
       if (compressible) response.setHeader("vary", "Accept-Encoding");
       let representation: { file: string; size: number; encoding?: string } | undefined;
       for (const encoding of acceptedEncodings(request.headers["accept-encoding"] ?? "")) {
-        if (encoding === "identity") { representation = { file, size: info.size }; break; }
+        if (encoding === "identity") {
+          representation = { file, size: info.size };
+          break;
+        }
         if (!compressible) continue;
         const variant = `${file}.${encoding === "gzip" ? "gz" : "br"}`;
         const compressed = await fileInfo(variant);
@@ -79,7 +82,11 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
           break;
         }
       }
-      if (!representation) { response.statusCode = 406; response.end(); return; }
+      if (!representation) {
+        response.statusCode = 406;
+        response.end();
+        return;
+      }
       response.statusCode = 200;
       response.setHeader("content-type", contentType(file));
       response.setHeader("cache-control", file === index ? "no-store" : "public, max-age=31536000, immutable");
@@ -92,7 +99,10 @@ export async function createAssetHost(webRoot: string, development: boolean): Pr
 }
 
 async function fileInfo(path: string) {
-  return stat(path).then(value => value.isFile() ? value : undefined, () => undefined);
+  return stat(path).then(
+    value => (value.isFile() ? value : undefined),
+    () => undefined,
+  );
 }
 
 function acceptedEncodings(header: string): string[] {
@@ -102,9 +112,8 @@ function acceptedEncodings(header: string): string[] {
     const q = parameters.find(value => value.startsWith("q="))?.slice(2);
     qualities.set(name, q === undefined ? 1 : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(q) ? Number(q) : 0);
   }
-  const quality = (name: string) => qualities.get(name) ?? (name === "identity"
-    ? qualities.get("*") === 0 ? 0 : 1
-    : qualities.get("*") ?? 0);
+  const quality = (name: string) =>
+    qualities.get(name) ?? (name === "identity" ? (qualities.get("*") === 0 ? 0 : 1) : (qualities.get("*") ?? 0));
   return ["br", "gzip", "identity"].filter(name => quality(name) > 0).sort((a, b) => quality(b) - quality(a));
 }
 
