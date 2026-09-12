@@ -12,7 +12,6 @@ import {
 } from "@tabler/icons-react";
 import {
   Component,
-  lazy,
   Suspense,
   type ReactNode,
   useEffect,
@@ -49,21 +48,19 @@ import { AgentPanel } from "../sessions/agent-panel";
 import { AttachmentPanel } from "../conversation/attachment-panel";
 import { agentColor, useAgentColors } from "../sessions/agent-color";
 import { copyText } from "../ui/clipboard";
-const ArchiveDialog = lazy(() => import("../sessions/archive-dialog").then(module => ({ default: module.ArchiveDialog })));
-const ChangelogDialog = lazy(() => import("../settings/changelog-dialog").then(module => ({ default: module.ChangelogDialog })));
+import { ArchiveDialog } from "../sessions/archive-dialog";
+import { ChangelogDialog } from "../settings/changelog-dialog";
 import { version } from "../../../../../package.json";
 import { ConversationPanel, type ComposerSelection } from "../conversation/conversation-panel";
 import { CompactionPanel } from "../conversation/compaction-panel";
-const BrowserPanel = lazy(() => import("../browser/browser-panel").then(module => ({ default: module.BrowserPanel })));
-const DatabasePanel = lazy(() => import("../database/database-panel").then(module => ({ default: module.DatabasePanel })));
+import { BrowserPanel } from "../browser/browser-panel";
+import { DatabasePanel } from "../database/database-panel";
 import { FilesPanel } from "../workspace/files-panel";
 // Keep the workspace shell synchronous; file viewers and editors have local lazy boundaries.
 import { FileWorkspace } from "../workspace/file-workspace";
 import { useGitWorkspace } from "../workspace/git-controller";
 import type { GitDetailQuery } from "../../shared/workspace/git";
-const GitPanel = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitPanel })));
-const ReviewSurface = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.ReviewSurface })));
-const GitDialogs = lazy(() => import("../workspace/git-workspace").then(module => ({ default: module.GitDialogs })));
+import { GitDialogs, GitPanel, ReviewSurface } from "../workspace/git-workspace";
 import type { FileView } from "../workspace/files-panel";
 import type { WorkspaceSearchQuery } from "../../shared/workspace/workspace-search";
 import { PinnedSearchPanel, SearchPopup, type PinnedSearch } from "../workspace/search-popup";
@@ -76,7 +73,7 @@ import { ReferencePanel, ReferenceRail, ScopeRail, SurfaceTabs } from "./app-chr
 
 /** Reference views that render a session view body inside the shared panel. */
 const SESSION_REFERENCES: ViewId[] = ["overview", "policy", "timeline", "memory", "tools", "notes"];
-const UsageView = lazy(() => import("../usage/usage-view").then(module => ({ default: module.UsageView })));
+import { UsageView } from "../usage/usage-view";
 import {
   clampPanelWidth,
   beginBrowserSessionSurfaceTransition,
@@ -104,8 +101,8 @@ import {
   sessionTitle,
   type SessionProject,
 } from "../sessions/session-sidebar";
-const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
-const TerminalPanel = lazy(() => import("../terminal/terminal-panel").then(module => ({ default: module.TerminalPanel })));
+import { SettingsDialog } from "../settings/settings-dialog";
+import { TerminalPanel } from "../terminal/terminal-panel";
 import { TurnDiffPanel } from "../workspace/turn-diff-panel";
 import { runtimeRequestStillCurrent, useSessionCatalog } from "../sessions/use-session-catalog";
 import { useComposerDrafts } from "../conversation/use-composer-drafts";

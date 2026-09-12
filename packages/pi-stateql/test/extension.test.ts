@@ -224,11 +224,18 @@ test("uses stable distinct global actors and closes every client", async () => {
 });
 
 test("fails clearly when the installed runtime lacks global workspace support", async () => {
-  const value = await start(harness(false, false));
-  await assert.rejects(
-    value.tools.get("stateql").execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context()),
-    /forWorkspace/,
-  );
+  const runtime = StateQL as unknown as { forWorkspace: typeof StateQL.forWorkspace | undefined };
+  const forWorkspace = runtime.forWorkspace;
+  try {
+    runtime.forWorkspace = undefined;
+    const value = await start(harness(false, false));
+    await assert.rejects(
+      value.tools.get("stateql").execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context()),
+      /forWorkspace/,
+    );
+  } finally {
+    runtime.forWorkspace = forWorkspace;
+  }
 });
 
 test("composes environment and active Pylon credential resolution without retaining the host", async () => {

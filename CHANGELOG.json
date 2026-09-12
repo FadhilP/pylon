@@ -1,5 +1,15 @@
 [
   {
+    "version": "3.1.4",
+    "date": "Sep 12, 2026",
+    "title": "Predictable workspace loading and compatibility checks",
+    "summary": "A maintenance release makes core Web workspace surfaces load synchronously and strengthens StateQL compatibility regression coverage.",
+    "notes": [
+      "Made core Web panels and dialogs part of the main application bundle instead of top-level lazy chunks, while retaining local lazy boundaries for file viewers and editors.",
+      "Strengthened StateQL compatibility coverage by temporarily removing global workspace support from the installed runtime during the regression test and always restoring it afterward."
+    ]
+  },
+  {
     "version": "3.1.3",
     "date": "Sep 10, 2026",
     "title": "Shared database workspaces and smarter browser control",
