@@ -94,6 +94,7 @@ import {
 } from "./navigation";
 import { startsHeliosBrowser } from "../browser/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
+import { importLegacyWebState } from "../runtime/legacy-web-state";
 import {
   currentSessionProgress,
   SessionProgress,
@@ -265,6 +266,7 @@ export function App() {
   const mobile = useMediaQuery("(max-width: 900px)");
   const inspectorOverlay = useMediaQuery("(max-width: 1179px)");
   const live = useRuntimeStore();
+  const legacyImportStarted = useRef(false);
   const agentColors = useAgentColors(live.runtime?.sessionId, live.runtime?.conversation.delegatedRuns ?? []);
   const toSessionProject = (page: SessionProjectPage): SessionProject => ({
     id: page.id,
@@ -395,6 +397,31 @@ export function App() {
     for (const session of activeWithLiveFields)
       draftsChanged = composerDrafts.rememberProject(session) || draftsChanged;
     if (draftsChanged) composerDrafts.persist();
+    if (!legacyImportStarted.current) {
+      legacyImportStarted.current = true;
+      const projectBySession = new Map<string, string>();
+      for (const project of projectsWithLiveFields)
+        for (const session of project.sessions) projectBySession.set(session.id, project.id);
+      for (const session of activeWithLiveFields) projectBySession.set(session.id, session.projectId);
+      const projectForSession = async (sessionId: string): Promise<string | undefined> => {
+        const known = projectBySession.get(sessionId);
+        if (known) return known;
+        const active = await runtimeStore.listSessions({ query: sessionId, limit: 100 }).catch(() => undefined);
+        const activeMatch = active && [
+          ...active.activeSessions,
+          ...active.projects.flatMap(project => project.sessions),
+        ].find(session => session.id === sessionId);
+        if (activeMatch) {
+          projectBySession.set(sessionId, activeMatch.projectId);
+          return activeMatch.projectId;
+        }
+        const archived = await runtimeStore.listArchived({ query: sessionId, limit: 100 }).catch(() => undefined);
+        const archivedMatch = archived?.sessions.find(session => session.id === sessionId);
+        if (archivedMatch) projectBySession.set(sessionId, archivedMatch.projectId);
+        return archivedMatch?.projectId;
+      };
+      void importLegacyWebState(input => runtimeStore.importLegacyWebState(input), projectForSession);
+    }
     sessionPagesRef.current = projectsWithLiveFields;
     sessionPagesQuery.current = appliedQuery;
     setSessionPages(projectsWithLiveFields);
@@ -1353,6 +1380,7 @@ export function App() {
       <DatabasePanel
         key={`database:${live.runtime?.sessionId ?? "loading"}:${live.runtime?.sessionGeneration ?? 0}`}
         live={live}
+        projectId={activeSessions.find(session => session.id === live.runtime?.sessionId)?.projectId}
         onClose={() => changeSurface("chat")}
       />
     ) : surface === "browser" ? (

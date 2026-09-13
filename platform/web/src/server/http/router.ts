@@ -13,7 +13,7 @@ import {
 import { validateHeliosBrowserCommand } from "../../shared/protocol/helios.ts";
 import { validateHeliosAndroidToolingCommand } from "../../shared/protocol/helios-android-tooling.ts";
 import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
-import type { BootstrapSnapshot, StateQLCommandInput, StateQLWorkspace, UsageQuery } from "../../shared/protocol/snapshots.ts";
+import { STATEQL_GLOBAL_UI_ACTOR, type BootstrapSnapshot, type StateQLCommandInput, type StateQLWorkspace, type UsageQuery } from "../../shared/protocol/snapshots.ts";
 import type { FileHistoryQuery } from "pylon-core/src/file-history.ts";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope.ts";
 import type { WorkspaceSearchQuery, WorkspaceSymbolResult } from "../../shared/workspace/workspace-search.ts";
@@ -66,8 +66,21 @@ function validOperationId(value: unknown): value is string {
   return typeof value === "string" && OPERATION_ID.test(value);
 }
 
-import { KeyboardRevisionConflict, KeyboardSettingsStore } from "../settings/keyboard-settings.ts";
+import { KeyboardRevisionConflict, KeyboardSettingsStore, WebStateRevisionConflict } from "../settings/keyboard-settings.ts";
 import { validateKeymap, type Keymap } from "../../shared/settings/keyboard.ts";
+import {
+  isComposerDraftInput,
+  isDatabaseDraftInput,
+  isExplorerInput,
+  isHostPreferencesInput,
+  isLegacyWebStateImportInput,
+  isWebStateIdentifier,
+  type ComposerDraftInput,
+  type DatabaseDraftInput,
+  type ExplorerInput,
+  type HostPreferencesInput,
+  type LegacyWebStateImportInput,
+} from "../../shared/settings/web-state.ts";
 
 export interface ServerTransportOptions extends SecurityOptions {
   secureCookies?: boolean;
@@ -217,6 +230,16 @@ export class ServerTransport {
         return await this.heliosAndroidTooling(request, response);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/keyboard")
         return await this.keyboardPreferences(request, response);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/preferences")
+        return await this.hostPreferences(request, response);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/explorer")
+        return await this.explorerState(request, response, url);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/composer")
+        return await this.composerDraft(request, response, url);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/database")
+        return await this.databaseDraft(request, response, url);
+      if (request.method === "POST" && url.pathname === "/api/v1/settings/web-state/import")
+        return await this.legacyWebStateImport(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/commands")
         return await this.command(request, response);
       if (request.method === "POST" && url.pathname.startsWith("/api/v1/ui-responses/"))
@@ -308,6 +331,7 @@ export class ServerTransport {
       keyboardSettings: this.keyboardSettings.read(),
       unseenCompletionSessionIds: this.projection.unseenCompletionSessionIds(),
       ...(pending ? { pendingUi: pending } : {}),
+      hostPreferences: this.keyboardSettings.readHostPreferences(),
     };
     this.send(response, 200, body);
   }
@@ -330,6 +354,134 @@ export class ServerTransport {
       if (error instanceof KeyboardRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
       throw error;
     }
+  }
+
+  private async hostPreferences(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    if (request.method === "GET") return this.send(response, 200, this.keyboardSettings.readHostPreferences());
+    this.mutatingSession(request);
+    const body = await readJson(request, 96 * 1024) as Record<string, unknown> | null;
+    if (!body || Array.isArray(body) || Object.keys(body).some(key => !["expectedRevision", "input"].includes(key))
+      || !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 0 || !isHostPreferencesInput(body.input))
+      throw httpError(400, "Invalid host preferences mutation");
+    try {
+      const saved = this.keyboardSettings.updateHostPreferences(body.expectedRevision as number, body.input as HostPreferencesInput);
+      this.publish("web.preferences", saved);
+      this.send(response, 200, saved);
+    } catch (error) {
+      if (error instanceof WebStateRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
+      throw error;
+    }
+  }
+
+  private async explorerState(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    if (request.method === "GET") {
+      const values = url.searchParams.getAll("projectId");
+      if (values.length !== 1 || [...url.searchParams.keys()].some(key => key !== "projectId") || !isWebStateIdentifier(values[0])) throw httpError(400, "invalid projectId");
+      return this.send(response, 200, { projectId: values[0], state: this.keyboardSettings.readExplorer(values[0]) });
+    }
+    this.mutatingSession(request);
+    const body = await readJson(request, 64 * 1024) as Record<string, unknown> | null;
+    if (!body || Array.isArray(body) || Object.keys(body).some(key => !["expectedRevision", "input"].includes(key))
+      || !(body.expectedRevision === null || (Number.isSafeInteger(body.expectedRevision) && (body.expectedRevision as number) >= 0)) || !isExplorerInput(body.input))
+      throw httpError(400, "Invalid explorer mutation");
+    try {
+      const state = this.keyboardSettings.updateExplorer(body.expectedRevision as number | null, body.input as ExplorerInput);
+      const payload = { projectId: (body.input as ExplorerInput).projectId, ...(state ? { state } : {}) };
+      this.publish("web.explorer", payload);
+      this.send(response, 200, payload);
+    } catch (error) {
+      if (error instanceof WebStateRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
+      throw error;
+    }
+  }
+
+  private async composerDraft(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    if (request.method === "GET") {
+      const sessionIds = url.searchParams.getAll("sessionId");
+      const projectIds = url.searchParams.getAll("projectId");
+      if ([...url.searchParams.keys()].some(key => key !== "sessionId" && key !== "projectId") || sessionIds.length + projectIds.length !== 1 || !isWebStateIdentifier(sessionIds[0] ?? projectIds[0])) throw httpError(400, "invalid composer query");
+      if (sessionIds[0]) return this.send(response, 200, { sessionId: sessionIds[0], draft: this.keyboardSettings.readComposer(sessionIds[0]) });
+      return this.send(response, 200, { projectId: projectIds[0], drafts: this.keyboardSettings.listComposersForProject(projectIds[0]) });
+    }
+    this.mutatingSession(request);
+    const body = await readJson(request, 96 * 1024) as Record<string, unknown> | null;
+    if (!body || Array.isArray(body) || Object.keys(body).some(key => !["expectedRevision", "input"].includes(key))
+      || !(body.expectedRevision === null || (Number.isSafeInteger(body.expectedRevision) && (body.expectedRevision as number) >= 0)) || !isComposerDraftInput(body.input))
+      throw httpError(400, "Invalid composer mutation");
+    try {
+      const draft = this.keyboardSettings.updateComposer(body.expectedRevision as number | null, body.input as ComposerDraftInput);
+      const payload = { sessionId: (body.input as ComposerDraftInput).sessionId, ...(draft ? { draft } : {}) };
+      this.publish("web.composer", payload);
+      this.send(response, 200, payload);
+    } catch (error) {
+      if (error instanceof WebStateRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
+      throw error;
+    }
+  }
+
+  private async databaseDraft(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    if (request.method === "GET") {
+      const scopes = url.searchParams.getAll("scope");
+      const sessionIds = url.searchParams.getAll("sessionId");
+      if ([...url.searchParams.keys()].some(key => key !== "scope" && key !== "sessionId") || scopes.length + sessionIds.length !== 1 || !isWebStateIdentifier(scopes[0] ?? sessionIds[0])) throw httpError(400, "invalid database query");
+      if (scopes[0]) return this.send(response, 200, { scope: scopes[0], draft: this.keyboardSettings.readDatabase(scopes[0]) });
+      return this.send(response, 200, { sessionId: sessionIds[0], drafts: this.keyboardSettings.listDatabasesForSession(sessionIds[0]) });
+    }
+    this.mutatingSession(request);
+    const body = await readJson(request, 320 * 1024) as Record<string, unknown> | null;
+    if (!body || Array.isArray(body) || Object.keys(body).some(key => !["expectedRevision", "input"].includes(key))
+      || !(body.expectedRevision === null || (Number.isSafeInteger(body.expectedRevision) && (body.expectedRevision as number) >= 0)) || !isDatabaseDraftInput(body.input))
+      throw httpError(400, "Invalid database mutation");
+    const input = body.input as DatabaseDraftInput;
+    let tuple: unknown;
+    try {
+      tuple = JSON.parse(input.scope);
+    } catch {
+      throw httpError(400, "Invalid database scope");
+    }
+    if (
+      !Array.isArray(tuple) ||
+      tuple.length !== 4 ||
+      !tuple.every(item => typeof item === "string" && item.length > 0) ||
+      (tuple[0] !== "session" && tuple[0] !== "global") ||
+      tuple[2] !== input.sessionId ||
+      (tuple[0] === "session" ? tuple[1] !== input.sessionId : tuple[1] !== STATEQL_GLOBAL_UI_ACTOR)
+    ) {
+      throw httpError(400, "Invalid database scope");
+    }
+
+    try {
+      const draft = this.keyboardSettings.updateDatabase(body.expectedRevision as number | null, body.input as DatabaseDraftInput);
+      const payload = { scope: (body.input as DatabaseDraftInput).scope, ...(draft ? { draft } : {}) };
+      this.publish("web.database", payload);
+      this.send(response, 200, payload);
+    } catch (error) {
+      if (error instanceof WebStateRevisionConflict) return this.send(response, 409, { error: error.message, current: error.current });
+      throw error;
+    }
+  }
+
+  private async legacyWebStateImport(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    if (this.disposed) throw httpError(503, "Server closing");
+    this.requireTab(request);
+    this.mutatingSession(request);
+    const body = await readJson(request, 10 * 1024 * 1024);
+    if (!isLegacyWebStateImportInput(body)) throw httpError(400, "Invalid legacy web state import");
+    const result = this.keyboardSettings.importLegacy(body as LegacyWebStateImportInput);
+    // importLegacy commits before returning; only committed values are broadcast.
+    if (result.preferences?.accepted) this.publish("web.preferences", result.preferences.value);
+    for (const state of result.explorers?.values ?? []) this.publish("web.explorer", { projectId: state.projectId, state });
+    for (const draft of result.composers?.values ?? []) this.publish("web.composer", { sessionId: draft.sessionId, draft });
+    for (const draft of result.databases?.values ?? []) this.publish("web.database", { scope: draft.scope, draft });
+    this.send(response, 200, result);
   }
 
   private events(request: IncomingMessage, response: ServerResponse, url: URL): void {
@@ -1436,6 +1588,22 @@ export class ServerTransport {
     this.send(response, 200, { accepted: true, requestId, ...(expiresAt ? { expiresAt } : {}) });
   }
 
+  /** Driver deletion has completed when this is called; archives deliberately never reach here. */
+  private cleanupDeletedState(kind: "session" | "project", id: string): void {
+    if (kind === "project") {
+      const removed = this.keyboardSettings.deleteProject(id);
+      for (const projectId of removed.explorers) this.publish("web.explorer", { projectId });
+      for (const sessionId of removed.composers) this.publish("web.composer", { sessionId });
+      for (const scope of removed.databases) this.publish("web.database", { scope });
+    } else {
+      const removed = this.keyboardSettings.deleteSession(id);
+      for (const sessionId of removed.composers) this.publish("web.composer", { sessionId });
+      for (const scope of removed.databases) this.publish("web.database", { scope });
+    }
+    this.keyboardSettings.checkpoint();
+  }
+
+
   private execute(command: WebCommand): Promise<AcceptedCommand> {
     const accepted = (sessionGeneration: number): AcceptedCommand => ({
       commandId: command.commandId,
@@ -1464,7 +1632,7 @@ export class ServerTransport {
       case "removeProject":
         return this.driver
           .removeProject({ projectId: command.projectId, expectedGeneration: command.expectedGeneration })
-          .then(result => accepted(result.sessionGeneration));
+          .then(result => { this.cleanupDeletedState("project", command.projectId); return accepted(result.sessionGeneration); });
       case "renameProject":
         return this.driver.renameProject(command).then(() => accepted(command.expectedGeneration));
       case "reorderProject":
@@ -1488,7 +1656,7 @@ export class ServerTransport {
       case "deleteSession":
         return this.driver
           .deleteSession({ sessionId: command.sessionId, expectedGeneration: command.expectedGeneration })
-          .then(() => accepted(command.expectedGeneration));
+          .then(() => { this.cleanupDeletedState("session", command.sessionId); return accepted(command.expectedGeneration); });
       case "archiveSession":
         return this.driver.archiveSession(command).then(result => accepted(result.sessionGeneration));
       case "restoreSession":

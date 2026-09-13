@@ -21,20 +21,18 @@ import {
   databaseRecord,
   databaseSnapshotMatchesRuntime,
   isDatabaseResult,
-  readDatabaseDrafts,
-  saveDatabaseDraft,
-  clearDatabaseDrafts,
   type DatabaseQuery,
   type DatabaseResult,
-  type DatabaseDraft,
 } from "./database-workspace";
 import { runtimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
 import { UiDialog } from "../runtime/remote-ui-dialog";
+import { ApiHttpError } from "../runtime/api-client";
 import { DatabaseHistory } from "./database-history";
 import { DatabaseConnectDialog, type DatabaseProfileSetup } from "./database-connect-dialog";
 import { DatabaseSetupError, submitDatabaseSetup, type DatabaseSetupStep } from "./database-setup";
 import { DatabaseResultGrid } from "./database-result-grid";
 import { DatabaseQueryEditor } from "./database-query-editor";
+import { isDatabaseWebStateEvent, type DatabaseDraftInput } from "../../shared/settings/web-state";
 
 interface QueryTab extends DatabaseQuery {
   params: string;
@@ -47,8 +45,32 @@ interface QueryTab extends DatabaseQuery {
   detached?: boolean;
   plan?: { handle: string; expires: string; text: string; params: string };
 }
-const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({ ...tab, params: "", kind: "query", sub: "data" });
+const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({
+  ...tab,
+  params: "",
+  kind: "query",
+  sub: "data",
+});
 const DATABASE_WORKSPACE_KEY = "pylon-database-workspace-v1";
+const DATABASE_LAYOUT_KEY = "pylon-database-layout-v1";
+
+const readLayout = (): { height: number; active: string } => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(DATABASE_LAYOUT_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { height: 220, active: "history" };
+    const layout = value as { height?: unknown; active?: unknown };
+    return {
+      height:
+        typeof layout.height === "number"
+          ? Math.max(120, Math.min(600, layout.height))
+          : 220,
+      active: typeof layout.active === "string" ? layout.active : "history",
+    };
+  } catch {
+    return { height: 220, active: "history" };
+  }
+};
+
 const persistedWorkspace = (): StateQLWorkspace => {
   try {
     return localStorage.getItem(DATABASE_WORKSPACE_KEY) === "global" ? "global" : "session";
@@ -57,18 +79,27 @@ const persistedWorkspace = (): StateQLWorkspace => {
   }
 };
 
-export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; onClose: () => void }) {
+export function DatabasePanel({
+  live,
+  onClose,
+  projectId,
+}: {
+  live: RuntimeStoreSnapshot;
+  onClose: () => void;
+  projectId?: string;
+}) {
   const runtimeScope = `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`;
   const [workspace, setWorkspace] = useState<StateQLWorkspace>(persistedWorkspace);
   const ready = live.connection === "connected" && live.runtime?.ready === true;
   const [receivedSnapshot, setSnapshot] = useState<StateQLSnapshot>();
   const snapshot =
     ready && databaseSnapshotMatchesRuntime(receivedSnapshot, live.runtime, workspace) ? receivedSnapshot : undefined;
+  const connected = Boolean(snapshot?.connection);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [tabs, setTabs] = useState<QueryTab[]>([]);
   const [active, setActive] = useState("history");
-  const [height, setHeight] = useState(220);
+  const [height, setHeight] = useState(() => readLayout().height);
   const [busy, setBusy] = useState("");
   const [busyTab, setBusyTab] = useState("");
   const [setup, setSetup] = useState<{ operationId: string; profile?: DatabaseProfileSetup }>();
@@ -83,15 +114,35 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   const [profileRevision, setProfileRevision] = useState(0);
   const [objectRevision, setObjectRevision] = useState(0);
   const dirtyTabs = useRef(new Set<string>());
+  const draftDirty = useRef(false);
+  const draftBlocked = useRef(false);
+  const draftWriting = useRef(false);
+  const draftChange = useRef(0);
+  const draftScopeToken = useRef(0);
+  const pendingDraft = useRef<(DatabaseDraftInput & { change: number; token: number }) | undefined>(undefined);
   const request = useRef<AbortController | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const savedScope = useRef("");
   const refreshRevision = useRef(0);
+  const savedRevision = useRef<number | null>(null);
+  const scopeOwnerSessionId = snapshot?.session.session_id;
   const scope = snapshot
-    ? JSON.stringify([workspace, snapshot.actor_id, snapshot.session.session_id, snapshot.connection?.connection_id ?? "unbound"])
+    ? JSON.stringify([
+        workspace,
+        snapshot.actor_id,
+        scopeOwnerSessionId,
+        snapshot.connection?.connection_id ?? "unbound",
+      ])
     : "";
-  const connected = Boolean(snapshot?.connection);
+  const markDraftDirty = () => {
+    draftDirty.current = true;
+    draftBlocked.current = false;
+    draftChange.current++;
+  };
+  const selectActive = (id: string) => {
+    setActive(id);
+  };
   // The ref changes synchronously before the command starts; React state can still contain
   // the dialog's previous correlation ID when the first local SSE prompt arrives.
   const setupOperationId = setupOperation.current ?? setup?.operationId;
@@ -143,6 +194,8 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     setupOperation.current = undefined;
     setSetup(undefined);
     dirtyTabs.current.clear();
+    draftDirty.current = false;
+    draftChange.current++;
     setTabs([]);
   }, [runtimeScope, workspace]);
   useEffect(
@@ -153,12 +206,8 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     [runtimeScope, workspace],
   );
   useEffect(() => {
-    try {
-      localStorage.setItem(DATABASE_WORKSPACE_KEY, workspace);
-    } catch {
-      // Storage is optional; this panel still works without persistence.
-    }
-  }, [workspace]);
+    if (live.hostPreferences) setWorkspace(live.hostPreferences.databaseWorkspace);
+  }, [live.hostPreferences?.revision]);
   useEffect(() => {
     if (workspace !== "global" || !ready) return;
     const timer = window.setInterval(() => void refresh(), 10_000);
@@ -167,44 +216,113 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
   useEffect(() => {
     if (!scope || scope === savedScope.current) return;
     savedScope.current = scope;
+    draftScopeToken.current++;
+    savedRevision.current = null;
+    draftDirty.current = false;
+    draftBlocked.current = false;
+    pendingDraft.current = undefined;
+    draftChange.current++;
     request.current?.abort();
     request.current = null;
     setBusy("");
     setBusyTab("");
     setTransaction(undefined);
     setIsolation(driver === "mongodb" ? "snapshot" : "serializable");
-    let draft: DatabaseDraft | undefined;
-    try {
-      draft = readDatabaseDrafts(localStorage).find(item => item.scope === scope);
-    } catch {
-      setNotice("Browser storage is unavailable. Queries remain in memory.");
-    }
-    setTabs(current => [
-      ...current.filter(tab => dirtyTabs.current.has(tab.id)).map(tab => ({ ...tab, detached: true })),
-      ...(draft?.tabs.map(tabFromDraft) ?? []),
-    ]);
-    setActive(current => (dirtyTabs.current.has(current) ? current : (draft?.active ?? "history")));
-    setHeight(draft?.height ?? 220);
+    let cancelled = false;
+    void runtimeStore
+      .databaseDraft(scope)
+      .then(response => {
+        if (cancelled || savedScope.current !== scope) return;
+        const draft = response.draft;
+        savedRevision.current = draft?.revision ?? null;
+        setTabs(current => [
+          ...current
+            .filter(tab => dirtyTabs.current.has(tab.id))
+            .map(tab => ({ ...tab, detached: true })),
+          ...(draft?.tabs.map(tabFromDraft) ?? []),
+        ]);
+        setActive(current => (dirtyTabs.current.has(current) ? current : readLayout().active));
+      })
+      .catch(() => {
+        if (!cancelled) setNotice("Saved queries could not be loaded. Queries remain in memory.");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [scope]);
   useEffect(() => {
-    if (!scope || savedScope.current !== scope) return;
-    const timeout = window.setTimeout(() => {
-      try {
-        saveDatabaseDraft(localStorage, {
-          version: 1,
-          scope,
-          sessionId: snapshot!.actor_id,
-          tabs: tabs.filter(tab => tab.kind === "query"),
-          active,
-          height,
-          updatedAt: Date.now(),
-        });
-      } catch (cause) {
-        setNotice(cause instanceof Error ? cause.message : "Browser storage is unavailable. Queries remain in memory.");
+    try {
+      localStorage.setItem(DATABASE_LAYOUT_KEY, JSON.stringify({ height, active }));
+    } catch {
+      /* Layout is optional. */
+    }
+  }, [height, active]);
+  const persistDraft = async () => {
+    const pending = pendingDraft.current;
+    if (!pending || draftWriting.current || draftBlocked.current || pending.token !== draftScopeToken.current) return;
+    draftWriting.current = true;
+    try {
+      const { change: _change, token: _token, ...input } = pending;
+      const response = await runtimeStore.saveDatabaseDraft(savedRevision.current, input);
+      if (pending.token !== draftScopeToken.current || savedScope.current !== pending.scope) return;
+      savedRevision.current = response.draft?.revision ?? null;
+      if (draftChange.current === pending.change) draftDirty.current = false;
+    } catch (cause) {
+      if (cause instanceof ApiHttpError && cause.status === 409) {
+        const response = await runtimeStore.databaseDraft(pending.scope).catch(() => undefined);
+        if (pending.token === draftScopeToken.current && response) {
+          savedRevision.current = response.draft?.revision ?? null;
+        }
       }
-    }, 350);
+      if (pending.token === draftScopeToken.current) {
+        draftBlocked.current = true;
+        setNotice(
+          cause instanceof ApiHttpError && cause.status === 409
+            ? "Saved queries changed in another browser. Your local query text was preserved; edit again to retry."
+            : "Saved queries could not be persisted. Your query text remains in memory.",
+        );
+      }
+    } finally {
+      draftWriting.current = false;
+      const latest = pendingDraft.current;
+      if (
+        latest &&
+        latest.token === draftScopeToken.current &&
+        latest.change !== pending.change &&
+        draftDirty.current &&
+        !draftBlocked.current
+      ) {
+        window.setTimeout(() => void persistDraft(), 0);
+      }
+    }
+  };
+  useEffect(() => {
+    if (!draftDirty.current || !scope || !scopeOwnerSessionId || !projectId || savedScope.current !== scope) return;
+    const tabsToSave = tabs
+      .filter(tab => tab.kind === "query" && tab.saved)
+      .map(({ id, title, text, driver }) => ({ id, title, text, driver, saved: true as const }));
+    pendingDraft.current = {
+      scope,
+      sessionId: scopeOwnerSessionId,
+      projectId,
+      tabs: tabsToSave,
+      change: draftChange.current,
+      token: draftScopeToken.current,
+    };
+    const timeout = window.setTimeout(() => void persistDraft(), 350);
     return () => window.clearTimeout(timeout);
-  }, [tabs, active, height, scope]);
+  }, [tabs, scope, scopeOwnerSessionId, projectId]);
+  useEffect(
+    () =>
+      runtimeStore.subscribeWebState("database", value => {
+        if (!isDatabaseWebStateEvent(value) || value.scope !== savedScope.current || draftDirty.current) {
+          return;
+        }
+        savedRevision.current = value.draft?.revision ?? null;
+        setTabs(value.draft?.tabs.map(tabFromDraft) ?? []);
+      }),
+    [],
+  );
   useEffect(() => {
     if (!tabs.some(tab => tab.plan)) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -313,18 +431,36 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     response?.status === "completed" && response.response.ok && databaseRecord(response.response.data)
       ? response.response.data
       : undefined;
-  const update = (id: string, patch: Partial<QueryTab>) =>
+  const update = (id: string, patch: Partial<QueryTab>) => {
+    const current = tabs.find(tab => tab.id === id);
+    if (
+      current?.kind === "query" &&
+      (current.saved || patch.saved === true) &&
+      ("text" in patch || "title" in patch || "saved" in patch)
+    ) {
+      markDraftDirty();
+    }
     setTabs(current =>
       current.map(tab =>
         tab.id === id
-          ? { ...tab, ...patch, ...("text" in patch || "params" in patch ? { plan: undefined } : {}) }
+          ? {
+              ...tab,
+              ...patch,
+              ...("text" in patch || "params" in patch ? { plan: undefined } : {}),
+            }
           : tab,
       ),
     );
-  const add = (text = "", table?: QueryTab["table"], result?: DatabaseResult) => {
+  };
+  const add = (
+    text = "",
+    table?: QueryTab["table"],
+    result?: DatabaseResult,
+    saved = !table,
+  ) => {
     const existing = table && tabs.find(tab => tab.table?.name === table.name && tab.table?.schema === table.schema);
     if (existing) {
-      setActive(existing.id);
+      selectActive(existing.id);
       return existing.id;
     }
     if (tabs.length >= 20) {
@@ -332,6 +468,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
       return;
     }
     const id = crypto.randomUUID();
+    if (saved) markDraftDirty();
     setTabs(current => [
       ...current,
       {
@@ -339,7 +476,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
         title: table?.name ?? `Query ${current.length + 1}`,
         text,
         driver,
-        saved: !table,
+        saved,
         params: "",
         kind: table ? "table" : "query",
         table,
@@ -347,7 +484,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
         result,
       },
     ]);
-    setActive(id);
+    selectActive(id);
     return id;
   };
   const copy = async (text: string) => {
@@ -362,8 +499,10 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     dirtyTabs.current.delete(id);
     if (busyTab === id) request.current?.abort();
     const index = tabs.findIndex(tab => tab.id === id);
+    const closing = tabs.find(tab => tab.id === id);
+    if (closing?.kind === "query" && closing.saved) markDraftDirty();
     setTabs(current => current.filter(tab => tab.id !== id));
-    if (active === id) setActive(tabs[index - 1]?.id ?? "history");
+    if (active === id) selectActive(tabs[index - 1]?.id ?? "history");
     window.requestAnimationFrame(() =>
       document.getElementById(`database-tab-${tabs[index - 1]?.id ?? "history"}`)?.focus(),
     );
@@ -457,7 +596,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
       const table = { name: object.name, ...(object.schema ? { schema: object.schema } : {}) };
       add("", table);
     } else {
-      const id = add();
+      const id = add("", undefined, undefined, false);
       if (!id) return;
       update(id, { kind: "object", title: object.name, saved: false, sub: "definition" });
       const value = data(await run({ command: "object.describe", object }, id));
@@ -499,27 +638,45 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
     reconciledTransaction.current = handle;
     void transactionAction("transaction.status");
   }, [snapshot?.transaction?.transaction_id, locked]);
-  const bindOldDraft = () => {
-    let drafts;
+  const bindSavedDraft = async () => {
+    if (!scopeOwnerSessionId) return;
     try {
-      drafts = readDatabaseDrafts(localStorage)
-        .filter(item => item.sessionId === snapshot?.actor_id && item.scope !== scope)
-        .sort((a, b) => b.updatedAt - a.updatedAt);
+      const response = await runtimeStore.databaseDrafts(scopeOwnerSessionId);
+      const draft = response.drafts.find(item => item.scope !== scope && item.tabs.some(tab => tab.driver === driver));
+      if (!draft) {
+        setNotice("No saved queries from another connection.");
+        return;
+      }
+      setTabs(
+        draft.tabs
+          .filter(tab => tab.driver === driver)
+          .map(tab => tabFromDraft({ ...tab, id: crypto.randomUUID(), saved: false })),
+      );
+      setActive("history");
+      setNotice("Imported query text into this connection. Review it before running.");
     } catch {
-      setError("Browser storage is unavailable.");
-      return;
+      setError("Saved queries could not be loaded.");
     }
-    if (!drafts[0]) {
-      setNotice("No saved queries from another connection.");
-      return;
+  };
+  const clearSavedQueries = async () => {
+    if (!scope || !scopeOwnerSessionId || !projectId || savedScope.current !== scope) return;
+    try {
+      const response = await runtimeStore.saveDatabaseDraft(savedRevision.current, {
+        scope,
+        sessionId: scopeOwnerSessionId,
+        projectId,
+        tabs: [],
+      });
+      if (savedScope.current !== scope) return;
+      savedRevision.current = response.draft?.revision ?? null;
+      draftDirty.current = false;
+      draftChange.current++;
+      setTabs(current => current.map(tab => ({ ...tab, saved: false })));
+      setActive("history");
+      setNotice("Saved queries cleared. Open tabs remain in memory.");
+    } catch {
+      setError("Saved queries could not be cleared. Your saved query text remains in memory.");
     }
-    setTabs(
-      drafts[0].tabs
-        .filter(tab => tab.driver === driver)
-        .map(tab => tabFromDraft({ ...tab, id: crypto.randomUUID(), saved: false })),
-    );
-    setActive("history");
-    setNotice("Imported query text into this connection. Review it before running.");
   };
 
   return (
@@ -542,6 +699,13 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                 return;
               request.current?.abort();
               setWorkspace(next);
+              const preferences = live.hostPreferences;
+              if (preferences) {
+                void runtimeStore.patchHostPreferences({ databaseWorkspace: next }).catch(() => {
+                  setWorkspace(preferences.databaseWorkspace);
+                  setNotice("Database workspace preference could not be saved.");
+                });
+              }
             }}>
             <option value="session">Session</option>
             <option value="global">Global</option>
@@ -794,22 +958,14 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
               <header>
                 <span className="section-kicker">Saved queries</span>
               </header>
-              <p className="database-muted">Saved text stays in this browser and may contain sensitive literals.</p>
-              <button className="text-button" type="button" onClick={bindOldDraft}>
+              <p className="database-muted">Saved text is synchronized with this Pylon host.</p>
+              <button className="text-button" type="button" onClick={() => void bindSavedDraft()}>
                 Import from previous connection
               </button>
               <button
                 className="text-button"
                 type="button"
-                onClick={() => {
-                  try {
-                    clearDatabaseDrafts(localStorage, snapshot?.actor_id ?? "", scope);
-                    setTabs(current => current.map(tab => ({ ...tab, saved: false })));
-                    setNotice("Saved queries cleared. Open tabs remain in memory.");
-                  } catch {
-                    setError("Browser storage is unavailable.");
-                  }
-                }}>
+                onClick={() => void clearSavedQueries()}>
                 Clear saved queries
               </button>
             </section>
@@ -830,7 +986,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                       ? ids.at(-1)!
                       : ids[(index + (event.key === "ArrowLeft" ? ids.length - 1 : 1)) % ids.length]!;
                 event.preventDefault();
-                setActive(next);
+                selectActive(next);
                 document.getElementById(`database-tab-${next}`)?.focus();
               }}>
               <button
@@ -840,7 +996,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                 aria-selected={active === "history"}
                 aria-controls="database-view-history"
                 tabIndex={active === "history" ? 0 : -1}
-                onClick={() => setActive("history")}>
+                onClick={() => selectActive("history")}>
                 History
               </button>
               {tabs.map(tab => (
@@ -852,7 +1008,7 @@ export function DatabasePanel({ live, onClose }: { live: RuntimeStoreSnapshot; o
                     aria-controls={`database-view-${tab.id}`}
                     aria-selected={active === tab.id}
                     tabIndex={active === tab.id ? 0 : -1}
-                    onClick={() => setActive(tab.id)}>
+                    onClick={() => selectActive(tab.id)}>
                     {busyTab === tab.id && <span className="overview-orb is-running" aria-label="Running" />}
                     <span>{tab.title}</span>
                     {!tab.saved && tab.text && <span className="database-dirty" aria-label="Not saved" />}

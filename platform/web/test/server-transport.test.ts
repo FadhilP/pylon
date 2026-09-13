@@ -1296,6 +1296,117 @@ test("keyboard preferences are sessionless, CSRF protected, replayable and rejec
   }
 });
 
+test("host preferences bootstrap, replay and scoped HTTP writes enforce validation and CAS", async () => {
+  const driver = new FakeDriver();
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`] });
+  const stream = new AbortController();
+  try {
+    const connect = async (tab: string) => {
+      const response = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+      const boot = await body(response);
+      const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0];
+      assert.deepEqual(boot.hostPreferences, { revision: 0, initialized: false, theme: "system", syntax: "auto", hiddenModels: [], databaseWorkspace: "session" });
+      return { boot, headers: { cookie, "x-pylon-tab-id": tab, "x-pylon-csrf": String(boot.csrfToken), "content-type": "application/json" } };
+    };
+    const first = await connect("web-state-first");
+    const second = await connect("web-state-second");
+    const preferences = { initialized: true, theme: "dark", syntax: "dracula", hiddenModels: [], databaseWorkspace: "global" } as const;
+    const postPreferences = (headers: Record<string, string>, expectedRevision: number) =>
+      fetch(`${origin}/api/v1/settings/preferences`, { method: "POST", headers, body: JSON.stringify({ expectedRevision, input: preferences }) });
+    const saved = await postPreferences(first.headers, 0);
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await body(saved), { revision: 1, ...preferences });
+    const stale = await postPreferences(second.headers, 0);
+    assert.equal(stale.status, 409);
+    assert.deepEqual((await body(stale)).current, { revision: 1, ...preferences });
+    assert.deepEqual((await body(await fetch(`${origin}/api/v1/settings/preferences`, { headers: first.headers }))), { revision: 1, ...preferences });
+
+    const invalidExplorer = await fetch(`${origin}/api/v1/settings/explorer`, {
+      method: "POST", headers: first.headers, body: JSON.stringify({ expectedRevision: null, input: { projectId: "project", open: ["../outside"], changesOnly: false } }),
+    });
+    assert.equal(invalidExplorer.status, 400);
+    const explorerInput = { projectId: "project", open: ["src"], changesOnly: false };
+    assert.equal((await fetch(`${origin}/api/v1/settings/explorer`, {
+      method: "POST", headers: first.headers, body: JSON.stringify({ expectedRevision: null, input: explorerInput }),
+    })).status, 200);
+    const staleExplorer = await fetch(`${origin}/api/v1/settings/explorer`, {
+      method: "POST", headers: second.headers, body: JSON.stringify({ expectedRevision: null, input: explorerInput }),
+    });
+    assert.equal(staleExplorer.status, 409);
+    assert.equal(((await body(staleExplorer)).current as { revision: number }).revision, 0);
+
+    const events = await fetch(`${origin}/api/v1/events?tabId=web-state-second&cursor=${second.boot.sessionGeneration}:${second.boot.sequence}`, { headers: second.headers, signal: stream.signal });
+    const reader = events.body!.getReader();
+    let replay = "";
+    while (!replay.includes("web.preferences") || !replay.includes("\"revision\":1")) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      replay += new TextDecoder().decode(chunk.value);
+    }
+    assert.match(replay, /event: web\.preferences/);
+  } finally {
+    stream.abort();
+    transport.dispose();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test("confirmed deletes clean durable web rows while archives and failed deletes preserve them", async () => {
+  const driver = new FakeDriver();
+  const transport = await ServerTransport.create(driver, { allowedHosts: ["localhost"] });
+  const internal = transport as unknown as {
+    execute(command: Record<string, unknown>): Promise<AcceptedCommand>;
+    keyboardSettings: {
+      updateExplorer(expected: number | null, input: { projectId: string; open: string[]; changesOnly: boolean }): unknown;
+      updateComposer(expected: number | null, input: { sessionId: string; projectId: string; text: string }): unknown;
+      updateDatabase(expected: number | null, input: { scope: string; sessionId: string; projectId: string; tabs: Array<{ id: string; title: string; text: string; driver: "sqlite"; saved: true }> }): unknown;
+      readExplorer(projectId: string): unknown;
+      readComposer(sessionId: string): unknown;
+      readDatabase(scope: string): unknown;
+    };
+  };
+  const seed = (projectId: string, sessionId: string, connection: string) => {
+    const scope = JSON.stringify(["session", sessionId, sessionId, connection]);
+    internal.keyboardSettings.updateExplorer(null, { projectId, open: ["src"], changesOnly: false });
+    internal.keyboardSettings.updateComposer(null, { sessionId, projectId, text: "draft" });
+    internal.keyboardSettings.updateDatabase(null, { scope, sessionId, projectId, tabs: [{ id: "query", title: "Query", text: "select 1", driver: "sqlite", saved: true }] });
+    return scope;
+  };
+  try {
+    const archiveScope = seed("archive-project", "archive-session", "archive");
+    await internal.execute({ type: "archiveProject", projectId: "archive-project", commandId: "archive-project", expectedGeneration: 1 });
+    await internal.execute({ type: "archiveSession", sessionId: "archive-session", commandId: "archive-session", expectedGeneration: 1 });
+    assert.ok(internal.keyboardSettings.readExplorer("archive-project"));
+    assert.ok(internal.keyboardSettings.readComposer("archive-session"));
+    assert.ok(internal.keyboardSettings.readDatabase(archiveScope));
+
+    const removedScope = seed("removed-project", "removed-session", "removed");
+    await internal.execute({ type: "removeProject", projectId: "removed-project", commandId: "remove-project", expectedGeneration: 1 });
+    assert.equal(internal.keyboardSettings.readExplorer("removed-project"), undefined);
+    assert.equal(internal.keyboardSettings.readComposer("removed-session"), undefined);
+    assert.equal(internal.keyboardSettings.readDatabase(removedScope), undefined);
+
+    const deletedScope = seed("session-project", "deleted-session", "deleted");
+    await internal.execute({ type: "deleteSession", sessionId: "deleted-session", commandId: "delete-session", expectedGeneration: 1 });
+    assert.equal(internal.keyboardSettings.readComposer("deleted-session"), undefined);
+    assert.equal(internal.keyboardSettings.readDatabase(deletedScope), undefined);
+    assert.ok(internal.keyboardSettings.readExplorer("session-project"));
+
+    const failedScope = seed("failed-project", "failed-session", "failed");
+    (driver as unknown as { deleteSession: () => Promise<void> }).deleteSession = () => Promise.reject(new Error("driver deletion failed"));
+    await assert.rejects(internal.execute({ type: "deleteSession", sessionId: "failed-session", commandId: "failed-delete", expectedGeneration: 1 }), /driver deletion failed/);
+    assert.ok(internal.keyboardSettings.readComposer("failed-session"));
+    assert.ok(internal.keyboardSettings.readDatabase(failedScope));
+  } finally {
+    transport.dispose();
+  }
+});
+
 
 test("bootstrap snapshots completions at its cursor and later completions replay", async () => {
   const driver = new FakeDriver();

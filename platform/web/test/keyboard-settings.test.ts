@@ -79,7 +79,7 @@ test("unsupported or damaged persistent settings fail closed without replacing d
   try {
     new KeyboardSettingsStore(path).close();
     let db = new DatabaseSync(path);
-    db.exec("PRAGMA user_version=2");
+    db.exec("PRAGMA user_version=3");
     db.close();
     assert.throws(() => new KeyboardSettingsStore(path), /newer/);
     db = new DatabaseSync(path);

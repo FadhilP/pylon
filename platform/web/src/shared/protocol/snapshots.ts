@@ -1,4 +1,5 @@
 import type { KeyboardSettings } from "../settings/keyboard.ts";
+import type { HostPreferences } from "../settings/web-state.ts";
 import type { EffectiveGuardRules, GuardRuleOverrides } from "../settings/guard-policy.ts";
 import type { PROTOCOL_VERSION } from "./envelope.ts";
 import type {
@@ -374,6 +375,7 @@ export interface BootstrapSnapshot {
   unseenCompletionSessionIds: string[];
   pendingUi?: UiRequestReadModel;
   keyboardSettings?: KeyboardSettings;
+  hostPreferences: HostPreferences;
 }
 
 export interface LocalImageQuery {

@@ -1,4 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { runtimeStore, useRuntimeStore } from "../runtime/event-store";
 import {
   applyTheme,
   applyInterfaceScale,
@@ -76,27 +77,25 @@ export function rememberSetting(key: string, value: string | number): void {
 
 /** Keeps a stored preference separate from the color applied to the document. */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => readStoredThemePreference(storage()));
+  const preferences = useRuntimeStore().hostPreferences;
+  const [fallback, setFallback] = useState<Theme>(() => readStoredThemePreference(storage()));
+  const theme = (preferences?.theme ?? fallback) as Theme;
   const [prefersLight, setPrefersLight] = useState(prefersLightColorScheme);
   const resolvedTheme = resolveTheme(theme, prefersLight);
-
   useEffect(() => {
     if (theme !== "system") return;
-    const media = matchMedia(SYSTEM_COLOR_SCHEME);
-    const update = () => setPrefersLight(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    const media = matchMedia(SYSTEM_COLOR_SCHEME); const update = () => setPrefersLight(media.matches);
+    update(); media.addEventListener("change", update); return () => media.removeEventListener("change", update);
   }, [theme]);
-
-  useEffect(() => {
-    applyTheme(resolvedTheme);
-  }, [resolvedTheme]);
-
-  useEffect(() => {
-    rememberThemePreference(storage(), theme);
-  }, [theme]);
-
+  useEffect(() => { applyTheme(resolvedTheme); }, [resolvedTheme]);
+  const setTheme = (next: Theme) => {
+    setFallback(next);
+    if (!preferences) {
+      rememberThemePreference(storage(), next);
+      return;
+    }
+    void runtimeStore.patchHostPreferences({ theme: next }).catch(() => undefined);
+  };
   return [theme, setTheme, resolvedTheme] as const;
 }
 
@@ -124,15 +123,19 @@ function readInitialSyntaxTheme(): SyntaxThemePreference {
 }
 
 export function useSyntaxTheme(colorTheme: ColorTheme) {
-  const [theme, setTheme] = useState<SyntaxThemePreference>(readInitialSyntaxTheme);
+  const preferences = useRuntimeStore().hostPreferences;
+  const [fallback, setFallback] = useState<SyntaxThemePreference>(readInitialSyntaxTheme);
+  const theme = (preferences?.syntax ?? fallback) as SyntaxThemePreference;
   const resolvedTheme = resolveSyntaxTheme(theme, colorTheme);
-  useEffect(() => {
-    document.documentElement.dataset.syntaxTheme = resolvedTheme;
-    setSyntaxTheme(resolvedTheme);
-  }, [resolvedTheme]);
-  useEffect(() => {
-    rememberStoredPreference(storage(), SYNTAX_THEME_KEY, theme);
-  }, [theme]);
+  useEffect(() => { document.documentElement.dataset.syntaxTheme = resolvedTheme; setSyntaxTheme(resolvedTheme); }, [resolvedTheme]);
+  const setTheme = (next: SyntaxThemePreference) => {
+    setFallback(next);
+    if (!preferences) {
+      rememberStoredPreference(storage(), SYNTAX_THEME_KEY, next);
+      return;
+    }
+    void runtimeStore.patchHostPreferences({ syntax: next }).catch(() => undefined);
+  };
   return [theme, setTheme] as const;
 }
 

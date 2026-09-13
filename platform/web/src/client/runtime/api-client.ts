@@ -1,5 +1,19 @@
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations";
 import type { KeyboardSettings, Keymap } from "../../shared/settings/keyboard";
+import type {
+  ComposerDraftInput,
+  ComposerDraftResponse,
+  ComposerDraftListResponse,
+  DatabaseDraftInput,
+  DatabaseDraftResponse,
+  ExplorerInput,
+  DatabaseDraftListResponse,
+  ExplorerStateResponse,
+  HostPreferences,
+  HostPreferencesInput,
+  LegacyWebStateImportInput,
+  LegacyWebStateImportResult,
+} from "../../shared/settings/web-state";
 import type { WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
 import type { GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
@@ -73,20 +87,26 @@ export function tabId(): string {
 }
 
 export class ApiHttpError extends Error {
+  readonly current?: unknown;
   constructor(
     readonly status: number,
     message: string,
+    /** The parsed error body is retained for conflict-resolution callers. */
+    readonly body?: unknown,
   ) {
     super(message);
     this.name = "ApiHttpError";
+    if (body && typeof body === "object" && "current" in body) this.current = (body as { current?: unknown }).current;
   }
 }
 async function json<T>(response: Response): Promise<T> {
-  const body = (await response.json().catch(() => ({}))) as { error?: unknown };
+  const body: unknown = await response.json().catch(() => ({}));
+  const error = body && typeof body === "object" && !Array.isArray(body) ? (body as { error?: unknown }).error : undefined;
   if (!response.ok)
     throw new ApiHttpError(
       response.status,
-      typeof body.error === "string" ? body.error : `Request failed (${response.status})`,
+      typeof error === "string" ? error : `Request failed (${response.status})`,
+      body,
     );
   return body as T;
 }
@@ -111,6 +131,59 @@ export class ApiClient {
   async saveKeyboardSettings(revision: number, keymap: Keymap): Promise<KeyboardSettings> {
     return json(await fetch("/api/v1/settings/keyboard", {
       method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ revision, keymap }),
+    }));
+  }
+
+  async hostPreferences(): Promise<HostPreferences> {
+    return json(await fetch("/api/v1/settings/preferences", { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+
+  async saveHostPreferences(expectedRevision: number, input: HostPreferencesInput): Promise<HostPreferences> {
+    return json(await fetch("/api/v1/settings/preferences", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ expectedRevision, input }),
+    }));
+  }
+
+  async explorerState(projectId: string): Promise<ExplorerStateResponse> {
+    return json(await fetch(`/api/v1/settings/explorer?${new URLSearchParams({ projectId })}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+
+  async saveExplorerState(expectedRevision: number | null, input: ExplorerInput): Promise<ExplorerStateResponse> {
+    return json(await fetch("/api/v1/settings/explorer", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ expectedRevision, input }),
+    }));
+  }
+
+  async composerDraft(sessionId: string): Promise<ComposerDraftResponse> {
+    return json(await fetch(`/api/v1/settings/composer?${new URLSearchParams({ sessionId })}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+
+  async composerDrafts(projectId: string): Promise<ComposerDraftListResponse> {
+    return json(await fetch(`/api/v1/settings/composer?${new URLSearchParams({ projectId })}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+
+  async saveComposerDraft(expectedRevision: number | null, input: ComposerDraftInput): Promise<ComposerDraftResponse> {
+    return json(await fetch("/api/v1/settings/composer", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ expectedRevision, input }),
+    }));
+  }
+
+  async databaseDraft(scope: string): Promise<DatabaseDraftResponse> {
+    return json(await fetch(`/api/v1/settings/database?${new URLSearchParams({ scope })}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+
+  async databaseDrafts(sessionId: string): Promise<DatabaseDraftListResponse> {
+    return json(await fetch(`/api/v1/settings/database?${new URLSearchParams({ sessionId })}`, { headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin" }));
+  }
+  async saveDatabaseDraft(expectedRevision: number | null, input: DatabaseDraftInput): Promise<DatabaseDraftResponse> {
+    return json(await fetch("/api/v1/settings/database", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify({ expectedRevision, input }),
+    }));
+  }
+
+  async importLegacyWebState(input: LegacyWebStateImportInput): Promise<LegacyWebStateImportResult> {
+    return json(await fetch("/api/v1/settings/web-state/import", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify(input),
     }));
   }
 

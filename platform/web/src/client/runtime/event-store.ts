@@ -1,9 +1,27 @@
 import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/settings/keyboard";
+import {
+  isComposerWebStateEvent,
+  isDatabaseWebStateEvent,
+  isExplorerWebStateEvent,
+  isHostPreferences,
+  type ComposerDraftInput,
+  type ComposerDraftListResponse,
+  type ComposerDraftResponse,
+  type DatabaseDraftInput,
+  type DatabaseDraftListResponse,
+  type DatabaseDraftResponse,
+  type ExplorerInput,
+  type ExplorerStateResponse,
+  type HostPreferences,
+  type HostPreferencesInput,
+  type LegacyWebStateImportInput,
+  type LegacyWebStateImportResult,
+} from "../../shared/settings/web-state";
 import { validAnnotation, type AnnotationList, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations";
 import type { WorkspaceMutation, WorkspaceEntry, WorkspaceGitIndex } from "../../shared/workspace/workspace-mutations";
 import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git";
 import { useSyncExternalStore } from "react";
-import { isDatabaseCommandResult, clearDatabaseDrafts } from "../database/database-workspace";
+import { isDatabaseCommandResult } from "../database/database-workspace";
 import type { GuardRuleOverrides } from "../../shared/settings/guard-policy";
 import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
@@ -122,6 +140,7 @@ export interface RuntimeStoreSnapshot {
   connection: ConnectionState;
   runtime?: RuntimeSnapshot;
   keyboardSettings?: KeyboardSettings;
+  hostPreferences?: HostPreferences;
   pendingUi?: UiRequestReadModel;
   sequence: number;
   generation?: number;
@@ -159,6 +178,10 @@ const initial: RuntimeStoreSnapshot = {
 };
 const eventNames = [
   "keyboard.settings",
+  "web.preferences",
+  "web.explorer",
+  "web.composer",
+  "web.database",
   "message.start",
   "message.update",
   "message.end",
@@ -300,6 +323,19 @@ export class RuntimeEventStore {
   private bootstrapEpoch = 0;
   private bootstrapAttempts = 0;
   private bootstrapRetry?: number;
+  private preferenceWrites: Promise<void> = Promise.resolve();
+  /** Kept separate from snapshot subscribers so editing a draft does not rerender App. */
+  private readonly webStateListeners = new Map<"explorer" | "composer" | "database", Set<(value: unknown) => void>>();
+  subscribeWebState(kind: "explorer" | "composer" | "database", listener: (value: unknown) => void): () => void {
+    let listeners = this.webStateListeners.get(kind);
+    if (!listeners) this.webStateListeners.set(kind, (listeners = new Set()));
+    if (listeners.size >= 100) throw new Error("Too many web state subscribers");
+    listeners.add(listener);
+    return () => listeners?.delete(listener);
+  }
+  private publishWebState(kind: "explorer" | "composer" | "database", value: unknown): void {
+    for (const listener of this.webStateListeners.get(kind) ?? []) listener(value);
+  }
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -352,8 +388,11 @@ export class RuntimeEventStore {
     this.set({ ...this.snapshot, keyboardSettings: value });
   }
   private refreshKeyboardOnFocus = () => {
-    if (this.snapshot.connection === "connected") void this.refreshKeyboardSettings().catch(() => undefined);
-  };
+    if (this.snapshot.connection === "connected") {
+      void this.refreshKeyboardSettings().catch(() => undefined);
+      void this.refreshHostPreferences().catch(() => undefined);
+    }
+  }
   async refreshKeyboardSettings(): Promise<void> {
     const epoch = this.bootstrapEpoch;
     const value = await this.api.keyboardSettings();
@@ -370,6 +409,69 @@ export class RuntimeEventStore {
       if (error instanceof ApiHttpError && error.status === 409) await this.refreshKeyboardSettings().catch(() => undefined);
       throw error;
     }
+  }
+
+  private receiveHostPreferences(value: unknown): void {
+    if (!isHostPreferences(value)) throw new Error("Invalid host preferences response");
+    if (value.revision <= (this.snapshot.hostPreferences?.revision ?? -1)) return;
+    this.set({ ...this.snapshot, hostPreferences: value });
+  }
+  async refreshHostPreferences(): Promise<void> {
+    const epoch = this.bootstrapEpoch;
+    const value = await this.api.hostPreferences();
+    if (!this.disposed && epoch === this.bootstrapEpoch) this.receiveHostPreferences(value);
+  }
+  async saveHostPreferences(expectedRevision: number, input: HostPreferencesInput): Promise<HostPreferences> {
+    try {
+      const value = await this.api.saveHostPreferences(expectedRevision, input);
+      this.receiveHostPreferences(value);
+      return value;
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 409) {
+        await this.refreshHostPreferences().catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+  patchHostPreferences(patch: Partial<Omit<HostPreferencesInput, "initialized">>): Promise<HostPreferences> {
+    const write = this.preferenceWrites.then(async () => {
+      const current = this.snapshot.hostPreferences;
+      if (!current) throw new Error("Host preferences are not available");
+      const { revision, ...input } = current;
+      return this.saveHostPreferences(revision, { ...input, ...patch, initialized: true });
+    });
+    this.preferenceWrites = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    return write;
+  }
+  async explorerState(projectId: string): Promise<ExplorerStateResponse> {
+    return this.api.explorerState(projectId);
+  }
+  async saveExplorerState(expectedRevision: number | null, input: ExplorerInput): Promise<ExplorerStateResponse> {
+    return this.api.saveExplorerState(expectedRevision, input);
+  }
+  async composerDrafts(projectId: string): Promise<ComposerDraftListResponse> {
+    return this.api.composerDrafts(projectId);
+  }
+  async composerDraft(sessionId: string): Promise<ComposerDraftResponse> {
+    return this.api.composerDraft(sessionId);
+  }
+  async saveComposerDraft(expectedRevision: number | null, input: ComposerDraftInput): Promise<ComposerDraftResponse> {
+    return this.api.saveComposerDraft(expectedRevision, input);
+  }
+  async databaseDraft(scope: string): Promise<DatabaseDraftResponse> {
+    return this.api.databaseDraft(scope);
+  }
+  async databaseDrafts(sessionId: string): Promise<DatabaseDraftListResponse> {
+    return this.api.databaseDrafts(sessionId);
+  }
+  async saveDatabaseDraft(expectedRevision: number | null, input: DatabaseDraftInput): Promise<DatabaseDraftResponse> {
+    return this.api.saveDatabaseDraft(expectedRevision, input);
+  }
+  async importLegacyWebState(input: LegacyWebStateImportInput): Promise<LegacyWebStateImportResult> {
+    return this.api.importLegacyWebState(input);
   }
 
 
@@ -1642,11 +1744,6 @@ export class RuntimeEventStore {
       commandId: commandId(),
       expectedGeneration: generation,
     });
-    try {
-      clearDatabaseDrafts(localStorage, sessionId);
-    } catch {
-      /* Browser storage may be disabled. */
-    }
   }
 
   async archiveSession(sessionId: string): Promise<void> {
@@ -2000,6 +2097,7 @@ export class RuntimeEventStore {
         connection,
         runtime,
         keyboardSettings: isKeyboardSettings(boot.keyboardSettings) ? boot.keyboardSettings : undefined,
+        hostPreferences: isHostPreferences(boot.hostPreferences) ? boot.hostPreferences : undefined,
         pendingUi: runtime ? boot.pendingUi : undefined,
         pendingMessages,
         sequence: boot.sequence,
@@ -2041,8 +2139,11 @@ export class RuntimeEventStore {
     const source = this.api.events(cursor);
     this.source = source;
     source.onopen = () => {
-      if (this.source === source)
+      if (this.source === source) {
         this.set({ ...this.snapshot, connection: "connected", error: undefined, recovery: undefined });
+        void this.refreshKeyboardSettings().catch(() => undefined);
+        void this.refreshHostPreferences().catch(() => undefined);
+      }
     };
     source.onerror = () => {
       if (this.source !== source || this.disposed) return;
@@ -2101,6 +2202,40 @@ export class RuntimeEventStore {
     if (event.type === "keyboard.settings") {
       if (!isKeyboardSettings(event.payload)) { this.reset(); return; }
       this.receiveKeyboardSettings(event.payload);
+      this.set({ ...this.snapshot, sequence: event.sequence });
+      return;
+    }
+
+    if (event.type === "web.preferences") {
+      if (!isHostPreferences(event.payload)) { this.reset(); return; }
+      this.receiveHostPreferences(event.payload);
+      this.set({ ...this.snapshot, sequence: event.sequence });
+      return;
+    }
+    if (event.type === "web.explorer") {
+      if (!isExplorerWebStateEvent(event.payload)) {
+        this.reset();
+        return;
+      }
+      this.publishWebState("explorer", event.payload);
+      this.set({ ...this.snapshot, sequence: event.sequence });
+      return;
+    }
+    if (event.type === "web.composer") {
+      if (!isComposerWebStateEvent(event.payload)) {
+        this.reset();
+        return;
+      }
+      this.publishWebState("composer", event.payload);
+      this.set({ ...this.snapshot, sequence: event.sequence });
+      return;
+    }
+    if (event.type === "web.database") {
+      if (!isDatabaseWebStateEvent(event.payload)) {
+        this.reset();
+        return;
+      }
+      this.publishWebState("database", event.payload);
       this.set({ ...this.snapshot, sequence: event.sequence });
       return;
     }

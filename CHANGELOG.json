@@ -1,5 +1,16 @@
 [
   {
+    "version": "3.1.5",
+    "date": "Sep 13, 2026",
+    "title": "Durable Web preferences and drafts",
+    "summary": "A maintenance release moves important Web preferences and workspace drafts into revision-safe host storage so they survive browser changes and stay synchronized across tabs.",
+    "notes": [
+      "Persisted theme, syntax, hidden-model choices, Explorer state, composer drafts, and Database query tabs in bounded SQLite storage instead of relying only on browser-local data.",
+      "Synchronized persisted Web state across tabs with revision-checked writes, validated events, conflict recovery, debounced saves, explicit lifecycle cleanup, and local composer recovery until the host acknowledges each draft.",
+      "Added a guarded one-time migration for existing browser state that resolves session ownership, imports each state domain independently, and retains unresolved or failed data for a later retry."
+    ]
+  },
+  {
     "version": "3.1.4",
     "date": "Sep 12, 2026",
     "title": "Predictable workspace loading and compatibility checks",
