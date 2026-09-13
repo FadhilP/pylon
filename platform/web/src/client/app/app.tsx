@@ -105,7 +105,20 @@ import {
 import { startsHeliosBrowser } from "../browser/browser-tool-activity";
 import { runtimeStore, useRuntimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
 import { importLegacyWebState } from "../runtime/legacy-web-state";
-import { AndroidPanel } from "../android/android-panel";
+import {
+  AndroidBottomOutput,
+  AndroidPanel,
+  AndroidPanelHeader,
+  type AndroidDockedOutputs,
+} from "../android/android-panel";
+import {
+  DEFAULT_ANDROID_DOCK_LAYOUT,
+  closeTerminalTab,
+  dockAndroidOutput,
+  restoreAndroidOutput,
+  type AndroidBottomTab,
+  type AndroidOutputKind,
+} from "../android/android-layout";
 import { androidStore, useAndroidStore } from "../android/android-store";
 import {
   currentSessionProgress,
@@ -354,6 +367,10 @@ export function App() {
     setTerminalDrawerHeight,
     toggleTerminal: openTerminalDrawer,
   } = useTerminalDrawer(initialTerminalHeight);
+  const [androidDockLayout, setAndroidDockLayout] = useState(DEFAULT_ANDROID_DOCK_LAYOUT);
+  useEffect(() => {
+    if (!terminalOpen) setAndroidDockLayout(current => closeTerminalTab(current));
+  }, [terminalOpen]);
   useMarkSessionSeen(live);
 
   const sessions = useMemo(() => sessionPages.flatMap(page => page.sessions), [sessionPages]);
@@ -1284,7 +1301,11 @@ export function App() {
       reportError(new Error("Reconnect before opening a terminal"), "Terminal unavailable");
       return;
     }
-    if (!createTerminal(project)) reportError(new Error("Close a terminal before opening another"), "Terminal limit reached");
+    if (!createTerminal(project)) {
+      reportError(new Error("Close a terminal before opening another"), "Terminal limit reached");
+      return;
+    }
+    setAndroidDockLayout(current => ({ ...current, active: "terminal" }));
     if (mobile) setSidebarOpen(false);
   };
   const policyEditingDisabled =
@@ -1292,10 +1313,34 @@ export function App() {
     live.runtime?.ready !== true ||
     Boolean(live.pendingUi) ||
     activeSessions.some(session => session.runtimeState === "running" || session.runtimeState === "attention");
-  const toggleTerminal = () => {
-    if (!openTerminalDrawer(terminalProject))
+  const selectTerminalTab = () => {
+    if (!terminalOpen && !openTerminalDrawer(terminalProject)) {
       reportError(new Error("Choose a project before opening a terminal"), "Terminal unavailable");
+      return;
+    }
+    setAndroidDockLayout(current => ({ ...current, active: "terminal" }));
+  };
+  const toggleTerminal = () => {
+    if (terminalOpen && androidDockLayout.active === "terminal") {
+      setTerminalOpen(false);
+      setAndroidDockLayout(current => closeTerminalTab(current));
+    } else {
+      selectTerminalTab();
+    }
     if (mobile) setSidebarOpen(false);
+  };
+  const dockOutput = (which: AndroidOutputKind) => {
+    setAndroidDockLayout(current => dockAndroidOutput(current, which));
+    requestAnimationFrame(() => document.getElementById(`bottom-panel-tab-${which}`)?.focus());
+  };
+  const restoreOutput = (which: AndroidOutputKind) => {
+    setAndroidDockLayout(current => restoreAndroidOutput(current, which));
+    setReference("android");
+    requestAnimationFrame(() => document.getElementById(`android-${which}-dock-control`)?.focus());
+  };
+  const closeTerminalSurface = () => {
+    setTerminalOpen(false);
+    setAndroidDockLayout(current => closeTerminalTab(current));
   };
   const openSettings = () => {
     showSettings();
@@ -1708,10 +1753,19 @@ export function App() {
         </ReferencePanel>
       )}
       {reference === "android" && (
-        <ReferencePanel reference="android" overlay={inspectorOverlay} onClose={() => setReference(null)}>
+        <ReferencePanel
+          reference="android"
+          overlay={inspectorOverlay}
+          fill
+          showDescription={false}
+          headerActions={<AndroidPanelHeader />}
+          onClose={() => setReference(null)}>
           <AndroidPanel
             workspaceLabel={live.runtime?.cwdLabel}
             sessionGeneration={live.runtime?.ready ? live.runtime.sessionGeneration : undefined}
+            dockedOutputs={{ build: androidDockLayout.build, logs: androidDockLayout.logs }}
+            onDockOutput={dockOutput}
+            onRestoreOutput={restoreOutput}
           />
         </ReferencePanel>
       )}
@@ -1827,9 +1881,22 @@ export function App() {
     </DeferredPanel>
   );
 
+  const bottomOpen = terminalOpen || androidDockLayout.build || androidDockLayout.logs;
+  const terminalAvailable = Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false);
+  const bottomTabs = (
+    <BottomPanelTabs
+      active={androidDockLayout.active}
+      docked={{ build: androidDockLayout.build, logs: androidDockLayout.logs }}
+      terminalAvailable={terminalAvailable || terminalOpen}
+      onSelect={tab => {
+        if (tab === "terminal") selectTerminalTab();
+        else setAndroidDockLayout(current => ({ ...current, active: tab }));
+      }}
+    />
+  );
   const terminalChrome = (
     <>
-      {terminalOpen && !mobile && (
+      {bottomOpen && !mobile && (
         <TerminalResizer
           container={appShellRef}
           height={terminalDrawerHeight}
@@ -1839,21 +1906,46 @@ export function App() {
           }}
         />
       )}
-      {retainedTerminals.map(terminal => (
-        <TerminalPanel
-          key={`terminal:${terminal.terminalId}`}
-          terminalId={terminal.terminalId}
-          projectId={terminal.projectId}
-          open={terminalOpen && activeTerminalId === terminal.terminalId}
-          tabs={retainedTerminals}
-          launchLabel={terminal.launchLabel}
-          canCreate={live.connection === "connected" && Boolean(terminalProject)}
-          onNew={() => terminalProject && createProjectTerminal(terminalProject)}
-          onSelect={selectTerminal}
-          onClose={() => setTerminalOpen(false)}
-          onShutdown={releaseTerminal}
-        />
-      ))}
+      <section className="terminal-drawer" aria-label="Bottom panel" hidden={!bottomOpen}>
+        {bottomTabs}
+        <div className="bottom-panel-content">
+          {retainedTerminals.map((terminal, index) => (
+            <TerminalPanel
+              key={`terminal:${terminal.terminalId}`}
+              terminalId={terminal.terminalId}
+              projectId={terminal.projectId}
+              open={bottomOpen && androidDockLayout.active === "terminal" && terminalOpen && activeTerminalId === terminal.terminalId}
+              tabs={retainedTerminals}
+              launchLabel={terminal.launchLabel}
+              canCreate={live.connection === "connected" && Boolean(terminalProject)}
+              onNew={() => terminalProject && createProjectTerminal(terminalProject)}
+              onSelect={selectTerminal}
+              panelId={activeTerminalId === terminal.terminalId ? "bottom-panel-terminal" : `retained-terminal-${index}`}
+              tabId="bottom-panel-tab-terminal"
+              onClose={closeTerminalSurface}
+              onShutdown={releaseTerminal}
+            />
+          ))}
+          {androidDockLayout.build && (
+            <AndroidBottomOutput
+              which="build"
+              active={bottomOpen && androidDockLayout.active === "build"}
+              panelId="bottom-panel-build"
+              tabId="bottom-panel-tab-build"
+              onRestore={restoreOutput}
+            />
+          )}
+          {androidDockLayout.logs && (
+            <AndroidBottomOutput
+              which="logs"
+              active={bottomOpen && androidDockLayout.active === "logs"}
+              panelId="bottom-panel-logs"
+              tabId="bottom-panel-tab-logs"
+              onRestore={restoreOutput}
+            />
+          )}
+        </div>
+      </section>
     </>
   );
 
@@ -1875,7 +1967,7 @@ export function App() {
         style={
           {
             "--sidebar-width": `${leftPanelWidth}px`,
-            "--terminal-height": terminalOpen ? `${terminalDrawerHeight}px` : "0px",
+            "--terminal-height": bottomOpen ? `${terminalDrawerHeight}px` : "0px",
           } as CSSProperties
         }>
         <a className="skip-link" href="#main-content">
@@ -1884,7 +1976,7 @@ export function App() {
         <ScopeRail
           workspaceView={workspaceView}
           theme={resolvedTheme}
-          terminalOpen={terminalOpen}
+          terminalOpen={terminalOpen && androidDockLayout.active === "terminal"}
           terminalAvailable={retainedTerminals.length > 0 || (live.connection === "connected" && Boolean(terminalProject))}
           onWorkspaceView={openWorkspaceView}
           onAmbient={runAmbient}
@@ -2353,6 +2445,58 @@ class DeferredPanel extends Component<{ children: ReactNode }, { failed: boolean
   }
 }
 
+function BottomPanelTabs({
+  active,
+  docked,
+  terminalAvailable,
+  onSelect,
+}: {
+  active: AndroidBottomTab;
+  docked: AndroidDockedOutputs;
+  terminalAvailable: boolean;
+  onSelect: (tab: AndroidBottomTab) => void;
+}) {
+  const tabs: Array<{ id: AndroidBottomTab; label: string; disabled?: boolean }> = [
+    { id: "terminal", label: "Terminal", disabled: !terminalAvailable },
+    ...(docked.build ? [{ id: "build" as const, label: "Build output" }] : []),
+    ...(docked.logs ? [{ id: "logs" as const, label: "App logs" }] : []),
+  ];
+  return (
+    <div className="bottom-panel-tabs" role="tablist" aria-label="Bottom panel tabs">
+      {tabs.map((tab, index) => (
+        <button
+          key={tab.id}
+          id={`bottom-panel-tab-${tab.id}`}
+          type="button"
+          role="tab"
+          disabled={tab.disabled}
+          aria-selected={active === tab.id}
+          aria-controls={`bottom-panel-${tab.id}`}
+          tabIndex={active === tab.id ? 0 : -1}
+          onClick={() => onSelect(tab.id)}
+          onKeyDown={event => {
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const enabled = tabs.filter(candidate => !candidate.disabled);
+            const current = enabled.findIndex(candidate => candidate.id === tab.id);
+            const next =
+              event.key === "Home"
+                ? enabled[0]
+                : event.key === "End"
+                  ? enabled.at(-1)
+                  : enabled[(current + (event.key === "ArrowRight" ? 1 : -1) + enabled.length) % enabled.length];
+            if (!next) return;
+            onSelect(next.id);
+            requestAnimationFrame(() => document.getElementById(`bottom-panel-tab-${next.id}`)?.focus());
+          }}>
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+
 function TerminalResizer({
   container,
   height,
@@ -2395,7 +2539,7 @@ function TerminalResizer({
     <div
       className="terminal-resizer"
       role="separator"
-      aria-label="Resize terminal"
+      aria-label="Resize bottom panel"
       aria-orientation="horizontal"
       aria-valuemin={160}
       aria-valuemax={Math.floor(window.innerHeight * 0.7)}

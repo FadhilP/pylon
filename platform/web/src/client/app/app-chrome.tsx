@@ -199,6 +199,8 @@ export function ReferencePanel({
   reference,
   overlay,
   fill,
+  headerActions,
+  showDescription = true,
   children,
   onClose,
 }: {
@@ -206,6 +208,8 @@ export function ReferencePanel({
   overlay: boolean;
   /** Fill the panel when content manages its own scrolling. */
   fill?: boolean;
+  headerActions?: ReactNode;
+  showDescription?: boolean;
   children: ReactNode;
   onClose: () => void;
 }) {
@@ -221,15 +225,18 @@ export function ReferencePanel({
           <strong id={titleId}>{definition.label}</strong>
           {reference === "notes" && <AnnotationCount />}
         </div>
-        <button
-          className="icon-button"
-          type="button"
-          onClick={onClose}
-          aria-label={overlay ? `Close ${definition.label}` : `Collapse ${definition.label}`}>
-          <IconX size={17} />
-        </button>
+        <div className="inspector-header-actions">
+          {headerActions}
+          <button
+            className="icon-button"
+            type="button"
+            onClick={onClose}
+            aria-label={overlay ? `Close ${definition.label}` : `Collapse ${definition.label}`}>
+            <IconX size={17} />
+          </button>
+        </div>
       </header>
-      <p className="inspector-description">{definition.description}</p>
+      {showDescription && <p className="inspector-description">{definition.description}</p>}
       <div className={fill ? "inspector-fill" : "inspector-scroll"}>{children}</div>
     </aside>
   );

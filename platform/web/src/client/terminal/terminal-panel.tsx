@@ -89,6 +89,8 @@ export function TerminalPanel({
   canCreate,
   onNew,
   onSelect,
+  panelId,
+  tabId,
   onClose,
   onShutdown,
 }: {
@@ -100,13 +102,21 @@ export function TerminalPanel({
   canCreate: boolean;
   onNew: () => void;
   onSelect: (terminalId: string) => void;
+  panelId: string;
+  tabId: string;
   onClose: () => void;
   onShutdown: (terminalId: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const openRef = useRef(open);
   const [status, setStatus] = useState("Connecting…");
+
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -159,9 +169,10 @@ export function TerminalPanel({
         ready = true;
         setStatus("Connected");
         requestAnimationFrame(() => {
+          if (disposed) return;
           fitTerminal();
           send({ type: "resize", cols: terminal.cols, rows: terminal.rows });
-          terminal.focus();
+          if (openRef.current) terminal.focus();
         });
       } else if (message.type === "error") {
         setStatus(message.message || "Terminal unavailable");
@@ -205,7 +216,12 @@ export function TerminalPanel({
   }, [open]);
 
   return (
-    <section className="terminal-drawer" aria-label="Terminal" hidden={!open}>
+    <section
+      id={panelId}
+      className="terminal-panel-view"
+      role="tabpanel"
+      aria-labelledby={tabId}
+      hidden={!open}>
       <header>
         <div className="terminal-tabs" role="tablist" aria-label="Open terminals">
           {tabs.map(tab => (
