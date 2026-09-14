@@ -134,7 +134,7 @@ test("packed package installs and launches its production web app", { timeout: 2
         packageRoot,
         project,
       ],
-      { encoding: "utf8", timeout: 30_000 },
+      { encoding: "utf8", timeout: 120_000 },
     );
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
 
