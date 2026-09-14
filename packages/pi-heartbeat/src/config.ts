@@ -70,6 +70,7 @@ export async function loadConfig(path = configPath()): Promise<HeartbeatConfig> 
       return config;
     },
     defaultConfig,
+    1,
   );
 }
 

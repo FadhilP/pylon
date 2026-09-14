@@ -6,14 +6,15 @@ import { discoverRepositories, type Repository } from "./repositories.ts";
 export type RepositoryState = Repository & { head: string };
 
 async function inspect(repository: Repository): Promise<RepositoryState> {
-  const { root } = repository,
-    bare = await git(root, ["rev-parse", "--is-bare-repository"]),
-    head = await git(root, ["rev-parse", "HEAD"]);
+  const { root } = repository;
+  // Keep the directory last so paths containing newlines remain intact.
+  const metadata = await git(root, ["rev-parse", "--is-bare-repository", "HEAD", "--absolute-git-dir"]);
+  const fields = /^(true|false)\r?\n([a-f0-9]{40}|[a-f0-9]{64})\r?\n([\s\S]+)$/.exec(metadata);
+  if (!fields) throw Error("Unable to inspect repository identity.");
+  const [, bare, head, gd] = fields;
   if (bare === "true") throw Error("Bare repositories unsupported.");
   if ((await git(root, ["ls-files", "-u"])).trim())
     throw Error(`Unmerged index unsupported: ${repository.prefix || "."}`);
-  const raw = await git(root, ["rev-parse", "--git-dir"]),
-    gd = raw.startsWith("/") || /^[A-Za-z]:/.test(raw) ? raw : join(root, raw);
   for (const f of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"])
     if (existsSync(join(gd, f))) throw Error(`Git operation in progress: ${repository.prefix || "."}`);
   const unsafe = (await git(root, ["ls-files", "--others", "--exclude-standard"]))

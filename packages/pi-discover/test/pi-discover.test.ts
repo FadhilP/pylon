@@ -721,18 +721,22 @@ test("discover child tools enforce their child-local output cap", async () => {
   assert.match(result.content[0].text, /truncated/i);
 });
 
-test("index database lives under pi-discover and migrates the legacy path", async () => {
+test("index database uses a schema-specific path and leaves older caches untouched", async () => {
   const agentDir = await mkdtemp(join(tmpdir(), "pi-discover-agent-"));
   const legacy = join(agentDir, "indexes", "pi-discover.sqlite");
-  const expected = join(agentDir, "pi-discover", "index.sqlite");
+  const unversioned = join(agentDir, "pi-discover", "index.sqlite");
+  const expected = join(agentDir, "pi-discover", "index-v4.sqlite");
   const previousPath = process.env.PI_DISCOVER_INDEX_PATH;
   delete process.env.PI_DISCOVER_INDEX_PATH;
   await mkdir(join(agentDir, "indexes"));
+  await mkdir(join(agentDir, "pi-discover"));
   new DatabaseSync(legacy).close();
+  new DatabaseSync(unversioned).close();
   try {
     assert.equal(indexDatabasePath(agentDir), expected);
-    await access(expected);
-    await assert.rejects(access(legacy));
+    await access(legacy);
+    await access(unversioned);
+    await assert.rejects(access(expected));
   } finally {
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
     else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
@@ -1300,6 +1304,7 @@ test("search refreshes the SQLite index on demand after each turn", async () => 
   runtime.events.on("pi-discover:index-state", value => indexStates.push(value));
   try {
     await runtime.lifecycle.emitAsync("session_start", {}, ctx);
+    await runtime.lifecycle.emitAsync("resources_discover", {}, ctx);
     assert.ok(!runtime.active.includes("index_status"));
     assert.ok(!runtime.active.includes("relationship_graph"));
     assert.ok(!runtime.active.includes("search_sessions"));
@@ -1382,6 +1387,7 @@ test("automatic indexing does not block session startup", async () => {
   process.env.PI_DISCOVER_INDEX_PATH = join(root, "index.sqlite");
   let releaseIndex!: () => void;
   let markStarted!: () => void;
+  let indexingStarted = false;
   const release = new Promise<void>(resolve => {
     releaseIndex = resolve;
   });
@@ -1389,25 +1395,28 @@ test("automatic indexing does not block session startup", async () => {
     markStarted = resolve;
   });
   const runtime = setup(async () => {
+    indexingStarted = true;
     markStarted();
     await release;
     return { code: 1, stdout: "", stderr: "stopped" };
   });
   const ctx = { cwd: root };
   try {
-    const startup = runtime.lifecycle.emitAsync("session_start", {}, ctx);
-    assert.equal(
-      await Promise.race([
-        startup.then(() => true),
-        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100)),
-      ]),
-      true,
-    );
+    await runtime.lifecycle.emitAsync("session_start", {}, ctx);
+    assert.equal(indexingStarted, false, "automatic indexing waits for the post-startup phase");
+    await runtime.lifecycle.emitAsync("resources_discover", {}, ctx);
     await started;
+    let closed = false;
+    const closing = runtime.lifecycle.emitAsync("session_shutdown", {}, ctx).then(() => {
+      closed = true;
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(closed, false, "shutdown drains a refresh that has already started");
     releaseIndex();
-    await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
+    await closing;
   } finally {
     releaseIndex();
+    await runtime.lifecycle.emitAsync("session_shutdown", {}, ctx);
     if (previousPath === undefined) delete process.env.PI_DISCOVER_INDEX_PATH;
     else process.env.PI_DISCOVER_INDEX_PATH = previousPath;
     await rm(root, { recursive: true, force: true });

@@ -23,6 +23,12 @@ export function createPylonModelRuntime(agentDir: string): Promise<ModelRuntime>
   });
 }
 
+export type StartupHookTiming = {
+  extension: string;
+  event: "session_start" | "resources_discover";
+  durationMs: number;
+};
+
 export async function createPylonRuntimeFactory(options: {
   agentDir: string;
   additionalExtensionPaths?: string[];
@@ -31,10 +37,12 @@ export async function createPylonRuntimeFactory(options: {
   modelRuntime?: ModelRuntime;
   mainPrompt?: PromptPackageSettingValue;
   onStartupPhase?: (phase: "extension-loading" | "session-create", durationMs: number) => void;
+  onStartupHook?: (timing: StartupHookTiming) => void;
 }): Promise<CreateAgentSessionRuntimeFactory> {
   const eventBus = options.eventBus ?? createEventBus();
   const fixedAgentDir = resolve(options.agentDir);
   const modelRuntime = options.modelRuntime ?? (await createPylonModelRuntime(fixedAgentDir));
+  const timedHandlers = new WeakSet<Function>();
 
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     if (resolve(agentDir) !== fixedAgentDir) {
@@ -56,6 +64,40 @@ export async function createPylonRuntimeFactory(options: {
         additionalExtensionPaths: options.additionalExtensionPaths ?? [],
         eventBus,
         extensionFactories: options.extensionFactories,
+        extensionsOverride: loaded => {
+          if (!options.onStartupHook) return loaded;
+          for (const extension of loaded.extensions) {
+            for (const event of ["session_start", "resources_discover"] as const) {
+              const handlers = extension.handlers.get(event);
+              if (!handlers) continue;
+              extension.handlers.set(
+                event,
+                handlers.map(handler => {
+                  if (timedHandlers.has(handler)) return handler;
+                  const timed: typeof handler = async (value, ctx) => {
+                    const startedAt = performance.now();
+                    try {
+                      return await handler(value, ctx);
+                    } finally {
+                      try {
+                        options.onStartupHook?.({
+                          extension: basename(extension.path),
+                          event,
+                          durationMs: performance.now() - startedAt,
+                        });
+                      } catch {
+                        // Diagnostic observers must not change extension results or error handling.
+                      }
+                    }
+                  };
+                  timedHandlers.add(timed);
+                  return timed;
+                }),
+              );
+            }
+          }
+          return loaded;
+        },
         ...(options.mainPrompt?.mode === "replace" ? { systemPromptOverride: () => options.mainPrompt!.text } : {}),
         ...(options.mainPrompt?.mode === "append" && options.mainPrompt.text
           ? { appendSystemPromptOverride: (base: string[]) => [...base, options.mainPrompt!.text] }

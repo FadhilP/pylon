@@ -86,3 +86,24 @@ test("preflight still detects and rejects untracked bare repositories", async ()
     await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
+
+test("batched identity inspection uses a detached worktree's own operation directory", async () => {
+  const { root, git } = await repository();
+  const checkout = await mkdtemp(join(tmpdir(), "timeline detached worktree "));
+  try {
+    await git("worktree", "add", "--detach", checkout, "HEAD");
+    const head = await git("rev-parse", "HEAD");
+    assert.equal((await preflight(checkout)).head, head);
+    const gitDir = (
+      await exec("git", ["rev-parse", "--absolute-git-dir"], { cwd: checkout, windowsHide: true })
+    ).stdout.trim();
+    await writeFile(join(gitDir, "CHERRY_PICK_HEAD"), `${head}\n`);
+    await assert.rejects(preflight(checkout), /Git operation in progress/);
+    await rm(join(gitDir, "CHERRY_PICK_HEAD"));
+    await exec("git", ["checkout", "--orphan", "unborn"], { cwd: checkout, windowsHide: true });
+    await assert.rejects(preflight(checkout), /HEAD|revision/);
+  } finally {
+    await rm(checkout, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});

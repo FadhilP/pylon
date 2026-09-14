@@ -3,6 +3,7 @@ import { link, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { listSessionInventory } from "pylon-core/session-inventory";
+import { createSessionMaintenance } from "pylon-core/src/session-maintenance.ts";
 
 const LEASE_VERSION = 1;
 type Lease = { version: 1; sessionId: string; pid: number; token: string };
@@ -97,7 +98,13 @@ async function readLease(path: string): Promise<Lease | undefined> {
 
 async function liveLeases(directory: string) {
   const sessionIds = new Set<string>();
-  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error: any) {
+    return { safe: error?.code === "ENOENT", sessionIds };
+  }
+  for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const path = join(directory, entry.name),
       active = await readLease(path);
@@ -125,29 +132,39 @@ export async function startSessionGc(
   await withLock(root, async () => {
     await mkdir(leases, { recursive: true });
     await writeFile(leasePath, `${JSON.stringify(lease)}\n`, { mode: 0o600 });
-    let sessions: Array<{ id: string }>;
-    try {
-      sessions = await listSessions();
-    } catch {
-      return;
-    }
-    const active = await liveLeases(leases);
-    if (!active.safe) return;
-    const live = new Set(sessions.map(item => item.id));
-    live.add(sessionId);
-    for (const id of active.sessionIds) live.add(id);
-    await cleanup(live);
   });
 
-  return async (cleanupIfLast?: () => Promise<void>) =>
+  const maintenance = createSessionMaintenance(root, () =>
     withLock(root, async () => {
-      const owned = await readLease(leasePath);
-      if (owned?.token !== token) return;
-      await rm(leasePath, { force: true });
-      if (!cleanupIfLast) return;
+      let sessions: Array<{ id: string }>;
+      try {
+        sessions = await listSessions();
+      } catch {
+        return;
+      }
       const active = await liveLeases(leases);
-      if (active.safe && !active.sessionIds.has(sessionId)) await cleanupIfLast();
-    });
+      if (!active.safe) return;
+      const live = new Set(sessions.map(item => item.id));
+      live.add(sessionId);
+      for (const id of active.sessionIds) live.add(id);
+      await cleanup(live);
+    }),
+  );
+
+  return Object.assign(
+    async (cleanupIfLast?: () => Promise<void>) => {
+      await maintenance.stop();
+      await withLock(root, async () => {
+        const owned = await readLease(leasePath);
+        if (owned?.token !== token) return;
+        await rm(leasePath, { force: true });
+        if (!cleanupIfLast) return;
+        const active = await liveLeases(leases);
+        if (active.safe && !active.sessionIds.has(sessionId)) await cleanupIfLast();
+      });
+    },
+    { collect: maintenance.collect, cancel: maintenance.cancel },
+  );
 }
 
 export async function pruneOrphanWorkFiles(root: string, liveSessionIds: ReadonlySet<string>) {

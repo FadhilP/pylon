@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { realpath } from "node:fs/promises";
+import { captureCheckoutTrees } from "pylon-core/src/worktree.ts";
 import { git, symbolicHead } from "./git.ts";
 import { preflight, type RepositoryState } from "./safety.ts";
 
@@ -26,17 +25,14 @@ const ident = {
 };
 
 async function trees(repository: RepositoryState) {
-  const dir = await mkdtemp(join(tmpdir(), "pi-timeline-")),
-    index = join(dir, "index"),
-    env = { GIT_INDEX_FILE: index };
-  try {
-    const indexTree = await git(repository.root, ["write-tree"]);
-    await git(repository.root, ["read-tree", "HEAD"], env);
-    await git(repository.root, ["add", "-A", "--", "."], env);
-    return { indexTree, worktreeTree: await git(repository.root, ["write-tree"], env) };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  const state = await captureCheckoutTrees(repository.root, repository.head, git);
+  const [root, commonDir] = await Promise.all([
+    git(repository.root, ["rev-parse", "--show-toplevel"]).then(value => realpath(value)),
+    git(repository.root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).then(value => realpath(value)),
+  ]);
+  if (canonical(root) !== canonical(repository.root) || canonical(commonDir) !== canonical(repository.commonDir))
+    throw Error("Repository identity changed during checkpoint.");
+  return state;
 }
 
 type FingerprintTrees = Pick<RepositorySnapshot, "indexTree" | "worktreeTree">;

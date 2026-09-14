@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs, { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import fs, { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -38,7 +38,9 @@ test("lock acquisition errors preserve their cause and never run the protected t
   let ran = false;
   try {
     await assert.rejects(
-      withFileLock(path, async () => { ran = true; }),
+      withFileLock(path, async () => {
+        ran = true;
+      }),
       { cause: failure },
     );
     assert.equal(ran, false);
@@ -78,7 +80,24 @@ test("malformed versioned state is quarantined while missing state uses fallback
     assert.deepEqual(await readVersionedJson(path, { version: 1 }, value => value?.version === 1), { version: 1 });
     await writeFile(path, "{bad json");
     assert.deepEqual(await readVersionedJson(path, { version: 1 }, value => value?.version === 1), { version: 1 });
-    assert.ok((await readdir(root)).some(name => name.startsWith("state.json.reset-unsupported-")));
+    assert.ok((await readdir(root)).some(name => name.startsWith("state.json.corrupt-")));
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+test("unsupported versioned state stays in place and is not interpreted as empty", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-unsupported-"));
+  const path = join(root, "state.json");
+  const contents = JSON.stringify({ version: 2, records: ["keep"] });
+  try {
+    await writeFile(path, contents);
+    await assert.rejects(
+      readVersionedJson(path, { version: 1 }, value => value?.version === 1),
+      /unsupported versioned JSON state/,
+    );
+    assert.equal(await readFile(path, "utf8"), contents);
+    assert.deepEqual(await readdir(root), ["state.json"]);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 3 });
   }

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extension from "../extensions/pi-continuity.ts";
 import { saveConfig } from "../src/config.ts";
+import { fresh, sessionWorkFile, setPlan } from "../src/active-work.ts";
 import {
   emptyMemoryState,
   isReviewRecord,
@@ -20,6 +21,7 @@ import {
 import type { ActivationDraft } from "../src/memory-activation.ts";
 import { writeJsonAtomic } from "../src/storage.ts";
 import { projectContext } from "../src/worktree.ts";
+import { registerWorkspace } from "../src/workspace.ts";
 
 const exec = promisify(execFile);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -214,6 +216,84 @@ test("package settings disable durable memory while keeping planning and recall"
     assert.match(result.content[0].text, /disabled in package settings/i);
     const beforeAgentStart = app.handlers.get("before_agent_start")![0];
     assert.equal(await beforeAgentStart({}, ctx), undefined);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("newer durable memory is preserved and stops startup instead of becoming empty", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-memory-newer-"));
+  const cwd = join(root, "repo");
+  const agentDir = join(root, "agent");
+  const path = join(agentDir, "pi-continuity", "memory-v6", "state.json");
+  const contents = JSON.stringify({ schemaVersion: 7, revision: 1, notes: ["keep"] });
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: true });
+    await mkdir(join(agentDir, "pi-continuity", "memory-v6"), { recursive: true });
+    await writeFile(path, contents);
+    const app = runtime(["read", "memory", "continuity_update"]);
+    const ctx: any = {
+      cwd,
+      hasUI: false,
+      mode: "json",
+      sessionManager: {
+        getSessionId: () => "memory-newer",
+        getSessionFile: () => undefined,
+        getEntries: () => [],
+        getBranch: () => [],
+        buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    await assert.rejects(async () => {
+      for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    }, /unsupported versioned JSON state/);
+    assert.equal(await readFile(path, "utf8"), contents);
+  } finally {
+    if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("newer active work is preserved and cannot be resumed as an empty plan", async () => {
+  const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = await mkdtemp(join(tmpdir(), "continuity-work-newer-"));
+  const cwd = join(root, "repo");
+  const agentDir = join(root, "agent");
+  const sessionId = "work-newer";
+  await mkdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    await saveConfig({ version: 2, memoryEnabled: false });
+    const registered = await registerWorkspace(join(agentDir, "pi-continuity"), cwd);
+    const path = join(registered.dir, "sessions", sessionWorkFile(sessionId));
+    const contents = JSON.stringify({ schemaVersion: 2, mode: "planning", goal: "keep" });
+    await mkdir(join(registered.dir, "sessions"), { recursive: true });
+    await writeFile(path, contents);
+    const app = runtime(["read", "continuity_update"]);
+    const ctx: any = {
+      cwd,
+      hasUI: false,
+      mode: "json",
+      sessionManager: {
+        getSessionId: () => sessionId,
+        getSessionFile: () => undefined,
+        getEntries: () => [],
+        getBranch: () => [],
+        buildContextEntries: () => [],
+      },
+      ui: { notify: () => {}, setStatus: () => {}, setWidget: () => {} },
+    };
+    await assert.rejects(async () => {
+      for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+    }, /unsupported versioned JSON state/);
+    assert.equal(await readFile(path, "utf8"), contents);
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
@@ -1331,5 +1411,64 @@ test("automatic completion waits for required verification but accepts a stale r
   } finally {
     if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+  }
+});
+
+test("startup only probes verification status when restoring executing work", async () => {
+  const root = await mkdtemp(join(tmpdir(), "continuity-startup-probes-"));
+  const cwd = join(root, "repo"),
+    agentDir = join(root, "agent"),
+    trace = join(root, "git-trace.log");
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR,
+    previousTrace = process.env.GIT_TRACE;
+  let app: ReturnType<typeof runtime> | undefined;
+  await mkdir(cwd);
+  const manager = SessionManager.inMemory(cwd);
+  const ctx: any = {
+    cwd,
+    hasUI: false,
+    mode: "json",
+    sessionManager: manager,
+    ui: { notify() {}, setStatus() {}, setWidget() {} },
+  };
+  try {
+    await exec("git", ["init", "-q"], { cwd, windowsHide: true });
+    await exec(
+      "git",
+      ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "base"],
+      { cwd, windowsHide: true },
+    );
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await saveConfig({ version: 2, memoryEnabled: false });
+    const workspace = await registerWorkspace(join(agentDir, "pi-continuity"), cwd);
+    const sessions = join(workspace.dir, "sessions");
+    await mkdir(sessions, { recursive: true });
+    const path = join(sessions, sessionWorkFile(manager.getSessionId()));
+    app = runtime();
+    process.env.GIT_TRACE = trace;
+    for (const mode of [undefined, "planning", "executing"] as const) {
+      if (mode) {
+        const work = fresh("Finish the task");
+        setPlan(work, ["Finish"]);
+        work.mode = mode;
+        work.approved = true;
+        await writeJsonAtomic(path, work);
+      }
+      await writeFile(trace, "");
+      for (const handler of app.handlers.get("session_start") ?? []) await handler({}, ctx);
+      const statusCalls = (await readFile(trace, "utf8")).match(/git status --porcelain=v1/g) ?? [];
+      assert.equal(
+        statusCalls.length,
+        mode === "executing" ? 2 : 0,
+        `verification probes for ${mode ?? "new"} session`,
+      );
+    }
+  } finally {
+    for (const handler of app?.handlers.get("session_shutdown") ?? []) await handler({}, ctx);
+    if (previousTrace === undefined) delete process.env.GIT_TRACE;
+    else process.env.GIT_TRACE = previousTrace;
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(root, { recursive: true, force: true });
   }
 });

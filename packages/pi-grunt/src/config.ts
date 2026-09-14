@@ -146,6 +146,7 @@ export async function loadConfig(path = configPath()): Promise<GruntConfig> {
       } satisfies GruntConfig;
     },
     () => ({ version: 1 }),
+    1,
   );
 }
 

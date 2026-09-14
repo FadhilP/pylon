@@ -1,8 +1,11 @@
+import { setImmediate } from "node:timers/promises";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { IndexProvider } from "./index.ts";
 import { boundedError } from "./search-common.ts";
 
 export type IndexLifecycle = {
+  /** Set the workspace and cancel queued automatic work without starting I/O. */
+  setWorkspace(ctx: { cwd?: string }): void;
   /** Queue a background refresh for `ctx.cwd`, coalescing repeat requests. */
   scheduleRefresh(ctx?: { cwd?: string }): void;
   /** Handle a `pi-discover:index-action` rebuild request. */
@@ -81,6 +84,7 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
     pendingCwd = ctx.cwd;
     if (background) return;
     background = (async () => {
+      await setImmediate();
       while (pendingCwd && !shuttingDown) {
         const cwd = pendingCwd;
         pendingCwd = undefined;
@@ -100,6 +104,10 @@ export function createIndexLifecycle(pi: ExtensionAPI, indexFor: IndexProvider):
   };
 
   return {
+    setWorkspace(ctx) {
+      activeCwd = ctx.cwd ?? "";
+      pendingCwd = undefined;
+    },
     scheduleRefresh,
     hasError: () => Boolean(latestError),
     healthLine: () => `Index: ${latestError ? `refresh failed: ${latestError}` : ready ? "ready" : "not initialized"}`,

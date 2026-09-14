@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readVersionedJson, updateJson, writeJson } from "./storage.ts";
+import { assertVersionedJsonWritable, readVersionedJson, updateJson, writeJson } from "./storage.ts";
 import {
   PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
   definePackageSettings,
@@ -151,12 +151,14 @@ export async function loadConfig(path = configPath()): Promise<ContinuityConfig>
 export async function saveConfig(config: ContinuityConfig, path = configPath()): Promise<void> {
   const normalized = normalizeConfig({ ...config, version: 2 });
   if (!normalized) throw Error("invalid Continuity config");
+  await assertVersionedJsonWritable(path, "version", 2);
   await writeJson(path, normalized);
 }
 export async function updateConfig(
   update: (config: ContinuityConfig) => ContinuityConfig,
   path = configPath(),
 ): Promise<ContinuityConfig> {
+  await assertVersionedJsonWritable(path, "version", 2);
   return updateJson(
     path,
     defaultConfig(),

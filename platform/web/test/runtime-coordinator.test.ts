@@ -199,6 +199,94 @@ test("private annotation storage is scoped by the selected server session and re
 });
 
 
+test("startup policy is available to extensions and policy updates await activation", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-startup-policy-"));
+  const cwd = join(root, "workspace"),
+    agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const registry = new ProjectRegistry(join(agentDir, "pylon-web", "projects.json"), root);
+  await registry.load([cwd]);
+  const projectId = projectIdForCwd(cwd);
+  const before = registry.runtimePolicy(projectId, "new");
+  await registry.updateRuntimePolicy({
+    scope: "project",
+    projectId,
+    sessionId: "new",
+    expectedRevision: before.revision,
+    verify: before.project.verify,
+    timeline: "disabled",
+    guard: "inherit",
+    workspace: "inherit",
+    guardTimeoutSeconds: "inherit",
+    clarifyTimeoutSeconds: "inherit",
+  });
+  const startupPolicies: boolean[] = [];
+  let release!: () => void,
+    began!: () => void,
+    hold = false;
+  const blocked = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const activationStarted = new Promise<void>(resolve => {
+    began = resolve;
+  });
+  const driver = new RuntimeCoordinator({
+    projectRegistry: registry,
+    extensionFactories: [
+      pi => {
+        pi.on("session_start", (_event, ctx) => {
+          pi.events.emit("pylon:runtime-policy-request", {
+            version: 1,
+            sessionId: ctx.sessionManager.getSessionId(),
+            respond: (policy: any) => startupPolicies.push(policy.timelineEnabled),
+          });
+        });
+        pi.events.on("pylon:runtime-policy", (policy: any) => {
+          if (!hold || !policy.timelineEnabled) return;
+          hold = false;
+          policy.waitUntil(blocked);
+          began();
+        });
+      },
+    ],
+  });
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    assert.deepEqual(startupPolicies, [false]);
+    const snapshot = await driver.snapshot();
+    hold = true;
+    let completed = false;
+    const update = driver
+      .updateRuntimePolicy({
+        type: "updateRuntimePolicy",
+        scope: "project",
+        verify: snapshot.runtimePolicy.project.verify,
+        timeline: "enabled",
+        guard: "inherit",
+        guardRules: {},
+        workspace: "inherit",
+        guardTimeoutSeconds: "inherit",
+        clarifyTimeoutSeconds: "inherit",
+        expectedRevision: snapshot.runtimePolicy.revision,
+        expectedGeneration: snapshot.sessionGeneration,
+        commandId: "enable-timeline",
+      })
+      .then(() => {
+        completed = true;
+      });
+    await activationStarted;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(completed, false);
+    release();
+    await update;
+    assert.equal((await driver.snapshot()).runtimePolicy.effective.timelineEnabled, true);
+  } finally {
+    release();
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("project and session policies defer effective changes until a running turn settles", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-deferred-policy-"));
   const cwd = join(root, "workspace");

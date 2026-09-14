@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configPath, effectiveConfig, loadConfig, saveConfig } from "../src/config.ts";
@@ -55,6 +55,22 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
       mainPrompt: { mode: "default", text: "" },
     });
     assert.equal(JSON.parse(await readFile(configPath(agentDir), "utf8")).lineEditEnabled, false);
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("newer pylon-core settings are preserved and protected from older writes", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pylon-core-newer-"));
+  const path = configPath(agentDir);
+  const contents = JSON.stringify({ version: 2, lineEditEnabled: false, futurePolicy: true });
+  try {
+    await mkdir(join(agentDir, "pylon-core"), { recursive: true });
+    await writeFile(path, contents);
+    assert.deepEqual(await loadConfig(path), { version: 1, lineEditEnabled: true });
+    assert.equal(await readFile(path, "utf8"), contents);
+    await assert.rejects(saveConfig({ version: 1, lineEditEnabled: true }, path), /newer than supported/);
+    assert.equal(await readFile(path, "utf8"), contents);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }

@@ -73,6 +73,27 @@ test("SQLite preserves overrides/unbinding across restart and CAS prevents two c
   }
 });
 
+test("historical additive schema v2 remains compatible with the v1 reader", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pylon-keyboard-v2-"));
+  const path = join(dir, "settings.sqlite");
+  try {
+    new KeyboardSettingsStore(path).close();
+    let db = new DatabaseSync(path);
+    db.exec("PRAGMA user_version=2");
+    db.close();
+
+    const reopened = new KeyboardSettingsStore(path);
+    assert.deepEqual(reopened.read().keymap, DEFAULT_KEYMAP);
+    reopened.close();
+
+    db = new DatabaseSync(path);
+    assert.equal(db.prepare("PRAGMA user_version").get()?.user_version, 1);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("unsupported or damaged persistent settings fail closed without replacing data", () => {
   const dir = mkdtempSync(join(tmpdir(), "pylon-keyboard-corrupt-"));
   const path = join(dir, "settings.sqlite");
@@ -121,7 +142,11 @@ test("logical primary bindings match exact modifiers without swallowing IME, rep
   assert.equal(matchesBinding(stroke("+", { ctrlKey: true, shiftKey: true }), plus, false), true);
   assert.equal(matchesBinding(stroke("+", { metaKey: true, shiftKey: true }), plus, true), true);
   assert.equal(matchesBinding(stroke("+", { ctrlKey: true, shiftKey: true }), plus, true), false);
-  for (const [id, key] of [["copy-entry", "c"], ["cut-entry", "x"], ["paste-entry", "v"]] as const) {
+  for (const [id, key] of [
+    ["copy-entry", "c"],
+    ["cut-entry", "x"],
+    ["paste-entry", "v"],
+  ] as const) {
     const binding = effectiveBinding(DEFAULT_KEYMAP, id);
     assert.equal(matchesBinding(stroke(key, { ctrlKey: true }), binding, false), true);
     assert.equal(matchesBinding(stroke(key, { metaKey: true }), binding, true), true);

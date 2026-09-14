@@ -103,17 +103,25 @@ export default function discoverExtension(pi: ExtensionAPI) {
   });
   const disposeIndexActions = pi.events.on("pi-discover:index-action", index.handleAction);
   const disposeSymbolQueries = pi.events.on("pi-discover:symbol-query", index.handleSymbolQuery);
+  let started = false;
 
   pi.on("session_start", async (_event, ctx) => {
+    started = false;
+    index.setWorkspace(ctx);
     Object.assign(settings, await configuredSettings);
     discovery.clearSessionState();
     configureDeferredTools();
-    index.scheduleRefresh(ctx);
+    started = true;
+  });
+  // Pi emits this only after every session_start handler has completed.
+  pi.on("resources_discover", (_event, ctx) => {
+    if (started) index.scheduleRefresh(ctx);
   });
   pi.on("turn_end", () => discovery.clearTurnState());
   pi.on("before_agent_start", (event: any) => discovery.guidanceFor(event));
   pi.on("tool_call", (event: any) => discovery.noteToolCall(event?.toolName));
   pi.on("session_shutdown", async () => {
+    started = false;
     await index.stop();
     disposeChildCapability();
     disposeHealth();

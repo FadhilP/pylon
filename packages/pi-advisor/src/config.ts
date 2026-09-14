@@ -9,6 +9,7 @@ import {
   validPackageSettingValue,
   type PackageSettingField,
 } from "pylon-core/package-settings";
+import { assertJsonConfigWritable } from "pylon-core/json-config";
 
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof thinkingLevels)[number];
@@ -121,6 +122,7 @@ export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-advis
 export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
+    if (Number.isSafeInteger(value?.version) && value.version > 1) return { version: 1 };
     if (
       value?.version !== 1 ||
       (value.advisorModel !== undefined && (typeof value.advisorModel !== "string" || !value.advisorModel.trim())) ||
@@ -150,6 +152,7 @@ export async function loadConfig(path = configPath()): Promise<AdvisorConfig> {
   }
 }
 export async function saveConfig(config: AdvisorConfig, path = configPath()): Promise<void> {
+  await assertJsonConfigWritable(path, 1);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {

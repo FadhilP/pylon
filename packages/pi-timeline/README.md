@@ -27,6 +27,8 @@ Every restore requires confirmation. Native `/tree` remains conversation-only. I
 
 Timeline stores synthetic commits under `refs/pi-timeline/...` in every participating repository. It recursively includes initialized nested repositories from Git links/non-ignored embedded repositories, without requiring `.gitmodules`. A hidden session-start baseline means the first displayed change is measured from session start while the checkpoint still contains the complete worktree; later change labels compare to the previous checkpoint.
 
+Pylon skips creating this baseline when Timeline is disabled by policy. If enabled later, it captures the baseline before activation completes, using the state at enablement rather than reconstructing an earlier session-start state. Existing persisted baselines and checkpoints are reused.
+
 Automatic capture occurs only after mutation-capable tools change or may change Git-backed state. Read-only turns and unchanged Bash skip it; rollback and Guard checkpoints are unconditional. With Pylon, shell detection is shared once per turn with Continuity; standalone Timeline compares per call. Checkpoints do not change `HEAD`, branch, stash, or ignored files. They record branch/detached state only for display.
 
 Semantic checkpoint titles are off by default. Pylon Web settings can enable current-session or separate-model titles. The filesystem checkpoint is always written first; a bounded background title request then uses short prompt/response/changed-path excerpts. Until valid output arrives, the prompt remains label. Each changed turn can add model cost. Session titles similarly run once after the first settled turn and never replace existing/manual/cleared names.
@@ -35,7 +37,7 @@ Semantic checkpoint titles are off by default. Pylon Web settings can enable cur
 
 Format V6 stores the session-start baseline. V4+ records Git common-directory identity, allowing a Pylon session moved between linked worktree and registered checkout to retain refs/restoration. V3 migrates only from its original checkout; unprovable relocation fails closed. Git operations time out after two minutes.
 
-Ordinary untracked files are included; common credential files (`.env*`, `.npmrc`, `.pypirc`, key files) are refused. On startup Timeline removes refs for deleted sessions with no live lease; failed session discovery/repository access fails closed. Ephemeral-session refs are removed on clean shutdown.
+Ordinary untracked files are included; common credential files (`.env*`, `.npmrc`, `.pypirc`, key files) are refused. Startup registers its lease before capturing a baseline. After all `session_start` hooks finish, `resources_discover` schedules background cleanup of deleted-session refs, coalesced per artifact root. Inventory, live-lease checks, and deletion remain locked and fail closed on unreadable state; a new startup can still wait behind already-running maintenance. Shutdown cancels queued cleanup, drains running cleanup, and removes ephemeral-session refs.
 
 Valid Continuity `pylon-run` metadata groups planner/executor/reviewer checkpoints into one run timeline; linked checkpoint selection switches to its owner before restore/fork. Other sessions remain session-local. Matching successful Verify metadata attaches by exact worktree identity. Before Guard asks for destructive approval, Timeline attempts a recoverable checkpoint; Guard still controls approval/blocking.
 

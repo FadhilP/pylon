@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PackageCatalog } from "../src/server/packages/package-catalog.ts";
@@ -80,6 +80,25 @@ test("pylon-core is always enabled and cannot be disabled", async () => {
     assert.equal(state.packages[0]?.required, true);
     assert.equal(state.enabledIds.has("pylon-core"), true);
     await assert.rejects(catalog.setEnabled("pylon-core", false), /required/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("newer package enablement stays intact and cannot be overwritten", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-package-newer-"));
+  const agentDir = join(root, "agent");
+  const config = join(agentDir, "pylon-web", "packages.json");
+  const contents = JSON.stringify({ version: 2, enabled: ["pi-a"], policy: "future" });
+  try {
+    await addPackage(root, "pi-a");
+    await mkdir(join(agentDir, "pylon-web"), { recursive: true });
+    await writeFile(config, contents);
+    const catalog = new PackageCatalog(root, agentDir);
+
+    assert.deepEqual([...(await catalog.scan()).enabledIds], ["pylon-core"]);
+    await assert.rejects(catalog.setEnabled("pi-a", true), /newer than supported/);
+    assert.equal(await readFile(config, "utf8"), contents);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

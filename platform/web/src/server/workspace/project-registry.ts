@@ -21,6 +21,7 @@ import type {
 } from "../../shared/protocol/snapshots.ts";
 import { GENERAL_PROJECT_ID, GENERAL_PROJECT_LABEL } from "../../shared/sessions/general-session.ts";
 
+// Increment only when persisted meaning changes or migration is required; additive fields stay compatible.
 const VERSION = 13;
 const MAX_PROJECTS = 100;
 const MAX_ARCHIVED_SESSIONS = 10_000;

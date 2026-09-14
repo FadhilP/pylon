@@ -244,7 +244,19 @@ export class PackageCatalog {
     }
   }
 
+  private async assertConfigWritable(): Promise<void> {
+    try {
+      const value = JSON.parse(await readFile(this.configPath, "utf8")) as { version?: unknown };
+      if (Number.isSafeInteger(value?.version) && Number(value.version) > 1)
+        throw new Error(`Package configuration version ${value.version} is newer than supported version 1`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return;
+      throw error;
+    }
+  }
+
   private async writeEnabled(enabledIds: Set<string>): Promise<void> {
+    await this.assertConfigWritable();
     await mkdir(dirname(this.configPath), { recursive: true });
     const tempPath = `${this.configPath}.${randomUUID()}.tmp`;
     const body = `${JSON.stringify({ version: 1, enabled: [...enabledIds].sort() } satisfies PackageConfig, null, 2)}\n`;

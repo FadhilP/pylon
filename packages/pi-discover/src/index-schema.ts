@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,18 +8,9 @@ export function indexDatabasePath(
   agentDir = typeof getAgentDir === "function" ? getAgentDir() : join(homedir(), ".pi", "agent"),
 ): string {
   if (process.env.PI_DISCOVER_INDEX_PATH) return process.env.PI_DISCOVER_INDEX_PATH;
-  const current = join(agentDir, "pi-discover", "index.sqlite");
-  const legacy = join(agentDir, "indexes", "pi-discover.sqlite");
-  if (existsSync(current) || !existsSync(legacy)) return current;
-  mkdirSync(dirname(current), { recursive: true });
-  const database = new DatabaseSync(legacy);
-  try {
-    database.exec("PRAGMA busy_timeout=1000; PRAGMA wal_checkpoint(TRUNCATE);");
-  } finally {
-    database.close();
-  }
-  renameSync(legacy, current);
-  return current;
+  // Derived indexes use a generation-specific file so older and newer Pylon
+  // versions never rewrite or reject each other's cache.
+  return join(agentDir, "pi-discover", "index-v4.sqlite");
 }
 
 const SCHEMA_VERSION = 4;

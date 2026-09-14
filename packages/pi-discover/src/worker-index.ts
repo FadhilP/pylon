@@ -19,7 +19,8 @@ export class WorkerIndex {
     this.worker = new Worker(new URL("./index-worker.mjs", import.meta.url), {
       workerData: { cwd, path, timeout, filesystemVerifyIntervalMs },
       // The bootstrap supplies its own TS loader; do not inherit host test, profiler or loader hooks.
-      execArgv: [],
+      // Suppress only the warning emitted by its required stripTypeScriptTypes() call.
+      execArgv: ["--disable-warning=ExperimentalWarning"],
     });
     this.worker.on("message", message => {
       if (message.type === "exec") {

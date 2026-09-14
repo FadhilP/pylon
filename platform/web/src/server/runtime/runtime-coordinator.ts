@@ -2588,7 +2588,7 @@ export class RuntimeCoordinator implements PiDriver {
     const policy = this.registry().runtimePolicy(projectId, slot.id);
     policy.effective = structuredClone(current.runtimePolicy.effective);
     policy.availableVerifyChecks = current.runtimePolicy.availableVerifyChecks.map(check => ({ ...check }));
-    slot.driver.applyRuntimePolicy(policy);
+    await slot.driver.applyRuntimePolicy(policy);
     this.emitRuntimePolicyChanged(slot);
   }
 
@@ -2627,7 +2627,7 @@ export class RuntimeCoordinator implements PiDriver {
           this.registry().workspaceForSession(slot.id)?.mode ?? current.runtimePolicy.effective.workspace;
       }
       policy.availableVerifyChecks = current.runtimePolicy.availableVerifyChecks.map(check => ({ ...check }));
-      slot.driver.applyRuntimePolicy(policy);
+      await slot.driver.applyRuntimePolicy(policy);
       this.emitRuntimePolicyChanged(slot);
     })().finally(() => {
       if (slot.policyActivation === activation) slot.policyActivation = undefined;

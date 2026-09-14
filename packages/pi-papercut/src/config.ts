@@ -65,6 +65,7 @@ export async function loadConfig(path = configPath()): Promise<PapercutConfig> {
       return config;
     },
     defaultConfig,
+    1,
   );
 }
 

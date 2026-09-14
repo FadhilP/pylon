@@ -1,5 +1,17 @@
 [
   {
+    "version": "3.1.6",
+    "date": "Sep 14, 2026",
+    "title": "Safer upgrades and coordinated startup maintenance",
+    "summary": "A maintenance release protects persisted state from incompatible downgrades, coordinates background startup work, and makes Timeline snapshots and activation more reliable.",
+    "notes": [
+      "Prevented older Pylon versions from quarantining or overwriting valid configuration and persisted state created by newer incompatible versions across bundled agents, Web package settings, keyboard settings, and project storage.",
+      "Deferred Discover indexing and Continuity and Timeline cleanup until startup hooks finish, coalesced maintenance per workspace root, and safely cancelled or drained queued work during workspace changes and shutdown.",
+      "Made Timeline capture a baseline only when enabled, await baseline creation before policy activation, block dependent tools when activation fails, and clean up failed or stale captures.",
+      "Hardened Timeline Git snapshots against repository identity changes, concurrent index and worktree updates, and paths containing newlines, while making Web policy activation awaitable and surfacing slow startup handlers in diagnostics."
+    ]
+  },
+  {
     "version": "3.1.5",
     "date": "Sep 13, 2026",
     "title": "Durable Web preferences and drafts",

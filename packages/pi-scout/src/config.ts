@@ -126,6 +126,7 @@ export async function loadConfig(path = configPath()): Promise<ScoutConfig> {
       } satisfies ScoutConfig;
     },
     defaultConfig,
+    1,
   );
 }
 

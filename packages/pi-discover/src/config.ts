@@ -119,6 +119,7 @@ export async function loadConfig(path = configPath()): Promise<DiscoverConfig> {
       return config;
     },
     defaultConfig,
+    1,
   );
 }
 

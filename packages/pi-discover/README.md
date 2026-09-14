@@ -36,6 +36,8 @@ Historical tools are deferred by default and must be loaded through `search_tool
 
 The code index is a machine-local SQLite database shared per canonical physical root and scoped back to each logical workspace. Git repositories use Git inventory and dirty paths; ordinary directories use native filesystem scans without requiring Git, ripgrep, or fd. Source files are never changed. Files over 512 KiB, binaries, symlinks, ignored files, and unsupported extensions are skipped. Refreshes and schema upgrades use transactions; SQLite uses WAL and bounded locking.
 
+Automatic refresh is queued from Pi's `resources_discover` phase, after all `session_start` hooks finish, rather than competing with startup baseline capture. Shutdown cancels queued refreshes and drains any already running. Explicit indexed searches still refresh on demand.
+
 `symbol_search` is case-insensitive exact/prefix/substring matching with optional path, language, and kind filters. Extraction is heuristic. `code_search` is FTS5 lexical ranking, not semantic/embedding search, and defaults to ten one-line excerpts. Both refresh first and report bounded JSON/truncation counts. The database defaults to:
 
 ```text

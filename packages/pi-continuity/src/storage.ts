@@ -23,17 +23,46 @@ export async function readJson<T>(path: string, fallback: T, valid: (x: any) => 
   }
 }
 
-/** Missing files use the fallback. Unsupported/malformed state is backed up; operational failures propagate. */
+/** Missing files use the fallback. Malformed files are backed up; unsupported parsed state is preserved and refused. */
 export async function readVersionedJson<T>(path: string, fallback: T, valid: (x: any) => boolean): Promise<T> {
+  let raw: string;
   try {
-    const value = JSON.parse(await readFile(path, "utf8"));
-    if (!valid(value)) throw invalidData("unsupported schema");
-    return value;
+    raw = await readFile(path, "utf8");
   } catch (error: any) {
     if (error?.code === "ENOENT") return structuredClone(fallback);
-    if (!recoverableDataError(error)) throw error;
-    await rename(path, `${path}.reset-unsupported-${randomUUID()}`);
+    throw error;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    await rename(path, `${path}.corrupt-${randomUUID()}`);
     return structuredClone(fallback);
+  }
+  if (!valid(value)) throw invalidData("unsupported versioned JSON state");
+  return value as T;
+}
+
+/** Refuse to replace versioned state created by a newer incompatible generation. */
+export async function assertVersionedJsonWritable(
+  path: string,
+  field: "version" | "schemaVersion",
+  currentVersion: number,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (Number.isSafeInteger(value?.[field]) && Number(value[field]) > currentVersion)
+      throw invalidData(`stored ${field} is newer than supported version ${currentVersion}`);
+  } catch (error) {
+    if (error instanceof SyntaxError) return;
+    throw error;
   }
 }
 
@@ -81,8 +110,7 @@ export async function withFileLock<T>(path: string, task: () => Promise<T>): Pro
     try {
       await mkdir(lock, { mode: 0o700 });
     } catch (error: any) {
-      if (attempt >= LOCK_WAIT_ATTEMPTS)
-        throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
+      if (attempt >= LOCK_WAIT_ATTEMPTS) throw Error(`Unable to lock continuity state: ${path}`, { cause: error });
       if (error?.code === "EEXIST") {
         if (!(await removeStaleLock(lock))) await delay(LOCK_RETRY_MS);
         continue;

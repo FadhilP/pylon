@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ROLLOVER_HIGH_MULTIPLIER, DEFAULT_ROLLOVER_LOW_MULTIPLIER, SIEVE_THRESHOLD } from "./sieve.ts";
+import { assertJsonConfigWritable } from "pylon-core/json-config";
 
 export const MIN_SIEVE_THRESHOLD = 1_000;
 export const MAX_SIEVE_THRESHOLD = 50_000;
@@ -73,6 +74,7 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
 
   try {
     const value = JSON.parse(serialized);
+    if (Number.isSafeInteger(value?.version) && value.version > 1) return defaultConfig();
     if (
       !value ||
       typeof value !== "object" ||
@@ -109,6 +111,7 @@ export async function loadConfig(path = configPath()): Promise<SieveConfig> {
 }
 
 export async function saveConfig(config: SieveConfig, path = configPath()): Promise<void> {
+  await assertJsonConfigWritable(path, 1);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {

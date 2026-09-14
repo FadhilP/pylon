@@ -98,31 +98,31 @@ async function temporaryIndex<T>(run: (env: Record<string, string>) => Promise<T
   }
 }
 
-async function currentIndexTree(root: string): Promise<string> {
-  const source = await git(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+async function currentIndexTree(root: string, runGit = git): Promise<string> {
+  const source = await runGit(root, ["rev-parse", "--path-format=absolute", "--git-path", "index"]);
   return temporaryIndex(async env => {
     const target = env.GIT_INDEX_FILE!;
     try {
       await copyFile(source, target);
     } catch (error: any) {
       if (error?.code !== "ENOENT") throw error;
-      await git(root, ["read-tree", "--empty"], env);
+      await runGit(root, ["read-tree", "--empty"], env);
     }
-    return git(root, ["write-tree"], env);
+    return runGit(root, ["write-tree"], env);
   });
 }
 
-async function currentTree(root: string, head?: string, changedPaths?: string[]): Promise<string> {
+async function currentTree(root: string, head?: string, changedPaths?: string[], runGit = git): Promise<string> {
   return temporaryIndex(async env => {
-    await git(root, head ? ["read-tree", head] : ["read-tree", "--empty"], env);
+    await runGit(root, head ? ["read-tree", head] : ["read-tree", "--empty"], env);
     const boundedPaths =
       changedPaths?.length &&
       changedPaths.length <= 500 &&
       changedPaths.reduce((size, path) => size + path.length + 1, 0) <= 24_000
         ? changedPaths.map(path => `:(literal)${path}`)
         : ["."];
-    await git(root, ["add", "-A", "--", ...boundedPaths], env);
-    return git(root, ["write-tree"], env);
+    await runGit(root, ["add", "-A", "--", ...boundedPaths], env);
+    return runGit(root, ["write-tree"], env);
   });
 }
 
@@ -1105,20 +1105,21 @@ export async function captureCheckoutState(cwd: string, validateForMutation = fa
   const workspace = await inspectGitWorkspace(cwd);
   if (!workspace) throw Error("Workspace is not a Git checkout.");
   if (validateForMutation) await assertSafeCheckout(workspace);
+  return { ...workspace, ...(await captureCheckoutTrees(workspace.root, workspace.head)) };
+}
 
-  // Observe the same set of paths that currentTree will stage. A second observation
-  // below makes the cheap clean path safe when the index or worktree changes mid-capture.
+/** Capture with the caller's Git runner so its timeout policy also covers tree construction. */
+export async function captureCheckoutTrees(root: string, expectedHead: string | undefined, runGit = git) {
+  const readHead = () => {
+    const pending = runGit(root, ["rev-parse", "--verify", "HEAD"]);
+    return expectedHead ? pending : pending.catch(() => undefined);
+  };
+  // Recheck status/HEAD after construction, including the cheap clean path.
   for (let attempt = 0; attempt <= snapshotRetryDelaysMs.length; attempt++) {
-    const rawStatus = await git(workspace.root, [
-      "status",
-      "--porcelain=v2",
-      "--branch",
-      "-z",
-      "--untracked-files=all",
-    ]);
+    const rawStatus = await runGit(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
     const status = parseWorktreeStatus(rawStatus);
-    const observedHead = await head(workspace.root);
-    if (status.head !== (observedHead ?? "(initial)") || observedHead !== workspace.head) {
+    const observedHead = await readHead();
+    if (status.head !== (observedHead ?? "(initial)") || observedHead !== expectedHead) {
       if (attempt === snapshotRetryDelaysMs.length) break;
       await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
       continue;
@@ -1126,27 +1127,29 @@ export async function captureCheckoutState(cwd: string, validateForMutation = fa
 
     let indexTree: string;
     let worktreeTree: string;
-    if (!status.dirty && workspace.head) {
-      // A clean index and worktree are both precisely HEAD's tree; avoid copying
-      // the index or invoking git add in the common case.
-      worktreeTree = indexTree = await git(workspace.root, ["rev-parse", `${workspace.head}^{tree}`]);
+    if (!status.dirty && expectedHead) {
+      worktreeTree = indexTree = await runGit(root, ["rev-parse", `${expectedHead}^{tree}`]);
     } else if (!status.dirty) {
-      // An unborn but genuinely empty checkout has no HEAD tree. Its empty index is
-      // the equivalent tree, and reading it does not stage ignored files.
-      worktreeTree = indexTree = await currentIndexTree(workspace.root);
+      worktreeTree = indexTree = await currentIndexTree(root, runGit);
     } else {
-      [indexTree, worktreeTree] = await Promise.all([
-        currentIndexTree(workspace.root),
-        currentTree(workspace.root, workspace.head, status.paths),
+      // Drain both temporary indexes before reporting failure to the caller.
+      const [index, worktree] = await Promise.allSettled([
+        currentIndexTree(root, runGit),
+        currentTree(root, expectedHead, status.paths, runGit),
       ]);
+      if (index.status === "rejected") throw index.reason;
+      if (worktree.status === "rejected") throw worktree.reason;
+      indexTree = index.value;
+      worktreeTree = worktree.value;
     }
 
     const [latestStatus, latestHead] = await Promise.all([
-      git(workspace.root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
-      head(workspace.root),
+      runGit(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
+      readHead(),
     ]);
-    if (latestStatus === rawStatus && latestHead === workspace.head) return { ...workspace, indexTree, worktreeTree };
-    if (attempt < snapshotRetryDelaysMs.length) await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
+    if (latestStatus === rawStatus && latestHead === expectedHead) return { indexTree, worktreeTree };
+    if (attempt < snapshotRetryDelaysMs.length)
+      await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
   }
   throw Error("Git checkout changed during capture.");
 }

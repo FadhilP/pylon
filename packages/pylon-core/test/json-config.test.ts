@@ -29,16 +29,29 @@ test("a valid config round-trips through save and load", async () => {
   assert.deepEqual(await readdir(join(dir, "nested")), ["config.json"], "a successful save leaves no temporary file");
 });
 
-test("unparseable and structurally invalid configs are quarantined, not deleted", async () => {
-  for (const contents of ["{not json", JSON.stringify({ version: 9 })]) {
+test("unparseable and structurally invalid supported configs are quarantined, not deleted", async () => {
+  for (const contents of ["{not json", JSON.stringify({ version: 1, name: 42 })]) {
     const dir = await scratch();
     const path = join(dir, "config.json");
     await writeFile(path, contents);
-    assert.deepEqual(await loadJsonConfig(path, parse, fallback), { version: 1 });
+    assert.deepEqual(await loadJsonConfig(path, parse, fallback, 1), { version: 1 });
     const aside = await quarantined(dir);
     assert.equal(aside.length, 1, contents);
     assert.equal(await readFile(join(dir, aside[0]), "utf8"), contents, "the original bytes are recoverable");
   }
+});
+
+test("newer configs remain in place and cannot be overwritten by an older writer", async () => {
+  const dir = await scratch();
+  const path = join(dir, "config.json");
+  const contents = JSON.stringify({ version: 9, name: "future", added: true });
+  await writeFile(path, contents);
+
+  assert.deepEqual(await loadJsonConfig(path, parse, fallback, 1), { version: 1 });
+  assert.equal(await readFile(path, "utf8"), contents);
+  assert.deepEqual(await quarantined(dir), []);
+  await assert.rejects(saveJsonConfig({ version: 1, name: "older" }, path), /newer than supported/);
+  assert.equal(await readFile(path, "utf8"), contents);
 });
 
 test("a failed atomic save preserves the destination and removes its temporary file", async t => {

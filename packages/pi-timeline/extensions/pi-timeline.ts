@@ -88,6 +88,7 @@ export default function timelineExtension(
   const checkpointNaming = { generation: 0, inFlight: new Set<string>() };
   /** Persisted session-start state until the first checkpoint consumes it as a diff base. */
   let sessionBaseline: { entryId: string; snapshot: Snapshot } | undefined;
+  let baselinePending: Promise<void> | undefined;
 
   /** Tracks worktree mutations that should trigger an automatic checkpoint. */
   const mutations = {
@@ -104,10 +105,12 @@ export default function timelineExtension(
   /** Identity and lifecycle of the session this extension instance is attached to. */
   const session = {
     id: "",
+    generation: 0,
     ephemeral: false,
     agentRunning: false,
     shuttingDown: false,
-    releaseLease: undefined as ((cleanupIfLast?: boolean) => Promise<void>) | undefined,
+    maintenanceReady: false,
+    releaseLease: undefined as Awaited<ReturnType<typeof startSessionGc>> | undefined,
   };
 
   let stateRevision = 0,
@@ -239,11 +242,25 @@ export default function timelineExtension(
       typeof value.timelineEnabled !== "boolean"
     )
       return;
+    const wasEnabled = enabled;
     enabled = value.timelineEnabled;
     if (!enabled) {
       mutations.automatic = false;
       mutations.pending.clear();
       mutations.heartbeatJobs.clear();
+    }
+    if (enabled && !wasEnabled && lastCtx && !session.shuttingDown) {
+      const generation = session.generation;
+      const activation = establishSessionBaseline(lastCtx, true).catch(error => {
+        if (session.generation === generation) {
+          enabled = false;
+          publishState();
+        }
+        throw error;
+      });
+      if (typeof value.waitUntil === "function") value.waitUntil(activation);
+      // Standalone event publishers may not await policy activation.
+      void activation.catch(() => {});
     }
     publishState();
   });
@@ -750,35 +767,58 @@ export default function timelineExtension(
     return undefined;
   };
 
-  const establishSessionBaseline = async (ctx: any) => {
-    sessionBaseline = undefined;
-    if ([...checkpoints.records.values()].some(bound => bound.sessionId === session.id)) return;
-    const entries = ctx.sessionManager.getEntries();
-    sessionBaseline = persistedSessionBaseline(entries, session.id);
-    if (sessionBaseline) return;
-    try {
-      const snapshot = await capture(ctx.cwd, session.id, root => recordTimelineOwner(artifactRoot, session.id, root));
-      const record: TimelineBaselineV1 = {
-        version: 1,
-        kind: "pi-timeline-baseline",
-        ownerSessionId: session.id,
-        createdAt: new Date().toISOString(),
-        ...snapshot,
-      };
-      pi.appendEntry("pi-timeline-baseline", record);
-      const entryId = ctx.sessionManager.getLeafId();
-      if (!entryId) {
-        await deleteRefs(snapshot);
-        return;
+  const establishSessionBaseline = (ctx: any, strict = false): Promise<void> => {
+    if (baselinePending) return baselinePending;
+    const sessionId = session.id,
+      generation = session.generation;
+    const pending = (async () => {
+      sessionBaseline = undefined;
+      if ([...checkpoints.records.values()].some(bound => bound.sessionId === sessionId)) return;
+      const entries = ctx.sessionManager.getEntries();
+      sessionBaseline = persistedSessionBaseline(entries, sessionId);
+      if (sessionBaseline || !enabled) return;
+      let snapshot: Snapshot | undefined;
+      try {
+        snapshot = await capture(ctx.cwd, sessionId, root => recordTimelineOwner(artifactRoot, sessionId, root));
+        if (
+          session.generation !== generation ||
+          session.shuttingDown ||
+          ctx.sessionManager.getSessionId() !== sessionId
+        ) {
+          await deleteRefs(snapshot);
+          return;
+        }
+        const record: TimelineBaselineV1 = {
+          version: 1,
+          kind: "pi-timeline-baseline",
+          ownerSessionId: sessionId,
+          createdAt: new Date().toISOString(),
+          ...snapshot,
+        };
+        pi.appendEntry("pi-timeline-baseline", record);
+        const entryId = ctx.sessionManager.getLeafId();
+        if (!entryId) {
+          await deleteRefs(snapshot);
+          if (strict) throw Error("Timeline baseline could not be persisted.");
+          return;
+        }
+        sessionBaseline = { entryId, snapshot };
+      } catch (error: any) {
+        if (snapshot) await deleteRefs(snapshot).catch(() => {});
+        if (ctx.hasUI && session.generation === generation)
+          ctx.ui.notify(
+            strict
+              ? `Timeline could not be enabled: ${error.message}`
+              : `Timeline session baseline unavailable; first checkpoint may include earlier changes: ${error.message}`,
+            "warning",
+          );
+        if (strict) throw error;
       }
-      sessionBaseline = { entryId, snapshot };
-    } catch (error: any) {
-      if (ctx.hasUI)
-        ctx.ui.notify(
-          `Timeline session baseline unavailable; first checkpoint may include earlier changes: ${error.message}`,
-          "warning",
-        );
-    }
+    })().finally(() => {
+      if (baselinePending === pending) baselinePending = undefined;
+    });
+    baselinePending = pending;
+    return pending;
   };
   const load = async (ctx: any) => {
     checkpoints.records = new Map();
@@ -834,6 +874,7 @@ export default function timelineExtension(
     }
   };
   async function checkpoint(ctx: any, source?: "pi-guard"): Promise<Snapshot | undefined> {
+    await baselinePending;
     if (!enabled) return;
     const branch = ctx.sessionManager.getBranch(),
       user = [...branch].reverse().find((e: any) => e.type === "message" && e.message.role === "user") as any;
@@ -963,6 +1004,11 @@ export default function timelineExtension(
     publishState();
   });
   pi.on("session_start", async (_e, ctx) => {
+    session.maintenanceReady = false;
+    session.releaseLease?.cancel();
+    session.generation++;
+    await baselinePending?.catch(() => {});
+    sessionBaseline = undefined;
     lastCtx = ctx;
     latestVerification = undefined;
     mutations.pending.clear();
@@ -982,6 +1028,15 @@ export default function timelineExtension(
     const reuseSessionLease = !!session.releaseLease && session.id === nextSessionId;
     if (session.releaseLease && !reuseSessionLease) await session.releaseLease(session.ephemeral);
     session.id = nextSessionId;
+    enabled = true;
+    pi.events.emit?.("pylon:runtime-policy-request", {
+      version: 1,
+      sessionId: session.id,
+      respond: (value: any) => {
+        if (value?.version === 1 && value.sessionId === nextSessionId && typeof value.timelineEnabled === "boolean")
+          enabled = value.timelineEnabled;
+      },
+    });
     if (!reuseSessionLease) session.releaseLease = await startSessionGc(artifactRoot, session.id);
     session.ephemeral = !ctx.sessionManager.getSessionFile?.();
     await load(ctx);
@@ -995,9 +1050,19 @@ export default function timelineExtension(
     refresh(ctx);
     publishState();
     void hydrateLegacyChanges(session.id);
+    session.maintenanceReady = true;
+  });
+  pi.on("resources_discover", () => {
+    if (session.maintenanceReady)
+      void session.releaseLease
+        ?.collect()
+        .catch(() => console.warn("[pi-timeline] Session artifact cleanup failed; retained for retry."));
   });
   pi.on("session_shutdown", async event => {
+    session.maintenanceReady = false;
+    session.releaseLease?.cancel();
     session.shuttingDown = true;
+    session.generation++;
     naming.generation++;
     naming.inFlight = undefined;
     checkpointNaming.generation++;
@@ -1018,6 +1083,7 @@ export default function timelineExtension(
     disposeDiffRequest();
     disposeHistoryRequest();
     disposeRuntimePolicy();
+    await baselinePending?.catch(() => {});
     await mutations.checkpoint?.catch(() => {});
     mutations.checkpoint = undefined;
     if (sessionBaseline && event.reason !== "reload" && !session.ephemeral) {
@@ -1097,6 +1163,11 @@ export default function timelineExtension(
     session.agentRunning = true;
   });
   pi.on("tool_call", async (event, ctx) => {
+    try {
+      await baselinePending;
+    } catch {
+      return { block: true, reason: "Timeline activation failed; retry after updating its policy." };
+    }
     if (enabled && ((event.toolName === "bash" && !sharedWorktreeObserver) || event.toolName === "grunt"))
       mutations.pending.set(event.toolCallId, await worktreeFingerprint(ctx.cwd));
   });

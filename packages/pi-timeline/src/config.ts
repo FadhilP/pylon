@@ -9,6 +9,7 @@ import {
   validPackageSettingValue,
   type PackageSettingField,
 } from "pylon-core/package-settings";
+import { assertJsonConfigWritable } from "pylon-core/json-config";
 
 export const timelineSettingFields = {
   gitTimeoutMs: {
@@ -121,6 +122,7 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
     throw error;
   }
   const value = JSON.parse(serialized);
+  if (Number.isSafeInteger(value?.version) && value.version > 1) return defaultConfig();
   const validModel =
     value.checkpointTitleModel === undefined ||
     (typeof value.checkpointTitleModel === "string" && !!value.checkpointTitleModel.trim());
@@ -151,6 +153,7 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
 }
 
 export async function saveConfig(config: TimelineConfig, path = configPath()): Promise<void> {
+  await assertJsonConfigWritable(path, 1);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {

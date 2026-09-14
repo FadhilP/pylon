@@ -136,6 +136,7 @@ export async function loadConfig(path = configPath()): Promise<PylonCoreConfig> 
   }
   try {
     const value = JSON.parse(serialized);
+    if (Number.isSafeInteger(value?.version) && value.version > 1) return defaultConfig();
     if (value?.version !== 1 || typeof value.lineEditEnabled !== "boolean") throw new Error("invalid config");
     const config: PylonCoreConfig = { version: 1, lineEditEnabled: value.lineEditEnabled };
     for (const field of pylonCoreSettings.fields.slice(1)) {

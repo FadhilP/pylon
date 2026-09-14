@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,14 @@ import { capture } from "../src/snapshot.ts";
 import { cleanupTimelineSession, recordTimelineOwner, readLockOwner, startSessionGc } from "../src/session-gc.ts";
 
 const exec = promisify(execFile);
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function repository() {
   const root = await mkdtemp(join(tmpdir(), "timeline-session-gc-repo-"));
   const git = async (...args: string[]) => (await exec("git", args, { cwd: root, windowsHide: true })).stdout.trim();
@@ -54,6 +62,7 @@ test("timeline GC removes deleted-session refs and preserves persisted or leased
     assert.equal((await refs(git)).length, 6);
 
     const releaseCurrent = await startSessionGc(artifacts, "current", async () => [{ id: "persisted" }]);
+    await releaseCurrent.collect();
     assert.equal((await refs(git)).length, 4);
 
     await cleanupTimelineSession(artifacts, "leased");
@@ -62,10 +71,12 @@ test("timeline GC removes deleted-session refs and preserves persisted or leased
     assert.equal((await refs(git)).length, 4, "second lease blocks ephemeral cleanup");
     await releaseCurrent();
     const releaseNext = await startSessionGc(artifacts, "next", async () => [{ id: "persisted" }]);
+    await releaseNext.collect();
     assert.equal((await refs(git)).length, 4, "second lease keeps same session refs live");
     await releaseSameSession();
     await releaseNext();
     const releaseFinal = await startSessionGc(artifacts, "final", async () => [{ id: "persisted" }]);
+    await releaseFinal.collect();
     assert.equal((await refs(git)).length, 2);
     await releaseFinal();
   } finally {
@@ -82,6 +93,7 @@ test("timeline GC fails closed on a malformed ownership catalog", async () => {
     await recordTimelineOwner(artifacts, "orphan", repo);
     await writeFile(join(artifacts, "session-artifacts.json"), "not json");
     const release = await startSessionGc(artifacts, "current", async () => []);
+    await release.collect();
     assert.equal((await refs(git)).length, 2);
     await assert.rejects(recordTimelineOwner(artifacts, "current", repo), /Unreadable/);
     await release();
@@ -118,6 +130,68 @@ test("timeline explicitly cleans ephemeral-session refs", async () => {
     await cleanupTimelineSession(artifacts, "ephemeral");
     assert.equal((await refs(git)).length, 0);
   } finally {
+    await rm(repo, { recursive: true, force: true });
+    await rm(artifacts, { recursive: true, force: true });
+  }
+});
+
+test("deferred collection protects a live baseline and release drains the scan before ephemeral cleanup", async () => {
+  const { root: repo, git } = await repository();
+  const artifacts = await mkdtemp(join(tmpdir(), "timeline-session-gc-deferred-"));
+  const started = deferred(),
+    finish = deferred();
+  let scans = 0;
+  const release = await startSessionGc(artifacts, "ephemeral", async () => {
+    scans++;
+    started.resolve();
+    await finish.promise;
+    return [];
+  });
+  try {
+    assert.equal(scans, 0);
+    await recordTimelineOwner(artifacts, "ephemeral", repo);
+    await capture(repo, "ephemeral");
+    const collection = release.collect();
+    await started.promise;
+    const closing = release(true);
+    assert.equal((await readdir(join(artifacts, "session-artifacts"))).length, 1);
+    assert.equal((await refs(git)).length, 2);
+    finish.resolve();
+    await Promise.all([collection, closing]);
+    assert.equal((await refs(git)).length, 0);
+    assert.equal((await readdir(join(artifacts, "session-artifacts"))).length, 0);
+    await release.collect();
+    assert.equal(scans, 1);
+  } finally {
+    finish.resolve();
+    await release(true);
+    await rm(repo, { recursive: true, force: true });
+    await rm(artifacts, { recursive: true, force: true });
+  }
+});
+
+test("unreadable lease storage or failed inventory leaves orphan refs intact", async () => {
+  const { root: repo, git } = await repository();
+  const artifacts = await mkdtemp(join(tmpdir(), "timeline-session-gc-unreadable-"));
+  let failInventory = true;
+  const release = await startSessionGc(artifacts, "current", async () => {
+    if (failInventory) throw new Error("inventory unavailable");
+    return [];
+  });
+  try {
+    await recordTimelineOwner(artifacts, "orphan", repo);
+    await capture(repo, "orphan");
+    await release.collect();
+    assert.equal((await refs(git)).length, 2);
+    failInventory = false;
+    const leases = join(artifacts, "session-artifacts");
+    await rm(leases, { recursive: true });
+    await writeFile(leases, "not a directory");
+    await release.collect();
+    await cleanupTimelineSession(artifacts, "orphan");
+    assert.equal((await refs(git)).length, 2);
+  } finally {
+    await release();
     await rm(repo, { recursive: true, force: true });
     await rm(artifacts, { recursive: true, force: true });
   }

@@ -88,7 +88,7 @@ export class KeyboardSettingsStore {
 
   private migrate(): void {
     const version = Number(this.db.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 2) throw new Error("Keyboard settings were created by a newer Pylon version");
+    if (version > 2) throw new Error("Pylon Web state was created by a newer incompatible version");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       if (version === 0) {
@@ -97,9 +97,11 @@ export class KeyboardSettingsStore {
           .prepare("INSERT OR IGNORE INTO keyboard_settings (id,revision,value) VALUES (1,0,?)")
           .run(JSON.stringify(DEFAULT_KEYMAP));
       }
-      if (version <= 1) this.createWebStateTables();
+      // Historical v2 only added tables, so it remains compatible with the v1
+      // keyboard reader. Additive tables do not define a new format generation.
+      this.createWebStateTables();
       this.createLegacyImportsTable();
-      this.db.exec("PRAGMA user_version=2; COMMIT");
+      this.db.exec("PRAGMA user_version=1; COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

@@ -17,6 +17,7 @@ import {
 import {
   readJson,
   readVersionedJson,
+  assertVersionedJsonWritable,
   writeJson,
   writeBytesAtomic,
   writeJsonAtomic,
@@ -296,7 +297,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     ephemeral: false,
     cwd: "",
     context: undefined as any,
-    releaseLease: undefined as ((cleanupIfLast?: () => Promise<void>) => Promise<void>) | undefined,
+    maintenanceReady: false,
+    releaseLease: undefined as Awaited<ReturnType<typeof startSessionGc>> | undefined,
   };
 
   // The /plan approval handshake; the last three are installed once the plan action is registered.
@@ -599,6 +601,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
     return migrated;
   };
   const writeMemory = async (state: MemoryStateFile) => {
+    await assertVersionedJsonWritable(paths().memory, "schemaVersion", 6);
     await writeJsonAtomic(paths().memory, state);
     await refreshMemoryCompilation(state);
   };
@@ -864,12 +867,17 @@ export default function continuityExtension(pi: ExtensionAPI) {
       );
       assertSafePath(...(work.handoff?.workingSet ?? []));
       for (const constraint of work.constraints) assertSafeWithPaths(constraint, work.handoff?.workingSet ?? []);
+      await assertVersionedJsonWritable(path, "schemaVersion", 1);
       await writeJson(path, work);
       publishState();
     } catch (error) {
       work = undefined;
       try {
-        work = await readJson<Work | undefined>(path, undefined, value => value === undefined || isWork(value));
+        work = await readVersionedJson<Work | undefined>(
+          path,
+          undefined,
+          value => value === undefined || isWork(value),
+        );
       } catch {
         /* Preserve the save error and fail closed if durable state cannot be restored. */
       }
@@ -1218,8 +1226,10 @@ export default function continuityExtension(pi: ExtensionAPI) {
     work.updatedAt = new Date().toISOString();
     void saveWork();
   });
-  pi.on("session_start", async (_e, ctx) =>
-    withMemoryLifecycle(async () => {
+  pi.on("session_start", async (_e, ctx) => {
+    session.maintenanceReady = false;
+    session.releaseLease?.cancel();
+    return withMemoryLifecycle(async () => {
       abandonAutomaticCompaction();
       gate(false);
       session.generation++;
@@ -1265,7 +1275,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
       }
       session.ephemeral = !ctx.sessionManager.getSessionFile?.();
       const p = paths();
-      work = await readJson<Work | undefined>(p.work, undefined, value => value === undefined || isWork(value));
+      work = await readVersionedJson<Work | undefined>(
+        p.work,
+        undefined,
+        value => value === undefined || isWork(value),
+      );
       const handoff = [...(ctx.sessionManager.getEntries?.() ?? [])]
         .reverse()
         .find(
@@ -1321,16 +1335,18 @@ export default function continuityExtension(pi: ExtensionAPI) {
       pruneMemoryLedger();
       memory.reviewCalledThisTask = false;
       memory.proposalToken = undefined;
-      const startupIdentity = await worktreeFingerprint(ctx.cwd),
-        startupChanges = await currentChangedPaths(ctx.cwd);
-      verifyState.needed =
-        work?.mode === "executing" &&
-        (startupChanges === undefined || startupChanges.size > 0) &&
-        !(
-          verifyState.latest?.sessionId === sessionId &&
-          (verifyState.latest.state === "stale" ||
-            (verifyState.latest.state === "passed" && verifyState.latest.worktreeId === startupIdentity))
-        );
+      verifyState.needed = false;
+      if (work?.mode === "executing") {
+        const startupIdentity = await worktreeFingerprint(ctx.cwd),
+          startupChanges = await currentChangedPaths(ctx.cwd);
+        verifyState.needed =
+          (startupChanges === undefined || startupChanges.size > 0) &&
+          !(
+            verifyState.latest?.sessionId === sessionId &&
+            (verifyState.latest.state === "stale" ||
+              (verifyState.latest.state === "passed" && verifyState.latest.worktreeId === startupIdentity))
+          );
+      }
       if (memory.enabled) {
         try {
           const migration = await runV4Migration(ctx, sessionId);
@@ -1356,10 +1372,19 @@ export default function continuityExtension(pi: ExtensionAPI) {
                 ctx.ui?.notify?.(`Plan approval recovery is pending: ${error?.message ?? String(error)}`, "warning"),
               ),
         );
-    }),
-  );
-  pi.on("session_shutdown", async () =>
-    withMemoryLifecycle(async () => {
+      session.maintenanceReady = true;
+    });
+  });
+  pi.on("resources_discover", () => {
+    if (session.maintenanceReady)
+      void session.releaseLease
+        ?.collect()
+        .catch(() => console.warn("[pi-continuity] Session artifact cleanup failed; retained for retry."));
+  });
+  pi.on("session_shutdown", async () => {
+    session.maintenanceReady = false;
+    session.releaseLease?.cancel();
+    return withMemoryLifecycle(async () => {
       if (memory.enabled) persistMemoryLedger();
       abandonAutomaticCompaction();
       session.generation++;
@@ -1385,8 +1410,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       await session.releaseLease?.(session.ephemeral && workFile ? () => rm(workFile, { force: true }) : undefined);
       session.releaseLease = undefined;
       session.id = "";
-    }),
-  );
+    });
+  });
   pi.on("agent_start", async (_e, ctx) => {
     awaitingClarificationProse = false;
     terminatingToolCalls.clear();

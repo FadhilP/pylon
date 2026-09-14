@@ -7,6 +7,7 @@ import {
   effectivePackageSettingValue,
   validPackageSettingValue,
 } from "pylon-core/package-settings";
+import { assertJsonConfigWritable } from "pylon-core/json-config";
 
 export const toolAvailabilities = ["deferred", "active"] as const;
 export type ToolAvailability = (typeof toolAvailabilities)[number];
@@ -157,6 +158,7 @@ export const configuredPrivateAgentSystemPrompt = (
 export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
+    if (Number.isSafeInteger(value?.version) && value.version > 1) return defaultConfig();
     if (value?.version !== 1) throw new Error("invalid config");
     if (value.toolAvailability !== undefined) {
       if (
@@ -195,6 +197,7 @@ export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
 }
 
 export async function saveConfig(config: SpawnConfig, path = configPath()): Promise<void> {
+  await assertJsonConfigWritable(path, 1);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {

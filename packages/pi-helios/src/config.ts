@@ -7,6 +7,7 @@ import {
   effectivePackageSettingValue,
   validPackageSettingValue,
 } from "pylon-core/package-settings";
+import { assertJsonConfigWritable } from "pylon-core/json-config";
 
 export const heliosSettings = definePackageSettings({
   version: 1,
@@ -108,6 +109,7 @@ export function effectiveConfig(config: HeliosConfig): EffectiveHeliosConfig {
 export async function loadConfig(path = configPath()): Promise<HeliosConfig> {
   try {
     const value = JSON.parse(await readFile(path, "utf8"));
+    if (Number.isSafeInteger(value?.version) && value.version > 1) return { version: 1 };
     if (value?.version !== 1 || typeof value !== "object") throw new Error("invalid config");
     const config: HeliosConfig = { version: 1 };
     for (const field of heliosSettings.fields) {
@@ -124,6 +126,7 @@ export async function loadConfig(path = configPath()): Promise<HeliosConfig> {
 }
 
 export async function saveConfig(config: HeliosConfig, path = configPath()): Promise<void> {
+  await assertJsonConfigWritable(path, 1);
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {

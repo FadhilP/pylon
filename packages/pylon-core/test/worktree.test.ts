@@ -9,6 +9,7 @@ import {
   anchorWorktreeTurn,
   appendTurnCommit,
   captureCheckoutState,
+  captureCheckoutTrees,
   claimSessionCheckout,
   createSessionWorktree,
   createWorktreeSummary,
@@ -73,6 +74,44 @@ async function initializeRepository(cwd: string): Promise<void> {
   await git(cwd, ["init", "-q"]);
   await appendFile(join(cwd, ".git", "config"), "\n[user]\n\temail = pylon@test.local\n\tname = Pylon\n");
 }
+
+test("tree capture uses the caller's runner and drains temporary indexes on failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-capture-runner-"));
+  try {
+    await initializeRepository(root);
+    await writeFile(join(root, "tracked.txt"), "base\n");
+    await git(root, ["add", "."]);
+    await git(root, ["commit", "-qm", "base"]);
+    const head = await gitOutput(root, ["rev-parse", "HEAD"]);
+    const calls: string[][] = [];
+    const indexes = new Set<string>();
+    let fail = false;
+    const runner = async (cwd: string, args: string[], env: Record<string, string> = {}) => {
+      calls.push(args);
+      if (env.GIT_INDEX_FILE) indexes.add(env.GIT_INDEX_FILE);
+      if (fail && args[0] === "write-tree") throw Error("configured Git timeout");
+      return gitOutputWithEnv(cwd, args, env);
+    };
+    const clean = await captureCheckoutTrees(root, head, runner);
+    assert.equal(clean.worktreeTree, await gitOutput(root, ["rev-parse", "HEAD^{tree}"]));
+    assert.equal(
+      calls.some(args => args[0] === "add"),
+      false,
+    );
+    await writeFile(join(root, "tracked.txt"), "changed\n");
+    const indexBefore = await readFile(join(root, ".git", "index"));
+    const dirty = await captureCheckoutTrees(root, head, runner);
+    assert.equal(dirty.worktreeTree, await fullWorktreeTree(root));
+    assert.ok(calls.some(args => args.join(" ") === "add -A -- :(literal)tracked.txt"));
+    assert.notEqual(dirty.indexTree, dirty.worktreeTree);
+    fail = true;
+    await assert.rejects(captureCheckoutTrees(root, head, runner), /configured Git timeout/);
+    assert.deepEqual(await readFile(join(root, ".git", "index")), indexBefore);
+    for (const index of indexes) await assert.rejects(stat(index), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("checkout capture preserves bounded snapshots across index and worktree states", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-checkout-capture-"));
