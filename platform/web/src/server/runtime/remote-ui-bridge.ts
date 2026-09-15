@@ -1132,6 +1132,20 @@ export class RemoteUiBridge {
   }
 }
 
+function exposeEnumerableUiContext(context: object): void {
+  const prototype = Object.getPrototypeOf(context);
+  for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(prototype))) {
+    if (name === "constructor") continue;
+    Object.defineProperty(context, name, {
+      ...descriptor,
+      enumerable: true,
+      ...(typeof descriptor.value === "function" ? { value: descriptor.value.bind(context) } : {}),
+      ...(descriptor.get ? { get: descriptor.get.bind(context) } : {}),
+      ...(descriptor.set ? { set: descriptor.set.bind(context) } : {}),
+    });
+  }
+}
+
 class GenerationUiContext implements ExtensionUIContext {
   constructor(
     private readonly bridge: RemoteUiBridge,
@@ -1139,7 +1153,11 @@ class GenerationUiContext implements ExtensionUIContext {
     private readonly generation: number,
     private readonly surface?: "database",
     private readonly operationId?: string,
-  ) {}
+  ) {
+    // Pi wraps UI prompts with object spread, so the complete RPC UI API must be
+    // enumerable own properties. Bind methods to retain the generation context.
+    exposeEnumerableUiContext(this);
+  }
 
   requestStateQLCredential(request: StateQLCredentialRequest): Promise<string | undefined> {
     return this.bridge.requestStateQLCredential(
