@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { parseTelemetryEvent } from "pylon-core/token-meter";
+import { DELEGATED_USAGE_ENTRY_TYPE } from "pylon-core/child-process";
+import type { DelegatedAgentRunReadModel } from "../../shared/protocol/events.ts";
 import type { UsageAgent } from "../../shared/protocol/snapshots.ts";
 
 export interface PersistedUsageAtom {
@@ -128,6 +130,71 @@ function normalizeUsage(value: any, turnCount: unknown = 1): NormalizedUsage | u
       ? costParts(typeof value.cost === "object" ? value.cost : value.costParts, cost)
       : { costInput: 0, costOutput: 0 }),
   };
+}
+
+const DELEGATED_MODEL_TOOL_NAMES = new Set([...Object.keys(MODEL_TOOLS), "spawn_session"]);
+const invocationIdentity = (details: any, toolCallId: string): string =>
+  typeof details?.runId === "string" && details.runId.length > 0 && details.runId.length <= 128
+    ? `run:${details.runId}`
+    : `tool:${toolCallId}`;
+
+/** Replaces mirrored native tool charges with one canonical cost per delegated invocation. */
+export function reconciledSessionCost(
+  nativeCost: number,
+  entries: readonly any[],
+  liveRuns: readonly DelegatedAgentRunReadModel[] = [],
+): number {
+  const toolNamesByCall = new Map<string, string>();
+  const persisted = new Map<string, number>();
+  let mirroredNativeCost = 0;
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    if (entry.type === "custom" && entry.customType === DELEGATED_USAGE_ENTRY_TYPE) {
+      const data = entry.data;
+      if (
+        data?.version !== 1 ||
+        typeof data.runId !== "string" ||
+        data.runId.length === 0 ||
+        data.runId.length > 128 ||
+        typeof data.toolName !== "string" ||
+        !DELEGATED_MODEL_TOOL_NAMES.has(data.toolName)
+      )
+        continue;
+      const usage = normalizeUsage(data.usage);
+      if (usage?.costKnown) persisted.set(`run:${data.runId}`, usage.cost);
+      continue;
+    }
+    if (entry.type !== "message") continue;
+    const message = entry.message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content)
+        if (part?.type === "toolCall" && typeof part.id === "string" && typeof part.name === "string")
+          toolNamesByCall.set(part.id, part.name);
+      continue;
+    }
+    if (message.role !== "toolResult" || typeof message.toolCallId !== "string") continue;
+    const toolName =
+      typeof message.toolName === "string" ? message.toolName : toolNamesByCall.get(message.toolCallId);
+    if (!toolName || !DELEGATED_MODEL_TOOL_NAMES.has(toolName)) continue;
+    const detailsUsage = normalizeUsage(message.details?.usage);
+    if (!detailsUsage?.costKnown) continue;
+    persisted.set(invocationIdentity(message.details, message.toolCallId), detailsUsage.cost);
+    const nativeUsage = normalizeUsage(message.usage);
+    if (nativeUsage?.costKnown) mirroredNativeCost += nativeUsage.cost;
+  }
+
+  const canonical = new Map(persisted);
+  for (const run of liveRuns) {
+    const usage = normalizeUsage(run.usage);
+    if (!usage?.costKnown) continue;
+    const identity = run.runId ? `run:${run.runId}` : `tool:${run.id}`;
+    if (run.status === "running" || !persisted.has(identity)) canonical.set(identity, usage.cost);
+  }
+  const delegatedCost = [...canonical.values()].reduce((sum, cost) => sum + cost, 0);
+  const baseCost = Number.isFinite(nativeCost) && nativeCost >= 0 ? nativeCost : 0;
+  return Math.max(0, baseCost - mirroredNativeCost) + delegatedCost;
 }
 
 function atom(

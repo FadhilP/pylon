@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { SPAWN_PROGRESS_CHANNEL } from "./constants.ts";
+import { DELEGATED_USAGE_ENTRY_TYPE } from "pylon-core/child-process";
 import { failure, label, scientistName } from "./results.ts";
 import { isThreadActive, resultDetails, type SpawnKind } from "./sessions.ts";
 import type { ExecuteTurn, TurnRequest } from "./turns.ts";
@@ -125,7 +126,33 @@ export function createBackgroundRuns(pi: ExtensionAPI, executeTurn: ExecuteTurn)
     const next = [...runs.values()].find(run => run.path === path && run.state === "queued");
     if (next) startEntry(next);
   };
+  const persistTerminalUsage = (run: BackgroundRun, result: any) => {
+    const details = result?.details;
+    if (!details?.usage || typeof details.usage !== "object") return result;
+    try {
+      pi.appendEntry(DELEGATED_USAGE_ENTRY_TYPE, {
+        version: 1,
+        runId: run.runId,
+        toolCallId: run.toolCallId,
+        toolName: run.kind === "agent" ? "spawn_agent" : "spawn_session",
+        kind: run.kind,
+        id: run.id,
+        usage: details.usage,
+        ...(typeof details.provider === "string" ? { provider: details.provider } : {}),
+        ...(typeof details.modelId === "string"
+          ? { model: details.modelId }
+          : typeof details.model === "string"
+            ? { model: details.model }
+            : {}),
+      });
+      return result;
+    } catch {
+      return { ...result, details: { ...details, accountingPersistenceFailed: true } };
+    }
+  };
+
   const settle = (run: BackgroundRun, result: any) => {
+    result = persistTerminalUsage(run, result);
     run.result = result;
     run.state = stateFrom(result);
     emitProgress(run, "end", result);

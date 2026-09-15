@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { addCostParts, emptyUsage, sumCostParts, usageSnapshot } from "pylon-core/child-process";
+import { addCostParts, emptyUsage, sumCostParts, toolResultUsage, usageSnapshot } from "pylon-core/child-process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -623,6 +623,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               failureCode: run.failure,
               ...(workerFailureMessage ? { failureMessage: workerFailureMessage } : {}),
             },
+            usage: toolResultUsage(run.usage),
           };
         }
 
@@ -696,6 +697,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               ? { failureMessage: integrationError || workerFailureMessage }
               : {}),
           },
+          usage: toolResultUsage(run.usage),
         };
       } catch (error) {
         const failureMessage = sanitizeFailureMessage(error, "Grunt execution failed.");
@@ -726,6 +728,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
             ...(costLimitUsd === undefined ? {} : { costLimitUsd }),
             usage: liveUsage,
           },
+          usage: toolResultUsage(liveUsage),
         };
       } finally {
         if (heartbeat) clearInterval(heartbeat);

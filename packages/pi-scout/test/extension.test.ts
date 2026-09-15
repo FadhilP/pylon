@@ -230,6 +230,7 @@ test("Repo Scout retries transient child failures in fresh sessions", async () =
     assert.deepEqual(usageUpdates[0].costParts, { input: 0.04, output: 0.03, cacheRead: 0.02, cacheWrite: 0.01 });
     assert.ok(Math.abs(result.details.usage.cost - 0.3) < Number.EPSILON);
     assert.deepEqual(result.details.usage.costParts, { input: 0.12, output: 0.09, cacheRead: 0.06, cacheWrite: 0.03 });
+    assert.ok(Math.abs(result.usage.cost.total - 0.3) < Number.EPSILON);
     assert.deepEqual(usageUpdates.at(-1).costParts, result.details.usage.costParts);
     assert.notEqual(sessionDirs[0], sessionDirs[1]);
   } finally {

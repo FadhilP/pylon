@@ -3,6 +3,7 @@ import { sessionEntryToContextMessages, type ExtensionAPI } from "@earendil-work
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { requestDelegateName, type DelegateNameHandle } from "pylon-core/delegate-names";
+import { toolResultUsage } from "pylon-core/child-process";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
 import { advisorBudget } from "../src/budget.ts";
 import { ADVISOR_IMMUTABLE_FOOTER, ADVISOR_PROMPT } from "../src/prompts.ts";
@@ -70,7 +71,11 @@ const snapshotDetails = (snapshot: Snapshot) => ({
   sectionAllocations: snapshot.sectionAllocations,
   duplicateTelemetry: snapshot.duplicateTelemetry,
 });
-const textResult = (text: string, details: Details) => ({ content: [{ type: "text" as const, text }], details });
+const textResult = (text: string, details: Details) => ({
+  content: [{ type: "text" as const, text }],
+  details,
+  usage: toolResultUsage(details.usage),
+});
 const configuredModel = (ctx: any, config: AdvisorConfig): Model<any> | undefined => {
   if (config.useMainModel) return ctx.model;
   if (!config.advisorModel) return undefined;

@@ -14,6 +14,18 @@ export type ChildUsage = {
   cost: number;
   costParts: CostParts;
 };
+
+export const DELEGATED_USAGE_ENTRY_TYPE = "pylon-delegated-usage";
+
+/** Converts child accounting into Pi's cost-bearing tool-result usage shape. */
+export const toolResultUsage = (usage: ChildUsage) => ({
+  input: usage.input,
+  output: usage.output,
+  cacheRead: usage.cacheRead,
+  cacheWrite: usage.cacheWrite,
+  totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+  cost: { ...usage.costParts, total: usage.cost },
+});
 export type ChildActivity = {
   id?: string;
   kind: "call" | "result";

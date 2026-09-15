@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { emptyCostParts } from "pylon-core/child-process";
+import { toolResultUsage } from "pylon-core/child-process";
 import type { DelegateNameHandle } from "pylon-core/delegate-names";
 import { SPAWN_TOOLS, SPECIALIST_TOOLS } from "./constants.ts";
 import { failure, label, runText, scientistName } from "./results.ts";
@@ -215,15 +215,7 @@ export function createTurnRunner(pi: ExtensionAPI, runChild: RunChild, runtime: 
           truncated: run.truncated,
           ...(run.error ? { failureCode: "child_error", failureMessage: run.error } : {}),
         },
-        usage: {
-          input: run.usage.input,
-          output: run.usage.output,
-          cacheRead: run.usage.cacheRead,
-          cacheWrite: run.usage.cacheWrite,
-          totalTokens: run.usage.input + run.usage.output + run.usage.cacheRead + run.usage.cacheWrite,
-          // Always the four rates plus the total, even when a run carried none.
-          cost: { ...emptyCostParts(), ...run.usage.costParts, total: run.usage.cost },
-        },
+        usage: toolResultUsage(run.usage),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

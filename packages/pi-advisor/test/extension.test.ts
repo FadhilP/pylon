@@ -360,6 +360,7 @@ test("Advisor retries transient failures and only successful consultations consu
     const paid = await tool.execute("paid", { request: "review" }, undefined, undefined, ctx);
     assert.equal(providerCalls, callsBeforePaidFailure + 1);
     assert.equal(paid.details.usage.cost, 0.1);
+    assert.equal(paid.usage.cost.total, 0.1);
     assert.equal(paid.details.callNumber, 2);
 
     mode = "success";

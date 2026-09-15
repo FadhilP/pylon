@@ -13,7 +13,7 @@ import {
   usageWindow,
   type UsageIndexedSession,
 } from "../src/server/usage/usage-aggregation.ts";
-import { UsageHistoryAccumulator } from "../src/server/usage/usage-history.ts";
+import { reconciledSessionCost, UsageHistoryAccumulator } from "../src/server/usage/usage-history.ts";
 import { isUsageSnapshot } from "../src/shared/protocol/validation.ts";
 
 const at = "2026-03-20T12:00:00.000Z";
@@ -188,6 +188,77 @@ test("ordinary spawned-session usage is not duplicated from its parent tool resu
     },
   });
   assert.deepEqual(history.result(), []);
+});
+
+test("session cost replaces mirrored tool usage with one canonical delegated charge", () => {
+  const usage = (cost: number) => ({ input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost });
+  const nativeUsage = (cost: number) => ({ ...usage(cost), totalTokens: 12, cost: { total: cost } });
+  const entries = [
+    assistantEntry("main", { cost: 1 }),
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "spawn-call",
+        toolName: "spawn_agent",
+        details: { runId: "foreground", usage: usage(0.2) },
+        usage: nativeUsage(0.2),
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "scout-call",
+        toolName: "repo_scout",
+        details: { usage: usage(0.3) },
+      },
+    },
+    {
+      type: "custom",
+      customType: "pylon-delegated-usage",
+      data: { version: 1, runId: "background", toolName: "spawn_agent", usage: usage(0.4) },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "collect-call",
+        toolName: "spawn_agent",
+        details: { runId: "background", usage: usage(0.4) },
+        usage: nativeUsage(0.4),
+      },
+    },
+  ];
+
+  // Native cost already contains main + foreground spawn + collected background spawn.
+  assert.ok(Math.abs(reconciledSessionCost(1.6, entries) - 1.9) < 1e-9);
+});
+
+test("session cost uses cumulative live usage until persisted usage takes over", () => {
+  const entries = [assistantEntry("main", { cost: 1 })];
+  const run = (cost: number, status: "running" | "completed" = "running") => ({
+    id: "advisor-call",
+    kind: "advisor" as const,
+    turn: 1,
+    status,
+    usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost },
+    activity: [],
+  });
+
+  assert.equal(reconciledSessionCost(1, entries, [run(0.1)]), 1.1);
+  assert.equal(reconciledSessionCost(1, entries, [run(0.2)]), 1.2);
+  entries.push({
+    type: "message",
+    message: {
+      role: "toolResult",
+      toolCallId: "advisor-call",
+      toolName: "advisor",
+      details: { usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.2 } },
+      usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: { total: 0.2 } },
+    },
+  } as any);
+  assert.equal(reconciledSessionCost(1.2, entries, [run(0.2, "completed")]), 1.2);
 });
 
 test("usage aggregation deduplicates fork copies and isolates conflicting identities", () => {

@@ -223,6 +223,7 @@ import {
 } from "./projections.ts";
 import { invalidateFileSuggestions, suggestGitFiles } from "../workspace/file-suggestions.ts";
 import { modelRateLookup, type UsageRateLookup } from "../usage/usage-aggregation.ts";
+import { reconciledSessionCost } from "../usage/usage-history.ts";
 import { projectIdForCwd, SessionIndex } from "../sessions/session-index.ts";
 import { ProjectRegistry } from "../workspace/project-registry.ts";
 
@@ -3695,18 +3696,7 @@ export class SessionRuntime implements PiDriver {
         return;
       }
       if (kind === "message_end" || kind === "message_complete") {
-        queueMicrotask(() => {
-          if (!this.gate.accepts(generation) || this.runtime?.session !== session) return;
-          this.refreshSnapshot();
-          const metrics = this.lastSnapshot?.metrics;
-          if (!metrics) return;
-          this.emit({
-            type: "session.event",
-            sessionId: session.sessionId,
-            sessionGeneration: generation,
-            payload: { type: "usage", metrics },
-          });
-        });
+        queueMicrotask(() => this.publishUsageMetrics(session, generation));
       }
       let forwarded: unknown = raw;
       const phase =
@@ -3761,6 +3751,7 @@ export class SessionRuntime implements PiDriver {
             const terminal = [...this.liveDelegatedRuns].find(([, item]) => item.status !== "running");
             this.liveDelegatedRuns.delete(terminal?.[0] ?? this.liveDelegatedRuns.keys().next().value!);
           }
+          if (run.usage?.cost !== previous?.usage?.cost) this.publishUsageMetrics(session, generation);
         }
       }
       if (
@@ -4197,6 +4188,20 @@ export class SessionRuntime implements PiDriver {
     return session;
   }
 
+  private publishUsageMetrics(session: AgentSession, generation: number): void {
+    if (!this.gate.accepts(generation) || this.runtime?.session !== session) return;
+    this.refreshSnapshot();
+    const metrics = this.lastSnapshot?.metrics;
+    if (!metrics) return;
+    this.emit({
+      type: "session.event",
+      sessionId: session.sessionId,
+      sessionGeneration: generation,
+      payload: { type: "usage", metrics },
+    });
+  }
+
+
   private refreshSnapshot(): void {
     const runtime = this.requireRuntime();
     const availableTools = runtime.session
@@ -4343,7 +4348,7 @@ export class SessionRuntime implements PiDriver {
         contextTokens: context?.tokens ?? 0,
         contextLimit: context?.contextWindow ?? 0,
         contextPercent: context?.percent ?? 0,
-        cost: stats.cost,
+        cost: reconciledSessionCost(stats.cost, session.sessionManager.getEntries(), delegatedRuns),
         userMessages: stats.userMessages,
         assistantMessages: stats.assistantMessages,
         toolCalls: stats.toolCalls,
@@ -4562,6 +4567,7 @@ export class SessionRuntime implements PiDriver {
     );
     if (!run || run.threadId !== childId || run.runId !== runId) return;
     this.liveDelegatedRuns.set(toolCallId, structuredClone(run));
+    if (run.usage?.cost !== previous.usage?.cost) this.publishUsageMetrics(this.runtime.session, generation);
     this.emit({
       type: "session.event",
       sessionId,

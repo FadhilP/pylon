@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { addCostParts, emptyUsage, sumCostParts, usageSnapshot } from "pylon-core/child-process";
+import { addCostParts, emptyUsage, sumCostParts, toolResultUsage, usageSnapshot } from "pylon-core/child-process";
 import { Type } from "typebox";
 import {
   configPath,
@@ -558,6 +558,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             failureCode: run.failure === "budget_exceeded" ? "budget_exceeded" : run.error ? "child_error" : undefined,
             ...(failureMessage ? { failureMessage } : {}),
           },
+          usage: toolResultUsage(usage),
         };
       } finally {
         if (heartbeat) clearInterval(heartbeat);
@@ -784,6 +785,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             ...(failureMessage ? { failureMessage } : {}),
             activity: run.activity,
           },
+          usage: toolResultUsage(run.usage),
         };
       } finally {
         clearInterval(heartbeat);

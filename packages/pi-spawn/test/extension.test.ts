@@ -88,6 +88,7 @@ async function fixture(
   const busHandlers = new Map<string, Function[]>();
   const calls: Array<{ args: string[]; cwd: string; prompt: string; env: NodeJS.ProcessEnv; timeoutMs?: number }> = [];
   const sentMessages: any[] = [];
+  const appendedEntries: Array<{ customType: string; data: any }> = [];
   const pi: any = {
     events: {
       emit: (name: string, value: any) => {
@@ -105,6 +106,7 @@ async function fixture(
     },
     on: (name: string, handler: Function) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     sendMessage: (message: any) => sentMessages.push(message),
+    appendEntry: (customType: string, data: any) => appendedEntries.push({ customType, data }),
     registerTool: (tool: any) => tools.set(tool.name, tool),
   };
   const run: any = async (args: string[], options: any) => {
@@ -144,6 +146,7 @@ async function fixture(
     emitted,
     calls,
     sentMessages,
+    appendedEntries,
     ctx,
     models,
     configuredModels,
@@ -439,11 +442,16 @@ test("background agent runs stream correlated progress, report status, and prese
     const terminal = [...f.emitted].reverse().find(event => event.name === "pylon:spawn-progress")?.value;
     assert.equal(terminal.phase, "end");
     assert.equal(terminal.result.details.status, "completed");
+    assert.deepEqual(
+      f.appendedEntries.map(entry => [entry.customType, entry.data.runId, entry.data.usage.cost]),
+      [["pylon-delegated-usage", runId, 0.1]],
+    );
     const completedRun = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
     assert.equal(completedRun.details.status, "completed");
     assert.match(completedRun.content[0].text, /done:work independently/);
     const consumed = await tool.execute("status", { action: "status", id, runId }, undefined, undefined, f.ctx);
     assert.equal(consumed.details.failureCode, "not_found");
+    assert.equal(f.appendedEntries.length, 1);
   } finally {
     f.restore();
   }

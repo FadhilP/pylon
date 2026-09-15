@@ -12,6 +12,7 @@ import {
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import { appendToolDuration, appendTurnGitBranch, appendWorkDuration } from "pylon-core/src/work-duration.ts";
+import { DELEGATED_USAGE_ENTRY_TYPE } from "pylon-core/child-process";
 import {
   correlatePendingUserMessageStart,
   deferUserMessageEndEntryId,
@@ -767,6 +768,40 @@ test("completed work metadata survives runtime restart", { timeout: 45_000 }, as
   }
 });
 
+test("completed background delegate cost survives runtime restart", { timeout: 45_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-delegated-cost-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const sessionDir = join(root, "sessions");
+  await Promise.all([mkdir(cwd), mkdir(agentDir), mkdir(sessionDir)]);
+  const session = SessionManager.create(cwd, sessionDir);
+  persistSession(session, "Delegated response");
+  session.appendCustomEntry(DELEGATED_USAGE_ENTRY_TYPE, {
+    version: 1,
+    runId: "background-run",
+    toolCallId: "spawn-call",
+    toolName: "spawn_agent",
+    kind: "agent",
+    id: "child-session",
+    usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.25 },
+  });
+  const sessionPath = session.getSessionFile()!;
+  const first = new SessionRuntime();
+  const restarted = new SessionRuntime();
+
+  try {
+    await first.start({ cwd, agentDir, repositoryRoot, sessionPath });
+    assert.equal((await first.snapshot()).metrics.cost, 0.25);
+    await first.dispose();
+    await restarted.start({ cwd, agentDir, repositoryRoot, sessionPath });
+    assert.equal((await restarted.snapshot()).metrics.cost, 0.25);
+  } finally {
+    await first.dispose();
+    await restarted.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("completed tool duration survives runtime restart", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-tool-duration-"));
   const cwd = join(root, "workspace");
@@ -818,6 +853,8 @@ test("runtime snapshots retain live delegated agents while the session is not se
   const agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   const driver = new SessionRuntime();
+  const events: any[] = [];
+  const unsubscribe = driver.subscribe(event => events.push(event));
 
   try {
     await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
@@ -857,7 +894,13 @@ test("runtime snapshots retain live delegated agents while the session is not se
     assert.equal(run?.modelName, "provider/child");
     assert.equal(run?.activity.length, 1);
     assert.equal(run?.usage?.output, 3);
+    assert.equal((await driver.snapshot()).metrics.cost, 0.01);
+    const usage = [...events]
+      .reverse()
+      .find((event: any) => event.type === "session.event" && event.payload?.type === "usage");
+    assert.equal(usage?.payload.metrics.cost, 0.01);
   } finally {
+    unsubscribe();
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
@@ -935,6 +978,7 @@ test("runtime accepts only correlated background spawn progress", async () => {
       { status: run?.status, response: run?.response, output: run?.usage?.output, activity: run?.activity.length },
       { status: "running", response: "Reading auth…", output: 3, activity: 1 },
     );
+    assert.equal((await driver.snapshot()).metrics.cost, 0.01);
 
     (driver as any).eventBus.emit("pylon:spawn-progress", progress({ runId: "stale-run" }));
     assert.equal((await driver.snapshot()).conversation.delegatedRuns[0]?.runId, runId);
@@ -969,6 +1013,7 @@ test("runtime accepts only correlated background spawn progress", async () => {
       },
       { status: "completed", response: "Done", sessionOutput: 60, activity: 2 },
     );
+    assert.equal((await driver.snapshot()).metrics.cost, 0.02);
   } finally {
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
