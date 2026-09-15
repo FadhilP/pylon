@@ -1,9 +1,10 @@
-import { IconPower, IconTerminal2, IconX } from "@tabler/icons-react";
+import { IconPlus, IconTerminal2, IconX } from "@tabler/icons-react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { runtimeStore } from "../runtime/event-store";
+import type { RetainedTerminal } from "./use-terminal-drawer";
 
 function terminalTheme() {
   const theme = document.documentElement.dataset.theme;
@@ -80,17 +81,27 @@ function terminalTheme() {
 }
 
 export function TerminalPanel({
+  terminalId,
+  projectId,
   open,
-  generation,
-  cwdLabel,
+  tabs,
+  launchLabel,
+  canCreate,
+  onNew,
+  onSelect,
   onClose,
   onShutdown,
 }: {
+  terminalId: string;
+  projectId: string;
   open: boolean;
-  generation: number;
-  cwdLabel?: string;
+  tabs: RetainedTerminal[];
+  launchLabel: string;
+  canCreate: boolean;
+  onNew: () => void;
+  onSelect: (terminalId: string) => void;
   onClose: () => void;
-  onShutdown: () => void;
+  onShutdown: (terminalId: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -114,7 +125,7 @@ export function TerminalPanel({
     fitRef.current = fit;
     terminal.loadAddon(fit);
     terminal.open(host);
-    const socket = new WebSocket(runtimeStore.terminalUrl(generation));
+    const socket = new WebSocket(runtimeStore.terminalUrl(projectId, terminalId));
     let disposed = false;
     let ready = false;
     const send = (value: object) => {
@@ -178,7 +189,7 @@ export function TerminalPanel({
       terminalRef.current = null;
       fitRef.current = null;
     };
-  }, [generation]);
+  }, [projectId, terminalId]);
 
   useEffect(() => {
     if (!open) return;
@@ -196,11 +207,44 @@ export function TerminalPanel({
   return (
     <section className="terminal-drawer" aria-label="Terminal" hidden={!open}>
       <header>
-        <span>
-          <IconTerminal2 size={15} />
-          <strong>Terminal</strong>
-          {cwdLabel && <small title={cwdLabel}>{cwdLabel}</small>}
-        </span>
+        <div className="terminal-tabs" role="tablist" aria-label="Open terminals">
+          {tabs.map(tab => (
+            <div
+              key={tab.terminalId}
+              className={`terminal-tab${tab.terminalId === terminalId ? " is-active" : ""}`}
+              role="presentation">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab.terminalId === terminalId}
+                title={`${tab.title} — launched in ${tab.launchLabel}`}
+                onClick={() => onSelect(tab.terminalId)}>
+                <IconTerminal2 size={14} />
+                <span>{tab.title}</span>
+              </button>
+              <button
+                className="terminal-tab-close"
+                type="button"
+                aria-label={`Close ${tab.title} terminal`}
+                title={`Close ${tab.title}`}
+                onClick={() =>
+                  window.confirm("Shut down this terminal and stop any running process?") && onShutdown(tab.terminalId)
+                }>
+                <IconX size={12} />
+              </button>
+            </div>
+          ))}
+          <button
+            className="terminal-new"
+            type="button"
+            disabled={!canCreate}
+            onClick={onNew}
+            aria-label="New terminal in current project"
+            title="New terminal in current project">
+            <IconPlus size={14} />
+          </button>
+        </div>
+        <small className="terminal-launch" title={launchLabel}>Launched in {launchLabel}</small>
         <span className="terminal-status" role="status">
           {status}
         </span>
@@ -208,17 +252,9 @@ export function TerminalPanel({
           <button
             className="icon-button"
             type="button"
-            onClick={() => window.confirm("Shut down this terminal and stop any running process?") && onShutdown()}
-            aria-label="Shut down terminal"
-            title="Shut down terminal">
-            <IconPower size={15} />
-          </button>
-          <button
-            className="icon-button"
-            type="button"
             onClick={onClose}
-            aria-label="Close terminal drawer"
-            title="Close terminal drawer">
+            aria-label="Hide terminal drawer"
+            title="Hide terminal drawer">
             <IconX size={16} />
           </button>
         </span>

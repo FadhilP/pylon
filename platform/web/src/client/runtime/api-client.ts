@@ -192,13 +192,14 @@ export class ApiClient {
     return new EventSource(`/api/v1/events?${query.toString()}`, { withCredentials: true });
   }
 
-  terminalUrl(generation: number): string {
+  terminalUrl(projectId: string, terminalId: string): string {
     if (!this.csrfToken) throw new Error("Runtime has not finished bootstrapping");
     const url = new URL("/api/v1/terminal", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.search = new URLSearchParams({
       tabId: this.tabId,
-      generation: String(generation),
+      projectId,
+      terminalId,
       csrf: this.csrfToken,
     }).toString();
     return url.toString();

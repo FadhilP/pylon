@@ -77,7 +77,8 @@ export interface RuntimeHandle {
   sessionGeneration: number;
 }
 
-export interface TerminalTarget extends RuntimeHandle {
+export interface TerminalTarget {
+  projectId: string;
   cwd: string;
 }
 
@@ -366,7 +367,7 @@ export interface HeliosBrowserFrame {
 export interface PiDriver {
   start(target: RuntimeTarget): Promise<RuntimeHandle>;
   snapshot(): Promise<RuntimeSnapshot>;
-  terminalTarget?(): TerminalTarget;
+  terminalTarget?(projectId: string): TerminalTarget | undefined;
   annotationNotes?(input: AnnotationRequest): Promise<AnnotationList>;
   mutateAnnotation?(input: AnnotationMutation): Promise<AnnotationList>;
   conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage>;

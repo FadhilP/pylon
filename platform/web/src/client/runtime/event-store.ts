@@ -929,8 +929,8 @@ export class RuntimeEventStore {
     return { ...metadata, ...result, expiresAt: Date.now() + WORKSPACE_INVENTORY_TTL_MS };
   }
 
-  terminalUrl(generation: number): string {
-    return this.api.terminalUrl(generation);
+  terminalUrl(projectId: string, terminalId: string): string {
+    return this.api.terminalUrl(projectId, terminalId);
   }
 
   async workspaceEntry(path: string, sessionId: string, generation: number, moveDestination?: string, includeGitIndex = true): Promise<WorkspaceEntry> {

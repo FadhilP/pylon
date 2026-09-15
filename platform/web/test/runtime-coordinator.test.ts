@@ -2740,6 +2740,7 @@ test(
     try {
       await driver.start({ cwd, agentDir, repositoryRoot: root });
       assert.equal((await driver.snapshot()).projectAvailable, false);
+      assert.equal(driver.terminalTarget(projectIdForCwd(cwd)), undefined);
       assert.deepEqual(
         (await driver.listSessions()).projects.map(project => project.id),
         [GENERAL_PROJECT_ID],
@@ -2752,6 +2753,10 @@ test(
       assert.equal((await driver.snapshot()).projectAvailable, true);
       assert.equal((await driver.listSessions()).projects[0]?.totalCount, 0);
       assert.equal((await driver.listSessions()).projects[0]?.cwd, cwd);
+      assert.deepEqual(driver.terminalTarget(projectIdForCwd(cwd)), {
+        projectId: projectIdForCwd(cwd),
+        cwd,
+      });
 
       const archived = await driver.archiveProject({
         projectId: projectIdForCwd(cwd),
@@ -2759,11 +2764,14 @@ test(
       });
       assert.equal((await driver.snapshot()).projectAvailable, false);
       assert.equal((await driver.listArchived()).projects[0]?.id, projectIdForCwd(cwd));
+      assert.equal(driver.terminalTarget(projectIdForCwd(cwd)), undefined);
       await driver.restoreProject({ projectId: projectIdForCwd(cwd), expectedGeneration: archived.sessionGeneration });
       assert.equal((await driver.listSessions()).projects[0]?.id, projectIdForCwd(cwd));
+      assert.equal(driver.terminalTarget(projectIdForCwd(cwd))?.cwd, cwd);
 
       await driver.removeProject({ projectId: projectIdForCwd(cwd), expectedGeneration: archived.sessionGeneration });
       assert.equal((await driver.snapshot()).projectAvailable, false);
+      assert.equal(driver.terminalTarget(projectIdForCwd(cwd)), undefined);
       assert.deepEqual(
         (await driver.listSessions()).projects.map(project => project.id),
         [GENERAL_PROJECT_ID],

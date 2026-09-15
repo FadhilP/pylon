@@ -393,6 +393,7 @@ class FakeDriver implements PiDriver {
   renamedSessions: Array<{ sessionId: string; name: string }> = [];
   renamedProjects: Array<{ projectId: string; name: string }> = [];
   activatedSessions: Array<{ sessionId: string; active: boolean }> = [];
+  unavailableTerminalProjects = new Set<string>();
   pinnedSessions: Array<{ sessionId: string; pinned: boolean }> = [];
   selectedModels: Array<{ provider: string; modelId: string }> = [];
   selectedThinking: string[] = [];
@@ -428,8 +429,9 @@ class FakeDriver implements PiDriver {
   snapshot(): Promise<RuntimeSnapshot> {
     return Promise.resolve(structuredClone(this.current));
   }
-  terminalTarget() {
-    return { sessionId: this.current.sessionId, sessionGeneration: this.current.sessionGeneration, cwd: process.cwd() };
+  terminalTarget(projectId: string) {
+    if (this.unavailableTerminalProjects.has(projectId)) return;
+    return { projectId, cwd: process.cwd() };
   }
   conversationHistory(): Promise<ConversationHistoryPage> {
     return Promise.resolve({
@@ -996,6 +998,13 @@ class FakeDriver implements PiDriver {
       ...(completed ? { completed: true } : {}),
     });
   }
+  emitProjectsChanged(): void {
+    this.emit({
+      type: "projects.changed",
+      sessionId: this.current.sessionId,
+      sessionGeneration: this.current.sessionGeneration,
+    });
+  }
   dispose(): Promise<void> {
     return Promise.resolve();
   }
@@ -1064,8 +1073,10 @@ test("local server rejects foreign Host before API and asset routing", async () 
   }
 });
 
-test("terminal upgrade rejects unauthenticated and stale sessions before spawning", async () => {
-  const running = await startIsolatedServer({ port: 0, development: false, driver: new FakeDriver() });
+test("terminal upgrade rejects unauthenticated and unavailable projects before spawning", async () => {
+  const driver = new FakeDriver();
+  driver.unavailableTerminalProjects.add("project-unavailable");
+  const running = await startIsolatedServer({ port: 0, development: false, driver });
   const port = (running.server.address() as AddressInfo).port;
   const origin = `http://127.0.0.1:${port}`;
   const tab = "terminal-security-tab";
@@ -1087,16 +1098,21 @@ test("terminal upgrade rejects unauthenticated and stale sessions before spawnin
     const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
     const csrf = String((await body(bootstrap)).csrfToken);
     const url = new URL(origin.replace("http:", "ws:") + "/api/v1/terminal");
-    url.search = new URLSearchParams({ tabId: tab, generation: "2", csrf }).toString();
+    url.search = new URLSearchParams({
+      tabId: tab,
+      projectId: "project-unavailable",
+      terminalId: "terminal-security",
+      csrf,
+    }).toString();
     assert.equal(await upgradeStatus(url, cookie), 409);
-    url.searchParams.set("generation", "1");
+    url.searchParams.set("projectId", "project-available");
     assert.equal(await upgradeStatus(url), 403);
   } finally {
     await running.close();
   }
 });
 
-test("terminals stay attached per session until that session deactivates", { timeout: 15_000 }, async () => {
+test("project terminals survive session changes and close only with their project", { timeout: 15_000 }, async () => {
   const driver = new FakeDriver();
   const terminals: Array<{ killed: boolean }> = [];
   const terminalSpawn = () => {
@@ -1129,12 +1145,11 @@ test("terminals stay attached per session until that session deactivates", { tim
   transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], terminalSpawn });
   server.on("upgrade", transport.handleUpgrade);
   const tab = "terminal-retention-tab";
-  let first: WebSocket | undefined;
-  let second: WebSocket | undefined;
-  const connect = (generation: number, cookie: string, csrf: string) =>
+  const sockets: WebSocket[] = [];
+  const connect = (projectId: string, terminalId: string, cookie: string, csrf: string) =>
     new Promise<WebSocket>((resolve, reject) => {
       const url = new URL(origin.replace("http:", "ws:") + "/api/v1/terminal");
-      url.search = new URLSearchParams({ tabId: tab, generation: String(generation), csrf }).toString();
+      url.search = new URLSearchParams({ tabId: tab, projectId, terminalId, csrf }).toString();
       const socket = new WebSocket(url, { headers: { cookie, origin } });
       socket.once("unexpected-response", (_request, response) => {
         response.resume();
@@ -1150,30 +1165,43 @@ test("terminals stay attached per session until that session deactivates", { tim
     const bootstrap = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
     const cookie = (bootstrap.headers.get("set-cookie") ?? "").split(";", 1)[0]!;
     const csrf = String((await body(bootstrap)).csrfToken);
-    first = await connect(1, cookie, csrf);
-    const replacement = await driver.switchSession({ sessionId: "session-2" });
-    second = await connect(replacement.sessionGeneration, cookie, csrf);
-    assert.equal(first.readyState, WebSocket.OPEN);
-    assert.equal(second.readyState, WebSocket.OPEN);
-    assert.equal(terminals.length, 2);
-    await driver.switchSession({ sessionId: "session-1" });
-    assert.equal(first.readyState, WebSocket.OPEN);
-    assert.equal(second.readyState, WebSocket.OPEN);
+    sockets.push(await connect("project-one", "terminal-one", cookie, csrf));
+    sockets.push(await connect("project-one", "terminal-two", cookie, csrf));
+    sockets.push(await connect("project-two", "terminal-three", cookie, csrf));
+    await assert.rejects(connect("project-two", "terminal-three", cookie, csrf), /409/);
+    for (let index = 4; index <= 8; index++)
+      sockets.push(await connect("project-two", `terminal-${index}`, cookie, csrf));
+    assert.equal(terminals.length, 8);
+    await assert.rejects(connect("project-two", "terminal-nine", cookie, csrf), /429/);
 
-    const firstClosed = new Promise<void>(resolve => first!.once("close", () => resolve()));
+    await driver.switchSession({ sessionId: "session-2" });
     driver.emitStatus("session-1", "sleeping");
-    await firstClosed;
-    assert.equal(terminals[0].killed, true);
-    assert.equal(terminals[1].killed, false);
-    assert.equal(second.readyState, WebSocket.OPEN);
+    assert.ok(terminals.every(terminal => !terminal.killed));
+    assert.ok(sockets.every(socket => socket.readyState === WebSocket.OPEN));
+
+    const closedTab = new Promise<void>(resolve => sockets[2]!.once("close", () => resolve()));
+    sockets[2]!.close();
+    await closedTab;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(terminals.map(terminal => terminal.killed), [false, false, true, false, false, false, false, false]);
+    assert.ok(sockets.slice(3).every(socket => socket.readyState === WebSocket.OPEN));
+    sockets[2] = await connect("project-two", "terminal-nine", cookie, csrf);
+
+    const closed = Promise.all(
+      sockets.slice(0, 2).map(socket => new Promise<void>(resolve => socket.once("close", () => resolve()))),
+    );
+    driver.unavailableTerminalProjects.add("project-one");
+    driver.emitProjectsChanged();
+    await closed;
+    assert.deepEqual(terminals.map(terminal => terminal.killed), [true, true, true, false, false, false, false, false, false]);
+    assert.ok(sockets.slice(2).every(socket => socket.readyState === WebSocket.OPEN));
   } finally {
-    first?.close();
-    second?.close();
+    for (const socket of sockets) socket.close();
     server.off("upgrade", transport.handleUpgrade);
     transport.dispose();
     await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve())));
   }
-  assert.equal(terminals[1].killed, true);
+  assert.ok(terminals.every(terminal => terminal.killed));
 });
 
 test("server startup disposes a driver that fails to initialize", async () => {

@@ -75,7 +75,14 @@ import {
 } from "./settings-search";
 import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
 import { UiDialog } from "../runtime/remote-ui-dialog";
-import { modelKey, selectableModels, setHiddenModelVisible, useHiddenModels, visibleModels } from "./model-visibility";
+import {
+  modelKey,
+  selectableModels,
+  setHiddenModelsVisible,
+  setHiddenModelVisible,
+  useHiddenModels,
+  visibleModels,
+} from "./model-visibility";
 import { OverviewOrb, type OverviewState } from "../ui/overview-primitives";
 import {
   DEFAULT_INTERFACE_SCALE,
@@ -247,6 +254,7 @@ export function SettingsDialog({
   const [providerFilter, setProviderFilter] = useState<"all" | "connected" | "available">("all");
   const [packageQuery, setPackageQuery] = useState(initialPackageQuery);
   const [modelQuery, setModelQuery] = useState("");
+  const [expandedModelProviders, setExpandedModelProviders] = useState<Set<string>>(() => new Set());
   const [selectedPackageId, setSelectedPackageId] = useState<string>();
   const [toolPolicyBusy, setToolPolicyBusy] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -295,7 +303,15 @@ export function SettingsDialog({
   const searchResults = useMemo(() => searchSettings(searchIndex, searchQuery), [searchIndex, searchQuery]);
   const agentModelPackages = useMemo(() => packages.filter(item => hasAgentModelFields(item.settings)), [packages]);
   const setProviderVisible = (items: ModelOptionReadModel[], visible: boolean) => {
-    for (const item of items) setHiddenModelVisible(`${item.provider}/${item.id}`, visible);
+    setHiddenModelsVisible(items.map(modelKey), visible);
+  };
+  const toggleModelProvider = (provider: string) => {
+    setExpandedModelProviders(current => {
+      const next = new Set(current);
+      if (next.has(provider)) next.delete(provider);
+      else next.add(provider);
+      return next;
+    });
   };
   const authFlow = providerAuth?.flow;
   const authRunning = authFlow?.status === "running";
@@ -1197,16 +1213,23 @@ export function SettingsDialog({
               {filteredModels.length > 0 && (
                 <div className="settings-provider-groups">
                   {modelGroups.map(group => {
-                    const allVisible = group.items.every(item => !hiddenModelKeys.has(`${item.provider}/${item.id}`));
+                    const allVisible = group.items.every(item => !hiddenModelKeys.has(modelKey(item)));
+                    const expanded = expandedModelProviders.has(group.provider);
+                    const groupId = `model-group-${group.provider}`;
+                    const listId = `${groupId}-list`;
                     return (
-                      <section
-                        className="settings-provider-group"
-                        key={group.provider}
-                        aria-labelledby={`model-group-${group.provider}`}>
+                      <section className="settings-provider-group" key={group.provider} aria-labelledby={groupId}>
                         <header>
-                          <h3 id={`model-group-${group.provider}`}>{group.provider}</h3>
-                          {/* The same switch the rows use, so a group and the
-                              models inside it read as one control. */}
+                          <button
+                            id={groupId}
+                            type="button"
+                            className="settings-model-provider-toggle"
+                            aria-expanded={expanded}
+                            aria-controls={expanded ? listId : undefined}
+                            onClick={() => toggleModelProvider(group.provider)}>
+                            {expanded ? <IconChevronUp size={14} /> : <IconChevronDown size={14} />}
+                            <span>{group.provider}</span>
+                          </button>
                           <label className="settings-model-all package-switch">
                             <span>Show all</span>
                             <input
@@ -1218,15 +1241,17 @@ export function SettingsDialog({
                             />
                           </label>
                         </header>
-                        <div className="settings-provider-list">
-                          {group.items.map(item => (
-                            <ModelVisibilityControl
-                              key={modelKey(item)}
-                              model={item}
-                              hidden={hiddenModelKeys.has(modelKey(item))}
-                            />
-                          ))}
-                        </div>
+                        {expanded && (
+                          <div id={listId} className="settings-provider-list">
+                            {group.items.map(item => (
+                              <ModelVisibilityControl
+                                key={modelKey(item)}
+                                model={item}
+                                hidden={hiddenModelKeys.has(modelKey(item))}
+                              />
+                            ))}
+                          </div>
+                        )}
                       </section>
                     );
                   })}

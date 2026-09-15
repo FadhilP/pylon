@@ -116,6 +116,7 @@ import {
   useTheme,
 } from "./use-chrome";
 import { useSettingsDialog } from "../settings/use-settings-dialog";
+import { terminalProjectForSelection, terminalProjectForSession } from "../terminal/terminal-project";
 import { useMarkSessionSeen, useTerminalDrawer } from "../terminal/use-terminal-drawer";
 import { enqueueWebAudioCues, unlockWebAudio } from "../ui/web-audio";
 import { exitDelay } from "../ui/motion";
@@ -259,6 +260,7 @@ export function App() {
   const pendingSessionDraft = useRef("");
   const pendingSessionSelection = useRef<ComposerSelection | undefined>(undefined);
   const pendingSessionInFlight = useRef(false);
+  const terminalProjectsBySession = useRef(new Map<string, Pick<SessionProject, "id" | "label" | "cwd">>());
   const fileWorkspaceStates = useRef(new Map<string, FileWorkspaceState>());
   const changesStates = useRef(new Map<string, FileWorkspaceState>());
   const toastId = useRef(0);
@@ -321,18 +323,36 @@ export function App() {
   const {
     terminalOpen,
     setTerminalOpen,
-    closeTerminal,
-    terminalSessionId,
+    activeTerminalId,
     retainedTerminals,
+    createTerminal,
+    selectTerminal,
     releaseTerminal,
+    releaseProject,
     terminalDrawerHeight,
     setTerminalDrawerHeight,
     toggleTerminal: openTerminalDrawer,
-  } = useTerminalDrawer(live, initialTerminalHeight);
+  } = useTerminalDrawer(initialTerminalHeight);
   useMarkSessionSeen(live);
 
   const sessions = useMemo(() => sessionPages.flatMap(page => page.sessions), [sessionPages]);
   const activeSession = activeSessions.find(session => session.active) ?? sessions.find(session => session.active);
+  const runtimeSessionId = live.runtime?.sessionId;
+  const listedTerminalProject = terminalProjectForSession(
+    runtimeSessionId,
+    [...activeSessions, ...sessions],
+    general ? [...projects, general] : projects,
+  );
+  if (runtimeSessionId && listedTerminalProject) terminalProjectsBySession.current.set(runtimeSessionId, listedTerminalProject);
+  if (runtimeSessionId && pendingSession && runtimeSessionId !== pendingSession.previousSessionId)
+    terminalProjectsBySession.current.set(runtimeSessionId, pendingSession.project);
+  const terminalProject = terminalProjectForSelection(
+    runtimeSessionId,
+    [...activeSessions, ...sessions],
+    general ? [...projects, general] : projects,
+    pendingSession?.project,
+    runtimeSessionId ? terminalProjectsBySession.current.get(runtimeSessionId) : undefined,
+  );
   const activePackages = useMemo(() => new Set(packages.filter(item => item.active).map(item => item.id)), [packages]);
   const browserAvailable = activePackages.has("pi-helios");
   const browserToolRevision = useMemo(
@@ -826,7 +846,6 @@ export function App() {
       recoveredDraftSessionId: retry ? pendingSession?.recoveredDraftSessionId : recoveredDraft?.sessionId,
       phase: "preparing",
     });
-    setTerminalOpen(false);
     setSessionBusy(project.id);
     let accepted = false;
     try {
@@ -903,6 +922,7 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.removeProject(project.id);
+      releaseProject(project.id);
       composerDrafts.dropProject(project.id);
       setSidebarAction(undefined);
     } catch (cause) {
@@ -1079,6 +1099,8 @@ export function App() {
     setProjectBusy(project.id);
     try {
       await runtimeStore.archiveProject(project.id);
+      releaseProject(project.id);
+      setSidebarAction(undefined);
       for (const session of project.sessions) composerDrafts.forgetInMemory(session.id);
     } catch (cause) {
       reportError(cause, "Unable to archive project");
@@ -1219,8 +1241,17 @@ export function App() {
     pendingSession?.project ??
     (currentProjectPage ? toSessionProject(currentProjectPage) : live.runtime ? undefined : currentProject);
   const composerProjectLabel = composerProject?.label ?? activeSession?.cwdLabel ?? live.runtime?.cwdLabel ?? "Project";
+  const createProjectTerminal = (project: Pick<SessionProject, "id" | "label" | "cwd">) => {
+    if (live.connection !== "connected") {
+      reportError(new Error("Reconnect before opening a terminal"), "Terminal unavailable");
+      return;
+    }
+    if (!createTerminal(project)) reportError(new Error("Close a terminal before opening another"), "Terminal limit reached");
+    if (mobile) setSidebarOpen(false);
+  };
   const toggleTerminal = () => {
-    openTerminalDrawer();
+    if (!openTerminalDrawer(terminalProject))
+      reportError(new Error("Choose a project before opening a terminal"), "Terminal unavailable");
     if (mobile) setSidebarOpen(false);
   };
   const openSettings = () => {
@@ -1333,7 +1364,7 @@ export function App() {
       confirmLabel: "Archive session", busyLabel: "Archiving…", onConfirm: () => { void archiveSession(activeSession).then(() => setSidebarAction(undefined)); },
     }) : undefined,
     worktree: keyboardReady && live.runtime?.workspace?.canMoveToWorktree ? () => runtimeStore.handoffSession("worktree") : undefined,
-    terminal: keyboardReady && live.runtime?.projectAvailable !== false ? toggleTerminal : undefined,
+    terminal: retainedTerminals.length > 0 || (live.connection === "connected" && Boolean(terminalProject)) ? toggleTerminal : undefined,
     changes: keyboardReady ? reviewChanges : undefined,
     inspector: keyboardReady ? () => setReference(current => current ? null : "overview") : undefined,
     theme: () => runAmbient("theme"),
@@ -1682,15 +1713,17 @@ export function App() {
       )}
       {retainedTerminals.map(terminal => (
         <TerminalPanel
-          key={`terminal:${terminal.sessionId}`}
-          open={terminalOpen && terminalSessionId === terminal.sessionId}
-          generation={terminal.generation}
-          cwdLabel={terminal.cwdLabel}
+          key={`terminal:${terminal.terminalId}`}
+          terminalId={terminal.terminalId}
+          projectId={terminal.projectId}
+          open={terminalOpen && activeTerminalId === terminal.terminalId}
+          tabs={retainedTerminals}
+          launchLabel={terminal.launchLabel}
+          canCreate={live.connection === "connected" && Boolean(terminalProject)}
+          onNew={() => terminalProject && createProjectTerminal(terminalProject)}
+          onSelect={selectTerminal}
           onClose={() => setTerminalOpen(false)}
-          onShutdown={() => {
-            releaseTerminal(terminal.sessionId);
-            closeTerminal();
-          }}
+          onShutdown={releaseTerminal}
         />
       ))}
     </>
@@ -1717,7 +1750,7 @@ export function App() {
         workspaceView={workspaceView}
         theme={resolvedTheme}
         terminalOpen={terminalOpen}
-        terminalAvailable={Boolean(live.runtime?.ready && live.runtime.projectAvailable !== false)}
+        terminalAvailable={retainedTerminals.length > 0 || (live.connection === "connected" && Boolean(terminalProject))}
         onWorkspaceView={openWorkspaceView}
         onAmbient={runAmbient}
       />
@@ -1802,7 +1835,22 @@ export function App() {
             setArchivesOpen(true);
             if (mobile) setSidebarOpen(false);
           }}
-          onArchiveProject={project => void archiveProject(project)}
+          onArchiveProject={project => {
+            const terminalCount = retainedTerminals.filter(terminal => terminal.projectId === project.id).length;
+            if (!terminalCount) {
+              void archiveProject(project);
+              return;
+            }
+            setSidebarAction({
+              key: `archive-project-${project.id}`,
+              title: `Archive “${project.label}”?`,
+              description: `This will shut down ${terminalCount} open terminal${terminalCount === 1 ? "" : "s"} for this project.`,
+              confirmLabel: "Archive project",
+              busyLabel: "Archiving…",
+              onConfirm: () => void archiveProject(project),
+            });
+          }}
+          onOpenTerminal={createProjectTerminal}
           onRenameProject={project =>
             setSidebarAction({
               key: `rename-project-${project.id}`,
@@ -1821,7 +1869,7 @@ export function App() {
             setSidebarAction({
               key: `remove-project-${project.id}`,
               title: `Remove “${project.label}”?`,
-              description: `This deletes ${count} saved session${count === 1 ? "" : "s"}. Project files and Continuity memory stay unchanged.`,
+              description: `This deletes ${count} saved session${count === 1 ? "" : "s"}${retainedTerminals.some(terminal => terminal.projectId === project.id) ? " and shuts down its open terminals" : ""}. Project files and Continuity memory stay unchanged.`,
               confirmLabel: "Remove project",
               busyLabel: "Removing…",
               danger: true,

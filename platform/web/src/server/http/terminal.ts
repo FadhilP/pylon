@@ -1,4 +1,6 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { realpath } from "node:fs/promises";
+import { basename } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import * as pty from "node-pty";
@@ -8,13 +10,37 @@ import { requestAllowed, SessionStore, validCsrf, validTabId, type SecurityOptio
 
 const MAX_INPUT_BYTES = 64 * 1024;
 const MAX_BUFFERED_OUTPUT = 1024 * 1024;
+const MAX_TERMINALS_PER_PAGE = 8;
+const MAX_TERMINALS_TOTAL = 32;
 
 export type TerminalClientMessage = { type: "input"; data: string } | { type: "resize"; cols: number; rows: number };
 
 export type TerminalSpawn = typeof pty.spawn;
 
-export function terminalShell(platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
-  return platform === "win32" ? "powershell.exe" : env.SHELL?.trim() || "/bin/sh";
+function executable(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function terminalShell(
+  platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  canExecute: (path: string) => boolean = executable,
+): string {
+  if (platform === "win32") return "powershell.exe";
+  const configured = env.SHELL?.trim();
+  const candidates = [configured, ...(platform === "darwin" ? ["/bin/zsh"] : []), "/bin/sh"];
+  return candidates.find((candidate): candidate is string => Boolean(candidate && canExecute(candidate))) ?? "/bin/sh";
+}
+
+/** macOS Terminal launches supported shells as interactive login shells. */
+export function terminalShellArgs(platform = process.platform, shell: string): string[] {
+  return platform === "darwin" && ["zsh", "bash", "sh", "fish"].includes(basename(shell)) ? ["-l", "-i"] : [];
 }
 
 export function parseTerminalMessage(value: unknown): TerminalClientMessage | undefined {
@@ -43,8 +69,9 @@ export function parseTerminalMessage(value: unknown): TerminalClientMessage | un
 interface Connection {
   socket: WebSocket;
   terminal: pty.IPty;
-  sessionId: string;
-  generation: number;
+  projectId: string;
+  targetCwd: string;
+  ownerKey: string;
   owner: symbol;
 }
 
@@ -66,55 +93,53 @@ export class TerminalServer {
     private readonly spawnTerminal: TerminalSpawn = pty.spawn,
   ) {
     this.unsubscribe = driver.subscribe(event => {
-      if (event.type === "session.status" && event.state === "sleeping") {
-        this.closeSession(event.sessionId, "Session deactivated");
-      } else if (event.type === "session.unavailable") {
-        this.closeSession(event.sessionId, "Session unavailable");
-      }
+      if (event.type === "projects.changed") this.closeUnavailableProjects();
     });
   }
 
   async handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    let reservation: { sessionId: string; owner: symbol } | undefined;
+    let reservation: { ownerKey: string; owner: symbol } | undefined;
     try {
       if (!requestAllowed(request, this.options)) return reject(socket, 403, "Forbidden");
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
       if (url.pathname !== "/api/v1/terminal") return reject(socket, 404, "Not Found");
       const session = this.sessions.get(request);
       const tabId = url.searchParams.get("tabId") ?? undefined;
-      const generation = Number(url.searchParams.get("generation"));
+      const projectId = url.searchParams.get("projectId") ?? undefined;
+      const terminalId = url.searchParams.get("terminalId") ?? undefined;
       if (
         !validCsrf(session, url.searchParams.get("csrf") ?? undefined) ||
         !validTabId(tabId) ||
+        !validTabId(projectId) ||
+        !validTabId(terminalId) ||
         !session?.tabs.has(tabId)
       ) {
         return reject(socket, 403, "Forbidden");
       }
-      if (!Number.isSafeInteger(generation) || generation < 1) return reject(socket, 400, "Invalid generation");
       if (!this.driver.terminalTarget) return reject(socket, 501, "Terminal unavailable");
-      const target = this.driver.terminalTarget();
-      if (target.sessionGeneration !== generation) return reject(socket, 409, "Stale session generation");
-      if (this.owners.has(target.sessionId)) return reject(socket, 409, "Terminal is already open");
-      const owner = Symbol(tabId);
-      reservation = { sessionId: target.sessionId, owner };
-      this.owners.set(target.sessionId, owner);
+      const target = this.driver.terminalTarget(projectId);
+      if (!target || target.projectId !== projectId) return reject(socket, 409, "Project unavailable");
+      const pageKey = `${session.secret}:${tabId}`;
+      const ownerKey = `${pageKey}:${projectId}:${terminalId}`;
+      if (this.owners.has(ownerKey)) return reject(socket, 409, "Terminal is already open");
+      if (this.owners.size >= MAX_TERMINALS_TOTAL || this.pageOwnerCount(pageKey) >= MAX_TERMINALS_PER_PAGE)
+        return reject(socket, 429, "Terminal limit reached");
+      const owner = Symbol(terminalId);
+      reservation = { ownerKey, owner };
+      this.owners.set(ownerKey, owner);
       const cwd = await realpath(target.cwd);
-      const current = this.driver.terminalTarget();
-      if (
-        current.sessionId !== target.sessionId ||
-        current.sessionGeneration !== generation ||
-        current.cwd !== target.cwd
-      ) {
-        if (this.owners.get(target.sessionId) === owner) this.owners.delete(target.sessionId);
-        return reject(socket, 409, "Session changed while opening terminal");
+      const current = this.driver.terminalTarget(projectId);
+      if (!current || current.projectId !== target.projectId || current.cwd !== target.cwd) {
+        if (this.owners.get(ownerKey) === owner) this.owners.delete(ownerKey);
+        return reject(socket, 409, "Project changed while opening terminal");
       }
       this.webSockets.handleUpgrade(request, socket, head, webSocket =>
-        this.connect(webSocket, owner, target.sessionId, generation, cwd),
+        this.connect(webSocket, ownerKey, owner, projectId, target.cwd, cwd),
       );
       reservation = undefined;
     } catch {
-      if (reservation && this.owners.get(reservation.sessionId) === reservation.owner)
-        this.owners.delete(reservation.sessionId);
+      if (reservation && this.owners.get(reservation.ownerKey) === reservation.owner)
+        this.owners.delete(reservation.ownerKey);
       reject(socket, 500, "Terminal unavailable");
     }
   }
@@ -125,18 +150,26 @@ export class TerminalServer {
     this.webSockets.close();
   }
 
-  private connect(socket: WebSocket, owner: symbol, sessionId: string, generation: number, cwd: string): void {
+  private connect(
+    socket: WebSocket,
+    ownerKey: string,
+    owner: symbol,
+    projectId: string,
+    targetCwd: string,
+    cwd: string,
+  ): void {
     let terminal: pty.IPty;
     try {
-      terminal = this.spawnTerminal(terminalShell(), [], {
+      const shell = terminalShell();
+      terminal = this.spawnTerminal(shell, terminalShellArgs(process.platform, shell), {
         name: "xterm-256color",
         cols: 80,
         rows: 24,
         cwd,
-        env: { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" },
+        env: { ...process.env, SHELL: shell, TERM: "xterm-256color", COLORTERM: "truecolor" },
       });
     } catch (error) {
-      if (this.owners.get(sessionId) === owner) this.owners.delete(sessionId);
+      if (this.owners.get(ownerKey) === owner) this.owners.delete(ownerKey);
       try {
         socket.send(
           JSON.stringify({
@@ -150,9 +183,11 @@ export class TerminalServer {
       }
       return;
     }
-    const connection = { socket, terminal, sessionId, generation, owner };
+    const connection = { socket, terminal, projectId, targetCwd, ownerKey, owner };
     this.connections.add(connection);
-    if (!this.send(connection, { type: "ready" })) return;
+    socket.once("close", () => this.close(connection));
+    socket.once("error", () => this.close(connection));
+    if (!this.send(connection, { type: "ready" })) return this.close(connection);
     terminal.onData(data => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > MAX_BUFFERED_OUTPUT) return this.close(connection, 1013, "Terminal output overflow");
@@ -175,8 +210,6 @@ export class TerminalServer {
       if (message.type === "input") terminal.write(message.data);
       else terminal.resize(message.cols, message.rows);
     });
-    socket.once("close", () => this.close(connection));
-    socket.once("error", () => this.close(connection));
   }
 
   private send(connection: Connection, payload: object): boolean {
@@ -192,9 +225,23 @@ export class TerminalServer {
     }
   }
 
-  private closeSession(sessionId: string, reason: string): void {
+  private pageOwnerCount(pageKey: string): number {
+    const prefix = `${pageKey}:`;
+    let count = 0;
+    for (const key of this.owners.keys()) if (key.startsWith(prefix)) count++;
+    return count;
+  }
+
+  private closeUnavailableProjects(): void {
     for (const connection of [...this.connections]) {
-      if (connection.sessionId === sessionId) this.close(connection, 1012, reason);
+      let target;
+      try {
+        target = this.driver.terminalTarget?.(connection.projectId);
+      } catch {
+        target = undefined;
+      }
+      if (!target || target.projectId !== connection.projectId || target.cwd !== connection.targetCwd)
+        this.close(connection, 1012, "Project unavailable");
     }
   }
 
@@ -208,7 +255,7 @@ export class TerminalServer {
       }
     if (connection.socket.readyState === WebSocket.OPEN && code) connection.socket.close(code, reason);
     else if (connection.socket.readyState !== WebSocket.CLOSED) connection.socket.terminate();
-    if (this.owners.get(connection.sessionId) === connection.owner) this.owners.delete(connection.sessionId);
+    if (this.owners.get(connection.ownerKey) === connection.owner) this.owners.delete(connection.ownerKey);
   }
 }
 

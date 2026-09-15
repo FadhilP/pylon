@@ -74,6 +74,7 @@ interface SidebarProps {
   onAddProject: () => void;
   onOpenArchives: () => void;
   onArchiveProject: (project: SessionProject) => void;
+  onOpenTerminal: (project: SessionProject) => void;
   onRenameProject: (project: SessionProject) => void;
   onRemoveProject: (project: SessionProject) => void;
   onArchiveSession: (session: SessionSummary) => void;
@@ -114,6 +115,7 @@ export function SessionSidebar({
   onAddProject,
   onOpenArchives,
   onArchiveProject,
+  onOpenTerminal,
   onRenameProject,
   onRemoveProject,
   onArchiveSession,
@@ -539,6 +541,16 @@ export function SessionSidebar({
                             }}>
                             <IconCopy size={14} />
                             Copy path
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(projectBusy || busy || deleting)}
+                            onClick={() => {
+                              closeMenu(true);
+                              onOpenTerminal(project);
+                            }}>
+                            <IconTerminal2 size={14} />
+                            New terminal
                           </button>
                           <button
                             type="button"

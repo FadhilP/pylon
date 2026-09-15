@@ -33,9 +33,14 @@ function current(): Set<string> {
   return cached;
 }
 export function setHiddenModelVisible(key: string, visible: boolean): void {
+  setHiddenModelsVisible([key], visible);
+}
+export function setHiddenModelsVisible(keys: Iterable<string>, visible: boolean): void {
   const next = new Set(current());
-  if (visible) next.delete(key);
-  else next.add(key);
+  for (const key of keys) {
+    if (visible) next.delete(key);
+    else next.add(key);
+  }
   const preferences = runtimeStore.getSnapshot().hostPreferences;
   if (!preferences) {
     fallback = next;
