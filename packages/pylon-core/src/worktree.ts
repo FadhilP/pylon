@@ -762,7 +762,7 @@ export async function listLocalGitBranches(cwd: string, limit = 500): Promise<Lo
   };
 }
 
-/** Switches to an existing local branch without carrying workspace changes across it. */
+/** Switches to an existing local branch while preserving changes Git considers safe to carry. */
 export async function switchLocalGitBranch(cwd: string, branch: string): Promise<string> {
   if (!branch || branch.length > 200 || /[\u0000-\u001f\u007f]/.test(branch)) throw Error("Invalid branch name.");
   const workspace = await inspectGitWorkspace(cwd);
@@ -779,8 +779,6 @@ export async function switchLocalGitBranch(cwd: string, branch: string): Promise
     throw Error(target.checkoutUnavailableReason ?? "Branch checkout is unavailable.");
   }
   if (target.current) return branch;
-  const status = await git(workspace.root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
-  if (status) throw Error("Commit, stash, or discard workspace changes before switching branches.");
   let failure: unknown;
   try {
     await git(workspace.root, ["switch", "--no-guess", branch]);

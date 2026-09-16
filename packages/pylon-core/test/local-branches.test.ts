@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listLocalGitBranches, switchLocalGitBranch } from "../src/worktree.ts";
@@ -21,7 +21,7 @@ const commitIdentity = {
   GIT_COMMITTER_EMAIL: "pylon@test.local",
 };
 
-test("local branches sort by tip activity and checkout fails closed for worktrees and dirty files", async () => {
+test("local branches sort by tip activity and delegate dirty-worktree compatibility to Git", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-local-branches-"));
   const repository = join(root, "repository");
   const otherWorktree = join(root, "other-worktree");
@@ -30,7 +30,8 @@ test("local branches sort by tip activity and checkout fails closed for worktree
     await git(repository, ["init", "-q"]);
     await git(repository, ["branch", "-M", "main"]);
     await writeFile(join(repository, "tracked.txt"), "base\n");
-    await git(repository, ["add", "tracked.txt"]);
+    await writeFile(join(repository, "stable.txt"), "base\n");
+    await git(repository, ["add", "."]);
     await git(repository, ["commit", "-qm", "base"], {
       ...commitIdentity,
       GIT_AUTHOR_DATE: "2025-01-01T00:00:00Z",
@@ -38,7 +39,9 @@ test("local branches sort by tip activity and checkout fails closed for worktree
     });
     await git(repository, ["switch", "-c", "feature"]);
     await writeFile(join(repository, "tracked.txt"), "feature\n");
-    await git(repository, ["commit", "-qam", "feature"], {
+    await writeFile(join(repository, "feature-only.txt"), "feature\n");
+    await git(repository, ["add", "."]);
+    await git(repository, ["commit", "-qm", "feature"], {
       ...commitIdentity,
       GIT_AUTHOR_DATE: "2025-02-01T00:00:00Z",
       GIT_COMMITTER_DATE: "2025-02-01T00:00:00Z",
@@ -65,9 +68,25 @@ test("local branches sort by tip activity and checkout fails closed for worktree
 
     assert.equal(await switchLocalGitBranch(repository, "feature"), "feature");
     assert.equal(await git(repository, ["branch", "--show-current"]), "feature");
+
     await writeFile(join(repository, "untracked.txt"), "keep\n");
-    await assert.rejects(() => switchLocalGitBranch(repository, "main"), /Commit, stash, or discard/);
-    assert.equal(await git(repository, ["branch", "--show-current"]), "feature");
+    assert.equal(await switchLocalGitBranch(repository, "main"), "main");
+    assert.equal(await readFile(join(repository, "untracked.txt"), "utf8"), "keep\n");
+
+    await writeFile(join(repository, "stable.txt"), "dirty\n");
+    assert.equal(await switchLocalGitBranch(repository, "feature"), "feature");
+    assert.equal(await readFile(join(repository, "stable.txt"), "utf8"), "dirty\n");
+    assert.equal(await readFile(join(repository, "untracked.txt"), "utf8"), "keep\n");
+    assert.equal(await switchLocalGitBranch(repository, "main"), "main");
+
+    await writeFile(join(repository, "tracked.txt"), "conflict\n");
+    await assert.rejects(() => switchLocalGitBranch(repository, "feature"), /would be overwritten|local changes/i);
+    assert.equal(await git(repository, ["branch", "--show-current"]), "main");
+
+    await git(repository, ["restore", "tracked.txt"]);
+    await writeFile(join(repository, "feature-only.txt"), "untracked conflict\n");
+    await assert.rejects(() => switchLocalGitBranch(repository, "feature"), /would be overwritten/i);
+    assert.equal(await git(repository, ["branch", "--show-current"]), "main");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

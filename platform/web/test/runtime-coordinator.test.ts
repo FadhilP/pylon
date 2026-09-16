@@ -2498,7 +2498,7 @@ test(
 );
 
 test(
-  "Local branch checkout stays visible while busy and refreshes the selected runtime",
+  "New Local sessions can check out branches and refresh the selected runtime",
   { timeout: 20_000 },
   async () => {
     const root = await mkdtemp(join(tmpdir(), "pylon-local-branch-checkout-"));
@@ -2520,7 +2520,7 @@ test(
       const slot = (driver as any).selected();
       const registry = (driver as any).registry() as ProjectRegistry;
       const projectId = projectIdForCwd(cwd);
-      await registry.setSessionWorkspace({ sessionId: slot.id, projectId, mode: "local" });
+      assert.equal(registry.workspaceForSession(slot.id)?.mode, "local");
 
       const canSleep = slot.driver.canSleep;
       slot.driver.canSleep = () => false;

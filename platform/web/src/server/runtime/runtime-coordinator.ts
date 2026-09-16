@@ -456,6 +456,13 @@ export class RuntimeCoordinator implements PiDriver {
     const slot = await this.createSlot(
       project ? { ...target, cwd: project.cwd, projectId: project.id } : { ...target, inMemory: true },
     );
+    if (
+      project &&
+      !this.projectRegistry.workspaceForSession(slot.id) &&
+      this.projectRegistry.runtimePolicy(project.id, slot.id).effective.workspace === "local"
+    ) {
+      await this.projectRegistry.setSessionWorkspace({ sessionId: slot.id, projectId: project.id, mode: "local" });
+    }
     this.selectedId = slot.id;
     this.noteSelection(slot.id);
     this.generation = 1;
