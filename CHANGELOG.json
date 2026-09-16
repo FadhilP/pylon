@@ -1,5 +1,18 @@
 [
   {
+    "version": "3.2.0",
+    "date": "Sep 15, 2026",
+    "title": "Global terminals and accurate agent costs",
+    "summary": "Pylon 3.2 adds persistent project-scoped terminals across sessions, makes delegated-agent cost totals accurate and durable, and upgrades the Pi runtime with compatibility safeguards.",
+    "notes": [
+      "Added project-scoped terminal tabs that remain available while switching sessions, can be opened from the project menu, and close automatically when their project is removed, archived, or moved.",
+      "Hardened terminal lifecycle and shell startup with duplicate-ID and ownership checks, per-page and server-wide limits, executable-shell validation, safe macOS and Unix fallbacks, and interactive login shells on macOS.",
+      "Corrected Advisor, Grunt, Scout, and Spawn cost accounting by reconciling mirrored tool charges, persisting background usage across restarts, publishing live usage updates, and surfacing persistence failures.",
+      "Grouped model visibility controls by provider with collapsed defaults and atomic provider-wide updates.",
+      "Upgraded the Pi runtime packages to 0.85.1 and preserved the complete generation-bound remote UI API when Pi wraps its context."
+    ]
+  },
+  {
     "version": "3.1.6",
     "date": "Sep 14, 2026",
     "title": "Safer upgrades and coordinated startup maintenance",
