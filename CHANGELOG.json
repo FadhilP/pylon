@@ -8,7 +8,7 @@
       "Added in-place Git conflict resolution with editable ours and theirs regions, structural marker protection, stale-state validation, automatic staging, and support for continuing merge, cherry-pick, and stash workflows.",
       "Allowed Git to carry compatible tracked and untracked changes across local branch switches while leaving conflicting switches unchanged, and initialized new Local sessions with the workspace metadata required for branch operations.",
       "Improved session search by automatically expanding matching project and General groups, preserving project context, reporting live-match counts, distinguishing live-only empty results, and pausing project reordering while filtering.",
-      "Unified database reads and writes behind a statement-aware Run action for SQL, MongoDB, and Redis, with multiline SQL support, single-statement validation, direct panel write execution, transaction safeguards, and fail-closed connection checks.",
+      "Unified database reads and writes behind a statement-aware Run action for SQL, MongoDB, and Redis, with multiline SQL support, single-statement validation, direct panel write execution, transaction safeguards, and fail-closed connection checks."
     ]
   },
   {
