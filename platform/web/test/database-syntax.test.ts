@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { once } from "node:events";
-import { databaseSyntaxDiagnostics } from "../src/client/database/database-syntax.ts";
+import { databaseStatementMode, databaseSyntaxDiagnostics } from "../src/client/database/database-syntax.ts";
 import { loadEditorLanguage, type SqlDialect } from "../src/client/rendering/editor-language.ts";
 import { EditorState } from "@codemirror/state";
 import { CompletionContext, type CompletionSource } from "@codemirror/autocomplete";
@@ -45,6 +45,23 @@ test("SQL diagnostics accept dialect quoting, placeholders and SQLite PRAGMA/UPS
       .map(source => source(new CompletionContext(state, 3, true))));
     assert.ok(results.some(result => result?.options.some(option => option.label.toLowerCase() === "select")), dialect);
   }
+});
+
+test("database statements route through one Run action without defaulting unknown input to writes", async () => {
+  const writes: Record<SqlDialect, string> = {
+    sqlite: "UPDATE users SET active = 1 WHERE id = 1;",
+    postgres: `UPDATE public.user_roles SET
+role_id = 'admin'::character varying WHERE
+id = '20677';`,
+    mysql: "UPDATE users SET active = 1 WHERE id = 1;",
+  };
+  for (const dialect of Object.keys(writes) as SqlDialect[]) {
+    assert.equal(await databaseStatementMode("/* review */ SELECT 1;", dialect), "read");
+    assert.equal(await databaseStatementMode(writes[dialect], dialect), "write");
+  }
+  assert.equal(await databaseStatementMode("WITH value AS (SELECT 1 AS id) SELECT * FROM value;", "postgres"), "read");
+  await assert.rejects(databaseStatementMode("SELECT 1; SELECT 2;", "postgres"), /exactly one SQL statement/i);
+  await assert.rejects(databaseStatementMode('PRAGMA table_info("users");', "sqlite"), /unsupported SQL statement type/i);
 });
 
 test("database worker handles SQL/JSON, bounds analysis and recovers without a database connection", { timeout: 15000 }, async () => {

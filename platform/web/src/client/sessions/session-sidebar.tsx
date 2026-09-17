@@ -298,13 +298,16 @@ export function SessionSidebar({
     ? visibleProjects.filter(project => sessionsForProject(project).length > 0)
     : visibleProjects;
   const totalCount = pages.reduce((total, page) => total + page.totalCount, 0);
-  const flatResults = normalizedQuery
-    ? [...visibleProjects, ...(general ? [general] : [])]
-        .flatMap(project => sessionsForProject(project).map(session => ({ project, session })))
-        .sort((left, right) => Date.parse(right.session.modifiedAt) - Date.parse(left.session.modifiedAt))
-    : [];
+  const projectsExpanded = Boolean(normalizedQuery) || projectsOpen;
+  const generalExpanded = Boolean(normalizedQuery) || generalOpen;
+  const matchingLiveCount = normalizedQuery
+    ? [...visibleProjects, ...(general ? [general] : [])].reduce(
+        (total, project) => total + sessionsForProject(project).length,
+        0,
+      )
+    : 0;
 
-  const row = (session: SessionSummary, menuId: string, showProject = false) => (
+  const row = (session: SessionSummary, menuId: string) => (
     <SessionRow
       key={menuId}
       session={session}
@@ -315,7 +318,6 @@ export function SessionSidebar({
       completed={Boolean(unseenCompletions?.[session.id])}
       now={now}
       compact
-      showProject={showProject}
       titleContent={highlightSessionTitle(sessionTitle(session), normalizedQuery)}
       onSelect={selectSession}
       onDelete={onDeleteSession}
@@ -345,10 +347,10 @@ export function SessionSidebar({
     }
     return content;
   };
-  const controls = (project: SessionProject, page: SessionProjectPage | undefined, contextual = false) => {
+  const controls = (project: SessionProject, page: SessionProjectPage | undefined) => {
     if (!page || (liveOnly && !normalizedQuery) || (!page.nextCursor && page.sessions.length <= SESSION_LIST_INITIAL_LIMIT)) return null;
     return (
-      <div className={`session-list-controls${contextual ? " is-contextual" : ""}`} key={`${project.id}-controls`}>
+      <div className="session-list-controls" key={`${project.id}-controls`}>
         {page.nextCursor && (
           <button
             className="session-list-button"
@@ -357,9 +359,7 @@ export function SessionSidebar({
             disabled={projectLoading === project.id}>
             {projectLoading === project.id
               ? "Loading…"
-              : contextual
-                ? `Show more in ${project.label}`
-                : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
+              : `Show ${Math.min(SESSION_LIST_MORE_LIMIT, page.totalCount - page.sessions.length)} more`}
           </button>
         )}
         {page.sessions.length > SESSION_LIST_INITIAL_LIMIT && (
@@ -368,7 +368,7 @@ export function SessionSidebar({
             type="button"
             onClick={() => onShowLess(project)}
             disabled={projectLoading === project.id}>
-            Show less{contextual ? ` in ${project.label}` : ""}
+            Show less
           </button>
         )}
       </div>
@@ -413,28 +413,15 @@ export function SessionSidebar({
 
         <nav className="project-list">
           {loading && !pages.length && <div className="sidebar-state">Loading sessions...</div>}
-          {normalizedQuery ? (
-            <div className="session-search-results">
-              {flatResults.length ? (
-                flatResults.map(({ project, session }) => row(session, `search-${project.id}-${session.id}`, true))
-              ) : !loading ? (
-                <div className="sidebar-state">No matching {liveOnly ? "live " : ""}sessions.</div>
-              ) : null}
-              {[...visibleProjects, ...(general ? [general] : [])].map(project =>
-                controls(
-                  project,
-                  pages.find(page => page.id === project.id),
-                  true,
-                ),
-              )}
-            </div>
-          ) : (
-            <>
+          <>
               <div className="project-heading">
                 <h2 className="nav-label">
-                  <button type="button" aria-expanded={projectsOpen} onClick={() => setProjectsOpen(open => !open)}>
+                  <button
+                    type="button"
+                    aria-expanded={projectsExpanded}
+                    onClick={() => setProjectsOpen(open => !open)}>
                     <span>Projects</span>
-                    <IconChevronRight className={projectsOpen ? "is-expanded" : ""} size={13} />
+                    <IconChevronRight className={projectsExpanded ? "is-expanded" : ""} size={13} />
                   </button>
                 </h2>
                 <div>
@@ -449,8 +436,8 @@ export function SessionSidebar({
                   </button>
                 </div>
               </div>
-              {projectsOpen && displayedProjects.map(project => {
-                const expanded = expandedProjects.has(project.id);
+              {projectsExpanded && displayedProjects.map(project => {
+                const expanded = Boolean(normalizedQuery) || expandedProjects.has(project.id);
                 const page = pages.find(candidate => candidate.id === project.id);
                 const projectSessions = sessionsForProject(project);
                 const projectLive = liveSessions.filter(session => session.projectId === project.id);
@@ -465,29 +452,38 @@ export function SessionSidebar({
                   <section
                     className={`project-group${preview?.kind === "project" && preview.id === project.id ? " is-dragging" : ""}`}
                     key={project.id}>
-                    <div className="project-row" data-reorder-kind="project" data-reorder-id={project.id}>
+                    <div
+                      className="project-row"
+                      data-reorder-kind={normalizedQuery ? undefined : "project"}
+                      data-reorder-id={normalizedQuery ? undefined : project.id}>
                       <button
                         type="button"
                         className={`project-toggle ${project.active ? "is-active" : ""}`}
                         onClick={() => onToggleProject(project.id)}
-                        onPointerDown={event =>
-                          startPointerReorder(
-                            event,
-                            "project",
-                            project.id,
-                            visibleProjects.map(item => item.id),
-                          )
+                        onPointerDown={
+                          normalizedQuery
+                            ? undefined
+                            : event =>
+                                startPointerReorder(
+                                  event,
+                                  "project",
+                                  project.id,
+                                  visibleProjects.map(item => item.id),
+                                )
                         }
-                        onKeyDown={event =>
-                          keyboardReorder(
-                            event,
-                            "project",
-                            project.id,
-                            visibleProjects.map(item => item.id),
-                          )
+                        onKeyDown={
+                          normalizedQuery
+                            ? undefined
+                            : event =>
+                                keyboardReorder(
+                                  event,
+                                  "project",
+                                  project.id,
+                                  visibleProjects.map(item => item.id),
+                                )
                         }
                         aria-expanded={expanded}
-                        aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+                        aria-keyshortcuts={normalizedQuery ? undefined : "Alt+ArrowUp Alt+ArrowDown"}
                         title={project.cwd}>
                         {expanded ? <IconFolderOpen size={14} /> : <IconFolder size={14} />}
                         <span>{project.label}</span>
@@ -588,25 +584,38 @@ export function SessionSidebar({
                     </div>
                     {expanded && (
                       <div className="project-sessions">
-                        {projectSessions.length ? rows(projectSessions, project.id) : <p className="session-empty">No live sessions.</p>}
+                        {projectSessions.length ? (
+                          rows(projectSessions, project.id)
+                        ) : (
+                          <p className="session-empty">
+                            {normalizedQuery ? "No matching sessions." : "No live sessions."}
+                          </p>
+                        )}
                         {controls(project, page)}
                       </div>
                     )}
                   </section>
                 );
               })}
-              {projectsOpen && !loading && !displayedProjects.length && (!general || liveOnly) && (
+              {projectsExpanded && !loading && !displayedProjects.length && (!general || liveOnly) && (
                 <div className="sidebar-state">
-                  {liveOnly ? "No sessions are live." : "No projects yet. Add a folder to start."}
+                  {normalizedQuery
+                    ? `No matching ${liveOnly ? "live " : ""}sessions.`
+                    : liveOnly
+                      ? "No sessions are live."
+                      : "No projects yet. Add a folder to start."}
                 </div>
               )}
               {general && (!liveOnly || sessionsForProject(general).length > 0) && (
                 <section className="general-session-group" aria-labelledby="general-sessions-heading">
                   <div className="project-heading">
                     <h2 className="nav-label" id="general-sessions-heading">
-                      <button type="button" aria-expanded={generalOpen} onClick={() => setGeneralOpen(open => !open)}>
+                      <button
+                        type="button"
+                        aria-expanded={generalExpanded}
+                        onClick={() => setGeneralOpen(open => !open)}>
                         <span>General</span>
-                        <IconChevronRight className={generalOpen ? "is-expanded" : ""} size={13} />
+                        <IconChevronRight className={generalExpanded ? "is-expanded" : ""} size={13} />
                       </button>
                     </h2>
                     <div>
@@ -621,12 +630,14 @@ export function SessionSidebar({
                       </button>
                     </div>
                   </div>
-                  {generalOpen && (
+                  {generalExpanded && (
                     <div className="project-sessions">
                       {sessionsForProject(general).length ? (
                         rows(sessionsForProject(general), "general")
                       ) : (
-                        <p className="session-empty">Search and work with files accessible on this PC.</p>
+                        <p className="session-empty">
+                          {normalizedQuery ? "No matching sessions." : "Search and work with files accessible on this PC."}
+                        </p>
                       )}
                       {controls(general, generalPage)}
                     </div>
@@ -634,14 +645,13 @@ export function SessionSidebar({
                 </section>
               )}
             </>
-          )}
         </nav>
 
         <footer className="session-sidebar-footer">
           <span>
             {liveOnly
               ? normalizedQuery
-                ? `${flatResults.length} live matches`
+                ? `${matchingLiveCount} live matches`
                 : `${liveSessions.length} sessions`
               : `${totalCount} sessions`}
             {!liveOnly && liveSessions.length > 0 ? <em> · {liveSessions.length} live</em> : null}

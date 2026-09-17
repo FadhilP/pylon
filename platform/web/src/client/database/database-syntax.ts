@@ -3,7 +3,9 @@ import type { Diagnostic } from "@codemirror/lint";
 import type { SqlDialect } from "../rendering/editor-language.ts";
 
 type Parse = (text: string) => unknown;
-// Import individual dialect builds, never the all-dialects entry point. Used only in a worker.
+export type DatabaseStatementMode = "read" | "write";
+
+// Import individual dialect builds, never the all-dialects entry point. Dynamic loading keeps parser cost off startup.
 // The SQLite-specific parser handles PRAGMA and ?NNN parameters rejected by node-sql-parser.
 const loaders: Record<SqlDialect, () => Promise<Parse>> = {
   sqlite: () => import("@appland/sql-parser").then(module => module.default),
@@ -15,16 +17,50 @@ const loaders: Record<SqlDialect, () => Promise<Parse>> = {
   }),
 };
 const parsers = new Map<SqlDialect, Promise<Parse>>();
+const READ_STATEMENTS = new Set(["select"]);
+const WRITE_STATEMENTS = new Set(["insert", "replace", "update", "delete", "create", "alter", "drop", "truncate"]);
 
-export async function databaseSyntaxDiagnostics(text: string, dialect: SqlDialect): Promise<Diagnostic[]> {
-  if (!text.trim()) return [];
+async function databaseParser(dialect: SqlDialect): Promise<Parse> {
   let loading = parsers.get(dialect);
   if (!loading) {
     loading = loaders[dialect]();
     parsers.set(dialect, loading);
     void loading.catch(() => parsers.delete(dialect));
   }
-  const parser = await loading;
+  return loading;
+}
+
+function statementTypes(parsed: unknown, dialect: SqlDialect): string[] {
+  if (dialect === "sqlite") {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    const root = parsed as { variant?: unknown; statement?: unknown };
+    const statements = root.variant === "list" && Array.isArray(root.statement) ? root.statement : [root];
+    return statements.map(statement =>
+      statement && typeof statement === "object" && typeof (statement as { variant?: unknown }).variant === "string"
+        ? (statement as { variant: string }).variant.toLowerCase()
+        : "",
+    );
+  }
+  const statements = Array.isArray(parsed) ? parsed : [parsed];
+  return statements.map(statement =>
+    statement && typeof statement === "object" && typeof (statement as { type?: unknown }).type === "string"
+      ? (statement as { type: string }).type.toLowerCase()
+      : "",
+  );
+}
+
+export async function databaseStatementMode(text: string, dialect: SqlDialect): Promise<DatabaseStatementMode> {
+  const types = statementTypes((await databaseParser(dialect))(text), dialect);
+  if (types.length !== 1) throw new Error("Run exactly one SQL statement at a time.");
+  const [type] = types;
+  if (READ_STATEMENTS.has(type!)) return "read";
+  if (WRITE_STATEMENTS.has(type!)) return "write";
+  throw new Error(`Unsupported SQL statement type${type ? ` “${type}”` : ""}.`);
+}
+
+export async function databaseSyntaxDiagnostics(text: string, dialect: SqlDialect): Promise<Diagnostic[]> {
+  if (!text.trim()) return [];
+  const parser = await databaseParser(dialect);
   try {
     parser(text);
     return [];

@@ -21,6 +21,7 @@ import {
   databaseRecord,
   databaseSnapshotMatchesRuntime,
   isDatabaseResult,
+  type DatabaseDriver,
   type DatabaseQuery,
   type DatabaseResult,
 } from "./database-workspace";
@@ -32,6 +33,7 @@ import { DatabaseConnectDialog, type DatabaseProfileSetup } from "./database-con
 import { DatabaseSetupError, submitDatabaseSetup, type DatabaseSetupStep } from "./database-setup";
 import { DatabaseResultGrid } from "./database-result-grid";
 import { DatabaseQueryEditor } from "./database-query-editor";
+import { databaseStatementMode, type DatabaseStatementMode } from "./database-syntax";
 import { isDatabaseWebStateEvent, type DatabaseDraftInput } from "../../shared/settings/web-state";
 
 interface QueryTab extends DatabaseQuery {
@@ -85,6 +87,38 @@ const DIRECT_WRITE_COMMANDS = new Set<StateQLCommandInput["command"]>([
   "transaction.commit",
   "transaction.rollback",
 ]);
+const MONGO_READ_OPERATIONS = new Set(["find", "aggregate"]);
+const MONGO_WRITE_OPERATIONS = new Set([
+  "insertOne",
+  "insertMany",
+  "updateOne",
+  "updateMany",
+  "replaceOne",
+  "deleteOne",
+  "deleteMany",
+]);
+const REDIS_READ_COMMANDS = new Set([
+  "GET", "MGET", "TYPE", "EXISTS", "TTL", "PTTL", "HGET", "HMGET", "LRANGE", "SCAN", "HSCAN", "SSCAN", "ZSCAN",
+]);
+const REDIS_WRITE_COMMANDS = new Set([
+  "SET", "DEL", "HSET", "HDEL", "LPUSH", "RPUSH", "SADD", "SREM", "ZADD", "ZREM",
+]);
+
+function nativeStatementMode(driver: Extract<DatabaseDriver, "mongodb" | "redis">, value: unknown): DatabaseStatementMode {
+  if (!databaseRecord(value)) throw new Error(`Enter a valid ${driver === "mongodb" ? "MongoDB" : "Redis"} command object.`);
+  const field = driver === "mongodb" ? "operation" : "command";
+  const raw = value[field];
+  if (typeof raw !== "string") throw new Error(`The ${field} field is required.`);
+  if (driver === "mongodb") {
+    if (MONGO_READ_OPERATIONS.has(raw)) return "read";
+    if (MONGO_WRITE_OPERATIONS.has(raw)) return "write";
+    throw new Error(`Unsupported MongoDB operation “${raw}”.`);
+  }
+  const command = raw.toUpperCase();
+  if (REDIS_READ_COMMANDS.has(command)) return "read";
+  if (REDIS_WRITE_COMMANDS.has(command)) return "write";
+  throw new Error(`Unsupported Redis command “${raw}”.`);
+}
 
 function writeCompletionNotice(command: StateQLCommandInput["command"], value: unknown): string {
   if (!DIRECT_WRITE_COMMANDS.has(command)) return "";
@@ -142,6 +176,7 @@ export function DatabasePanel({
   const draftChange = useRef(0);
   const draftScopeToken = useRef(0);
   const pendingDraft = useRef<(DatabaseDraftInput & { change: number; token: number }) | undefined>(undefined);
+  const preparingQuery = useRef(false);
   const request = useRef<AbortController | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -526,7 +561,8 @@ export function DatabasePanel({
       document.getElementById(`database-tab-${tabs[index - 1]?.id ?? "history"}`)?.focus(),
     );
   };
-  const execute = async (tab: QueryTab, action: "read" | "write") => {
+  const execute = async (tab: QueryTab) => {
+    if (preparingQuery.current) return;
     if (tab.detached) {
       setError("This result belongs to a previous connection. Discard edits and reopen the table.");
       return;
@@ -535,34 +571,45 @@ export function DatabasePanel({
       setError("Apply or discard pending table edits before reloading.");
       return;
     }
+    if (inTransaction && tab.kind === "query" && !ownTransaction) {
+      setError("Only the transaction owner can run statements until the transaction ends.");
+      return;
+    }
     let input: StateQLCommandInput;
+    let mode: DatabaseStatementMode = "read";
+    preparingQuery.current = true;
     try {
       if (tab.kind === "table") input = { command: "table.read", table: tab.table!, limit: 1000 };
-      else if (tab.driver === "redis")
+      else if (tab.driver === "redis") {
+        const redis: unknown = JSON.parse(tab.text);
+        mode = nativeStatementMode("redis", redis);
+        input = { command: mode === "read" ? "redis.query" : "redis.exec", redis } as StateQLCommandInput;
+      } else if (tab.driver === "mongodb") {
+        const mongo: unknown = JSON.parse(tab.text);
+        mode = nativeStatementMode("mongodb", mongo);
         input = {
-          command: action === "read" ? "redis.query" : "redis.exec",
-          redis: JSON.parse(tab.text),
-        };
-      else if (tab.driver === "mongodb")
-        input = {
-          command: action === "read" ? "mongo.query" : "mongo.exec",
-          mongo: JSON.parse(tab.text),
-          ...(action !== "read" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
+          command: mode === "read" ? "mongo.query" : "mongo.exec",
+          mongo,
+          ...(mode === "write" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
         } as StateQLCommandInput;
-      else
+      } else {
+        mode = await databaseStatementMode(tab.text, tab.driver);
         input = {
-          command: action === "read" ? "query" : "exec",
+          command: mode === "read" ? "query" : "exec",
           sql: tab.text,
           ...(tab.params.trim() ? { params: JSON.parse(tab.params) } : {}),
-          ...(action !== "read" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
+          ...(mode === "write" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
         };
-    } catch {
-      setError("Enter valid JSON for the command and parameters.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not classify this database statement.");
       return;
+    } finally {
+      preparingQuery.current = false;
     }
     update(tab.id, {
       response: undefined,
-      ...(action === "write" ? { result: undefined } : {}),
+      ...(mode === "write" ? { result: undefined } : {}),
     });
     const response = await run(input, tab.id);
     const value = data(response);
@@ -1259,7 +1306,7 @@ export function DatabasePanel({
                             active={active === tab.id}
                             onChange={text => update(tab.id, { text })}
                             onRun={() => {
-                              if (!locked && connected && !inTransaction) void execute(tab, "read");
+                              if (!locked && connected && (!inTransaction || ownTransaction)) void execute(tab);
                             }}
                           />
                         </div>
@@ -1307,45 +1354,37 @@ export function DatabasePanel({
                       <button
                         type="button"
                         className="primary-button"
-                        disabled={locked || !connected || inTransaction || (tab.kind === "query" && !tab.text.trim())}
-                        onClick={() => void execute(tab, "read")}>
+                        disabled={
+                          locked ||
+                          !connected ||
+                          (inTransaction && (tab.kind === "table" || !ownTransaction)) ||
+                          (tab.kind === "query" && !tab.text.trim())
+                        }
+                        onClick={() => void execute(tab)}>
                         {tab.kind === "table" ? "Load data" : "Run query"}
                       </button>
-                      {tab.kind === "query" && (
-                        <>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            disabled={
-                              locked || !connected || readOnly || (inTransaction && !ownTransaction) || !tab.text.trim()
-                            }
-                            onClick={() => void execute(tab, "write")}>
-                            {inTransaction ? "Stage write" : "Run write"}
-                          </button>
-                          {tab.driver !== "redis" && (
-                            <details className="database-overflow">
-                              <summary>Write safety</summary>
-                              <div>
-                                <label className="database-check">
-                                  <input
-                                    type="checkbox"
-                                    checked={allowUnbounded}
-                                    onChange={event => setAllowUnbounded(event.target.checked)}
-                                  />
-                                  Unbounded
-                                </label>
-                                <label className="database-check">
-                                  <input
-                                    type="checkbox"
-                                    checked={allowDestructive}
-                                    onChange={event => setAllowDestructive(event.target.checked)}
-                                  />
-                                  Destructive
-                                </label>
-                              </div>
-                            </details>
-                          )}
-                        </>
+                      {tab.kind === "query" && tab.driver !== "redis" && (
+                        <details className="database-overflow">
+                          <summary>Write safety</summary>
+                          <div>
+                            <label className="database-check">
+                              <input
+                                type="checkbox"
+                                checked={allowUnbounded}
+                                onChange={event => setAllowUnbounded(event.target.checked)}
+                              />
+                              Unbounded
+                            </label>
+                            <label className="database-check">
+                              <input
+                                type="checkbox"
+                                checked={allowDestructive}
+                                onChange={event => setAllowDestructive(event.target.checked)}
+                              />
+                              Destructive
+                            </label>
+                          </div>
+                        </details>
                       )}
                       {tab.kind === "table" && tab.text && (
                         <button type="button" className="text-button" onClick={() => add(tab.text)}>
@@ -1402,7 +1441,7 @@ export function DatabasePanel({
                         onSaved={() => {
                           dirtyTabs.current.delete(tab.id);
                           setNotice("Changes saved. Reloading table data.");
-                          void execute(tab, "read");
+                          void execute(tab);
                         }}
                       />
                     ) : (
