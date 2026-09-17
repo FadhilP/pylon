@@ -308,6 +308,15 @@ function boundedString(value: unknown, maximum: number): value is string {
   );
 }
 
+function boundedSql(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximum &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  );
+}
+
 function optionalString(value: unknown, maximum: number): boolean {
   return value === undefined || boundedString(value, maximum);
 }
@@ -559,7 +568,7 @@ function redisCommand(value: unknown): value is StateQLRedisCommand {
 }
 
 function sqlCommand(value: Record<string, unknown>, timeout: number, write: boolean): boolean {
-  if (!boundedString(value.sql, 100_000) || !params(value.params) || !optionalTimeout(value.timeout_ms, timeout))
+  if (!boundedSql(value.sql, 100_000) || !params(value.params) || !optionalTimeout(value.timeout_ms, timeout))
     return false;
   if (
     !commandBooleans(
@@ -690,7 +699,7 @@ function commandShape(value: Record<string, unknown>, maxTimeoutMs: number): boo
       );
     case "query":
       return (
-        boundedString(value.sql, 100_000) &&
+        boundedSql(value.sql, 100_000) &&
         params(value.params) &&
         optionalString(value.as, 200) &&
         (value.cache === undefined || (typeof value.cache === "string" && CACHE_POLICIES.has(value.cache))) &&

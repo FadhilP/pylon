@@ -174,6 +174,22 @@
 .git-review-conflict > .theirs { border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 7%, transparent); }
 .git-review-conflict small { display: block; padding: 3px 24px; color: var(--text-muted); font: 10.5px var(--mono); }
 .git-review-conflict pre, .git-conflict-context { margin: 0; padding: 4px 24px; overflow: auto; white-space: pre-wrap; tab-size: 4; font: 12px/1.6 var(--mono); }
+.git-review-conflicts.is-editable { display: flex; flex-direction: column; padding: 0; }
+.git-review-conflicts.is-editable > .code-viewer { flex: 1; min-height: 0; }
+.git-conflict-editor-line.is-marker, .git-conflict-editor-line.is-base { height: 0; min-height: 0; padding-block: 0 !important; overflow: hidden; color: transparent; line-height: 0; }
+.git-conflict-editor-line.is-ours { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.git-conflict-editor-line.is-theirs { border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 7%, transparent); }
+.git-conflict-editor-card { border-top: 1px solid var(--line); background: var(--surface-subtle); }
+.git-conflict-editor-card > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px 5px 24px; }
+.git-conflict-editor-card header strong { color: var(--text-muted); font: 11px var(--mono); }
+.git-conflict-editor-card header span { display: flex; flex-wrap: wrap; gap: 4px; }
+.git-conflict-editor-card header button { min-width: 76px; padding: 3px 8px; border: 1px solid var(--line-strong); }
+.git-conflict-editor-card header button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); }
+.git-review button.git-conflict-editor-side { display: block; width: 100%; padding: 4px 24px; border-radius: 0; color: var(--text-muted); text-align: left; font: 10.5px var(--mono); }
+.git-review button.git-conflict-editor-side.ours { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.git-review button.git-conflict-editor-side.theirs { border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 7%, transparent); }
+.git-conflict-editor-end { height: 1px; background: var(--line); }
+.git-review-conflicts.is-editable .code-editor-note.annotation-inline { background: var(--code-bg); }
 @container (max-width: 330px) {
   .git-panel-file .git-file-count, .git-panel-file > svg { display: none; }
   .git-panel-file { grid-template-columns: 15px 13px minmax(0, 1fr); }

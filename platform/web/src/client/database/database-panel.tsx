@@ -43,7 +43,6 @@ interface QueryTab extends DatabaseQuery {
   result?: DatabaseResult;
   response?: StateQLCommandResult;
   detached?: boolean;
-  plan?: { handle: string; expires: string; text: string; params: string };
 }
 const tabFromDraft = (tab: DatabaseQuery): QueryTab => ({
   ...tab,
@@ -78,6 +77,30 @@ const persistedWorkspace = (): StateQLWorkspace => {
     return "session";
   }
 };
+const DIRECT_WRITE_COMMANDS = new Set<StateQLCommandInput["command"]>([
+  "exec",
+  "mongo.exec",
+  "redis.exec",
+  "apply",
+  "transaction.commit",
+  "transaction.rollback",
+]);
+
+function writeCompletionNotice(command: StateQLCommandInput["command"], value: unknown): string {
+  if (!DIRECT_WRITE_COMMANDS.has(command)) return "";
+  const data = databaseRecord(value) ? value : undefined;
+  const status =
+    typeof data?.status === "string"
+      ? data.status.replaceAll("_", " ")
+      : data?.committed === true
+        ? "committed"
+        : "completed";
+  const affectedRows =
+    typeof data?.affected_rows === "number" && Number.isSafeInteger(data.affected_rows) && data.affected_rows >= 0
+      ? data.affected_rows
+      : undefined;
+  return `Write ${status}${affectedRows === undefined ? "" : ` · ${affectedRows.toLocaleString()} rows affected`}.`;
+}
 
 export function DatabasePanel({
   live,
@@ -109,7 +132,6 @@ export function DatabasePanel({
   const [isolation, setIsolation] = useState("serializable");
   const [allowUnbounded, setAllowUnbounded] = useState(false);
   const [allowDestructive, setAllowDestructive] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const [search, setSearch] = useState("");
   const [profileRevision, setProfileRevision] = useState(0);
   const [objectRevision, setObjectRevision] = useState(0);
@@ -323,11 +345,6 @@ export function DatabasePanel({
       }),
     [],
   );
-  useEffect(() => {
-    if (!tabs.some(tab => tab.plan)) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [tabs.some(tab => Boolean(tab.plan))]);
 
   const run = async (
     input: StateQLCommandInput,
@@ -364,7 +381,10 @@ export function DatabasePanel({
         setError(
           `${response.response.error.code}: ${response.response.error.message}${response.response.error.executed ? " The database may have executed this operation; inspect its status before retrying." : ""}`,
         );
-      else setNotice(response.response.warnings.map(warning => warning.message).join(" "));
+      else {
+        const warnings = response.response.warnings.map(warning => warning.message);
+        setNotice([writeCompletionNotice(input.command, response.response.data), ...warnings].filter(Boolean).join(" "));
+      }
       return response;
     } catch (cause) {
       if (startScope !== savedScope.current) return;
@@ -446,7 +466,6 @@ export function DatabasePanel({
           ? {
               ...tab,
               ...patch,
-              ...("text" in patch || "params" in patch ? { plan: undefined } : {}),
             }
           : tab,
       ),
@@ -507,7 +526,7 @@ export function DatabasePanel({
       document.getElementById(`database-tab-${tabs[index - 1]?.id ?? "history"}`)?.focus(),
     );
   };
-  const execute = async (tab: QueryTab, action: "read" | "plan" | "stage" | "apply") => {
+  const execute = async (tab: QueryTab, action: "read" | "write") => {
     if (tab.detached) {
       setError("This result belongs to a previous connection. Discard edits and reopen the table.");
       return;
@@ -518,24 +537,21 @@ export function DatabasePanel({
     }
     let input: StateQLCommandInput;
     try {
-      if (action === "apply") {
-        if (!tab.plan || Date.parse(tab.plan.expires) <= Date.now()) return;
-        input = { command: "apply", handle: tab.plan.handle };
-      } else if (tab.kind === "table") input = { command: "table.read", table: tab.table!, limit: 1000 };
+      if (tab.kind === "table") input = { command: "table.read", table: tab.table!, limit: 1000 };
       else if (tab.driver === "redis")
         input = {
-          command: action === "read" ? "redis.query" : action === "plan" ? "redis.plan" : "redis.exec",
+          command: action === "read" ? "redis.query" : "redis.exec",
           redis: JSON.parse(tab.text),
         };
       else if (tab.driver === "mongodb")
         input = {
-          command: action === "read" ? "mongo.query" : action === "plan" ? "mongo.plan" : "mongo.exec",
+          command: action === "read" ? "mongo.query" : "mongo.exec",
           mongo: JSON.parse(tab.text),
           ...(action !== "read" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
         } as StateQLCommandInput;
       else
         input = {
-          command: action === "read" ? "query" : action === "plan" ? "plan" : "exec",
+          command: action === "read" ? "query" : "exec",
           sql: tab.text,
           ...(tab.params.trim() ? { params: JSON.parse(tab.params) } : {}),
           ...(action !== "read" ? { allow_unbounded: allowUnbounded, allow_destructive: allowDestructive } : {}),
@@ -544,7 +560,10 @@ export function DatabasePanel({
       setError("Enter valid JSON for the command and parameters.");
       return;
     }
-    update(tab.id, { plan: undefined });
+    update(tab.id, {
+      response: undefined,
+      ...(action === "write" ? { result: undefined } : {}),
+    });
     const response = await run(input, tab.id);
     const value = data(response);
     setTabs(current =>
@@ -555,13 +574,6 @@ export function DatabasePanel({
           response,
           ...(value && isDatabaseResult(value)
             ? { result: value, ...(typeof value.query === "string" ? { text: value.query } : {}) }
-            : {}),
-          ...(value &&
-          typeof value.plan_id === "string" &&
-          typeof value.expires_at === "string" &&
-          item.text === tab.text &&
-          item.params === tab.params
-            ? { plan: { handle: value.plan_id, expires: value.expires_at, text: tab.text, params: tab.params } }
             : {}),
         };
       }),
@@ -1039,15 +1051,16 @@ export function DatabasePanel({
                   add(text);
                   setNotice("Review retained SQL before running; parameters are not restored.");
                 }}
-                onResult={(handle, total) =>
-                  add("", undefined, {
+                onResult={(handle, total, text) => {
+                  const opened = add(text ?? "", undefined, {
                     result_id: handle,
                     rows: total,
                     columns: [],
                     cached: false,
                     storage: { mode: "materialized", expires_at: undefined },
-                  })
-                }
+                  });
+                  if (opened && text) setNotice("Review retained SQL before running; parameters are not restored.");
+                }}
                 onReceipt={handle =>
                   void run({ command: "receipt", handle }).then(response => {
                     const value = data(response);
@@ -1306,8 +1319,8 @@ export function DatabasePanel({
                             disabled={
                               locked || !connected || readOnly || (inTransaction && !ownTransaction) || !tab.text.trim()
                             }
-                            onClick={() => void execute(tab, inTransaction ? "stage" : "plan")}>
-                            {inTransaction ? "Stage write" : "Plan write"}
+                            onClick={() => void execute(tab, "write")}>
+                            {inTransaction ? "Stage write" : "Run write"}
                           </button>
                           {tab.driver !== "redis" && (
                             <details className="database-overflow">
@@ -1317,10 +1330,7 @@ export function DatabasePanel({
                                   <input
                                     type="checkbox"
                                     checked={allowUnbounded}
-                                    onChange={event => {
-                                      setAllowUnbounded(event.target.checked);
-                                      setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
-                                    }}
+                                    onChange={event => setAllowUnbounded(event.target.checked)}
                                   />
                                   Unbounded
                                 </label>
@@ -1328,10 +1338,7 @@ export function DatabasePanel({
                                   <input
                                     type="checkbox"
                                     checked={allowDestructive}
-                                    onChange={event => {
-                                      setAllowDestructive(event.target.checked);
-                                      setTabs(current => current.map(tab => ({ ...tab, plan: undefined })));
-                                    }}
+                                    onChange={event => setAllowDestructive(event.target.checked)}
                                   />
                                   Destructive
                                 </label>
@@ -1358,21 +1365,6 @@ export function DatabasePanel({
                       <span className="spacer" />
                       <small>{tab.kind === "table" ? "Sample: up to 1,000 rows" : tab.driver}</small>
                     </div>
-                    {tab.plan && (
-                      <div className="database-plan" role="status">
-                        <span>
-                          Write plan <code>{tab.plan.handle}</code> ·{" "}
-                          {Date.parse(tab.plan.expires) <= now ? "Expired" : "Ready for confirmation"}
-                        </span>
-                        <button
-                          type="button"
-                          className="primary-button"
-                          disabled={locked || inTransaction || Date.parse(tab.plan.expires) <= now}
-                          onClick={() => void execute(tab, "apply")}>
-                          Apply plan
-                        </button>
-                      </div>
-                    )}
                     {tab.response?.status === "completed" && (
                       <div className="database-status">
                         <span>
@@ -1428,7 +1420,7 @@ export function DatabasePanel({
                             ? "Stage writes, then commit or roll back."
                             : tab.kind === "table"
                               ? "Load a bounded sample from this table."
-                              : "Run a read query or plan a write."}
+                              : "Run a read query or write."}
                         </p>
                       </div>
                     )}

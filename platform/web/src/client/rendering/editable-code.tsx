@@ -20,7 +20,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Annotation } from "../../shared/workspace/annotations";
-import { codeEditLimit, selectedCodeLines, paintedSyntax, paintSyntax, paintCode, paintedCode } from "./editable-code-state";
+import { codeEditLimit, selectedCodeLines, paintedSyntax, paintSyntax, paintCode, paintedCode, paintCodeLines, paintedCodeLines, protectCodeRanges, type CodeLineStyle, type ProtectedCodeRange } from "./editable-code-state";
 import type { GitLineChange } from "../../shared/workspace/code-viewer-model";
 import { getSyntaxTheme, subscribeSyntaxHighlighting, installTokenStyles } from "./syntax-highlighting";
 import { EditorAnalysisRequests, type EditorAnalysisInput, type EditorAnalysisResult } from "./editor-analysis";
@@ -39,7 +39,7 @@ export interface CodeEditing {
   onChange: (text: string) => void;
   onSave: () => void;
 }
-interface CodeBlock {
+export interface CodeBlock {
   key: string;
   line: number;
   children: ReactNode;
@@ -58,6 +58,9 @@ interface Props {
   noteActionLine?: number;
   onAddNote: () => void;
   blocks: CodeBlock[];
+  lineStyles?: readonly CodeLineStyle[];
+  protectedRanges?: (text: string) => readonly ProtectedCodeRange[];
+  validText?: (text: string) => boolean;
 }
 
 
@@ -271,6 +274,11 @@ export function EditableCode(props: Props) {
           highlightActiveLine(),
           paintedCode,
           paintedSyntax,
+          paintedCodeLines,
+          protectCodeRanges(
+            text => current.current.protectedRanges?.(text) ?? [],
+            text => current.current.validText?.(text) ?? true,
+          ),
           ViewPlugin.fromClass(class {
             decorations = Decoration.none;
             constructor(view: EditorView) { this.paint(view); }
@@ -401,6 +409,7 @@ export function EditableCode(props: Props) {
           : []),
         paintCode.of({ text: props.text, notes: props.notes, blocks, gitIndexText: props.editing.gitIndexText,
           ...(comparisonCurrent || analysisError ? { gitChanges } : {}) }),
+        paintCodeLines.of({ text: props.text, lines: props.lineStyles ?? [] }),
       ],
     });
   }, [
@@ -409,6 +418,7 @@ export function EditableCode(props: Props) {
     props.openNotes,
     props.noteActionLine,
     props.blocks,
+    props.lineStyles,
     props.editing.readOnly,
     props.editing.gitIndexText,
     comparisonCurrent,

@@ -24,6 +24,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
   current.current = identity;
   const [state, setState] = useState<GitState>();
   const latest = useRef<GitState>(undefined);
+  const stateIdentity = useRef<string | undefined>(undefined);
   const [selection, setSelection] = useState<GitDetailQuery>();
   const [detail, setDetail] = useState<GitDetail>();
   const [error, setError] = useState<string>();
@@ -32,6 +33,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
   const lock = useRef(false);
   const statusEpoch = useRef(0);
   const [conflictChoices, setConflictChoices] = useState<Record<string, Record<number, ConflictChoice>>>({});
+  const [conflictDrafts, setConflictDrafts] = useState<Record<string, string>>({});
   const [reload, setReload] = useState(0);
   const [detailReload, setDetailReload] = useState(0);
   const [confirmation, setConfirmation] = useState<GitConfirmation>();
@@ -61,6 +63,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
 
   useEffect(() => {
     latest.current = undefined;
+    stateIdentity.current = undefined;
     setState(undefined);
     setSelection(undefined);
     setDetail(undefined);
@@ -70,8 +73,27 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
     setMessage("");
     setAmend(false);
     setBusy(false);
-    setConflictChoices({});
   }, [identity]);
+  useEffect(() => {
+    if (!state || state.operation || stateIdentity.current !== identity) return;
+    const prefix = `${identity}:`;
+    setConflictChoices(previous => {
+      if (!Object.keys(previous).some(key => key.startsWith(prefix))) return previous;
+      return Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith(prefix)));
+    });
+    setConflictDrafts(previous => {
+      if (!Object.keys(previous).some(key => key.startsWith(prefix))) return previous;
+      return Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith(prefix)));
+    });
+  }, [identity, state?.operation]);
+
+  const conflictDirty = Object.keys(conflictDrafts).length > 0;
+  useEffect(() => {
+    if (!conflictDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [conflictDirty]);
 
   useEffect(() => {
     if (!ready || lock.current) return;
@@ -82,6 +104,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
       .then(next => {
         if (abort.signal.aborted || current.current !== identity || epoch !== statusEpoch.current) return;
         latest.current = next;
+        stateIdentity.current = identity;
         setState(next);
       })
       .catch(reason => {
@@ -162,6 +185,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
             const next = await runtimeStore.workspaceGitState();
             if (current.current === identity) {
               latest.current = next;
+              stateIdentity.current = identity;
               setState(next);
             }
           }
@@ -227,6 +251,7 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
     detail,
     error,
     result,
+    identity,
     busy,
     ready,
     dirty,
@@ -245,6 +270,8 @@ export function useGitWorkspace(live: RuntimeStoreSnapshot, enabled: boolean) {
     commit,
     conflictChoices,
     setConflictChoices,
+    conflictDrafts,
+    setConflictDrafts,
   };
 }
 export type GitWorkspaceController = ReturnType<typeof useGitWorkspace>;

@@ -113,7 +113,7 @@ test("stash pop/drop require the currently selected stash identity", async () =>
   }
 });
 
-test("text conflict resolution stages the saved result and can continue a cherry-pick", async () => {
+test("manual conflict editing reloads the saved result, stages it and can continue a cherry-pick", async () => {
   const { cwd, git } = await repository();
   try {
     await writeFile(join(cwd, "a.txt"), "base\n");
@@ -130,13 +130,17 @@ test("text conflict resolution stages the saved result and can continue a cherry
     await assert.rejects(git("cherry-pick", topic));
     const current = await state(cwd);
     assert.equal(current.operation?.kind, "cherry-pick");
+    const original = await readGitDetail(cwd, { kind: "conflict", path: "a.txt" });
+    await writeFile(join(cwd, "a.txt"), "resolved\n");
     const detail = await readGitDetail(cwd, { kind: "conflict", path: "a.txt" });
+    assert.notEqual(detail.conflict!.version, original.conflict!.version);
+    assert.deepEqual(detail.conflict!.blocks, []);
     await runGitAction(cwd, {
       action: "resolve",
-      expectedRevision: current.revision,
+      expectedRevision: detail.revision!,
       path: "a.txt",
       expectedVersion: detail.conflict!.version,
-      text: "resolved\n",
+      text: detail.conflict!.text,
       confirmed: true,
     });
     const after = await state(cwd);

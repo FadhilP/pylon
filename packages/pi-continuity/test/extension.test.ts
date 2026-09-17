@@ -1414,6 +1414,7 @@ test("automatic completion waits for required verification but accepts a stale r
   }
 });
 
+<<<<<<< Updated upstream
 test("startup only probes verification status when restoring executing work", async () => {
   const root = await mkdtemp(join(tmpdir(), "continuity-startup-probes-"));
   const cwd = join(root, "repo"),

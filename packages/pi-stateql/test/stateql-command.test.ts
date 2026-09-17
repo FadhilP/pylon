@@ -13,6 +13,20 @@ test("accepts bounded catalog and Redis contracts", () => {
   );
 });
 
+test("accepts multiline SQL while rejecting non-whitespace control characters", () => {
+  const sql = `UPDATE public.user_roles SET
+role_id = 'admin'::character varying WHERE
+id = '20677';`;
+  for (const command of ["query", "plan", "exec"] as const) {
+    assert.deepEqual(parseStateQLPanelCommand({ command, sql }), { command, sql });
+  }
+  assert.ok(parseStateQLPanelCommand({ command: "query", sql: "SELECT\t1\r\n" }));
+  for (const control of ["\u0000", "\u0007", "\u007f"]) {
+    assert.equal(parseStateQLPanelCommand({ command: "exec", sql: `SELECT 1${control}` }), undefined);
+  }
+  assert.equal(parseStateQLPanelCommand({ command: "profile.show", name: "line\nbreak" }), undefined);
+});
+
 test("refuses secret, unsafe, and ambiguous new command inputs", () => {
   assert.equal(parseStateQLPanelCommand({ command: "objects.list", search: "x".repeat(201) }), undefined);
   assert.equal(

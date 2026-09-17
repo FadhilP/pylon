@@ -415,6 +415,23 @@ export default function continuityExtension(pi: ExtensionAPI) {
     if (value === null || (Number.isInteger(value) && value >= 15 && value <= 86_400)) {
       clarifyTimeoutSeconds = value;
     }
+    // Project-scoped agent-model overrides published by Pylon Web. Absent roles inherit globals.
+    const overrides = event.agentModels?.continuity;
+    if (overrides !== undefined) {
+      const valid =
+        overrides &&
+        typeof overrides === "object" &&
+        !Array.isArray(overrides) &&
+        Object.entries(overrides).every(
+          ([role, profile]: [string, any]) =>
+            ["planner", "executor", "memoryReviewer", "compactionReviewer"].includes(role) &&
+            profile &&
+            typeof profile.model === "string" &&
+            profile.model.includes("/") &&
+            (profile.thinking === undefined || (thinkingLevels as readonly string[]).includes(profile.thinking)),
+        );
+      projectProfiles = valid ? overrides : undefined;
+    }
   });
   const clarifyDialogOptions = () =>
     clarifyTimeoutSeconds === undefined
@@ -441,6 +458,11 @@ export default function continuityExtension(pi: ExtensionAPI) {
     recentCalls.delete(key);
     return true;
   };
+  let projectProfiles: Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>> | undefined;
+  const effectiveProfile = (
+    role: "planner" | "executor" | "memoryReviewer" | "compactionReviewer",
+    global: ModelProfile | undefined,
+  ): ModelProfile | undefined => projectProfiles?.[role] ?? global;
   const configuredModel = async (
     ctx: any,
     profile: ModelProfile | undefined,
@@ -1026,7 +1048,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       expectedWorkspaceId = workspace?.id;
     if (!expectedWorkspaceId) throw Error("migration workspace identity is unavailable");
     const config = await loadConfig(),
-      profile = config.memoryReviewer;
+      profile = effectiveProfile("memoryReviewer", config.memoryReviewer);
     if (!profile) throw Error("Memory Reviewer is not configured");
     const model = await configuredModel(ctx, profile);
     if (!model) throw Error("Memory Reviewer model or credentials are unavailable");
@@ -1247,7 +1269,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       planApproval.context = ctx;
       const config = await loadConfig();
       memory.enabled = config.memoryEnabled !== false;
-      memory.reviewerConfigured = Boolean(config.memoryReviewer);
+      memory.reviewerConfigured = Boolean(effectiveProfile("memoryReviewer", config.memoryReviewer));
       recentCalls.clear();
       pendingMutations.clear();
       deniedToolCalls.clear();
@@ -1700,7 +1722,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (!draft) return { cancel: true };
 
       const focus = event.customInstructions?.trim();
-      const profile = config.compactionReviewer;
+      const profile = effectiveProfile("compactionReviewer", config.compactionReviewer);
       if (focus && !profile) throw Error("Compaction review instructions require a configured Compaction Reviewer.");
       let additions: CompactionSupplement[] = [];
       if (profile) {
@@ -2158,7 +2180,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       try {
         const resolved = await resolveProject(proposalCwd),
           config = await loadConfig(),
-          profile = config.memoryReviewer;
+          profile = effectiveProfile("memoryReviewer", config.memoryReviewer);
         if (!profile) return memoryFailure("Memory Reviewer unavailable: configure a dedicated reviewer model.");
         const model = await configuredModel(ctx, profile);
         if (!model)
@@ -2692,7 +2714,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
       if (work.revisionFeedback?.revision === work.planRevision)
         throw Error("Plan has requested changes; review the next revision before approval.");
       const config = await loadConfig();
-      const executor = await configuredModel(ctx, config.executor, work.baseModel);
+      const executorProfile = effectiveProfile("executor", config.executor);
+      const executor = await configuredModel(ctx, executorProfile, work.baseModel);
       if (!executor) {
         ctx.ui?.notify?.("Executor model unavailable.", "error");
         return false;
@@ -2703,11 +2726,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
         revision: work.planRevision ?? 1,
         resetContext,
         executorModel: { provider: executor.provider, id: executor.id },
-        ...((config.executor?.thinking ?? work.baseThinking)
-          ? { thinking: config.executor?.thinking ?? work.baseThinking }
+        ...((executorProfile?.thinking ?? work.baseThinking)
+          ? { thinking: executorProfile?.thinking ?? work.baseThinking }
           : {}),
         createdAt: now,
       };
+      work.updatedAt = now;
       work.updatedAt = now;
       await saveWork();
       return planApproval.resume(ctx);
@@ -2826,7 +2850,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       const config = await loadConfig();
       const baseModel = ctx.model && { provider: ctx.model.provider, id: ctx.model.id };
       const baseThinking = pi.getThinkingLevel();
-      if (!(await applyProfile(ctx, config.planner))) {
+      if (!(await applyProfile(ctx, effectiveProfile("planner", config.planner)))) {
         ctx.ui.notify("Planner model unavailable.", "error");
         return;
       }
@@ -2940,9 +2964,15 @@ export default function continuityExtension(pi: ExtensionAPI) {
         "compaction-reviewer": "compactionReviewer",
       } as const;
       const config = await loadConfig();
+      const show = {
+        planner: effectiveProfile("planner", config.planner),
+        executor: effectiveProfile("executor", config.executor),
+        memoryReviewer: effectiveProfile("memoryReviewer", config.memoryReviewer),
+        compactionReviewer: effectiveProfile("compactionReviewer", config.compactionReviewer),
+      };
       if ((action === "status" && parts.length === 1) || parts.length === 0) {
         ctx.ui.notify(
-          `Planner: ${config.planner?.model ?? "current session model"} · thinking: ${config.planner?.thinking ?? "current session level"}\nExecutor: ${config.executor?.model ?? "current session model"} · thinking: ${config.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${config.memoryReviewer?.model ?? "not configured"} · thinking: ${config.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${config.compactionReviewer?.model ?? "not configured"} · thinking: ${config.compactionReviewer?.thinking ?? "default"}`,
+          `Planner: ${show.planner?.model ?? "current session model"} · thinking: ${show.planner?.thinking ?? "current session level"}\nExecutor: ${show.executor?.model ?? "current session model"} · thinking: ${show.executor?.thinking ?? "current session level"}\nMemory Reviewer: ${show.memoryReviewer?.model ?? "not configured"} · thinking: ${show.memoryReviewer?.thinking ?? "default"}\nCompaction Reviewer: ${show.compactionReviewer?.model ?? "not configured"} · thinking: ${show.compactionReviewer?.thinking ?? "default"}`,
           "info",
         );
         return;

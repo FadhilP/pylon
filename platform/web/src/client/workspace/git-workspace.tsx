@@ -26,13 +26,14 @@ import { FileTypeIcon } from "../rendering/file-icons";
 import type { RuntimeStoreSnapshot } from "../runtime/event-store";
 import { ActionDialog } from "../ui/action-dialog";
 import { copyText } from "../ui/clipboard";
-import { reconstructConflictText, conflictChoiceText, type ConflictChoice } from "./git-review-model";
+import { conflictResolutionBlocks, editableConflictStructureMatches, prepareEditableConflictText, reconstructConflictText, parseEditableConflictText, type ConflictChoice } from "./git-review-model";
 import { WorkspaceEditor } from "./workspace-editor";
 import { FileContent } from "./files-panel";
 import type { GitWorkspaceController } from "./git-controller";
 import "./git-workspace.css";
 export { useGitWorkspace } from "./git-controller";
 const CodeViewer = lazy(() => import("../rendering/code-viewer"));
+const ConflictCodeEditor = lazy(() => import("./conflict-code-editor"));
 type OpenFile = (path: string, view?: "current" | "base" | "diff") => void;
 type Takeover = "cherry" | "merge" | "rebase" | "branch";
 export const isConflict = (file: GitFile) =>
@@ -1004,6 +1005,8 @@ export function ReviewSurface({
   const requestedPath = historical ? (query.path ?? git.detail?.selectedPath) : path;
   const selected = files.find(file => file.path === requestedPath) ?? files.find(isConflict) ?? files[0];
   const selectedPath = selected?.path;
+  const conflictDraftOpen = selectedPath !== undefined && Object.keys(git.conflictDrafts)
+    .some(key => key.startsWith(`${git.identity}:${selectedPath}:`));
   const selectFile = (file: GitFile, nextSide = side) => {
     setPath(file.path);
     setEdit(false);
@@ -1112,25 +1115,45 @@ export function ReviewSurface({
             <header className="git-review-vbar">
               <code title={selectedPath}>{selectedPath}</code>
               <span className="git-review-toolbar">
-                {!historical && !isConflict(selected!) && (
-                  <>
-                    <button
-                      aria-pressed={side === "unstaged" && !edit}
-                      disabled={!unstaged(selected!)}
-                      onClick={() => selectFile(selected!, "unstaged")}>
-                      Unstaged diff
-                    </button>
-                    <button
-                      aria-pressed={side === "staged" && !edit}
-                      disabled={!staged(selected!)}
-                      onClick={() => selectFile(selected!, "staged")}>
-                      Staged diff
-                    </button>
-                    <button aria-pressed={edit} onClick={() => setEdit(value => !value)}>
-                      Working copy
-                    </button>
-                  </>
-                )}
+                {!historical &&
+                  (isConflict(selected!) ? (
+                    <>
+                      <button
+                        aria-pressed={!edit}
+                        disabled={edit && git.dirty}
+                        title={edit && git.dirty ? "Save or discard the Working copy draft first" : undefined}
+                        onClick={() => {
+                          if (!edit) return;
+                          setEdit(false);
+                          git.select({ kind: "conflict", path: selectedPath });
+                        }}>
+                        Conflict helper
+                      </button>
+                      <button aria-pressed={edit} disabled={conflictDraftOpen}
+                        title={conflictDraftOpen ? "Reload or resolve the Conflict helper draft first" : undefined}
+                        onClick={() => setEdit(true)}>
+                        Working copy
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        aria-pressed={side === "unstaged" && !edit}
+                        disabled={!unstaged(selected!)}
+                        onClick={() => selectFile(selected!, "unstaged")}>
+                        Unstaged diff
+                      </button>
+                      <button
+                        aria-pressed={side === "staged" && !edit}
+                        disabled={!staged(selected!)}
+                        onClick={() => selectFile(selected!, "staged")}>
+                        Staged diff
+                      </button>
+                      <button aria-pressed={edit} onClick={() => setEdit(value => !value)}>
+                        Working copy
+                      </button>
+                    </>
+                  ))}
                 <button onClick={() => onOpenFile(selectedPath, "current")}>Open file history</button>
               </span>
             </header>
@@ -1150,7 +1173,7 @@ export function ReviewSurface({
                 git={git}
                 detail={git.detail}
                 operation={git.detail.conflict.operation}
-                open={() => onOpenFile(selectedPath, "current")}
+                open={() => setEdit(true)}
               />
             ) : (
               <ReviewDiff
@@ -1210,8 +1233,15 @@ function ConflictResolver({
   open(): void;
 }) {
   const conflict = detail.conflict!;
-  const choiceKey = `${conflict.path}:${conflict.version}:${operation?.kind}:${operation?.currentCommit ?? ""}`;
+  const rawText = useMemo(() => conflict.text.replace(/\r\n/g, "\n"), [conflict.text]);
+  const sourceText = useMemo(() => prepareEditableConflictText(rawText), [rawText]);
+  const choiceKey = `${git.identity}:${conflict.path}:${conflict.version}:${operation?.kind}:${operation?.currentCommit ?? ""}`;
   const choices = git.conflictChoices[choiceKey] ?? {};
+  const draftText = git.conflictDrafts[choiceKey] ?? sourceText;
+  const original = useMemo(() => parseEditableConflictText(sourceText), [sourceText]);
+  const parsed = useMemo(() => parseEditableConflictText(draftText), [draftText]);
+  const valid = original.valid && original.blocks.length === conflict.blocks.length &&
+    editableConflictStructureMatches(draftText, original.blocks);
   const setChoices = (
     next:
       Record<number, ConflictChoice> | ((previous: Record<number, ConflictChoice>) => Record<number, ConflictChoice>),
@@ -1221,84 +1251,44 @@ function ConflictResolver({
       [choiceKey]: typeof next === "function" ? next(previous[choiceKey] ?? {}) : next,
     }));
   };
-  const all = conflict.blocks.every((_, index) => choices[index]);
-  const text = all ? reconstructConflictText(conflict.text, conflict.blocks, choices) : undefined;
+  const setDraftText = (value: string) => {
+    const text = value.replace(/\r\n/g, "\n");
+    git.setConflictDrafts(previous => {
+      if (text !== sourceText) return { ...previous, [choiceKey]: text };
+      if (!(choiceKey in previous)) return previous;
+      const next = { ...previous };
+      delete next[choiceKey];
+      return next;
+    });
+  };
+  const clearLocal = () => {
+    setChoices({});
+    git.setConflictDrafts(previous => {
+      const next = { ...previous };
+      delete next[choiceKey];
+      return next;
+    });
+  };
+  const all = valid && parsed.blocks.every((_, index) => choices[index]);
+  const text = all ? reconstructConflictText(draftText, conflictResolutionBlocks(parsed.blocks), choices) : undefined;
   const stale = detail.revision !== git.state?.revision;
   const ours = operation?.kind === "rebase" ? "New base" : "This branch";
   const theirs = operation?.kind === "rebase" ? "Your commit" : "Incoming";
   const chooseAll = (choice: ConflictChoice) =>
-    setChoices(Object.fromEntries(conflict.blocks.map((_, index) => [index, choice])));
-  let cursor = 0;
-  const views: ReactNode[] = [];
-  conflict.blocks.forEach((block, index) => {
-    if (block.start > cursor)
-      views.push(
-        <pre className="git-conflict-context" key={`ctx${index}`}>
-          {conflict.text.slice(cursor, block.start)}
-        </pre>,
-      );
-    const choice = choices[index];
-    const kept = choice ? conflictChoiceText(block, choice) : undefined;
-    views.push(
-      <section className="git-review-conflict" key={index}>
-        <header>
-          <strong>
-            Conflict {index + 1}
-            {choice
-              ? ` · kept ${choice === "ours" ? ours.toLowerCase() : choice === "theirs" ? theirs.toLowerCase() : "both, in order"}`
-              : ""}
-          </strong>
-          <span>
-            {(["ours", "theirs", "both"] as const).map(value => (
-              <button
-                key={value}
-                aria-pressed={choice === value}
-                onClick={() => setChoices(previous => ({ ...previous, [index]: value }))}>
-                {value === "ours" ? ours : value === "theirs" ? theirs : "Both"}
-              </button>
-            ))}
-          </span>
-        </header>
-        {kept !== undefined ? (
-          <pre>{kept}</pre>
-        ) : (
-          <>
-            <div className="ours">
-              <small>
-                {operation?.kind === "rebase" ? `Already on ${short(operation.onto)}` : (block.oursLabel ?? ours)}
-              </small>
-              <pre>{block.ours}</pre>
-            </div>
-            <div className="theirs">
-              <small>
-                {operation?.kind === "rebase"
-                  ? `From your commit ${short(operation.currentCommit)}`
-                  : (block.theirsLabel ?? theirs)}
-              </small>
-              <pre>{block.theirs}</pre>
-            </div>
-          </>
-        )}
-      </section>,
-    );
-    cursor = block.end;
-  });
-  if (cursor < conflict.text.length)
-    views.push(
-      <pre className="git-conflict-context" key="tail">
-        {conflict.text.slice(cursor)}
-      </pre>,
-    );
+    setChoices(Object.fromEntries(parsed.blocks.map((_, index) => [index, choice])));
+  const selected = parsed.blocks.filter((_, index) => choices[index]).length;
   return (
     <>
       <div className="git-review-conflict-bar">
         <span>
-          {stale
-            ? "Repository state changed. Choices are retained; reload before resolving."
-            : "Choices stay local until you mark this file resolved."}
+          {!valid
+            ? "Conflict structure changed. Reload the helper to restore its protected markers."
+            : stale
+              ? "Repository state changed. Choices and edits are retained; reload before resolving."
+              : "Edit either side, choose the result, then mark this file resolved."}
         </span>
         <small>
-          {Object.keys(choices).length}/{conflict.blocks.length} chosen
+          {selected}/{parsed.blocks.length} chosen
         </small>
         <button
           className="primary-button"
@@ -1314,33 +1304,58 @@ function ConflictResolver({
                 text,
                 confirmed: true,
               })
-            )
+            ) {
+              clearLocal();
               git.select(undefined);
+            }
           }}>
           Mark resolved
         </button>
       </div>
       <div className="git-review-conflict-tools">
-        <button onClick={() => chooseAll("ours")}>Keep all from {ours.toLowerCase()}</button>
-        <button onClick={() => chooseAll("theirs")}>Keep all from {theirs.toLowerCase()}</button>
-        <button onClick={open}>Edit manually</button>
-        <button
+        <button disabled={!valid || git.busy} onClick={() => chooseAll("ours")}>Keep all from {ours.toLowerCase()}</button>
+        <button disabled={!valid || git.busy} onClick={() => chooseAll("theirs")}>Keep all from {theirs.toLowerCase()}</button>
+        <button disabled={git.busy || git.dirty || draftText !== sourceText}
+          title={draftText !== sourceText ? "Reload or resolve these helper edits before opening Working copy" : undefined}
+          onClick={open}>Working copy</button>
+        <button disabled={git.busy}
           onClick={() => {
             if (
-              !Object.keys(choices).length ||
-              window.confirm("Reload this file and discard the conflict choices made here?")
+              (draftText === sourceText && !Object.keys(choices).length) ||
+              window.confirm("Reload this file and discard the conflict choices and edits made here?")
             ) {
-              setChoices({});
+              clearLocal();
               git.select({ kind: "conflict", path: conflict.path });
             }
           }}>
           Reload conflict
         </button>
       </div>
-      <div className="git-review-conflicts">
-        {views}
+      <div className="git-review-conflicts is-editable">
+        <Suspense fallback={<div className="git-review-empty">Loading conflict editor…</div>}>
+          <ConflictCodeEditor
+            path={conflict.path}
+            text={draftText}
+            parsed={parsed}
+            original={original.blocks}
+            choices={choices}
+            readOnly={git.busy}
+            oursLabel={ours}
+            theirsLabel={theirs}
+            oursDetail={block =>
+              operation?.kind === "rebase" ? `Already on ${short(operation.onto)}` : (block.oursLabel ?? ours)
+            }
+            theirsDetail={block =>
+              operation?.kind === "rebase"
+                ? `From your commit ${short(operation.currentCommit)}`
+                : (block.theirsLabel ?? theirs)
+            }
+            onChange={setDraftText}
+            onChoice={(index, choice) => setChoices(previous => ({ ...previous, [index]: choice }))}
+          />
+        </Suspense>
         {!conflict.blocks.length && (
-          <p className="git-panel-desc">No markers remain. Mark resolved to stage the manually edited file.</p>
+          <p className="git-panel-desc">No markers remain. Review the file and mark it resolved to stage it.</p>
         )}
       </div>
     </>

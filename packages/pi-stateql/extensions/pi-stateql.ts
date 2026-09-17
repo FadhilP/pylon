@@ -355,6 +355,14 @@ const CONFIRMED_COMMANDS = new Set<StateQLToolInput["command"]>([
   "transaction.commit",
   "transaction.rollback",
 ]);
+const PANEL_DIRECT_WRITE_COMMANDS = new Set<StateQLToolInput["command"]>([
+  "exec",
+  "mongo.exec",
+  "redis.exec",
+  "apply",
+  "transaction.commit",
+  "transaction.rollback",
+]);
 const MAX_PARAMS_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 40 * 1024;
 const BROKERED_REFERENCE_PREFIX = "PYLON_STATEQL_BROKERED_";
@@ -1158,6 +1166,7 @@ export default function stateqlExtension(
             : 0;
         if (
           CONFIRMED_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
+          !PANEL_DIRECT_WRITE_COMMANDS.has(input.command as StateQLToolInput["command"]) &&
           (!(target && (input.command === "connect" || remembers) && !profileBrokered?.fromProfile) ||
             insecureBrokeredConnect)
         ) {
@@ -1470,7 +1479,7 @@ export default function stateqlExtension(
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",
-      "Use workspace.select once to choose session or global scope for later calls; an explicit workspace on one call overrides that selection without changing it.",
+      "Use the session workspace by default. Access or select global only when the user explicitly asks to use the shared/global workspace; do not choose global merely for convenience. workspace.select changes later calls, while an explicit workspace on one call is only an override.",
       "For PostgreSQL/MySQL targets, include the username but never a password in target; Pylon Web will request the password through a masked dialog. Use secret_env when the complete source already lives in an environment variable.",
       "Never weaken TLS or certificate verification without explicit user authorization; prefer configuring the database CA certificate with a native host absolute path, not a shell-only path such as /tmp on Windows.",
       "StateQL query output already includes preview rows in model context. Call StateQL rows only when the result is truncated or missing needed rows; when the complete preview is present, continue from preview_count instead of duplicating it from offset 0.",

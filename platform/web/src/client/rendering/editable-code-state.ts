@@ -16,6 +16,48 @@ export function codeEditLimit(maxLength: number) {
   );
 }
 
+export type ProtectedCodeRange = { from: number; to: number };
+
+/** Keeps structural ranges immutable while allowing insertion at either content boundary. */
+export function protectCodeRanges(
+  ranges: (text: string) => readonly ProtectedCodeRange[],
+  valid: (text: string) => boolean = () => true,
+) {
+  return EditorState.changeFilter.of(transaction => {
+    if (!transaction.docChanged || transaction.startState.readOnly) return !transaction.docChanged;
+    const protectedRanges = ranges(transaction.startState.doc.toString());
+    let allowed = true;
+    transaction.changes.iterChangedRanges((from, to) => {
+      if (!allowed) return;
+      const insertion = from === to;
+      allowed = !protectedRanges.some(range =>
+        insertion
+          ? from > range.from && from < range.to
+          : (from < range.to && to > range.from) || (to === range.from && from < to),
+      );
+    });
+    return allowed && valid(transaction.newDoc.toString());
+  });
+}
+
+export type CodeLineStyle = { line: number; className: string };
+export const paintCodeLines = StateEffect.define<{ text: string; lines: readonly CodeLineStyle[] }>();
+export const paintedCodeLines = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    if (transaction.docChanged) value = value.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (!effect.is(paintCodeLines) || effect.value.text !== transaction.state.doc.toString()) continue;
+      const ranges = effect.value.lines
+        .filter(item => item.line > 0 && item.line <= transaction.state.doc.lines)
+        .map(item => Decoration.line({ class: item.className }).range(transaction.state.doc.line(item.line).from));
+      value = Decoration.set(ranges, true);
+    }
+    return value;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
+
 export const paintSyntax = StateEffect.define<{ doc: Text; spans: readonly SyntaxSpan[] }>();
 export const paintedSyntax = StateField.define({
   create: () => Decoration.none,
