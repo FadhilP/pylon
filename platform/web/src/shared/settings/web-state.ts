@@ -136,8 +136,7 @@ function validPreferences(value: unknown, withRevision: boolean): boolean {
     !isTheme(value.theme) ||
     !isSyntax(value.syntax) ||
     !isDatabaseWorkspace(value.databaseWorkspace) ||
-    !Array.isArray(value.hiddenModels) ||
-    value.hiddenModels.length > 100
+    !Array.isArray(value.hiddenModels)
   ) {
     return false;
   }

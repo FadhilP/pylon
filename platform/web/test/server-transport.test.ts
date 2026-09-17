@@ -1324,7 +1324,7 @@ test("keyboard preferences are sessionless, CSRF protected, replayable and rejec
   }
 });
 
-test("host preferences bootstrap, replay and scoped HTTP writes enforce validation and CAS", async () => {
+test("host preferences persist large model visibility batches and enforce validation and CAS", async () => {
   const driver = new FakeDriver();
   let transport: ServerTransport;
   const server = createServer((request, response) => void transport.handle(request, response));
@@ -1343,7 +1343,8 @@ test("host preferences bootstrap, replay and scoped HTTP writes enforce validati
     };
     const first = await connect("web-state-first");
     const second = await connect("web-state-second");
-    const preferences = { initialized: true, theme: "dark", syntax: "dracula", hiddenModels: [], databaseWorkspace: "global" } as const;
+    const hiddenModels = Array.from({ length: 101 }, (_, index) => ({ provider: "provider", id: `model-${index}` }));
+    const preferences = { initialized: true, theme: "dark", syntax: "dracula", hiddenModels, databaseWorkspace: "global" } as const;
     const postPreferences = (headers: Record<string, string>, expectedRevision: number) =>
       fetch(`${origin}/api/v1/settings/preferences`, { method: "POST", headers, body: JSON.stringify({ expectedRevision, input: preferences }) });
     const saved = await postPreferences(first.headers, 0);
