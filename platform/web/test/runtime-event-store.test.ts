@@ -394,3 +394,39 @@ test("display previews survive expiry and failed refresh without accepting obsol
     await vite.close();
   }
 });
+
+
+test("nested tool events update execution state but never become standalone transcript messages", async () => {
+  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
+  const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
+  const store = new RuntimeEventStore();
+  const original = { window: (globalThis as any).window, requestAnimationFrame: (globalThis as any).requestAnimationFrame, cancelAnimationFrame: (globalThis as any).cancelAnimationFrame };
+  Object.assign(globalThis, { window: { removeEventListener() {} }, requestAnimationFrame: () => 1, cancelAnimationFrame() {} });
+  store.snapshot = { ...store.getSnapshot(), connection: "connected", generation: 1, sequence: 0,
+    runtime: { ready: true, sessionId: "nested-test", sessionGeneration: 1, conversation: { messages: [], tools: [], delegatedRuns: [], queue: { items: [] } } } };
+  let sequence = 0;
+  const apply = (type: string, payload: unknown) => store.apply({ type, payload, payloadVersion: 1, sessionGeneration: 1, sequence: ++sequence });
+  try {
+    const parent = { id: "script", name: "codemode", status: "running" };
+    const nested = { id: "script/1", name: "read", parentToolCallId: "script", status: "running" };
+    apply("tool.start", parent); apply("tool.start", nested);
+    assert.equal(store.getSnapshot().runtime.conversation.messages.length, 1);
+    apply("tool.end", { ...nested, status: "completed" });
+    const nestedCalls = { complete: true, calls: [{ id: "script/1", name: "read", status: "completed" }] };
+    apply("tool.update", { ...parent, nestedCalls });
+    apply("tool.end", { ...parent, status: "completed", nestedCalls });
+    const conversation = store.getSnapshot().runtime.conversation;
+    assert.equal(conversation.messages.length, 1);
+    assert.deepEqual(conversation.messages[0].tool.nestedCalls, nestedCalls);
+    assert.equal(conversation.tools.find((tool: any) => tool.id === "script/1").status, "completed");
+    assert.equal(conversation.messages[0].streaming, false);
+    apply("tool.update", { ...parent, nestedCalls: { complete: false, calls: [] } });
+    assert.equal(store.getSnapshot().runtime.conversation.messages[0].streaming, false, "late progress must not revive settled work");
+    apply("tool.start", { ...parent, id: "stopped" });
+    apply("tool.update", { ...parent, id: "stopped", nestedCalls: { complete: false, calls: [{ id: "stopped/1", name: "read", status: "running" }] } });
+    apply("agent.end", { stopped: true });
+    const stopped = store.getSnapshot().runtime.conversation.messages.find((message: any) => message.tool.id === "stopped");
+    assert.equal(stopped.tool.nestedCalls.calls[0].status, "failed");
+    assert.equal(stopped.tool.nestedCalls.complete, false);
+  } finally { store.dispose(); Object.assign(globalThis, original); await vite.close(); }
+});

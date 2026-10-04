@@ -431,7 +431,7 @@ export function ConversationPanel({
   const visibleMessages = useMemo(() => {
     const toolIds = new Set(transcriptMessages.flatMap(item => item.tool?.id ? [item.tool.id] : []));
     const messageIds = new Set(transcriptMessages.map(item => item.id));
-    const liveToolMessages = runningTools.filter(tool => !toolIds.has(tool.id)).map(liveToolMessage);
+    const liveToolMessages = runningTools.filter(tool => !tool.parentToolCallId && !toolIds.has(tool.id)).map(liveToolMessage);
     const pendingTranscriptMessages: MessageReadModel[] = pendingMessages
       .filter(item => !messageIds.has(item.id))
       .map(item => ({

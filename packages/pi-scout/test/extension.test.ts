@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import scout, { startsNewRepoSequence } from "../extensions/pi-scout.ts";
 import { saveConfig } from "../src/config.ts";
 import { REPO_SCOUT_PROMPT, WEB_SCOUT_IMMUTABLE_FOOTER, WEB_SCOUT_PROMPT } from "../src/prompts.ts";
@@ -295,10 +296,13 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
   };
   const runtime = await harness(run);
   const statuses: Array<string | undefined> = [];
+  const sessionManager = SessionManager.inMemory();
+  const omittedId = sessionManager.appendMessage({ role: "user", content: "Omitted scout history", timestamp: 1 });
+  sessionManager.appendContextEdit(omittedId, null);
+  const replacedId = sessionManager.appendMessage({ role: "user", content: "Obsolete scout context", timestamp: 2 });
+  sessionManager.appendContextEdit(replacedId, { content: "Find auth flow" });
   const ctx = context({
-    sessionManager: {
-      buildContextEntries: () => [{ type: "message", message: { role: "user", content: "Find auth flow" } }],
-    },
+    sessionManager,
     ui: { setStatus: (_name: string, value: string | undefined) => statuses.push(value) },
   });
   try {
@@ -330,6 +334,7 @@ test("parallel Repo Scout calls overlap in fresh child sessions; only follow-ups
     assert.ok(childArgs.every(args => args.includes("rpc") && !args.some(arg => arg.includes("Find auth flow"))));
     assert.doesNotMatch(childPrompts[0], /Find auth flow/);
     assert.match(childPrompts[1], /Find auth flow/);
+    assert.doesNotMatch(childPrompts[1], /Omitted scout history|Obsolete scout context/);
     assert.match(childPrompts[1], /Prior scout gap requiring follow-up: Need prior request context/);
     assert.equal(statuses.at(-1), undefined);
   } finally {
@@ -365,7 +370,7 @@ test("Repo Scout reports merged citations, structured claims, and repeated searc
     cacheReadTokens: 0,
   });
   const runtime = await harness(run);
-  const ctx = context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } });
+  const ctx = context({ hasUI: false, sessionManager: SessionManager.inMemory() });
   try {
     const first = await runtime.tools
       .get("repo_scout")
@@ -492,7 +497,7 @@ test("Repo Scout forwards its reported-cost ceiling and exposes budget exhaustio
         { task: "find config" },
         undefined,
         undefined,
-        context({ hasUI: false, sessionManager: { buildContextEntries: () => [] } }),
+        context({ hasUI: false, sessionManager: SessionManager.inMemory() }),
       );
     assert.equal(maxCostUsd, 2.5);
     assert.ok(timeoutMs !== undefined && timeoutMs > 0 && timeoutMs <= 123_456);

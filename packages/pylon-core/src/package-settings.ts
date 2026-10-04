@@ -448,6 +448,7 @@ export function extractPackageSettingsUpdate(
     "apply",
     "allowedModes",
     "maxBytes",
+    "defaultText",
   ];
   for (const field of update.fields) {
     if (

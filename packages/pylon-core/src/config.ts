@@ -19,6 +19,15 @@ export const pylonCoreSettings = definePackageSettings({
     },
     {
       version: 1,
+      key: "codemodeEnabled",
+      label: "Web codemode",
+      type: "boolean",
+      defaultValue: false,
+      description: "Opt into bounded native JavaScript batches of active coding/search tools in Pylon Web. Workflow controls remain direct calls; script model APIs are disabled.",
+      apply: "next-session",
+    },
+    {
+      version: 1,
       key: "lineEditPriceRatio",
       label: "Line-edit price ratio",
       type: "number",
@@ -49,6 +58,15 @@ export const pylonCoreSettings = definePackageSettings({
       step: 100,
       unit: "ms",
       apply: "next-operation",
+    },
+    {
+      version: 1,
+      key: "mainAgentModel",
+      label: "Default main agent model",
+      type: "model",
+      defaultValue: "",
+      description: "Optional default for new main agent sessions. Existing sessions keep their selected model.",
+      apply: "next-session",
     },
     {
       version: 1,
@@ -87,9 +105,11 @@ export const pylonCoreSettings = definePackageSettings({
 export type PylonCoreConfig = {
   version: 1;
   lineEditEnabled: boolean;
+  codemodeEnabled?: boolean;
   lineEditPriceRatio?: number;
   delegateMaxAttempts?: number;
   delegateRetryBaseMs?: number;
+  mainAgentModel?: string;
   delegateNamingModel?: string;
   delegateNamingPrompt?: import("./package-settings.ts").PromptPackageSettingValue;
   mainPrompt?: import("./package-settings.ts").PromptPackageSettingValue;
@@ -97,9 +117,11 @@ export type PylonCoreConfig = {
 export type EffectivePylonCoreConfig = {
   version: 1;
   lineEditEnabled: boolean;
+  codemodeEnabled: boolean;
   lineEditPriceRatio: number;
   delegateMaxAttempts: number;
   delegateRetryBaseMs: number;
+  mainAgentModel: string;
   delegateNamingModel: string;
   delegateNamingPrompt: import("./package-settings.ts").PromptPackageSettingValue;
   mainPrompt: import("./package-settings.ts").PromptPackageSettingValue;
@@ -111,9 +133,11 @@ export function effectiveConfig(config: PylonCoreConfig): EffectivePylonCoreConf
   return {
     version: 1,
     lineEditEnabled: effectivePackageSettingValue(fields.lineEditEnabled, config.lineEditEnabled) as boolean,
+    codemodeEnabled: effectivePackageSettingValue(fields.codemodeEnabled, config.codemodeEnabled) as boolean,
     lineEditPriceRatio: effectivePackageSettingValue(fields.lineEditPriceRatio, config.lineEditPriceRatio) as number,
     delegateMaxAttempts: effectivePackageSettingValue(fields.delegateMaxAttempts, config.delegateMaxAttempts) as number,
     delegateRetryBaseMs: effectivePackageSettingValue(fields.delegateRetryBaseMs, config.delegateRetryBaseMs) as number,
+    mainAgentModel: effectivePackageSettingValue(fields.mainAgentModel, config.mainAgentModel) as string,
     delegateNamingModel: effectivePackageSettingValue(fields.delegateNamingModel, config.delegateNamingModel) as string,
     delegateNamingPrompt: effectivePackageSettingValue(
       fields.delegateNamingPrompt,

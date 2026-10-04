@@ -59,6 +59,8 @@ interface ContentPart {
 interface ToolResultLike {
   toolCallId: string;
   toolName: string;
+  parentToolCallId?: string;
+  nestedCalls?: { calls: readonly { id: string; name: string; status: string }[] };
   input?: Record<string, unknown>;
   content: ContentPart[];
   isError: boolean;
@@ -216,15 +218,24 @@ export function recordToolResult(meter: TokenMeter, result: ToolResultLike): voi
     errors: 0,
   };
   usage.calls++;
-  usage.argumentChars += serializedLength(result.input ?? {});
-  usage.resultChars += result.content.reduce(
-    (sum, part) => sum + (part.type === "text" && typeof part.text === "string" ? part.text.length : 0),
-    0,
-  );
-  usage.images += result.content.filter(part => part.type === "image").length;
+  // Inner arguments/results are execution data, not model-facing transcript payload.
+  if (!result.parentToolCallId) {
+    usage.argumentChars += serializedLength(result.input ?? {});
+    usage.resultChars += result.content.reduce(
+      (sum, part) => sum + (part.type === "text" && typeof part.text === "string" ? part.text.length : 0),
+      0,
+    );
+    usage.images += result.content.filter(part => part.type === "image").length;
+  }
   if (result.isError) usage.errors++;
   meter.byTool.set(result.toolName, usage);
   recordDerivedTelemetry(meter, result);
+  for (const call of result.nestedCalls?.calls ?? []) {
+    recordToolResult(meter, {
+      toolCallId: call.id, toolName: call.name, parentToolCallId: result.toolCallId,
+      content: [], isError: call.status !== "ok",
+    });
+  }
 }
 
 export function parseTelemetryEvent(value: unknown): TelemetryEvent | undefined {
@@ -355,6 +366,8 @@ export function meterFromBranch(entries: readonly any[]): TokenMeter {
     recordToolResult(meter, {
       toolCallId: message.toolCallId,
       toolName: typeof message.toolName === "string" ? message.toolName : (call?.name ?? "unknown"),
+      parentToolCallId: message.parentToolCallId,
+      nestedCalls: message.nestedCalls,
       input: call?.input ?? {},
       content: Array.isArray(message.content) ? message.content : [],
       isError: message.isError === true,

@@ -2323,7 +2323,7 @@ function GenericPackageFields({
                 value={field.value}
                 disabled={disabled}
                 onChange={event => updateField(field.key, event.target.value)}>
-                <option value="">Disabled</option>
+                <option value="">{field.key === "mainAgentModel" ? "Use Pi default" : "Disabled"}</option>
                 {missing && <option value={field.value}>{field.value}</option>}
                 {options.map(model => (
                   <option value={modelKey(model)} key={modelKey(model)}>
@@ -2440,13 +2440,16 @@ const AGENT_MODEL_LABELS: Record<string, string> = {
   "pi-spawn": "Spawn",
   "pi-timeline": "Timeline",
   "pi-continuity": "Continuity",
-  "pylon-core": "Agent naming",
+  "pylon-core": "Main agent & naming",
 };
 
 function hasAgentModelFields(settings: PackageSettingsReadModel | undefined): boolean {
   if (!settings) return false;
   if (settings.kind === "generic") {
-    return settings.packageId === "pylon-core" && settings.fields.some(field => field.key === "delegateNamingModel");
+    return (
+      settings.packageId === "pylon-core" &&
+      settings.fields.some(field => field.key === "delegateNamingModel" || field.key === "mainAgentModel")
+    );
   }
   return ["advisor", "scout", "grunt", "spawn", "timeline", "continuity"].includes(settings.kind);
 }
@@ -2515,28 +2518,47 @@ function PackageModelFields({
   const provenance = packageProvenance(settings, onUpdate);
 
   if (settings.kind === "generic") {
-    const field = settings.fields.find(candidate => candidate.key === "delegateNamingModel");
-    if (!field || field.type !== "model") return null;
     return (
-      <PackageRow
-        live={Boolean(field.value)}
-        label="Naming model"
-        description="Assigns short semantic names to delegated agents. Applies next session.">
-        <OptionalModelSelect
-          label="Agent naming model"
-          value={field.value}
-          models={models}
-          disabled={disabled}
-          onChange={value =>
-            onUpdate({
-              ...settings,
-              fields: settings.fields.map(candidate =>
-                candidate.key === field.key ? { ...candidate, value } : candidate,
-              ) as typeof settings.fields,
-            })
-          }
-        />
-      </PackageRow>
+      <>
+        {(
+          [
+            {
+              key: "mainAgentModel",
+              label: "Default main agent model",
+              description: "Used for new sessions; existing sessions keep their selected model. Applies next session.",
+              selectLabel: "Default main agent model",
+            },
+            {
+              key: "delegateNamingModel",
+              label: "Naming model",
+              description: "Assigns short semantic names to delegated agents. Applies next session.",
+              selectLabel: "Agent naming model",
+            },
+          ] as const
+        ).map(({ key, label, description, selectLabel }) => {
+          const field = settings.fields.find(candidate => candidate.key === key);
+          if (!field || field.type !== "model") return null;
+          return (
+            <PackageRow key={key} live={Boolean(field.value)} label={label} description={description}>
+              <OptionalModelSelect
+                label={selectLabel}
+                value={field.value}
+                models={models}
+                disabled={disabled}
+                emptyLabel={key === "mainAgentModel" ? "Use Pi default" : "Disabled"}
+                onChange={value =>
+                  onUpdate({
+                    ...settings,
+                    fields: settings.fields.map(candidate =>
+                      candidate.key === key ? { ...candidate, value } : candidate,
+                    ) as typeof settings.fields,
+                  })
+                }
+              />
+            </PackageRow>
+          );
+        })}
+      </>
     );
   }
 

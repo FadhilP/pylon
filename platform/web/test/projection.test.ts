@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getCurrentSystemPrompt, getCurrentTools, type SystemMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { agentColorId } from "../src/client/ui/session-format.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
@@ -156,6 +158,72 @@ test("provider auth driver events publish live sign-in links", () => {
   assert.deepEqual(projection.snapshot().providerAuth, providerAuth);
   assert.deepEqual(published, [{ type: "provider.auth", payload: providerAuth }]);
 });
+
+test("native system deltas preserve canonical prompt/tools without interrupting the visible assistant stream", () => {
+  const manager = SessionManager.inMemory();
+  const update: SystemMessage = { role: "system", content: "", sections: { policy: "do not mutate" },
+    toolsAdded: [{ name: "read", description: "Read", parameters: { type: "object" } }], timestamp: 1 };
+  const removed: SystemMessage = { role: "system", content: [], toolsRemoved: [{ name: "read" }], timestamp: 2 };
+  manager.appendMessage(update);
+  manager.appendMessage({ role: "user", content: "Prompt", timestamp: 2 });
+  manager.appendMessage(removed);
+  const entries = manager.getBranch();
+  const raw = entries.flatMap(entry => entry.type === "message" ? [entry.message] : []);
+  const before = JSON.stringify(entries);
+  const visible = projectMessages([...raw, { role: "custom", customType: "notice", content: "Important context" }]);
+  assert.deepEqual(visible.map(message => message.text), ["Prompt", "Important context"]);
+  assert.equal(JSON.stringify(manager.getBranch()), before);
+  const canonical = manager.buildSessionProjection().messages.filter((message): message is SystemMessage => message.role === "system");
+  assert.match(getCurrentSystemPrompt(canonical), /do not mutate/);
+  assert.deepEqual(getCurrentTools(canonical), []);
+  const projection = new RuntimeProjection(runtime(), () => undefined);
+  projection.apply(session({ type: "message_start", message: { role: "assistant", content: "before" } }));
+  for (const message of [update, removed]) {
+    projection.apply(session({ type: "message_start", message }));
+    projection.apply(session({ type: "message_update", message }));
+    projection.apply(session({ type: "message_end", message }));
+  }
+  assert.equal(projection.snapshot().conversation.streaming, true);
+  projection.apply(session({ type: "message_update", delta: " after" }));
+  projection.apply(session({ type: "message_end", message: { role: "assistant", content: "before after" } }));
+  const messages = projection.snapshot().conversation.messages;
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]?.text, "before after");
+  assert.equal(messages[0]?.streaming, false);
+  projection.dispose();
+});
+
+
+test("nested activity stays on its parent across live execution and history without inner results", () => {
+  const published: Array<{ type: string; payload: any }> = [];
+  const projection = new RuntimeProjection(runtime(), (type, payload) => published.push({ type, payload }));
+  projection.apply(session({ type: "tool_execution_start", toolCallId: "script", toolName: "codemode", args: { code: "text('summary')" } }));
+  projection.apply(session({ type: "tool_execution_start", toolCallId: "script/1", parentToolCallId: "script", toolName: "read", args: { path: "source.ts" } }));
+  projection.apply(session({ type: "tool_execution_update", toolCallId: "script", toolName: "codemode", partialResult: { details: { calls: [
+    { id: "script/?", name: "read", status: "running", args: "token=must-not-expose" },
+  ] } } }));
+  assert.equal(published.find(event => event.type === "tool.update")?.payload.nestedCalls.calls[0].status, "running");
+  const calls = [{ id: "script/1", name: "read", status: "error", durationMs: 12.3, error: "token=must-not-expose", arguments: { secret: "must-not-expose" } }];
+  projection.apply(session({ type: "tool_execution_end", toolCallId: "script/1", parentToolCallId: "script", toolName: "read", isError: true, result: { content: [{ type: "text", text: "hidden-inner-result" }] } }));
+  projection.apply(session({ type: "tool_execution_end", toolCallId: "script", toolName: "codemode", isError: true, result: { details: { calls } } }));
+  const message = { role: "toolResult", toolCallId: "script", toolName: "codemode", isError: true, content: [{ type: "text", text: "partial output; script failed" }], nestedCalls: { complete: true, calls } };
+  projection.apply(session({ type: "message_start", message }));
+  projection.apply(session({ type: "message_end", message }));
+  const live = projection.snapshot().conversation;
+  assert.equal(live.messages.length, 1);
+  assert.equal(live.tools.find(tool => tool.id === "script/1")?.parentToolCallId, "script");
+  const stored = projectMessages([{ role: "assistant", content: [{ type: "toolCall", id: "script", name: "codemode", arguments: {} }] }, message]);
+  const tool = stored.find(item => item.role === "tool")?.tool;
+  assert.deepEqual(tool?.nestedCalls, live.messages[0]?.tool?.nestedCalls);
+  assert.equal(tool?.nestedCalls?.calls[0]?.durationMs, 12);
+  assert.doesNotMatch(JSON.stringify(tool), /must-not-expose|hidden-inner-result/);
+  assert.equal(isRuntimeSnapshot(projection.snapshot()), true);
+  const incomplete = projectMessages([{ ...message, nestedCalls: { complete: false, calls: [{ id: "script/1", name: "read", status: "unfinished" }] } }]);
+  assert.equal(incomplete[0]?.tool?.nestedCalls?.calls[0]?.status, "failed");
+  assert.equal(incomplete[0]?.tool?.nestedCalls?.complete, false);
+  projection.dispose();
+});
+
 
 test("metrics projection retains bounded per-tool usage", () => {
   const projection = new RuntimeProjection(runtime(), () => undefined);

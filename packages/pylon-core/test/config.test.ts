@@ -18,9 +18,11 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
     assert.equal(settings.packageId, "pylon-core");
     assert.deepEqual(fieldValues(settings), {
       lineEditEnabled: true,
+      codemodeEnabled: false,
       lineEditPriceRatio: 3,
       delegateMaxAttempts: 3,
       delegateRetryBaseMs: 1_000,
+      mainAgentModel: "",
       delegateNamingModel: "",
       delegateNamingPrompt: { mode: "default", text: "" },
       mainPrompt: { mode: "default", text: "" },
@@ -29,17 +31,21 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
       {
         ...settings,
         fields: settings.fields.map((field: any) =>
-          field.key === "lineEditEnabled"
-            ? { ...field, value: false }
-            : field.key === "lineEditPriceRatio"
-              ? { ...field, value: 2 }
-              : field.key === "delegateMaxAttempts"
-                ? { ...field, value: 5 }
-                : field.key === "delegateRetryBaseMs"
-                  ? { ...field, value: 200 }
-                  : field.key === "delegateNamingModel"
-                    ? { ...field, value: "cheap/namer" }
-                    : field,
+          field.key === "codemodeEnabled"
+            ? { ...field, value: true }
+            : field.key === "lineEditEnabled"
+              ? { ...field, value: false }
+              : field.key === "lineEditPriceRatio"
+                ? { ...field, value: 2 }
+                : field.key === "delegateMaxAttempts"
+                  ? { ...field, value: 5 }
+                  : field.key === "delegateRetryBaseMs"
+                    ? { ...field, value: 200 }
+                    : field.key === "mainAgentModel"
+                      ? { ...field, value: "cheap/main" }
+                      : field.key === "delegateNamingModel"
+                        ? { ...field, value: "cheap/namer" }
+                        : field,
         ),
       },
       { agentDir },
@@ -47,14 +53,38 @@ test("pylon-core generic settings persist line-edit ratio and delegate retry pol
     assert.deepEqual(await loadConfig(configPath(agentDir)), {
       version: 1,
       lineEditEnabled: false,
+      codemodeEnabled: true,
       lineEditPriceRatio: 2,
       delegateMaxAttempts: 5,
       delegateRetryBaseMs: 200,
+      mainAgentModel: "cheap/main",
       delegateNamingModel: "cheap/namer",
       delegateNamingPrompt: { mode: "default", text: "" },
       mainPrompt: { mode: "default", text: "" },
     });
     assert.equal(JSON.parse(await readFile(configPath(agentDir), "utf8")).lineEditEnabled, false);
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("pylon-core accepts the displayed prompt default text when changing a model", async () => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pylon-core-displayed-"));
+  try {
+    const settings = await readSettings({ agentDir });
+    const fields = settings.fields.map(field =>
+      field.key === "mainPrompt"
+        ? { ...field, defaultText: "Current system prompt" }
+        : field.key === "delegateNamingModel"
+          ? { ...field, value: "cheap/namer" }
+          : field,
+    );
+    await updateSettings({ ...settings, fields }, { agentDir });
+    assert.equal((await loadConfig(configPath(agentDir))).delegateNamingModel, "cheap/namer");
+    await assert.rejects(
+      updateSettings({ ...settings, fields: fields.map(field => ({ ...field, unrecognized: true })) }, { agentDir }),
+      /invalid generic package settings update/,
+    );
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }

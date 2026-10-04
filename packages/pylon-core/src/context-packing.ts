@@ -1,3 +1,18 @@
+import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
+
+/** Preserve source metadata while handing off only the canonical, edited model context. */
+export function projectedContextEntries(projection: SessionProjection): SessionEntry[] {
+  return projection.entries.flatMap(({ sourceEntry, messages }): SessionEntry[] => {
+    if (sourceEntry.type === "message") return messages.map(message => ({ ...sourceEntry, message }));
+    if (sourceEntry.type === "custom_message")
+      return messages.flatMap(message =>
+        message.role === "custom" ? [{ ...sourceEntry, content: message.content }] : [],
+      );
+    if (sourceEntry.type === "compaction" && !messages.length) return [];
+    return [sourceEntry];
+  });
+}
+
 /**
  * Pack caller-selected context newest-first, then restore reading order.
  * Deduplicate by caller-defined identity, dropping empty identities.

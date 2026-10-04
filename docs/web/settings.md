@@ -48,6 +48,15 @@ Package-specific references:
 - [Helios](../../packages/pi-helios/README.md) for browser and Android prerequisites.
 - [StateQL](../../packages/pi-stateql/README.md) for database access and confirmations.
 
+### Web codemode
+
+In **Packages → pylon-core**, enable **Web codemode** to let the model run native JavaScript batches alongside ordinary tools. It is off by default and applies when the next runtime is constructed: create a new session or reconstruct/reload an existing one after changing it. It does not enable standalone Pi CLI codemode.
+
+Only active direct coding/search tools are callable from scripts. Workflow controls, tool discovery, approvals/settings, verification, delegates, and model APIs remain outside scripts. Each call still passes through validation and Guard; planning/clarification gates remain authoritative. Scripts have a 60-second ceiling, 32-call budget and 2,000 estimated text output tokens; lower native first-line limits are respected.
+
+Failed scripts may already have changed files or run commands; completed side effects are not rolled back. Chat retains bounded nested activity on the parent tool, not inner result bodies. Native stores follow the session branch and commit only on success. The text-output ceiling is not an image or intermediate-data limit, and trusted extensions retain host permissions.
+
+
 ### Agent-facing package changes
 
 `pylon_settings` is a **Web-only**, deferred agent tool. It can list, inspect, and update validated **package settings only**. An update must use a fresh revision from an inspection and requires explicit confirmation. The agent should preserve unrelated settings and use the package settings interface rather than editing JSON.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -77,16 +77,13 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.equal(changelog.status, 0, changelog.stderr);
     assert.match(changelog.stdout, /Clearer setup and project documentation/);
 
-    const adapterCheck = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
+    const adapterScript = join(temp, "adapter-smoke.mjs");
+    await writeFile(adapterScript,
         `import { createRequire } from "node:module";
        import { join } from "node:path";
        import { pathToFileURL } from "node:url";
        import { writeFile } from "node:fs/promises";
-       const packageRoot = process.argv[1];
+       const packageRoot = process.argv[2];
        const installedRequire = createRequire(join(packageRoot, "package.json"));
        const { createJiti } = await import(pathToFileURL(installedRequire.resolve("jiti")).href);
        const jiti = createJiti(join(packageRoot, "package.json"));
@@ -99,7 +96,7 @@ test("packed package installs and launches its production web app", { timeout: 2
        installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
        if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function" || !listedDocs.some(item => item.path === "docs/web/README.md")) process.exit(1);
        const { WorkerIndex } = await jiti.import(join(packageRoot, "packages", "pi-discover", "src", "worker-index.ts"));
-       const project = process.argv[2];
+       const project = process.argv[3];
        await writeFile(join(project, "source.ts"), "export function packagedSymbol() {}\\n");
        await writeFile(join(project, "ignored.ts"), "export function packagedSymbol() {}\\n");
        await writeFile(join(project, ".gitignore"), "ignored.ts\\n");
@@ -108,6 +105,26 @@ test("packed package installs and launches its production web app", { timeout: 2
          const hits = await index.searchSymbols(project, { query: "packagedSymbol" });
          if (hits.length !== 1 || hits[0].path !== "source.ts") throw new Error("Installed filesystem indexing failed");
        } finally { await index.close(); }
+       // Exercise installed worker/WASM resolution, not just the exported API.
+       const codemodeModule = join(packageRoot, "codemode-smoke.mjs");
+       await writeFile(codemodeModule, 'export * from "@earendil-works/pi-coding-agent"; export { InMemoryCredentialStore, fauxProvider, fauxAssistantMessage, fauxToolCall, fauxText } from "@earendil-works/pi-ai";');
+       const pi = await import(pathToFileURL(codemodeModule).href);
+       const faux = pi.fauxProvider();
+       faux.setResponses([pi.fauxAssistantMessage([pi.fauxToolCall("codemode", { code: 'text((await tools.read({path:"source.ts"})).includes("packagedSymbol"));' })], { stopReason: "toolUse" }), pi.fauxAssistantMessage([pi.fauxText("done")])]);
+       const modelRuntime = await pi.ModelRuntime.create({ credentials: new pi.InMemoryCredentialStore(), modelsPath: null });
+       modelRuntime.registerNativeProvider(faux.provider);
+       await modelRuntime.refresh({ allowNetwork: false });
+       const agentDir = join(project, "codemode-agent");
+       const settingsManager = pi.SettingsManager.inMemory({ defaultTools: ["+codemode"], cacheWarming: "off", compaction: { enabled: false } });
+       const resourceLoader = new pi.DefaultResourceLoader({ cwd: project, agentDir, settingsManager, extensionFactories: [pi.createCodemodeExtension({ mode: "on", models: false })] });
+       await resourceLoader.reload();
+       const { session } = await pi.createAgentSession({ cwd: project, agentDir, resourceLoader, settingsManager, modelRuntime, model: faux.getModel(), sessionManager: pi.SessionManager.inMemory(project) });
+       try {
+         await session.bindExtensions({});
+         await session.prompt("Check installed codemode");
+         const result = session.messages.find(message => message.role === "toolResult" && message.toolName === "codemode");
+         if (!result || result.isError || !result.content.some(part => part.text === "true") || result.nestedCalls?.calls[0]?.name !== "read") throw new Error("Installed codemode worker execution failed: " + JSON.stringify(result));
+       } finally { session.dispose(); }
        const smokeModule = join(packageRoot, "packages", "pi-stateql", "package-smoke.mjs");
        await writeFile(smokeModule, 'export { StateQL } from "@fadhilp/stateql";');
        const { StateQL } = await import(pathToFileURL(smokeModule).href);
@@ -131,10 +148,9 @@ test("packed package installs and launches its production web app", { timeout: 2
          database.snapshot({ historyLimit: 1, historyInternal: false });
          if (JSON.stringify(database.snapshot()) !== JSON.stringify(before)) throw new Error("Snapshot mutated database history");
        } finally { database.close(); }`,
-        packageRoot,
-        project,
-      ],
-      { encoding: "utf8", timeout: 120_000 },
+    );
+    const adapterCheck = spawnSync(process.execPath, [adapterScript, packageRoot, project],
+      { encoding: "utf8", timeout: 120_000, env: { ...process.env, PI_OFFLINE: "1" } },
     );
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
 

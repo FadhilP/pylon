@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import advisor from "../extensions/pi-advisor.ts";
 import { saveConfig } from "../src/config.ts";
 import { ADVISOR_IMMUTABLE_FOOTER, ADVISOR_PROMPT } from "../src/prompts.ts";
@@ -97,6 +98,11 @@ test("parallel Advisor calls serialize and report running duration", async () =>
     maxTokens: 8_192,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   };
+  const sessionManager = SessionManager.inMemory(process.cwd(), { id: "session" });
+  const omittedId = sessionManager.appendMessage({ role: "user", content: "Omitted advisor history", timestamp: 1 });
+  sessionManager.appendContextEdit(omittedId, null);
+  const replacedId = sessionManager.appendMessage({ role: "user", content: "Obsolete advisor context", timestamp: 2 });
+  sessionManager.appendContextEdit(replacedId, { content: "Canonical advisor context" });
   const ctx = {
     cwd: process.cwd(),
     hasUI: false,
@@ -109,7 +115,7 @@ test("parallel Advisor calls serialize and report running duration", async () =>
         return { ok: true, apiKey: "key" };
       },
     },
-    sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
+    sessionManager,
   };
   try {
     const first = tool.execute("one", { request: "first" }, undefined, onUpdate, ctx);
@@ -134,6 +140,8 @@ test("parallel Advisor calls serialize and report running duration", async () =>
 Use terse operator notes.`),
     );
     assert.ok(systemPrompts[0].endsWith(ADVISOR_IMMUTABLE_FOOTER));
+    assert.match(prompts[0], /Canonical advisor context/);
+    assert.doesNotMatch(prompts[0], /Omitted advisor history|Obsolete advisor context/);
     assert.equal(results[0].details.callNumber, 1);
     assert.equal(results[1].details.callNumber, 2);
     assert.equal(results[0].details.agentName, "strategy-review");
@@ -170,7 +178,7 @@ test("advisor records bounded redacted failure diagnostics", async () => {
         return { ok: true, apiKey: "key" };
       },
     },
-    sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
+    sessionManager: SessionManager.inMemory(process.cwd(), { id: "session" }),
   };
   const run = async (complete: () => any, onUpdate?: (value: any) => void) => {
     let tool: any;
@@ -319,7 +327,7 @@ test("Advisor retries transient failures and only successful consultations consu
         return { ok: true, apiKey: "key" };
       },
     },
-    sessionManager: { buildContextEntries: () => [], getSessionId: () => "session" },
+    sessionManager: SessionManager.inMemory(process.cwd(), { id: "session" }),
   };
   try {
     const retried = await tool.execute("retry", { request: "review" }, undefined, undefined, ctx);

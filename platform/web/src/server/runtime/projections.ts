@@ -1,3 +1,4 @@
+import { sanitizeFailureMessage } from "pylon-core/redact";
 import { isDeepStrictEqual } from "node:util";
 import {
   MAX_COMPACTION_DISPLAY_HISTORY_ITEMS,
@@ -282,6 +283,14 @@ function messageText(value: unknown): string {
     .join("")
     .slice(0, MAX_TEXT);
 }
+
+// Pi 1.0 prompt/tool deltas have no display text, but must stay in canonical history.
+function metadataOnlySystemMessage(value: unknown): boolean {
+  const raw = object(value);
+  return raw.role === "system" && raw.customType === undefined && !messageText(raw).trim() &&
+    (raw.sections !== undefined || raw.toolsAdded !== undefined || raw.toolsRemoved !== undefined);
+}
+
 
 export function continuityCompactionInterruptionId(value: unknown): string | undefined {
   const raw = object(value);
@@ -641,6 +650,27 @@ export function browserJson(value: unknown): string | undefined {
   }
 }
 
+/** Nested results never enter the transcript; retain bounded execution metadata only. */
+function projectNestedToolCalls(value: unknown, parentId: string, settled = false): ToolActivityReadModel["nestedCalls"] {
+  const record = object(value);
+  if (!Array.isArray(record.calls)) return undefined;
+  const calls = record.calls.slice(0, 32).flatMap((value, index) => {
+    const call = object(value);
+    if (typeof call.name !== "string" || !call.name) return [];
+    const pending = call.status === "running" || call.status === "unfinished";
+    const durationMs = boundedNumber(call.durationMs, 7 * 24 * 60 * 60 * 1_000);
+    return [{
+      id: id(call.id === `${parentId}/?` ? undefined : call.id, `${parentId}/pending-${index}`),
+      name: text(call.name, 200),
+      status: pending && !settled ? "running" as const : call.status === "ok" ? "completed" as const : "failed" as const,
+      ...(durationMs === undefined ? {} : { durationMs: Math.round(durationMs) }),
+      ...(call.error ? { error: sanitizeFailureMessage(call.error, "Tool failed") } : {}),
+    }];
+  });
+  return { calls, complete: record.complete !== false && calls.length === record.calls.length && !record.calls.some(value => ["running", "unfinished"].includes(String(object(value).status))) };
+}
+
+
 export function latestVisibleUserIndex(messages: unknown[], end = messages.length): number | undefined {
   for (let index = Math.min(messages.length, Math.max(0, Math.floor(end))) - 1; index >= 0; index--) {
     const raw = object(messages[index]);
@@ -802,7 +832,7 @@ export function projectConversation(
   for (let index = 0; index < end; index++) {
     const message = messages[index];
     const raw = object(message);
-    if (continuityCompactionInterruptionId(raw)) continue;
+    if (continuityCompactionInterruptionId(raw) || metadataOnlySystemMessage(raw)) continue;
     const messageRole = role(raw.role);
     if (messageRole === "user") userTurn++;
     const fileCount = promptFileCount(raw);
@@ -837,6 +867,7 @@ export function projectConversation(
       if (kind) recordDelegatedResult(scan, raw, toolId, kind, call?.turn ?? userTurn, call?.rawInput);
       else if (control) recordSpawnControl(scan, raw, controlKind);
       if (index < start && index !== pinnedUserIndex) continue;
+      const nestedCalls = projectNestedToolCalls(raw.nestedCalls ?? raw.details, toolId, true);
       projectedMessages.push({
         id: fallbackId,
         ...(typeof raw.entryId === "string" ? { entryId: id(raw.entryId, fallbackId) } : {}),
@@ -849,6 +880,7 @@ export function projectConversation(
           name,
           input: browserJson(call?.rawInput),
           status: settledToolStatus(name, raw),
+          ...(nestedCalls ? { nestedCalls } : {}),
           ...(options.toolDurations?.get(toolId) === undefined
             ? {}
             : { durationMs: options.toolDurations.get(toolId) }),
@@ -1409,6 +1441,7 @@ export class RuntimeProjection {
   private messageStart(raw: Record<string, unknown>): void {
     this.flush();
     const message = object(raw.message);
+    if (metadataOnlySystemMessage(message)) return;
     const fileCount = promptFileCount(message);
     if (fileCount) {
       const user = [...this.messages.values()].reverse().find(item => item.role === "user");
@@ -1447,6 +1480,7 @@ export class RuntimeProjection {
     if (item.role === "tool") {
       const toolId = id(message.toolCallId ?? raw.toolCallId, messageId);
       const activity = this.tools.get(toolId);
+      const nestedCalls = projectNestedToolCalls(message.nestedCalls ?? message.details, toolId, true) ?? activity?.nestedCalls;
       item.tool = {
         id: toolId,
         name: text(message.toolName ?? raw.toolName, 200) || activity?.name || "Tool",
@@ -1454,6 +1488,7 @@ export class RuntimeProjection {
         status: message.isError === true || raw.isError === true ? "failed" : (activity?.status ?? "completed"),
         ...(activity?.startedAt ? { startedAt: activity.startedAt } : {}),
         ...(activity?.durationMs === undefined ? {} : { durationMs: activity.durationMs }),
+        ...(nestedCalls ? { nestedCalls } : {}),
       };
     }
     this.messages.set(messageId, item);
@@ -1463,6 +1498,7 @@ export class RuntimeProjection {
   }
   private messageUpdate(raw: Record<string, unknown>): void {
     const message = object(raw.message);
+    if (metadataOnlySystemMessage(message)) return;
     const messageId =
       this.activeMessageId ?? id(raw.messageId ?? raw.id ?? message.id, `message-${++this.messageCounter}`);
     this.activeMessageId = messageId;
@@ -1493,6 +1529,7 @@ export class RuntimeProjection {
   }
   private messageEnd(raw: Record<string, unknown>): void {
     if (promptFileCount(object(raw.message))) return;
+    if (metadataOnlySystemMessage(raw.message)) return;
     this.flush();
     const messageId = this.activeMessageId ?? id(raw.messageId ?? raw.id ?? object(raw.message).id, "message");
     const current = this.messages.get(messageId);
@@ -1549,6 +1586,7 @@ export class RuntimeProjection {
     const startedAt = createdAt(raw.startedAt) ?? new Date().toISOString();
     this.toolInputs.set(toolId, input);
     const item: ToolActivityReadModel = { id: toolId, name, input: browserJson(input), status: "running", startedAt };
+    if (typeof raw.parentToolCallId === "string") item.parentToolCallId = id(raw.parentToolCallId, "");
     this.tools.set(toolId, item);
     trimMap(this.tools, MAX_TOOLS);
     this.publish("tool.start", item);
@@ -1557,6 +1595,13 @@ export class RuntimeProjection {
   }
   private toolUpdate(raw: Record<string, unknown>): void {
     const toolId = id(raw.toolCallId ?? raw.toolId ?? raw.id, "tool");
+    const activity = this.tools.get(toolId);
+    const nestedCalls = projectNestedToolCalls(object(raw.partialResult).details, toolId);
+    if (activity?.status === "running" && nestedCalls) {
+      const item = { ...activity, nestedCalls };
+      this.tools.set(toolId, item);
+      this.publish("tool.update", item);
+    }
     const old = this.delegatedRuns.get(toolId);
     const next = projectDelegatedToolEvent("update", toolId, old, raw, this.runtime.metrics.userMessages);
     if (!next) return;
@@ -1579,6 +1624,7 @@ export class RuntimeProjection {
     const durationMs =
       projectedDuration ??
       (startedAt ? Math.min(7 * 24 * 60 * 60 * 1_000, Math.max(0, Date.now() - Date.parse(startedAt))) : undefined);
+    const nestedCalls = projectNestedToolCalls(object(raw.result).nestedCalls ?? object(raw.result).details, toolId, true) ?? old?.nestedCalls;
     const item: ToolActivityReadModel = {
       id: toolId,
       name,
@@ -1587,6 +1633,9 @@ export class RuntimeProjection {
       summary: text(raw.summary ?? raw.error ?? raw.output, 4_000) || undefined,
       ...(startedAt ? { startedAt } : {}),
       ...(durationMs === undefined ? {} : { durationMs }),
+      ...(old?.parentToolCallId || typeof raw.parentToolCallId === "string"
+        ? { parentToolCallId: old?.parentToolCallId ?? id(raw.parentToolCallId, "") } : {}),
+      ...(nestedCalls ? { nestedCalls } : {}),
     };
     this.tools.set(toolId, item);
     trimMap(this.tools, MAX_TOOLS);

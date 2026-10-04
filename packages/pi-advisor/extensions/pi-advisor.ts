@@ -1,5 +1,5 @@
 import { complete, type Message, type Model } from "@earendil-works/pi-ai/compat";
-import { sessionEntryToContextMessages, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { requestDelegateName, type DelegateNameHandle } from "pylon-core/delegate-names";
@@ -309,7 +309,7 @@ export default function advisorExtension(
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok || !auth.apiKey) return fail("Advisor unavailable: selected model has no credentials.", "unavailable");
 
-    const messages: any[] = ctx.sessionManager.buildContextEntries().flatMap(sessionEntryToContextMessages);
+    const messages: any[] = [...ctx.sessionManager.buildSessionProjection().messages];
     messages.push({ role: "custom", customType: "advisor-request", content: params.request.trim() });
     for (const record of await loadEvidenceRecords(ctx.cwd, params.evidence))
       messages.push({

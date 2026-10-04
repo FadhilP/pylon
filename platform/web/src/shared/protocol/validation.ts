@@ -93,6 +93,14 @@ function boundedString(value: unknown, maximum = 200): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maximum;
 }
 
+function validNestedToolCalls(value: unknown): boolean {
+  return value === undefined || (record(value) && typeof value.complete === "boolean" &&
+    Array.isArray(value.calls) && value.calls.length <= 32 && value.calls.every(call =>
+      record(call) && identifier(call.id) && boundedString(call.name) &&
+      ["running", "completed", "failed"].includes(String(call.status)) && validOptionalToolTiming(call) &&
+      (call.error === undefined || (typeof call.error === "string" && call.error.length <= 500))));
+}
+
 function validOptionalToolTiming(value: Record<string, unknown>): boolean {
   return (
     (value.startedAt === undefined ||
@@ -2057,6 +2065,7 @@ function validConversationMessage(message: unknown): boolean {
         (message.tool.input === undefined ||
           (typeof message.tool.input === "string" && message.tool.input.length <= MAX_MESSAGE_LENGTH)) &&
         toolStatuses.has(String(message.tool.status)) &&
+        validNestedToolCalls(message.tool.nestedCalls) &&
         validOptionalToolTiming(message.tool)))
   );
 }
@@ -2069,6 +2078,8 @@ function validConversationTool(tool: unknown): boolean {
     (tool.input === undefined || (typeof tool.input === "string" && tool.input.length <= MAX_MESSAGE_LENGTH)) &&
     (tool.summary === undefined || (typeof tool.summary === "string" && tool.summary.length <= MAX_MESSAGE_LENGTH)) &&
     toolStatuses.has(tool.status as string) &&
+    (tool.parentToolCallId === undefined || identifier(tool.parentToolCallId)) &&
+    validNestedToolCalls(tool.nestedCalls) &&
     validOptionalToolTiming(tool)
   );
 }

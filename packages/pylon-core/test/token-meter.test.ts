@@ -166,3 +166,29 @@ test("reports an empty current branch clearly", () => {
   assert.match(report, /No completed tool calls in current session branch/);
   assert.match(report, /0 turns; input 0; output 0/);
 });
+
+
+test("nested execution counts survive rebuild without counting hidden payloads twice", () => {
+  const input = { code: 'text("summary");' };
+  const nestedCalls = { complete: true, calls: [
+    { id: "script/1", name: "read", status: "ok" },
+    { id: "script/2", name: "bash", status: "error" },
+  ] };
+  const parent = { toolCallId: "script", toolName: "codemode", input, content: [{ type: "text", text: "summary" }], isError: false, nestedCalls };
+  const live = createTokenMeter();
+  for (const call of nestedCalls.calls) recordToolResult(live, { toolCallId: call.id, toolName: call.name,
+    parentToolCallId: "script", input: { command: "hidden command" },
+    content: [{ type: "text", text: "hidden output".repeat(1_000) }, { type: "image" }], isError: call.status === "error" });
+  recordToolResult(live, parent);
+  const rebuilt = meterFromBranch([
+    message("assistant", { role: "assistant", content: [{ type: "toolCall", id: "script", name: "codemode", arguments: input }] }),
+    message("result", { ...parent, role: "toolResult" }),
+  ]);
+  assert.deepEqual(live.byTool, rebuilt.byTool);
+  assert.deepEqual(live.byTool.get("read"), { calls: 1, argumentChars: 0, resultChars: 0, images: 0, errors: 0 });
+  assert.equal(live.byTool.get("bash")?.errors, 1);
+  assert.equal(live.byTool.get("codemode")?.resultChars, 7);
+  assert.equal(live.seenCallIds.size, 3);
+  recordToolResult(live, parent);
+  assert.deepEqual(live.byTool, rebuilt.byTool);
+});

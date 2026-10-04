@@ -44,6 +44,7 @@ import {
   sessionEntryToContextMessages,
   type AgentSession,
   type CompactionEntry,
+  type PromptOptions,
   type SessionInfo,
   type EventBusController,
   type AgentSessionRuntime,
@@ -180,6 +181,7 @@ import type {
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-bridge.ts";
 import type { StateQLCredentialVault } from "../database/stateql-credential-vault.ts";
 import { createPylonModelRuntime, createPylonRuntimeFactory, type StartupHookTiming } from "./runtime-factory.ts";
+import type { ExtensionLoadTiming } from "./pi-startup-timings.ts";
 import {
   applyOperationalEvent,
   cloneOperational,
@@ -1220,6 +1222,7 @@ export class SessionRuntime implements PiDriver {
     let sessionStartMs = 0;
     let bindMs = 0;
     const startupHooks: StartupHookTiming[] = [];
+    const extensionLoads: ExtensionLoadTiming[] = [];
     let collectStartupHooks = true;
     this.target = target;
     this.sessionIndex.setAgentDir(target.agentDir);
@@ -1270,6 +1273,9 @@ export class SessionRuntime implements PiDriver {
         if (phase === "extension-loading") packageExtensionsMs += durationMs;
         else runtimeCreateMs += durationMs;
       },
+      onExtensionLoadTimings: timings => {
+        if (collectStartupHooks) extensionLoads.push(...timings);
+      },
       onStartupHook: timing => {
         if (collectStartupHooks) startupHooks.push(timing);
       },
@@ -1313,6 +1319,7 @@ export class SessionRuntime implements PiDriver {
             runtimeCreateMs: Math.round(runtimeCreateMs),
             sessionStartMs: Math.round(sessionStartMs),
             bindSetupMs: Math.round(Math.max(0, bindMs - sessionStartMs)),
+            slowestExtensionLoads: extensionLoads.sort((a, b) => b.durationMs - a.durationMs).slice(0, 8),
             slowestHooks: startupHooks
               .sort((a, b) => b.durationMs - a.durationMs)
               .slice(0, 8)
@@ -1752,20 +1759,17 @@ export class SessionRuntime implements PiDriver {
           this.emitCommandResult();
         }
         if (!accepted) this.removePendingUserMessage(input.commandId);
-        if (!accepted && knownCommand && !files.length && !input.images?.length)
-          resolve(this.accepted(input.commandId));
-        else if (!accepted && knownCommand)
-          reject(new Error("files and images require a command that starts a model turn"));
-        else if (!accepted) reject(new Error("prompt was rejected before acceptance"));
+        if (!accepted && (files.length || input.images?.length))
+          reject(new Error("files and images require a prompt that starts a model turn"));
         else if (!filesConsumed) reject(new Error("text files require a prompt that starts a model turn"));
         else resolve(this.accepted(input.commandId));
       };
-      const finish = (accepted: boolean) => {
+      const finish: NonNullable<PromptOptions["preflightResult"]> = disposition => {
         if (knownCommand) {
           commandPending = true;
           return;
         }
-        complete(accepted);
+        complete(disposition !== "handled" || this.nextTurnId > turnAtStart);
       };
       void session
         .prompt(input.message, {
@@ -1811,14 +1815,21 @@ export class SessionRuntime implements PiDriver {
     const session = this.sessionFor(input.expectedGeneration);
     this.pendingUserMessageIds.push(input.commandId);
     try {
-      await session.steer(
+      const disposition = await session.steer(
         input.message,
         input.images?.map(image => ({
           type: "image",
           ...image,
           pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION,
         })),
+        { source: "rpc" },
       );
+      if (disposition === "handled") {
+        this.removePendingUserMessage(input.commandId);
+        if (input.files?.length || input.images?.length)
+          throw new Error("files and images require a prompt that starts a model turn");
+        return this.accepted(input.commandId);
+      }
     } catch (error) {
       this.removePendingUserMessage(input.commandId);
       throw error;
@@ -1833,14 +1844,21 @@ export class SessionRuntime implements PiDriver {
     const session = this.sessionFor(input.expectedGeneration);
     this.pendingUserMessageIds.push(input.commandId);
     try {
-      await session.followUp(
+      const disposition = await session.followUp(
         input.message,
         input.images?.map(image => ({
           type: "image",
           ...image,
           pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION,
         })),
+        { source: "rpc" },
       );
+      if (disposition === "handled") {
+        this.removePendingUserMessage(input.commandId);
+        if (input.files?.length || input.images?.length)
+          throw new Error("files and images require a prompt that starts a model turn");
+        return this.accepted(input.commandId);
+      }
     } catch (error) {
       this.removePendingUserMessage(input.commandId);
       throw error;
@@ -4200,7 +4218,6 @@ export class SessionRuntime implements PiDriver {
       payload: { type: "usage", metrics },
     });
   }
-
 
   private refreshSnapshot(): void {
     const runtime = this.requireRuntime();

@@ -47,13 +47,17 @@ export function terminalActivityStatus(
 }
 
 function settledTool<
-  T extends { status: "running" | "completed" | "failed" | "attention"; startedAt?: string; durationMs?: number },
+  T extends { status: "running" | "completed" | "failed" | "attention"; startedAt?: string; durationMs?: number; nestedCalls?: ToolActivityReadModel["nestedCalls"] },
 >(tool: T, status: "completed" | "failed"): T {
   if (tool.status !== "running") return tool;
   const startedAt = tool.startedAt ? Date.parse(tool.startedAt) : Number.NaN;
   return {
     ...tool,
     status,
+    ...(tool.nestedCalls?.calls.some(call => call.status === "running") ? {
+      nestedCalls: { ...tool.nestedCalls, complete: false, calls: tool.nestedCalls.calls.map(call =>
+        call.status === "running" ? { ...call, status: "failed" as const } : call) },
+    } : {}),
     ...(tool.durationMs === undefined && !Number.isNaN(startedAt)
       ? { durationMs: Math.max(0, Date.now() - startedAt) }
       : {}),
@@ -90,6 +94,7 @@ export function liveToolMessage(tool: ToolActivityReadModel): MessageReadModel {
       status: tool.status,
       ...(tool.startedAt ? { startedAt: tool.startedAt } : {}),
       ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
+      ...(tool.nestedCalls ? { nestedCalls: tool.nestedCalls } : {}),
     },
   };
 }
@@ -109,6 +114,7 @@ export function reconcileToolActivity(message: MessageReadModel, activity: ToolA
       status: activity.status,
       ...(startedAt ? { startedAt } : {}),
       ...(durationMs === undefined ? {} : { durationMs }),
+      ...(activity.nestedCalls ? { nestedCalls: activity.nestedCalls } : {}),
     },
   };
 }

@@ -118,6 +118,7 @@ import { ApiClient, ApiHttpError } from "./api-client";
 import { WorkspaceInventoryLoads, workspaceInventoryCacheState } from "../workspace/workspace-file-pages";
 import {
   liveToolMessage,
+  reconcileToolActivity,
   replaceConversationMessage,
   replaceDelegatedRun,
   replaceToolActivity,
@@ -2575,42 +2576,21 @@ function applyRuntimeEvent(runtime: RuntimeSnapshot, event: WebEvent): RuntimeSn
         },
       };
     }
-    case "tool.start": {
-      const tool = payload as ToolActivityReadModel;
-      return {
-        ...runtime,
-        conversation: {
-          ...conversation,
-          tools: replaceToolActivity(conversation.tools, tool),
-          messages: replaceConversationMessage(conversation.messages, liveToolMessage(tool)),
-        },
-      };
-    }
+    case "tool.start":
+    case "tool.update":
     case "tool.end": {
       const tool = payload as ToolActivityReadModel;
       const existing = conversation.messages.find(message => message.tool?.id === tool.id);
+      if (tool.status === "running" && existing?.tool && existing.tool.status !== "running") return runtime;
       return {
         ...runtime,
         conversation: {
           ...conversation,
           tools: replaceToolActivity(conversation.tools, tool),
-          messages: replaceConversationMessage(
+          // Inner calls are operational activity, not independent transcript results.
+          messages: tool.parentToolCallId ? conversation.messages : replaceConversationMessage(
             conversation.messages,
-            existing
-              ? {
-                  ...existing,
-                  text: tool.summary ?? existing.text,
-                  streaming: false,
-                  tool: {
-                    ...existing.tool!,
-                    name: tool.name || existing.tool!.name,
-                    input: tool.input ?? existing.tool!.input,
-                    status: tool.status,
-                    ...(tool.startedAt ? { startedAt: tool.startedAt } : {}),
-                    ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
-                  },
-                }
-              : liveToolMessage(tool),
+            existing ? reconcileToolActivity(existing, tool) : liveToolMessage(tool),
           ),
         },
       };

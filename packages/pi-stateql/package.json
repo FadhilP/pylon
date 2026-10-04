@@ -37,7 +37,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@fadhilp/stateql": "0.13.2"
+    "@fadhilp/stateql": "0.13.3"
   },
   "license": "MIT"
 }

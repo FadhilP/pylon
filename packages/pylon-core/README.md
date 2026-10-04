@@ -29,6 +29,15 @@ Revision-guarded numbered edits are on by default. For models whose advertised b
 
 Numbered `read` returns absolute lines and a compact version tag backed by SHA-256. `edit` accepts complete displayed numbered lines only when the tag matches. Disjoint operations validate against one snapshot and save once through Pi's per-file queue. Normal successful saves return the new tag; surrounding context is returned only when another process changed the file while saving. Settings live at `<agent-dir>/pylon-core/config.json`; Pylon Web uses `~/.pylon/agent` by default, while standalone Pi uses its host agent directory (normally `~/.pi/agent`) unless overridden. Each field reports when it applies; reload other Pi clients when required.
 
+## Web codemode (opt-in)
+
+Enable **Web codemode** in Pylon Web's `pylon-core` package settings (`codemodeEnabled`, default false), then create a new session or reconstruct/reload its runtime. This uses Pi 1.0 native JavaScript execution alongside ordinary tools; it does not change standalone Pi CLI codemode settings.
+
+Scripts can call only active direct coding/search tools. Workflow controls, discovery/activation, verification, delegates, and model APIs stay outside scripts. Native validation, Guard approvals, revision guards, and file queues still apply to each call. Scripts are capped at 60 seconds, 32 nested calls, and 2,000 estimated text output tokens; valid lower native first-line limits are respected. Failed scripts retain partial output and do not roll back completed side effects.
+
+Nested activity is bounded parent metadata, not a second transcript of inner results. Hidden inner payloads do not count toward model-facing tool token estimates. Native stores follow the current branch and commit only after successful scripts. Trusted extensions still run with host permissions; codemode is not an OS sandbox.
+
+
 ## Coordination behavior
 
 Core merges independently enabled tools, keeps baseline tools separate from package-managed tools, applies restrictive gates by fail-closed intersection, and validates/version-diagnoses policy messages. Discovery can select up to six deferred tools without bypassing gates. It coordinates Advisor, Grunt, Helios, Scout, and Continuity; allows Continuity planning to retain enabled read-only Scout/Advisor; shares one shell worktree fingerprint per turn for Continuity/Timeline; and falls back to each package's standalone behavior when absent.

@@ -3,6 +3,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { addCostParts, emptyUsage, sumCostParts, toolResultUsage, usageSnapshot } from "pylon-core/child-process";
+import { projectedContextEntries } from "pylon-core/context-packing";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -401,9 +402,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
         const maxCostUsd = gruntMaxCostUsd(config.maxCostUsd);
         costLimitUsd = maxCostUsd;
         const contextChars = gruntParentContextChars(config.parentContextChars);
-        const entries = contextChars
-          ? (ctx.sessionManager?.buildContextEntries?.() ?? ctx.sessionManager?.getBranch?.() ?? [])
-          : [];
+        const entries = contextChars ? projectedContextEntries(ctx.sessionManager.buildSessionProjection()) : [];
         const suggested = params.suggestedPaths ?? [];
         const targetedContext = params.targetedContext?.trim() ?? "";
         const checkCommands = params.checkCommands ?? [];

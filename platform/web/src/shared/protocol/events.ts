@@ -68,6 +68,7 @@ export interface MessageReadModel {
     status: "running" | "completed" | "failed" | "attention";
     startedAt?: string;
     durationMs?: number;
+    nestedCalls?: NestedToolCallsReadModel;
   };
 }
 
@@ -80,6 +81,17 @@ export interface ChangedFileReadModel {
 
 export type SessionRuntimeState = "sleeping" | "idle" | "running" | "attention";
 
+export interface NestedToolCallsReadModel {
+  complete: boolean;
+  calls: Array<{
+    id: string;
+    name: string;
+    status: "running" | "completed" | "failed";
+    durationMs?: number;
+    error?: string;
+  }>;
+}
+
 export interface ToolActivityReadModel {
   id: string;
   name: string;
@@ -88,6 +100,8 @@ export interface ToolActivityReadModel {
   summary?: string;
   startedAt?: string;
   durationMs?: number;
+  parentToolCallId?: string;
+  nestedCalls?: NestedToolCallsReadModel;
 }
 
 export type DelegatedAgentKind = "advisor" | "grunt" | "repo_scout" | "web_scout" | "spawn_agent" | "spawn_session";

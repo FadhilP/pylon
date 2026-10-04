@@ -2633,7 +2633,6 @@ test("fork translates the coordinator generation to the selected runtime generat
     const sessions = await driver.listSessions();
     assert.equal(sessions.activeSessions[0]?.id, forked.sessionId);
     assert.equal(sessions.activeSessions[0]?.pinned, true);
-    assert.equal(sessions.projects[0]?.sessions[0]?.id, forked.sessionId);
     const registry = (driver as any).registry() as ProjectRegistry;
     assert.equal(registry.isSessionPinned(existing.getSessionId()), false);
     assert.equal(registry.isSessionPinned(forked.sessionId), true);

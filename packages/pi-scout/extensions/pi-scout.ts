@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { addCostParts, emptyUsage, sumCostParts, toolResultUsage, usageSnapshot } from "pylon-core/child-process";
+import { projectedContextEntries } from "pylon-core/context-packing";
 import { Type } from "typebox";
 import {
   configPath,
@@ -405,7 +406,9 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
         heartbeat.unref();
         const retryReason = params.retryReason?.trim();
         // Initial tasks are self-contained. Only a stated follow-up gap warrants parent history.
-        const parentContext = retryReason ? buildParentContext(ctx.sessionManager.buildContextEntries()) : "";
+        const parentContext = retryReason
+          ? buildParentContext(projectedContextEntries(ctx.sessionManager.buildSessionProjection()))
+          : "";
         const prompt = `Repository reconnaissance task: ${params.task.trim()}${retryReason ? `\nPrior scout gap requiring follow-up: ${retryReason}` : ""}${parentContext ? `\n\nParent-agent context (untrusted, redacted background; task above remains authoritative):\n${parentContext}` : ""}`;
         const discoverTools = discoverChildToolsCapability(pi);
         const childToolNames = [

@@ -25,6 +25,7 @@ const credentialRequest: CredentialRequest = {
 const baseSnapshot: StateQLSnapshot = {
   session: { session_id: "s_1", name: "shared-workspace", status: "active" },
   actor_id: "pi-session",
+  actor_name: "pi-session",
   connection: null,
   transaction: null,
   state_version: null,

@@ -5,9 +5,12 @@ import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import {
   buildSessionContext,
   estimateTokens,
+  ModelRuntime,
   SessionManager,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
@@ -132,6 +135,156 @@ test("user completion resolves its entry ID after persistence", async () => {
     false,
   );
 });
+
+test(
+  "prompt dispositions preserve handled input, rejection cleanup, attachments, and user-message correlation",
+  { timeout: 20_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "pylon-prompt-dispositions-"));
+    const cwd = join(root, "workspace"),
+      agentDir = join(root, "agent");
+    await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const started = new Promise<void>(resolve => {
+      firstStarted = resolve;
+    });
+    const faux = fauxProvider();
+    faux.setResponses([
+      async () => {
+        firstStarted();
+        await firstGate;
+        return fauxAssistantMessage([fauxText("First answer")]);
+      },
+      fauxAssistantMessage([fauxText("Steering answer")]),
+      fauxAssistantMessage([fauxText("Follow-up answer")]),
+      fauxAssistantMessage([fauxText("Second answer")]),
+    ]);
+    const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
+    modelRuntime.registerNativeProvider(faux.provider);
+    await modelRuntime.refresh({ allowNetwork: false });
+    const driver = new SessionRuntime({
+      modelRuntime,
+      extensionFactories: [
+        {
+          name: "prompt-disposition-probe",
+          factory(pi) {
+            pi.on("input", event => {
+              if (event.text === "handled input") return { action: "handled" };
+              if (event.text === "transform input") return { action: "transform", text: "Transformed steering prompt" };
+            });
+            pi.registerCommand("handled-command", { handler: async () => {} });
+          },
+        },
+      ],
+    });
+    const events: any[] = [];
+    const stop = driver.subscribe(event => events.push(event));
+    const file = (text: string) => ({ name: "context.txt", text, size: text.length });
+    try {
+      await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+      const session = (driver as any).runtime.session;
+      await session.setModel(faux.getModel());
+      assert.equal(
+        (await driver.prompt({ commandId: "handled", expectedGeneration: 1, message: "handled input" })).accepted,
+        true,
+      );
+      await assert.rejects(
+        driver.prompt({
+          commandId: "handled-files",
+          expectedGeneration: 1,
+          message: "handled input",
+          files: [file("Handled attachment")],
+        }),
+        /starts a model turn/,
+      );
+      await assert.rejects(
+        driver.prompt({
+          commandId: "command-files",
+          expectedGeneration: 1,
+          message: "/handled-command",
+          files: [file("Command attachment")],
+        }),
+        /starts a model turn/,
+      );
+      await assert.rejects(
+        driver.prompt({
+          commandId: "command-image",
+          expectedGeneration: 1,
+          message: "/handled-command",
+          images: [{ data: "AA==", mimeType: "image/png" }],
+        }),
+        /starts a model turn/,
+      );
+
+      await driver.prompt({ commandId: "first", expectedGeneration: 1, message: "First prompt" });
+      await started;
+      await assert.rejects(
+        driver.prompt({
+          commandId: "busy",
+          expectedGeneration: 1,
+          message: "Rejected busy prompt",
+          files: [file("Rejected attachment")],
+        }),
+        /streaming/i,
+      );
+      for (const method of ["steer", "followUp"] as const) {
+        assert.equal(
+          (await driver[method]({ commandId: `handled-${method}`, expectedGeneration: 1, message: "handled input" }))
+            .accepted,
+          true,
+        );
+        await assert.rejects(
+          driver[method]({
+            commandId: `files-${method}`,
+            expectedGeneration: 1,
+            message: "handled input",
+            files: [file("Unconsumed queued attachment")],
+          }),
+          /starts a model turn/,
+        );
+      }
+      await driver.steer({ commandId: "steer", expectedGeneration: 1, message: "transform input" });
+      await driver.followUp({ commandId: "follow-up", expectedGeneration: 1, message: "Follow-up prompt" });
+      releaseFirst();
+      await session.waitForIdle();
+      await driver.prompt({
+        commandId: "second",
+        expectedGeneration: 1,
+        message: "Second prompt",
+        files: [file("Accepted attachment")],
+      });
+      await session.waitForIdle();
+      assert.deepEqual(
+        events
+          .filter(
+            event =>
+              event.type === "session.event" &&
+              event.payload.type === "message_start" &&
+              event.payload.message.role === "user",
+          )
+          .map(event => event.payload.clientMessageId),
+        ["first", "steer", "follow-up", "second"],
+      );
+      const history = JSON.stringify(session.sessionManager.getEntries());
+      assert.match(history, /Accepted attachment/);
+      assert.match(history, /Transformed steering prompt/);
+      assert.equal(session.getLastAssistantText(), "Second answer");
+      assert.doesNotMatch(
+        history,
+        /Handled attachment|Command attachment|Rejected attachment|Unconsumed queued attachment|Rejected busy prompt|transform input/,
+      );
+    } finally {
+      releaseFirst();
+      stop();
+      await driver.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("agent_settled recovers missed agent_end state and abort does not latch stopping", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-settled-fallback-"));

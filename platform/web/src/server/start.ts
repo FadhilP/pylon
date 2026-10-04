@@ -1,5 +1,8 @@
 import { preparePylonStorage } from "../../../../bin/storage.mjs";
 
+// Pi gates its detailed extension-loader timings at module initialization.
+process.env.PI_TIMING ??= "1";
+
 const storage = await preparePylonStorage();
 const { startPylonServer } = await import("./index.ts");
 const production = process.argv.includes("--production");

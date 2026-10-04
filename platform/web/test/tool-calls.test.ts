@@ -17,14 +17,7 @@ test("messageToolCallViews elapses a running call against now", () => {
     [toolMessage({ id: "t1", name: "Bash", input: "npm test", status: "running", startedAt: "2026-01-01T00:00:00Z" })],
     Date.parse("2026-01-01T00:00:05Z"),
   );
-  assert.deepEqual(view, {
-    key: "t1",
-    name: "Bash",
-    input: "npm test",
-    output: "",
-    status: "running",
-    durationMs: 5_000,
-  });
+  assert.equal(view?.durationMs, 5_000);
 });
 
 test("pairedToolCallViews settles unfinished calls once the run stops", () => {

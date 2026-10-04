@@ -5,6 +5,7 @@ import { access, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import grunt from "../extensions/pi-grunt.ts";
 import { saveConfig } from "../src/config.ts";
 import type { WorkerRun } from "../src/runner.ts";
@@ -206,6 +207,11 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         });
       }
     });
+    const sessionManager = SessionManager.inMemory(cwd);
+    const omittedId = sessionManager.appendMessage({ role: "user", content: "Omitted grunt history", timestamp: 1 });
+    sessionManager.appendContextEdit(omittedId, null);
+    const replacedId = sessionManager.appendMessage({ role: "user", content: "Obsolete grunt context", timestamp: 2 });
+    sessionManager.appendContextEdit(replacedId, { content: "Add worker" });
     const ctx: any = {
       cwd,
       hasUI: false,
@@ -215,9 +221,7 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
         find: () => model,
         hasConfiguredAuth: () => true,
       },
-      sessionManager: {
-        buildContextEntries: () => [{ type: "message", message: { role: "user", content: "Add worker" } }],
-      },
+      sessionManager,
       ui: { setStatus() {}, notify: (text: string, level: string) => notifications.push({ text, level }) },
     };
     for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
@@ -290,6 +294,8 @@ test("Grunt runs synchronously with per-call thinking and derives changed paths"
     assert.match(childArgs.at(-1) ?? "", /Targeted context.*exported-constant convention/s);
     assert.match(childArgs.at(-1) ?? "", /Focused checks:\n- npm test -- worker/);
     assert.match(childArgs.at(-1) ?? "", /Bounded redacted parent context/);
+    assert.match(childArgs.at(-1) ?? "", /User: Add worker/);
+    assert.doesNotMatch(childArgs.at(-1) ?? "", /Omitted grunt history|Obsolete grunt context/);
     assert.match(childArgs.at(-1) ?? "", /Unavailable ignored dependency directories: node_modules/);
     assert.equal(result.details.missingDependencies, undefined);
     assert.deepEqual(result.details.metrics, {
@@ -493,6 +499,7 @@ test("Grunt publishes sanitized bounded worker and outer failure details", async
     const ctx: any = {
       cwd: root,
       hasUI: false,
+      sessionManager: SessionManager.inMemory(root),
       model,
       modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model },
     };
@@ -618,6 +625,7 @@ test("isolated mode throws outside Git while direct mode runs there", async () =
     const ctx: any = {
       cwd: root,
       hasUI: false,
+      sessionManager: SessionManager.inMemory(root),
       model,
       modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }), find: () => model },
     };

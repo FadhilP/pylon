@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.3.0",
+    "date": "Oct 4, 2026",
+    "title": "Native codemode and clearer agent activity",
+    "summary": "Pylon 3.3 upgrades to Pi 1.0, adds opt-in JavaScript orchestration for coding tools, and improves nested tool visibility, delegated context, model defaults, and runtime diagnostics.",
+    "notes": [
+      "Added opt-in Web codemode using Pi's native JavaScript execution for active coding and search tools, with a 60-second ceiling, 32-call budget, bounded text output, and existing validation, Guard approvals, and workflow gates preserved; completed side effects are not rolled back on failure.",
+      "Kept nested tool activity grouped under its parent in live and restored conversations, with bounded status, duration, and error metadata, while excluding hidden inner arguments and results from model-facing token estimates.",
+      "Updated Advisor, Grunt, and Scout to use canonical projected session context so delegated work respects context edits and compaction, while keeping Scout parent context limited to explicit follow-up gaps.",
+      "Added a configurable default main-agent model for new Web sessions without changing existing sessions' selected models.",
+      "Upgraded Pi runtime packages to 1.0.0 and StateQL to 0.13.3, and adapted Web prompt, steering, and follow-up handling to Pi's new dispositions while rejecting attachments when no model turn starts.",
+      "Added best-effort extension import and factory timing diagnostics to session startup reports and enabled Tab indentation in editable code views."
+    ]
+  },
+  {
     "version": "3.2.1",
     "date": "Sep 17, 2026",
     "title": "Smoother Git conflict resolution and smarter workspace search",

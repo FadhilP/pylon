@@ -16,7 +16,7 @@ import {
   keymap,
   scrollPastEnd,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { createPortal } from "react-dom";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Annotation } from "../../shared/workspace/annotations";
@@ -323,6 +323,7 @@ export function EditableCode(props: Props) {
             },
             ...searchKeymap,
             ...lintKeymap,
+            indentWithTab,
             ...defaultKeymap,
             ...historyKeymap,
           ]),

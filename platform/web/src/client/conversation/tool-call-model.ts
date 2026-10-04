@@ -1,4 +1,4 @@
-import type { MessageReadModel } from "../../shared/protocol/events.ts";
+import type { MessageReadModel, NestedToolCallsReadModel } from "../../shared/protocol/events.ts";
 import { pairedAgentToolDuration, pairedAgentToolStatus, type PairedAgentActivity } from "../sessions/agent-activity.ts";
 import { toolElapsedDuration } from "../../shared/sessions/transcript.ts";
 
@@ -13,6 +13,7 @@ export type ToolCallView = {
   output?: string;
   status: ToolCallStatus;
   durationMs?: number;
+  nestedCalls?: NestedToolCallsReadModel;
 };
 
 export type ToolCallTrackTick = { key: string; status: ToolCallStatus; height: number };
@@ -47,6 +48,7 @@ export function messageToolCallViews(messages: MessageReadModel[], now = Date.no
     output: message.text,
     status: message.tool?.status ?? "completed",
     durationMs: toolElapsedDuration(message, now),
+    nestedCalls: message.tool?.nestedCalls,
   }));
 }
 
