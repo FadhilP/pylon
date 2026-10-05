@@ -1,5 +1,18 @@
 [
   {
+    "version": "3.3.1",
+    "date": "Oct 5, 2026",
+    "title": "Safer codemode cancellation and reliable image attachments",
+    "summary": "A maintenance release tightens codemode and Guard lifecycles, fixes Continuity batch validation and image attachment visibility, and expands runtime regression coverage.",
+    "notes": [
+      "Cancelled pending nested codemode work and Guard approval dialogs when scripts finish, time out, or are aborted, and prevented delayed approval preparation or stale answers from authorizing cancelled operations.",
+      "Made Continuity validate tool batches against the latest assistant message even when sibling tool results or timing entries have become the session leaf.",
+      "Restored viewable user image attachments after Pi prompt normalization while keeping image data out of conversation snapshots.",
+      "Hid nested tool activity details in conversation rows while retaining the parent tool's input and output.",
+      "Expanded codemode runtime, lifecycle, and packaged Web smoke coverage for guarded calls, cancellation, budgets, persistent stores, revision-safe edits, and session replacement, and made Heartbeat completion checks wait for the actual completion event."
+    ]
+  },
+  {
     "version": "3.3.0",
     "date": "Oct 4, 2026",
     "title": "Native codemode and clearer agent activity",

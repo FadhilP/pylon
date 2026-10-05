@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -78,8 +78,9 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.match(changelog.stdout, /Clearer setup and project documentation/);
 
     const adapterScript = join(temp, "adapter-smoke.mjs");
-    await writeFile(adapterScript,
-        `import { createRequire } from "node:module";
+    await writeFile(
+      adapterScript,
+      `import { createRequire } from "node:module";
        import { join } from "node:path";
        import { pathToFileURL } from "node:url";
        import { writeFile } from "node:fs/promises";
@@ -149,10 +150,21 @@ test("packed package installs and launches its production web app", { timeout: 2
          if (JSON.stringify(database.snapshot()) !== JSON.stringify(before)) throw new Error("Snapshot mutated database history");
        } finally { database.close(); }`,
     );
-    const adapterCheck = spawnSync(process.execPath, [adapterScript, packageRoot, project],
-      { encoding: "utf8", timeout: 120_000, env: { ...process.env, PI_OFFLINE: "1" } },
-    );
+    const adapterCheck = spawnSync(process.execPath, [adapterScript, packageRoot, project], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, PI_OFFLINE: "1" },
+    });
     assert.equal(adapterCheck.status, 0, adapterCheck.stderr || adapterCheck.stdout);
+
+    const webSmoke = join(packageRoot, "codemode-web-smoke.mjs");
+    await copyFile(join(root, "test", "package-codemode-smoke.mjs"), webSmoke);
+    const webCheck = spawnSync(process.execPath, [webSmoke, packageRoot, temp, project], {
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, PI_OFFLINE: "1" },
+    });
+    assert.equal(webCheck.status, 0, `${webCheck.stdout}\n${webCheck.stderr}`);
 
     launch = spawn(process.execPath, [join(packageRoot, "bin", "pylon.mjs")], {
       cwd: project,

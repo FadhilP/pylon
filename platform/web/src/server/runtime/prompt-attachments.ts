@@ -19,6 +19,20 @@ export class PromptAttachmentBridge {
     name: "pylon-prompt-attachments",
     hidden: true,
     factory: pi => {
+      pi.on("message_end", event => {
+        const message = event.message;
+        if (message.role !== "user" || !Array.isArray(message.content) || !message.content.some(part => part.type === "image"))
+          return;
+        // Prompt normalization rebuilds images, dropping fields supplied before this boundary.
+        return {
+          message: {
+            ...message,
+            content: message.content.map(part =>
+              part.type === "image" ? { ...part, pylonAttachmentVersion: PROMPT_IMAGE_ATTACHMENT_VERSION } : part,
+            ),
+          },
+        };
+      });
       pi.on("before_agent_start", () => {
         const staged = this.staged;
         if (!staged) return;

@@ -392,7 +392,12 @@ export default function continuityExtension(pi: ExtensionAPI) {
   });
   const modelName = (model: any) => `${model.provider}/${model.id}`;
   const assistantContent = (ctx: any) => {
-    const entry = ctx.sessionManager?.getLeafEntry?.();
+    // A sibling result or custom timing entry may already be the leaf when a later call is checked.
+    const entry =
+      [...(ctx.sessionManager?.getBranch?.() ?? [])]
+        .reverse()
+        .find((entry: any) => entry.type === "message" && entry.message?.role === "assistant") ??
+      ctx.sessionManager?.getLeafEntry?.();
     const content =
       entry?.type === "message" && entry.message?.role === "assistant" ? entry.message.content : undefined;
     return Array.isArray(content) ? content : [];
@@ -458,7 +463,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
     recentCalls.delete(key);
     return true;
   };
-  let projectProfiles: Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>> | undefined;
+  let projectProfiles:
+    Partial<Record<"planner" | "executor" | "memoryReviewer" | "compactionReviewer", ModelProfile>> | undefined;
   const effectiveProfile = (
     role: "planner" | "executor" | "memoryReviewer" | "compactionReviewer",
     global: ModelProfile | undefined,

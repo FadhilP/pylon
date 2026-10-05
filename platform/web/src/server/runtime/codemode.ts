@@ -86,8 +86,15 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
               const deadline = new AbortController();
               const timer = setTimeout(() => deadline.abort(new Error("Codemode deadline exceeded")), timeoutMs);
               timer.unref();
-              const boundedSignal = AbortSignal.any([deadline.signal, ...(signal ? [signal] : [])]);
-              let calls = 0;
+              const lifecycle = new AbortController();
+              const boundedSignal = AbortSignal.any([deadline.signal, lifecycle.signal, ...(signal ? [signal] : [])]);
+              let calls = 0,
+                pending = 0,
+                finished = false;
+              // Native tool_call hooks see the turn signal, not the nested call's signal.
+              // Keep the association until dispatches settle, so delayed Guard hooks cannot outlive the script.
+              const publishScope = (active: boolean) =>
+                pi.events.emit("pylon:codemode-scope", { version: 1, toolCallId: id, active, signal: boundedSignal });
               const context = Object.create(ctx, {
                 tools: { value: ctx.tools.filter(candidate => eligible(candidate.name)) },
                 signal: { value: boundedSignal },
@@ -100,16 +107,31 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
                       throw error;
                     }
                     if (!eligible(name)) throw new Error(`Tool "${name}" is not an active direct coding/search tool`);
-                    return ctx.executeTool(name, args, {
-                      ...options,
-                      signal: AbortSignal.any([boundedSignal, ...(options?.signal ? [options.signal] : [])]),
-                    });
+                    pending++;
+                    // The native sandbox also cancels unawaited calls on successful exit.
+                    const cancelScope = () => lifecycle.abort(new Error("Codemode nested work cancelled"));
+                    options?.signal?.addEventListener("abort", cancelScope, { once: true });
+                    if (options?.signal?.aborted) cancelScope();
+                    try {
+                      return await ctx.executeTool(name, args, {
+                        ...options,
+                        signal: AbortSignal.any([boundedSignal, ...(options?.signal ? [options.signal] : [])]),
+                      });
+                    } finally {
+                      options?.signal?.removeEventListener("abort", cancelScope);
+                      pending--;
+                      if (finished && pending === 0) publishScope(false);
+                    }
                   },
                 },
               });
               try {
+                publishScope(true);
                 return await tool.execute(id, { ...input, code }, boundedSignal, onUpdate, context);
               } finally {
+                finished = true;
+                lifecycle.abort(new Error("Codemode script ended"));
+                if (pending === 0) publishScope(false);
                 clearTimeout(timer);
               }
             },

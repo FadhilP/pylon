@@ -45,13 +45,13 @@ export function ToolCallRow({ call }: { call: ToolCallView }) {
         </span>
       </summary>
       <ToolCallOutput input={call.input} output={call.output} status={call.status} />
-      {call.nestedCalls && <section aria-label="Nested tool activity">
+      {/* {call.nestedCalls && <section aria-label="Nested tool activity">
         <ul>{call.nestedCalls.calls.map((nested, index) => <li key={`${nested.id}-${index}`}>
           {nested.name} — <ToolCallDuration status={nested.status} durationMs={nested.durationMs} />
           {nested.error && <pre className="is-error">{nested.error}</pre>}
         </li>)}</ul>
         {!call.nestedCalls.complete && <small>Nested activity is incomplete; inner results are not stored.</small>}
-      </section>}
+      </section>} */}
     </details>
   );
 }

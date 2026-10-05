@@ -146,6 +146,13 @@ export default function guardExtension(pi: ExtensionAPI) {
   let guardRules = bootstrap?.rules ?? mergeGuardRules();
   // This closure is per extension instance; Pi replaces it when a session is replaced.
   const sessionApprovals = new Set<string>();
+  const codemodeSignals = new Map<string, AbortSignal>();
+  const disposeCodemode = pi.events.on("pylon:codemode-scope", (event: any) => {
+    if (event?.version !== 1 || typeof event.toolCallId !== "string") return;
+    if (event.active === false) codemodeSignals.delete(event.toolCallId);
+    else if (event.active === true && event.signal instanceof AbortSignal)
+      codemodeSignals.set(event.toolCallId, event.signal);
+  });
   const disposePolicy = pi.events.on?.("pylon:runtime-policy", (event: any) => {
     if (event?.version !== 2) return;
     if (typeof event.guardEnabled === "boolean") {
@@ -212,6 +219,7 @@ export default function guardExtension(pi: ExtensionAPI) {
     operation: ApprovalIdentity["operation"],
     value: string,
   ): Promise<boolean> => {
+    if (ctx.signal?.aborted) return false;
     // Remembered consent is never usable without an interactive UI.
     if (!ctx.hasUI) return false;
 
@@ -223,9 +231,11 @@ export default function guardExtension(pi: ExtensionAPI) {
     }
     const scope = approvalScope({ policyVersion: POLICY_VERSION, cwd, category, operation, value });
     const remembered = await rememberedApproval(scope.candidates);
+    if (ctx.signal?.aborted) return false;
     if (remembered !== undefined) return remembered;
 
     await requestCheckpoint(ctx, reason);
+    if (ctx.signal?.aborted) return false;
 
     let selected: string | undefined;
     const blockingId = `pi-guard:${randomUUID()}`;
@@ -235,13 +245,14 @@ export default function guardExtension(pi: ExtensionAPI) {
       selected = await ctx.ui.select(
         `Pi-guard ${reason}\n\`${detail.slice(0, 2000)}\`${scopeNote}`,
         choices,
-        dialogOptions(),
+        ctx.signal ? { ...dialogOptions(), signal: ctx.signal } : dialogOptions(),
       );
     } catch {
       return false;
     } finally {
       pi.events.emit("pylon:ui-blocking", { version: 1, id: blockingId, source: "pi-guard", active: false });
     }
+    if (ctx.signal?.aborted) return false;
     if (selected === "Allow once") return true;
     const key = identityKey(scope.remembered);
     if (selected === "Always allow this session") {
@@ -292,6 +303,12 @@ export default function guardExtension(pi: ExtensionAPI) {
     lastCtx = ctx;
   });
   pi.on("tool_call", async (event, ctx) => {
+    const parentSignal = event.parentToolCallId && codemodeSignals.get(event.parentToolCallId);
+    if (parentSignal)
+      ctx = Object.create(ctx, {
+        signal: { value: AbortSignal.any([parentSignal, ...(ctx.signal ? [ctx.signal] : [])]) },
+      });
+    if (ctx.signal?.aborted) return { block: true, reason: "Operation aborted" };
     if (!enabled) return;
     const block = (message: string) => ({ block: true as const, reason: message });
 
@@ -366,5 +383,7 @@ export default function guardExtension(pi: ExtensionAPI) {
     lastCtx?.ui.setStatus("pi-guard", undefined);
     lastCtx = undefined;
     disposePolicy?.();
+    codemodeSignals.clear();
+    disposeCodemode();
   });
 }

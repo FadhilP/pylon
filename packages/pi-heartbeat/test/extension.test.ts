@@ -126,12 +126,18 @@ test("completed job remains in context until its output is fetched", async () =>
         undefined,
         ctx,
       );
-    let injected: any;
     for (let i = 0; i < 100; i++) {
-      injected = handlers.get("context")!({ messages: [] });
-      if (injected?.messages.at(-1).content.includes("completed")) break;
+      if (
+        events.some(
+          event =>
+            event.name === "pi-heartbeat:job" &&
+            event.value.id === started.details.id &&
+            event.value.state === "completed",
+        )
+      ) break;
       await delay(20);
     }
+    const injected = handlers.get("context")!({ messages: [] });
     assert.match(injected.messages.at(-1).content, /completed/);
     assert.match(injected.messages.at(-1).content, /status available now/);
     assert.deepEqual(events.filter(event => event.name === "pylon:tool-policy").at(-1)?.value.enabledTools, [
@@ -140,6 +146,7 @@ test("completed job remains in context until its output is fetched", async () =>
     ]);
     const lifecycle = events.filter(event => event.name === "pi-heartbeat:job");
     assert.ok(lifecycle.length >= 2);
+    assert.equal(lifecycle.at(-1)?.value.state, "completed");
     assert.ok(lifecycle.every(event => event.value.sessionId === ctx.sessionManager.getSessionId()));
     assert.match(handlers.get("context")!({ messages: [] }).messages.at(-1).content, /completed/);
 

@@ -184,6 +184,10 @@ test(
     const events: any[] = [];
     const stop = driver.subscribe(event => events.push(event));
     const file = (text: string) => ({ name: "context.txt", text, size: text.length });
+    const image = {
+      mimeType: "image/png" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    };
     try {
       await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
       const session = (driver as any).runtime.session;
@@ -220,7 +224,7 @@ test(
         /starts a model turn/,
       );
 
-      await driver.prompt({ commandId: "first", expectedGeneration: 1, message: "First prompt" });
+      await driver.prompt({ commandId: "first", expectedGeneration: 1, message: "First prompt", images: [image] });
       await started;
       await assert.rejects(
         driver.prompt({
@@ -247,17 +251,36 @@ test(
           /starts a model turn/,
         );
       }
-      await driver.steer({ commandId: "steer", expectedGeneration: 1, message: "transform input" });
-      await driver.followUp({ commandId: "follow-up", expectedGeneration: 1, message: "Follow-up prompt" });
+      await driver.steer({ commandId: "steer", expectedGeneration: 1, message: "transform input", images: [image] });
+      await driver.followUp({ commandId: "follow-up", expectedGeneration: 1, message: "Follow-up prompt", images: [image] });
       releaseFirst();
       await session.waitForIdle();
       await driver.prompt({
         commandId: "second",
         expectedGeneration: 1,
         message: "Second prompt",
+        images: [image],
         files: [file("Accepted attachment")],
       });
       await session.waitForIdle();
+      const snapshot = await driver.snapshot();
+      const userMessages = snapshot.conversation.messages.filter(message => message.role === "user");
+      assert.equal(userMessages.length, 4);
+      for (const message of userMessages) {
+        assert.equal(message.attachmentCount, 1);
+        const attachment = message.attachments?.find(item => item.kind === "image");
+        assert.ok(attachment, `Missing viewable image for ${message.text}`);
+        const content = await driver.conversationAttachment(attachment);
+        assert.equal(content.kind, "image");
+        if (content.kind !== "image") assert.fail("Expected image content");
+        const entry = session.sessionManager.getEntry(attachment.sourceEntryId);
+        const storedImage = entry.message.content.find((part: any) => part.type === "image");
+        assert.equal(storedImage.pylonAttachmentVersion, PROMPT_IMAGE_ATTACHMENT_VERSION);
+        assert.equal(content.data, storedImage.data);
+        assert.equal(content.mimeType, storedImage.mimeType);
+        assert.ok(content.data.length > 0);
+        assert.equal(JSON.stringify(snapshot).includes(content.data), false);
+      }
       assert.deepEqual(
         events
           .filter(
