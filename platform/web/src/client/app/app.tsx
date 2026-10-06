@@ -42,7 +42,6 @@ import {
   SESSION_LIST_INITIAL_LIMIT,
   SESSION_LIST_MORE_LIMIT,
 } from "../sessions/session-list";
-import type { ComposerDraft } from "../conversation/composer-drafts";
 import { ActionDialog } from "../ui/action-dialog";
 import { AgentPanel } from "../sessions/agent-panel";
 import { AttachmentPanel } from "../conversation/attachment-panel";
@@ -143,7 +142,6 @@ type PendingSession = {
   expectedGeneration?: number;
   phase: "preparing" | "failed";
   error?: string;
-  recoveredDraftSessionId?: string;
 };
 type SidebarAction = {
   key: string;
@@ -696,7 +694,7 @@ export function App() {
     )
       return;
     const draft = pendingSessionDraft.current;
-    composerDrafts.adopt(runtime.sessionId, pendingSession.project.id, draft, pendingSession.recoveredDraftSessionId);
+    composerDrafts.adopt(runtime.sessionId, pendingSession.project.id, draft);
     if (document.activeElement instanceof HTMLTextAreaElement && document.activeElement.id === "runtime-prompt") {
       pendingSessionSelection.current = {
         start: document.activeElement.selectionStart,
@@ -812,38 +810,16 @@ export function App() {
   const newSession = async (project: SessionProject, retry = false) => {
     if (pendingSessionInFlight.current || sessionBusy || sessionDeleting || projectBusy) return;
     setWorkspaceView(null);
-    let recoveredDraft: ComposerDraft | undefined;
-    if (!retry) {
-      const draft = composerDrafts.latestForProject(project.id);
-      if (draft && draft.sessionId !== live.runtime?.sessionId) {
-        pendingSessionInFlight.current = true;
-        setSessionBusy(draft.sessionId);
-        setSessionTransition(true);
-        try {
-          await runtimeStore.switchSession(draft.sessionId);
-          setComposerFocusTarget(draft.sessionId);
-          if (mobile) setSidebarOpen(false);
-          return;
-        } catch {
-          recoveredDraft = draft;
-        } finally {
-          pendingSessionInFlight.current = false;
-          setSessionBusy("");
-          setSessionTransition(false);
-        }
-      }
-    }
     pendingSessionInFlight.current = true;
     const requestId = retry && pendingSession ? pendingSession.requestId : ++pendingSessionRequest.current;
     if (!retry) {
-      pendingSessionDraft.current = recoveredDraft?.text ?? "";
+      pendingSessionDraft.current = "";
       pendingSessionSelection.current = undefined;
     }
     setPendingSession({
       requestId,
       project,
       previousSessionId: live.runtime?.sessionId,
-      recoveredDraftSessionId: retry ? pendingSession?.recoveredDraftSessionId : recoveredDraft?.sessionId,
       phase: "preparing",
     });
     setSessionBusy(project.id);
@@ -1518,8 +1494,6 @@ export function App() {
       onDraftChange={draft => {
         if (pendingSession) {
           pendingSessionDraft.current = draft;
-          if (pendingSession.recoveredDraftSessionId)
-            composerDrafts.save(pendingSession.recoveredDraftSessionId, pendingSession.project.id, draft);
           const runtime = live.runtime;
           if (
             pendingSession.expectedGeneration !== undefined &&

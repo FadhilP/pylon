@@ -19,9 +19,11 @@ Reload Pi afterward. Core package settings are available through Pylon Web.
 | `/pylon tools status` | Show baseline/effective tools and restrictive gates |
 | `/pylon tools enable …` / `disable …` | Change registered unmanaged tools; package-managed tools stay owned by their package |
 | `/tokens` / `/tokens all` | Report branch-scoped tool payload and main/child usage/cost summary |
-| `pylon_docs` | List or read shipped Pylon, Pylon Web, and package documentation with Web/TUI-aware guidance |
+| `pylon_docs` | Search, list, or read shipped Pylon, Pylon Web, and package documentation with Web/TUI-aware guidance |
 
 Gates remain authoritative: enabling a blocked baseline tool waits for gates to clear. Guard is the independent final safety authority; Pylon never approves or weakens it. In the full Pylon bundle, `pylon_docs` is deferred and can be activated through `search_tools`, keeping documentation out of the normal system prompt and tool context. Pylon Web marks the current host so the tool prioritizes panels, Inspector references, and Settings actions; Pi TUI prioritizes tools and slash commands. A standalone `pylon-core` install exposes its local README directly.
+
+Use `{ action: "search", query: "worktree approval" }` to find relevant sections without first listing documents. Search is case-insensitive and literal: all whitespace-separated terms must occur in a section's path, heading, or body. Heading and path matches rank above body-only matches. Results include the document path, section heading, starting line, and a bounded excerpt; at most eight sections are returned, with `truncated` indicating more matches. Queries must contain 1–240 characters and cannot be whitespace-only. Use `{ action: "read", path: "…" }` with a returned path when excerpts are insufficient; follow cross-references only as needed. Search uses the same confined, size-limited shipped-document catalog as list/read, with no external service or persistent index.
 
 ## Numbered line edits
 

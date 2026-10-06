@@ -36,7 +36,7 @@ See the complete [Pylon Web guide](./docs/web/README.md) for workspaces, session
 - Run `pylon changelog` for the installed release, `pylon changelog <version>` for an older release, or `pylon changelog --list` to list available versions.
 - Manage Pi-native extensions in **Settings → Extensions**. Extensions run arbitrary code with the server's permissions — review sources before enabling.
 - Pylon Web agents can use the deferred `pylon_settings` tool to inspect package settings and apply revision-checked updates after confirmation. The tool does not expose hooks, project policy, trust, extensions, Guard controls, credentials, or raw configuration files.
-- Agents can activate the deferred `pylon_docs` tool to list and read the shipped Web and package documentation on demand; documentation is not injected into every prompt.
+- Agents can activate the deferred `pylon_docs` tool to search, list, and read the shipped Web and package documentation on demand; documentation is not injected into every prompt.
 
 ## Terminal Setup (Alternative)
 

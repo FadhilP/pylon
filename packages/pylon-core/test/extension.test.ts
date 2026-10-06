@@ -1,11 +1,13 @@
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import extension from "../extensions/pylon-core.ts";
+import { createPylonDocsTool } from "../src/docs-tool.ts";
 
 const exec = promisify(execFile);
 
@@ -94,13 +96,87 @@ test("Pylon docs stay out of the base prompt and load through a deferred confine
     { mode: "rpc" },
   );
   assert.match(read.content[0].text, /^Current host: Pylon Web/);
-  assert.match(read.content[0].text, /also read the relevant docs\/web guide/);
   assert.match(read.content[0].text, /# pi-timeline/);
   const escaped = await tool.execute("escape", { action: "read", path: "../../README.md" }, undefined, undefined, {
     mode: "rpc",
   });
   assert.match(escaped.content[0].text, /path is unavailable/);
 });
+
+async function docsFixture(t: TestContext) {
+  const root = await mkdtemp(join(tmpdir(), "pylon-docs-search-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const core = join(root, "packages", "pylon-core");
+  await mkdir(core, { recursive: true });
+  await mkdir(join(root, "docs", "web"), { recursive: true });
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "@fadhilp/pylon" }));
+  await writeFile(join(root, "README.md"), "# Pylon\n");
+  await writeFile(join(core, "README.md"), "# Core\n");
+  let tool: any;
+  const docs = createPylonDocsTool(
+    { events: new Bus(), registerTool: (value: any) => { tool = value; } } as any,
+    pathToFileURL(join(core, "extensions", "pylon-core.ts")).href,
+  );
+  t.after(() => docs.shutdown());
+  const call = async (params: any) =>
+    (await tool.execute("docs", params, undefined, undefined, { mode: "tui", cwd: tmpdir() })).content[0].text;
+  const search = async (query: string) => JSON.parse(await call({ action: "search", query }));
+  return { root, core, call, search };
+}
+
+test("docs search matches all literal terms within a section and ranks headings above body matches", async t => {
+  const { root, core, call, search } = await docsFixture(t);
+  await writeFile(
+    join(root, "README.md"),
+    "# Pylon\n## General\nWorktree approval details appear here.\n## Partial\nWorktree only.\n## Separate\nApproval only.\n",
+  );
+  await writeFile(join(core, "README.md"), "# Core\n## Worktree\nApproval in package docs.\n");
+  const guide = "# Workflow\n## Worktree approval\nConfirm before creating a checkout.\n## Literal\nUse [approval].* literally.\n## Examples\n```md\n# Fence keyword\n```\n";
+  await writeFile(join(root, "docs", "web", "workflow.md"), guide);
+  const result = await search("  WORKTREE   approval worktree  ");
+  assert.deepEqual(result.matches.map((match: any) => match.path), [
+    "docs/web/workflow.md", "packages/pylon-core/README.md", "README.md",
+  ]);
+  assert.equal(result.truncated, false);
+  assert.match(result.matches[0].excerpt, /Confirm before creating a checkout/);
+  assert.equal(result.matches[0].line, 2);
+  assert.equal(result.matches[1].heading, "Worktree");
+  assert.deepEqual((await search("pylon-core approval")).matches.map((match: any) => match.path), [
+    "packages/pylon-core/README.md",
+  ]);
+  assert.equal((await search("[approval].*")).matches.length, 1);
+  assert.equal((await search("Fence keyword")).matches[0].heading, "Examples");
+  assert.deepEqual((await search("nonexistent-keyword")).matches, []);
+  const read = await call({ action: "read", path: result.matches[0].path });
+  assert.ok(read.endsWith(guide));
+});
+
+test("docs search validates queries, bounds output, and excludes files outside its catalog", async t => {
+  const { root, core, call, search } = await docsFixture(t);
+  for (const query of [undefined, 42, "", " \t\n", "x".repeat(241)]) {
+    assert.match(await call({ action: "search", query }), /query must contain/);
+  }
+  await writeFile(
+    join(core, "README.md"),
+    Array.from({ length: 10 }, (_, index) =>
+      `## Boundedneedle ${index}\n${"padding ".repeat(120)}${"boundedneedle ".repeat(80)}\n`).join(""),
+  );
+  const result = await search("boundedneedle");
+  assert.equal(result.matches.length, 8);
+  assert.equal(result.truncated, true);
+  assert.ok(result.matches.every((match: any) => match.excerpt.length <= 482 && match.excerpt.includes("boundedneedle")));
+  assert.deepEqual(await search("boundedneedle"), result);
+  await mkdir(join(root, "platform", "web"), { recursive: true });
+  await writeFile(join(root, "platform", "web", "README.md"), "outsidecatalog");
+  await writeFile(join(root, "docs", "web", "oversized.md"), "outsidecatalog".repeat(30_000));
+  const external = await mkdtemp(join(tmpdir(), "pylon-docs-external-"));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  await writeFile(join(external, "README.md"), "outsidecatalog");
+  await symlink(external, join(root, "packages", "external"), "junction");
+  assert.deepEqual((await search("outsidecatalog")).matches, []);
+  assert.match(await call({ action: "read", path: "../../README.md" }), /path is unavailable/);
+});
+
 test("numbered line tools default on and honor an explicit disable", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const root = await mkdtemp(join(tmpdir(), "pylon-core-toggle-"));
