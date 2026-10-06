@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { boundedJson, contentText as textContent } from "pylon-core/message-content";
 import type { Work } from "./active-work.ts";
 import {
   CONTINUITY_COMPACTION_TYPE,
@@ -70,15 +71,6 @@ type ToolOperation = {
   arguments: unknown;
 };
 type FileOperation = ToolOperation & { toolName: "read" | "write" | "edit"; path: string };
-
-function textContent(content: unknown) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
-    .map((part: any) => part.text)
-    .join("\n");
-}
 
 function boundedTextContent(content: unknown, max: number) {
   const limit = max + 1;
@@ -375,33 +367,6 @@ function fileOperations(entries: SessionEntry[]) {
       ? [{ ...operation, toolName: operation.toolName as FileOperation["toolName"], path: inline(path, 500) }]
       : [];
   });
-}
-
-function boundedJson(value: unknown, max: number) {
-  const seen = new WeakSet<object>();
-  const visit = (item: any, depth: number): any => {
-    if (typeof item === "string") return item.slice(0, max);
-    if (item === null || typeof item !== "object") return item;
-    if (depth >= 4 || seen.has(item)) return "[truncated]";
-    seen.add(item);
-    if (Array.isArray(item)) return item.slice(0, 25).map(child => visit(child, depth + 1));
-    const output: Record<string, unknown> = {};
-    let count = 0;
-    for (const key in item) {
-      if (!Object.hasOwn(item, key)) continue;
-      if (count++ >= 25) {
-        output["[truncated]"] = true;
-        break;
-      }
-      output[key.slice(0, 200)] = visit(item[key], depth + 1);
-    }
-    return output;
-  };
-  try {
-    return (JSON.stringify(visit(value, 0)) ?? "null").slice(0, max);
-  } catch {
-    return "[unserializable arguments]";
-  }
 }
 
 function toolRecord(operation: ToolOperation): RecallRecord {

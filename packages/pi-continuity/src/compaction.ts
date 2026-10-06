@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { findCutPoint, type CompactionResult, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { contentText as textContent } from "pylon-core/message-content";
 import type { Work } from "./active-work.ts";
 import {
   assertSafe,
@@ -259,15 +260,6 @@ function handoffIdentity(entry: SessionEntry): ContinuityBoundaryIdentity | unde
     timelineId: details.timelineId,
     ...(typeof entry.id === "string" && entry.id ? { handoffEntryId: entry.id } : {}),
   };
-}
-
-function textContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text" && typeof part.text === "string")
-    .map((part: any) => part.text)
-    .join("\n");
 }
 
 function inline(value: string, max = 500) {

@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   PACKAGE_SETTINGS_DESCRIPTOR_VERSION,
@@ -9,7 +8,9 @@ import {
   validPackageSettingValue,
   type PackageSettingField,
 } from "pylon-core/package-settings";
-import { assertJsonConfigWritable } from "pylon-core/json-config";
+import { saveJsonConfig } from "pylon-core/json-config";
+
+export { parseModelRef } from "pylon-core/model-ref";
 
 export const timelineSettingFields = {
   gitTimeoutMs: {
@@ -152,21 +153,4 @@ export async function loadConfig(path = configPath()): Promise<TimelineConfig> {
   };
 }
 
-export async function saveConfig(config: TimelineConfig, path = configPath()): Promise<void> {
-  await assertJsonConfigWritable(path, 1);
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
-export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
-  const slash = ref.indexOf("/");
-  if (slash < 1 || slash === ref.length - 1) return undefined;
-  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
-}
+export const saveConfig = (config: TimelineConfig, path = configPath()) => saveJsonConfig(config, path);

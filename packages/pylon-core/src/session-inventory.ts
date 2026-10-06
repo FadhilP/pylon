@@ -1,6 +1,7 @@
 import { open, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { mapLimit } from "./concurrency.ts";
 
 const CONCURRENCY = 16;
 const MAX_HEADER_BYTES = 64 * 1024;
@@ -8,21 +9,6 @@ const MAX_HEADER_BYTES = 64 * 1024;
 export type SessionInventoryEntry = { id: string; cwd: string; path: string; modified: Date };
 
 export type SessionInventoryOptions = { strict?: boolean };
-
-async function mapLimit<T, R>(items: T[], transform: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, items.length) }, async () => {
-      while (true) {
-        const index = next++;
-        if (index >= items.length) return;
-        results[index] = await transform(items[index]!);
-      }
-    }),
-  );
-  return results;
-}
 
 async function sessionFiles(root: string, strict: boolean): Promise<string[]> {
   let directories;
@@ -34,7 +20,7 @@ async function sessionFiles(root: string, strict: boolean): Promise<string[]> {
     return [];
   }
   return (
-    await mapLimit(directories, async directory => {
+    await mapLimit(directories, CONCURRENCY, async directory => {
       try {
         return (await readdir(join(root, directory.name), { withFileTypes: true }))
           .filter(entry => entry.isFile() && entry.name.endsWith(".jsonl"))
@@ -80,7 +66,7 @@ export async function listSessionInventory(
 ): Promise<SessionInventoryEntry[]> {
   const strict = options.strict ?? false;
   const files = await sessionFiles(resolve(agentDir, "sessions"), strict);
-  const entries = await mapLimit(files, async path => {
+  const entries = await mapLimit(files, CONCURRENCY, async path => {
     try {
       const entry = await readHeader(path);
       if (!entry && strict) throw new Error(`invalid or oversized session header: ${path}`);

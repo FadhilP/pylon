@@ -3,7 +3,7 @@ import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { saveJsonConfig } from "./json-config.ts";
-import { definePackageSettings, effectivePackageSettingValue, validPackageSettingValue } from "./package-settings.ts";
+import { definePackageSettings, effectivePackageSettings, validPackageSettingValue } from "./package-settings.ts";
 
 export const pylonCoreSettings = definePackageSettings({
   version: 1,
@@ -128,26 +128,8 @@ export type EffectivePylonCoreConfig = {
 };
 export const defaultConfig = (): PylonCoreConfig => ({ version: 1, lineEditEnabled: true });
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pylon-core", "config.json");
-const fields = Object.fromEntries(pylonCoreSettings.fields.map(field => [field.key, field]));
 export function effectiveConfig(config: PylonCoreConfig): EffectivePylonCoreConfig {
-  return {
-    version: 1,
-    lineEditEnabled: effectivePackageSettingValue(fields.lineEditEnabled, config.lineEditEnabled) as boolean,
-    codemodeEnabled: effectivePackageSettingValue(fields.codemodeEnabled, config.codemodeEnabled) as boolean,
-    lineEditPriceRatio: effectivePackageSettingValue(fields.lineEditPriceRatio, config.lineEditPriceRatio) as number,
-    delegateMaxAttempts: effectivePackageSettingValue(fields.delegateMaxAttempts, config.delegateMaxAttempts) as number,
-    delegateRetryBaseMs: effectivePackageSettingValue(fields.delegateRetryBaseMs, config.delegateRetryBaseMs) as number,
-    mainAgentModel: effectivePackageSettingValue(fields.mainAgentModel, config.mainAgentModel) as string,
-    delegateNamingModel: effectivePackageSettingValue(fields.delegateNamingModel, config.delegateNamingModel) as string,
-    delegateNamingPrompt: effectivePackageSettingValue(
-      fields.delegateNamingPrompt,
-      config.delegateNamingPrompt,
-    ) as import("./package-settings.ts").PromptPackageSettingValue,
-    mainPrompt: effectivePackageSettingValue(
-      fields.mainPrompt,
-      config.mainPrompt,
-    ) as import("./package-settings.ts").PromptPackageSettingValue,
-  };
+  return effectivePackageSettings(pylonCoreSettings, config);
 }
 
 export async function loadConfig(path = configPath()): Promise<PylonCoreConfig> {

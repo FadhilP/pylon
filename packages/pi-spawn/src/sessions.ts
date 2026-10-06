@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getAgentDir, SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { contentText as messageContentText } from "pylon-core/message-content";
 import { listSessionInventory } from "pylon-core/session-inventory";
 
 type ParentSessionManager = Pick<SessionManager, "getSessionFile" | "getSessionId" | "getBranch">;
@@ -384,17 +385,7 @@ const clipped = (value: string, max: number) =>
     ? { text: value, truncated: false }
     : { text: max <= 1 ? "…" : `${value.slice(0, max - 1)}…`, truncated: true };
 
-const contentText = (content: unknown): string => {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .flatMap((part: any) => {
-      if (part?.type === "text" && typeof part.text === "string") return [part.text];
-      if (part?.type === "image") return ["[image]"];
-      return [];
-    })
-    .join("\n");
-};
+const contentText = (content: unknown) => messageContentText(content, "[image]");
 
 /** Bounded read-only rendering of one transcript entry, keyed by entry type then message role. */
 const labelled = (label: string, text: string): RecentMessage | undefined => (text ? { label, text } : undefined);

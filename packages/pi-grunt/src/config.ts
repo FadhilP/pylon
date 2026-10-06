@@ -9,9 +9,10 @@ import {
   type PackageSettingField,
 } from "pylon-core/package-settings";
 import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
+import { thinkingLevels, type ThinkingLevel } from "pylon-core/model-ref";
 
-export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ThinkingLevel = (typeof thinkingLevels)[number];
+export { parseModelRef } from "pylon-core/model-ref";
+export { thinkingLevels, type ThinkingLevel };
 export const defaultThinkingLevels: ThinkingLevel[] = ["medium", "high"];
 export const gruntModes = ["isolated", "direct", "dynamic"] as const;
 export type GruntMode = (typeof gruntModes)[number];
@@ -154,10 +155,4 @@ export const saveConfig = (config: GruntConfig, path = configPath()) => saveJson
 
 export async function resetConfig(path = configPath()): Promise<void> {
   await rm(path, { force: true });
-}
-
-export function parseModelRef(ref: string): { provider: string; id: string } | undefined {
-  const slash = ref.indexOf("/");
-  if (slash < 1 || slash === ref.length - 1) return undefined;
-  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
 }

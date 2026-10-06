@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { unregisterToolPolicy } from "pylon-core/tools";
 import { AndroidSdk, diagnoseAndroid, validateEmulatorSerial } from "../src/android-sdk.ts";
 import { AndroidSessionManager, type AndroidAction, type AndroidOperationResult } from "../src/android-session.ts";
 import { AndroidToolingManager } from "../src/android-tooling.ts";
@@ -778,7 +779,7 @@ export default function heliosExtension(
     });
   });
   pi.on("session_shutdown", async (_event, ctx) => {
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-helios" });
+    unregisterToolPolicy(pi, "pi-helios");
     disposeWebScoutCapability();
     disposeEmbeddedBrowser();
     disposeEmbeddedBrowserStream();

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TProperties, type TSchema } from "typebox";
+import { activateManagedTools, registerToolPolicy, unregisterToolPolicy } from "pylon-core/tools";
 import { Check } from "typebox/value";
 import {
   MAX_ROLLOVER_MULTIPLIER,
@@ -626,24 +627,16 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
 
   const refreshRecallTool = () => {
     const recallEnabled = mode === "enabled" && (activePruning || continuityRecallActive);
-    let coordinated = false;
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
+    const enabledTools = recallEnabled ? [RECALL_TOOL_NAME] : [];
+    const coordinated = registerToolPolicy(pi, {
       owner: "pi-sieve",
       managedTools: [RECALL_TOOL_NAME],
-      enabledTools: recallEnabled ? [RECALL_TOOL_NAME] : [],
+      enabledTools,
       ...(recallEnabled
         ? { toolUsage: { [RECALL_TOOL_NAME]: "recover a registered tool result omitted from the active context" } }
         : {}),
-      acknowledge: () => {
-        coordinated = true;
-      },
     });
-    if (coordinated) return;
-    const active = pi.getActiveTools().filter(name => name !== RECALL_TOOL_NAME);
-    if (recallEnabled) active.push(RECALL_TOOL_NAME);
-    pi.setActiveTools(active);
+    if (!coordinated) activateManagedTools(pi, [RECALL_TOOL_NAME], enabledTools);
   };
   const syncContinuityBoundary = (ctx: any) => {
     let boundary: ReturnType<typeof continuityProjectionBoundary>;
@@ -750,7 +743,7 @@ export default function sieveExtension(pi: ExtensionAPI, options: { configPath?:
   pi.on("session_shutdown", () => {
     disposeStateRequest();
     pi.events.emit("pi-sieve:state-change", stateSnapshot(false));
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-sieve" });
+    unregisterToolPolicy(pi, "pi-sieve");
   });
 
   /** Runs the configured projection mode over the raw messages. */

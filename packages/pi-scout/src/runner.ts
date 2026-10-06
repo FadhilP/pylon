@@ -18,6 +18,7 @@ import {
   type ChildUsage,
   type Invocation,
 } from "pylon-core/child-process";
+import { createSerialQueue } from "pylon-core/concurrency";
 import { capReport, capText, type EvidenceAnchor } from "./result.ts";
 
 const SCOUT_PROTOCOL_MAX_BYTES = 5 * 1024 * 1024;
@@ -49,7 +50,7 @@ export type ScoutRun = {
   cacheReadTokens: number;
 };
 
-let scoutRunQueue = Promise.resolve();
+const serializeScoutRun = createSerialQueue();
 
 export type RunPiOptions = {
   cwd: string;
@@ -74,18 +75,10 @@ export type RunPiOptions = {
 
 export async function runPi(args: string[], options: RunPiOptions): Promise<ScoutRun> {
   if (options.concurrent) return runPiUnlocked(args, options);
-  const previousRun = scoutRunQueue;
-  let releaseRun = () => {};
-  scoutRunQueue = new Promise<void>(resolve => {
-    releaseRun = resolve;
-  });
-  await previousRun;
-  try {
+  return serializeScoutRun(() => {
     if (options.signal?.aborted) throw new DOMException("Scout run was aborted.", "AbortError");
-    return await runPiUnlocked(args, options);
-  } finally {
-    releaseRun();
-  }
+    return runPiUnlocked(args, options);
+  });
 }
 
 async function runPiUnlocked(args: string[], options: RunPiOptions): Promise<ScoutRun> {

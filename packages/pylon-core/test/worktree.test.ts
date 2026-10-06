@@ -891,6 +891,7 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     await git(root, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
     await git(root, ["commit", "-qm", "submodule"]);
     const submodulePath = join(root, "vendor", "lib");
+    const baselineTree = await gitOutput(root, ["rev-parse", "HEAD^{tree}"]);
     // Isolated indexes still share Git's object store, so serialize snapshots on Windows.
     const clean = await listWorkspaceFiles({ cwd: root });
     const cleanChanges = await inspectWorkspaceChanges(root);
@@ -984,8 +985,13 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     await addSubmodule(secondOrigin, join("vendor", "newmod"));
     const staged = await listWorkspaceFiles({ cwd: root });
     const stagedBase = await readWorkspaceFile({ cwd: root, path: "vendor/newmod/nested.txt", view: "base" });
-    assert.equal(staged.files.find(file => file.path === "vendor/newmod/nested.txt")?.status, "added");
-    assert.equal(stagedBase.state, "deleted");
+    assert.equal(staged.files.find(file => file.path === "vendor/newmod/nested.txt")?.status, undefined);
+    assert.equal(stagedBase.text?.trim(), "fresh");
+    // Apply inspection still compares against the parent's recorded baseline.
+    assert.equal(
+      (await inspectWorkspaceChanges(root)).files.find(file => file.path === "vendor/newmod/nested.txt")?.status,
+      "added",
+    );
 
     // A submodule commit with an unchanged tree remains visible as a gitlink-only change.
     const pointerBefore = await worktreeSnapshot(root);
@@ -1007,6 +1013,8 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     // A committed content change is expanded to files and suppresses the parent gitlink patch.
     await writeFile(join(submodulePath, "lib.txt"), "lib\ndirty\ncommitted turn\n");
     await git(submodulePath, ["add", "lib.txt"]);
+    const beforeCommit = await listWorkspaceFiles({ cwd: root, baselineTree });
+    const beforeCommitInspection = await inspectWorkspaceChanges(root, baselineTree);
     await git(submodulePath, [
       "-c",
       "user.email=pylon@test.local",
@@ -1021,6 +1029,18 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     assert.deepEqual(await worktreeDiff(pointerAfter, committedAfter), [
       { path: "vendor/lib/lib.txt", additions: 1, deletions: 0 },
     ]);
+    // Committed child history must not appear as live file changes, even with an explicit parent baseline.
+    const afterCommit = await listWorkspaceFiles({ cwd: root, baselineTree });
+    assert.equal(afterCommit.files.find(file => file.path === "vendor/lib/lib.txt")?.status, undefined);
+    assert.notEqual(afterCommit.revision, beforeCommit.revision);
+    const committedBase = await readWorkspaceFile({ cwd: root, baselineTree, path: "vendor/lib/lib.txt", view: "base" });
+    assert.equal(committedBase.text?.replaceAll("\r\n", "\n").trim(), "lib\ndirty\ncommitted turn");
+    const committedDiff = await diffWorkspaceFile({ cwd: root, baselineTree, path: "vendor/lib/lib.txt" });
+    assert.equal(committedDiff.text, "");
+    const afterCommitInspection = await inspectWorkspaceChanges(root, baselineTree);
+    assert.notEqual(afterCommitInspection.revision, beforeCommitInspection.revision);
+    assert.equal(afterCommitInspection.unapplicableSubmoduleChanges, undefined);
+    assert.equal(afterCommitInspection.files.find(file => file.path === "vendor/lib/lib.txt")?.status, "modified");
     const committedBranch = turnsBranchForSession("submodule-commit-turn");
     assert.ok(committedBranch);
     const committedAnchor = await anchorWorktreeTurn(pointerAfter, committedAfter, committedBranch);
@@ -1033,6 +1053,25 @@ test("registered submodules are inventoried, routed, and aggregate nested state"
     assert.match(committedText, /a\/vendor\/lib\/lib\.txt/);
     assert.doesNotMatch(committedText, /diff --git a\/vendor\/lib b\/vendor\/lib/);
     await removeWorktreeTurnRefs(root, committedBranch);
+
+    // Recursive submodules also use their own HEAD, not either ancestor's stale gitlink.
+    await writeFile(nestedPath, "fresh\ncommitted nested history\n");
+    await git(join(submodulePath, "nested"), ["add", "nested.txt"]);
+    const beforeNestedCommit = await listWorkspaceFiles({ cwd: root, baselineTree });
+    await git(join(submodulePath, "nested"), [
+      "-c", "user.email=pylon@test.local", "-c", "user.name=Pylon", "commit", "-qm", "nested history",
+    ]);
+    const afterNestedCommit = await listWorkspaceFiles({ cwd: root, baselineTree });
+    assert.notEqual(afterNestedCommit.revision, beforeNestedCommit.revision);
+    assert.equal(afterNestedCommit.files.find(file => file.path === "vendor/lib/nested/nested.txt")?.status, undefined);
+    await writeFile(nestedPath, "fresh\ncommitted nested history\ncurrent change\n");
+    await git(join(submodulePath, "nested"), ["add", "nested.txt"]);
+    const nestedDelta = await collectWorkspaceFileDelta({ cwd: root, baselineTree, paths: ["vendor/lib/nested/nested.txt"] });
+    assert.equal(nestedDelta.upserted[0]?.status, "modified");
+    assert.equal(nestedDelta.upserted[0]?.additions, 1);
+    const currentNestedDiff = await diffWorkspaceFile({ cwd: root, baselineTree, path: "vendor/lib/nested/nested.txt" });
+    assert.match(currentNestedDiff.text ?? "", /^\+current change$/m);
+    assert.doesNotMatch(currentNestedDiff.text ?? "", /^\+committed nested history$/m);
 
     const initializedBeforeRemoval = committedAfter;
 

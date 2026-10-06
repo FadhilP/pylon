@@ -9,9 +9,10 @@ import {
   type PackageSettingField,
 } from "pylon-core/package-settings";
 import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
+import { thinkingLevels, type ThinkingLevel } from "pylon-core/model-ref";
 
-export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ThinkingLevel = (typeof thinkingLevels)[number];
+export { parseThinkingModelRef as parseModelRef } from "pylon-core/model-ref";
+export { thinkingLevels, type ThinkingLevel };
 export const DEFAULT_REPO_TIMEOUT_MS = 15 * 60 * 1000;
 export const DEFAULT_SCOUT_MAX_COST_USD = 1.0;
 export const DEFAULT_WEB_SEARCH_RESULTS = 5;
@@ -134,17 +135,4 @@ export const saveConfig = (config: ScoutConfig, path = configPath()) => saveJson
 
 export async function resetConfig(path = configPath()): Promise<void> {
   await rm(path, { force: true });
-}
-
-export function parseModelRef(ref: string): { provider: string; id: string; thinking?: ThinkingLevel } | undefined {
-  const slash = ref.indexOf("/");
-  if (slash < 1 || slash === ref.length - 1) return undefined;
-  const colon = ref.lastIndexOf(":");
-  const suffix = ref.slice(colon + 1) as ThinkingLevel;
-  const hasThinking = colon > slash && thinkingLevels.includes(suffix);
-  return {
-    provider: ref.slice(0, slash),
-    id: ref.slice(slash + 1, hasThinking ? colon : undefined),
-    ...(hasThinking ? { thinking: suffix } : {}),
-  };
 }

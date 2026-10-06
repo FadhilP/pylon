@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerToolPolicy, unregisterToolPolicy } from "pylon-core/tools";
 import { DISCOVER_CHILD_TOOL_NAMES } from "../src/discover-child-tools.ts";
 import { effectiveConfig, loadConfig } from "../src/config.ts";
 import { registerFd } from "../src/fd.ts";
@@ -64,18 +65,12 @@ export default function discoverExtension(pi: ExtensionAPI) {
 
   /** Ask Pylon to manage this extension's tools; without a coordinator, hide the deferred ones. */
   const configureDeferredTools = () => {
-    let coordinated = false;
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
+    const coordinated = registerToolPolicy(pi, {
       owner: "pi-discover",
       managedTools: MANAGED_TOOLS,
       enabledTools: MANAGED_TOOLS,
       deferredTools: DEFERRED_TOOLS,
       toolUsage: TOOL_USAGE,
-      acknowledge: () => {
-        coordinated = true;
-      },
     });
     if (!coordinated) pi.setActiveTools(pi.getActiveTools().filter(name => !DEFERRED_TOOLS.includes(name)));
   };
@@ -128,7 +123,7 @@ export default function discoverExtension(pi: ExtensionAPI) {
     disposeIndexActions();
     disposeSymbolQueries();
     index.publishUnavailable();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-discover" });
+    unregisterToolPolicy(pi, "pi-discover");
     discovery.clearSessionState();
     await closeIndexes();
   });

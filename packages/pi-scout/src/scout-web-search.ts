@@ -1,9 +1,10 @@
 // Adapted from pi-web-access's OpenAI/Codex and zero-config Exa search providers.
 // Copyright (c) 2025 Nico Bailon. MIT licensed; see THIRD_PARTY_NOTICES.md.
-import { BlockList, isIP } from "node:net";
+import { isIP } from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { isPublicAddress } from "pylon-core/public-address";
 import { configPath, loadConfig, webSearchResults } from "./config.ts";
 
 const EXA_SEARCH_URL = "https://mcp.exa.ai/mcp?tools=web_search_exa";
@@ -29,48 +30,6 @@ type OpenAIAuth = { provider: "openai-codex" | "openai"; apiKey: string; model: 
 export type ScoutSearchResult = { title: string; url: string; snippet: string };
 export type ScoutSearchResponse = { provider: "openai" | "exa"; results: ScoutSearchResult[] };
 
-const blockedV4 = new BlockList();
-for (const [address, prefix] of [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.0.2.0", 24],
-  ["192.52.193.0", 24],
-  ["192.88.99.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["198.51.100.0", 24],
-  ["203.0.113.0", 24],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
-] as const)
-  blockedV4.addSubnet(address, prefix, "ipv4");
-const globalV6 = new BlockList();
-globalV6.addSubnet("2000::", 3, "ipv6");
-const blockedV6 = new BlockList();
-for (const [address, prefix] of [
-  ["2001::", 32],
-  ["2001:2::", 48],
-  ["2001:10::", 28],
-  ["2001:20::", 28],
-  ["2001:db8::", 32],
-  ["2002::", 16],
-  ["3fff::", 20],
-] as const)
-  blockedV6.addSubnet(address, prefix, "ipv6");
-
-function publicLiteral(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "").split("%")[0];
-  const family = isIP(host);
-  if (family === 4) return !blockedV4.check(host, "ipv4");
-  if (family !== 6 || host.toLowerCase().startsWith("::ffff:")) return false;
-  return globalV6.check(host, "ipv6") && !blockedV6.check(host, "ipv6");
-}
-
 function boundedText(value: string, maximum: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length <= maximum ? normalized : `${normalized.slice(0, maximum - 1)}…`;
@@ -88,7 +47,7 @@ function resultUrl(value: string): string | undefined {
     const family = isIP(host);
     if (
       family
-        ? !publicLiteral(host)
+        ? !isPublicAddress(host)
         : !host.includes(".") ||
           host.endsWith(".localhost") ||
           host.endsWith(".local") ||

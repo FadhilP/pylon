@@ -9,6 +9,8 @@ import { Text } from "@earendil-works/pi-tui";
 import { addCostParts, emptyUsage, sumCostParts, toolResultUsage, usageSnapshot } from "pylon-core/child-process";
 import { projectedContextEntries } from "pylon-core/context-packing";
 import { Type } from "typebox";
+import { modelName, selectableModelNames } from "pylon-core/model-ref";
+import { activateManagedTools, registerToolPolicy, unregisterToolPolicy } from "pylon-core/tools";
 import {
   configPath,
   loadConfig,
@@ -130,9 +132,6 @@ function webStartUrl(value: string): string {
   return url.href;
 }
 
-function modelName(model: { provider: string; id: string }): string {
-  return `${model.provider}/${model.id}`;
-}
 export function startsNewRepoSequence(event: { source: string; streamingBehavior?: string }): boolean {
   return event.source !== "extension" && event.streamingBehavior !== "steer";
 }
@@ -250,13 +249,11 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
   });
   const refreshTool = async (agentDir?: string) => {
     const enabled = isScoutEnabled(await loadConfig(agentDir ? configPath(agentDir) : undefined));
-    let coordinated = false;
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
+    const enabledTools = enabled ? ["repo_scout", "web_scout"] : [];
+    const coordinated = registerToolPolicy(pi, {
       owner: "pi-scout",
       managedTools: ["repo_scout", "web_scout"],
-      enabledTools: enabled ? ["repo_scout", "web_scout"] : [],
+      enabledTools,
       ...(enabled
         ? {
             deferredTools: ["web_scout"],
@@ -266,14 +263,8 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
             },
           }
         : {}),
-      acknowledge: () => {
-        coordinated = true;
-      },
     });
-    if (coordinated) return;
-    const active = pi.getActiveTools().filter(name => name !== "repo_scout" && name !== "web_scout");
-    if (enabled) active.push("repo_scout", "web_scout");
-    pi.setActiveTools(active);
+    if (!coordinated) activateManagedTools(pi, ["repo_scout", "web_scout"], enabledTools);
   };
 
   const disposeSettingsRefresh = pi.events.on("pylon:package-settings-changed", (request: any) => {
@@ -290,7 +281,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
   pi.on("session_shutdown", async () => {
     disposeHealth();
     disposeSettingsRefresh();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-scout" });
+    unregisterToolPolicy(pi, "pi-scout");
     await Promise.all([...repoSessionDirs].map(dir => rm(dir, { recursive: true, force: true })));
   });
   pi.on("input", event => {
@@ -861,14 +852,7 @@ export default function scoutExtension(pi: ExtensionAPI, runChild = runPi, retry
           return;
         }
         interactive = true;
-        selected =
-          (await ctx.ui.select(
-            "Scout model",
-            (ctx.scopedModels.length
-              ? ctx.scopedModels.map(({ model }) => model)
-              : ctx.modelRegistry.getAvailable()
-            ).map(modelName),
-          )) ?? undefined;
+        selected = (await ctx.ui.select("Scout model", selectableModelNames(ctx))) ?? undefined;
         if (!selected) return;
       } else {
         ctx.ui.notify(usage, action === "help" && parts.length === 1 ? "info" : "warning");

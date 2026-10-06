@@ -6,6 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { truncateTail, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { unregisterToolPolicy } from "pylon-core/tools";
 import { verificationWorktreeState } from "pylon-core/verification-worktree";
 import { checksForChangedPaths } from "../src/changed.ts";
 import { detectChecks } from "../src/detect.ts";
@@ -285,7 +286,7 @@ export default function verifyExtension(pi: ExtensionAPI) {
     await Promise.all([...logDirectories].map(directory => removeLog(directory).catch(() => undefined)));
     disposePolicy?.();
     disposeCatalog?.();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-verify" });
+    unregisterToolPolicy(pi, "pi-verify");
     currentCwd = "";
     currentSessionId = "";
     terminalState = undefined;

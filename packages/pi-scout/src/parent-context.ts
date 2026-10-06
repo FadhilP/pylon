@@ -1,16 +1,8 @@
 import { packRecentRecords } from "pylon-core/context-packing";
+import { contentText } from "pylon-core/message-content";
 import { redact } from "pylon-core/redact";
 
 const MAX_ITEM_CHARS = 1200;
-
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text")
-    .map((part: any) => part.text)
-    .join("\n");
-}
 
 export function buildParentContext(entries: readonly any[], maxChars = 6000, maxItems = 10): string {
   if (maxChars <= 0 || maxItems <= 0) return "";

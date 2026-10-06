@@ -7,6 +7,8 @@ import { projectedContextEntries } from "pylon-core/context-packing";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { modelName, selectableModelNames } from "pylon-core/model-ref";
+import { activateManagedTools, registerToolPolicy, unregisterToolPolicy } from "pylon-core/tools";
 import { buildWorkerContext, sanitizeFailureMessage } from "../src/context.ts";
 import {
   configPath,
@@ -49,7 +51,6 @@ const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extens
 const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
 
 const HEARTBEAT_MS = 1000;
-const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
 
 async function resolveExecutionMode(
   configured: ReturnType<typeof gruntMode>,
@@ -288,25 +289,17 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     const config = await loadConfig(agentDir ? configPath(agentDir) : undefined);
     refreshSchema(config);
     const enabled = isGruntEnabled(config);
-    let coordinated = false;
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
+    const enabledTools = enabled ? ["grunt"] : [];
+    const coordinated = registerToolPolicy(pi, {
       owner: "pi-grunt",
       managedTools: ["grunt"],
-      enabledTools: enabled ? ["grunt"] : [],
+      enabledTools,
       ...(enabled ? { deferredTools: ["grunt"] } : {}),
       ...(enabled
         ? { toolUsage: { grunt: "delegate a large mechanical implementation slice to an isolated synchronous worker" } }
         : {}),
-      acknowledge: () => {
-        coordinated = true;
-      },
     });
-    if (coordinated) return;
-    const active = pi.getActiveTools().filter(name => name !== "grunt");
-    if (enabled) active.push("grunt");
-    pi.setActiveTools(active);
+    if (!coordinated) activateManagedTools(pi, ["grunt"], enabledTools);
   };
 
   const disposeSettingsRefresh = pi.events.on("pylon:package-settings-changed", (request: any) => {
@@ -332,7 +325,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
     sessionPatchArtifacts.clear();
     disposeHealth();
     disposeSettingsRefresh();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-grunt" });
+    unregisterToolPolicy(pi, "pi-grunt");
   });
 
   pi.registerTool({
@@ -849,14 +842,7 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
           ctx.ui.notify("Grunt model selection is available only in Pi TUI.", "error");
           return;
         }
-        selected =
-          (await ctx.ui.select(
-            "Grunt worker model",
-            (ctx.scopedModels.length
-              ? ctx.scopedModels.map(({ model }) => model)
-              : ctx.modelRegistry.getAvailable()
-            ).map(modelName),
-          )) ?? undefined;
+        selected = (await ctx.ui.select("Grunt worker model", selectableModelNames(ctx))) ?? undefined;
         if (!selected) return;
       } else {
         ctx.ui.notify(usage, action === "help" && parts.length === 1 ? "info" : "warning");

@@ -8,9 +8,10 @@ import {
   validPackageSettingValue,
   type PackageSettingField,
 } from "pylon-core/package-settings";
+import { thinkingLevels, type ThinkingLevel } from "pylon-core/model-ref";
 
-export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ThinkingLevel = (typeof thinkingLevels)[number];
+export { parseThinkingModelRef as parseModelRef } from "pylon-core/model-ref";
+export { thinkingLevels, type ThinkingLevel };
 export type ModelProfile = { model: string; thinking?: ThinkingLevel };
 export const DEFAULT_KEEP_RECENT_TOKENS = 25_000;
 export const MIN_KEEP_RECENT_TOKENS = 1_000;
@@ -170,16 +171,4 @@ export async function updateConfig(
     },
     isContinuityConfig,
   );
-}
-export function parseModelRef(ref: string): { provider: string; id: string; thinking?: ThinkingLevel } | undefined {
-  const slash = ref.indexOf("/");
-  if (slash < 1 || slash === ref.length - 1) return;
-  const colon = ref.lastIndexOf(":"),
-    suffix = ref.slice(colon + 1) as ThinkingLevel,
-    hasThinking = colon > slash && thinkingLevels.includes(suffix);
-  return {
-    provider: ref.slice(0, slash),
-    id: ref.slice(slash + 1, hasThinking ? colon : undefined),
-    ...(hasThinking ? { thinking: suffix } : {}),
-  };
 }

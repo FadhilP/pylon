@@ -7,7 +7,7 @@ import {
   type CostParts,
 } from "pylon-core/child-process";
 import { ADVISOR_TIMEOUT_MS } from "./config.ts";
-import { redact } from "./redact.ts";
+import { redact } from "pylon-core/redact";
 import { isTransientProviderFailure, loadDelegateRetryPolicy, waitForDelegateRetry } from "./retry.ts";
 
 export { ADVISOR_TIMEOUT_MS };

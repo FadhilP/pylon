@@ -382,6 +382,34 @@ export function effectivePackageSettingValue<F extends PackageSettingField>(
   return field.defaultValue as PackageSettingValue<F>;
 }
 
+/**
+ * Parses a version-1 config holding only descriptor fields. Unknown keys are dropped;
+ * returns undefined when the version is wrong or any present field is invalid.
+ */
+export function parsePackageSettingsConfig<T extends { version: 1 }>(
+  descriptor: PackageSettingsDescriptor,
+  value: any,
+): T | undefined {
+  if (value?.version !== 1 || typeof value !== "object") return undefined;
+  const config: Record<string, unknown> = { version: 1 };
+  for (const field of descriptor.fields) {
+    const setting = value[field.key];
+    if (setting === undefined) continue;
+    if (!validPackageSettingValue(field, setting)) return undefined;
+    config[field.key] = setting;
+  }
+  return config as T;
+}
+
+/** Resolves every descriptor field of a version-1 config to its effective value. */
+export function effectivePackageSettings<T extends { version: 1 }>(
+  descriptor: PackageSettingsDescriptor,
+  config: Record<string, unknown>,
+): T {
+  const values = descriptor.fields.map(field => [field.key, effectivePackageSettingValue(field, config[field.key])]);
+  return { version: 1, ...Object.fromEntries(values) } as T;
+}
+
 /** Produces the transport-safe effective read model; environment variable names stay private. */
 export function effectivePackageSettingsReadModel(
   descriptor: PackageSettingsDescriptor,

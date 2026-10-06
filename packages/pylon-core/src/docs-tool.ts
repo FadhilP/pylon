@@ -3,6 +3,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerToolPolicy, unregisterToolPolicy } from "./tools.ts";
 
 const MAX_DOC_BYTES = 256 * 1024;
 
@@ -158,20 +159,17 @@ export function createPylonDocsTool(pi: ExtensionAPI, extensionUrl: string) {
   return {
     sessionStart() {
       if (!deferred) return;
-      pi.events.emit("pylon:tool-policy", {
-        version: 1,
-        kind: "register",
+      registerToolPolicy(pi, {
         owner: "pylon-core",
         managedTools: ["pylon_docs"],
         enabledTools: ["pylon_docs"],
         deferredTools: ["pylon_docs"],
         toolUsage: { pylon_docs: "read shipped Pylon and Pylon Web documentation for product-specific questions" },
-        acknowledge() {},
       });
     },
     shutdown() {
       disposeHostContext();
-      if (deferred) pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pylon-core" });
+      if (deferred) unregisterToolPolicy(pi, "pylon-core");
     },
   };
 }

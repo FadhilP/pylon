@@ -1,4 +1,5 @@
 import { packRecentRecords } from "pylon-core/context-packing";
+import { contentText } from "pylon-core/message-content";
 import { redact as redactText, sanitizeFailureMessage } from "pylon-core/redact";
 
 export { sanitizeFailureMessage };
@@ -6,15 +7,6 @@ export { sanitizeFailureMessage };
 // Parent context is prose the worker must reason about, so long identifiers — commit
 // hashes, digests, base64 blobs — are left intact; only provider-shaped secrets go.
 const redact = (text: string) => redactText(text, { broadTokens: false }).text;
-
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text")
-    .map((part: any) => part.text)
-    .join("\n");
-}
 
 export function buildWorkerContext(
   entries: readonly any[],

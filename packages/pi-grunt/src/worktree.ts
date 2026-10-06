@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
+import { mapLimit } from "pylon-core/concurrency";
 
 export type WorktreeSnapshot = {
   available: boolean;
@@ -32,20 +33,6 @@ export function parsePorcelainZ(output: string): string[] {
   return [...paths].sort();
 }
 
-async function mapConcurrent<T, R>(items: readonly T[], limit: number, task: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        const index = next++;
-        results[index] = await task(items[index]);
-      }
-    }),
-  );
-  return results;
-}
-
 async function fileFingerprint(root: string, path: string): Promise<string> {
   const absolute = resolve(root, path);
   try {
@@ -75,7 +62,7 @@ export async function captureWorktree(exec: Exec, cwd: string): Promise<Worktree
     if (headResult.code !== 0)
       return { available: false, paths: new Map(), root, error: "Git repository has no HEAD commit" };
     const dirtyPaths = parsePorcelainZ(status.stdout);
-    const fingerprints = await mapConcurrent(dirtyPaths, 8, path => fileFingerprint(root, path));
+    const fingerprints = await mapLimit(dirtyPaths, 8, path => fileFingerprint(root, path));
     const paths = new Map(dirtyPaths.map((path, index) => [path, fingerprints[index]]));
     return { available: true, paths, root, head: headResult.stdout.trim() };
   } catch (error: any) {

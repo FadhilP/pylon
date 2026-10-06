@@ -2,6 +2,7 @@ import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { composePackagePrompt, type PromptPackageSettingValue } from "./package-settings.ts";
 import { defaultConfig, effectiveConfig, loadConfig } from "./config.ts";
+import { parseModelRef } from "./model-ref.ts";
 
 const ROLE_NAMES = { advisor: "Advisor", grunt: "Grunt", repo_scout: "Scout", web_scout: "Scout" } as const;
 type RoleName = (typeof ROLE_NAMES)[keyof typeof ROLE_NAMES];
@@ -84,12 +85,6 @@ export function requestDelegateName(pi: ExtensionAPI, request: DelegateNameReque
     },
   });
   return fixedHandle(request.fallbackName ?? legacy ?? localFallback(request));
-}
-
-function parseModelRef(ref: string): { provider: string; id: string } | undefined {
-  const slash = ref.indexOf("/");
-  if (slash < 1 || slash === ref.length - 1) return;
-  return { provider: ref.slice(0, slash), id: ref.slice(slash + 1) };
 }
 
 /** Produces a bounded lowercase kebab slug from otherwise valid model output. */

@@ -1,6 +1,6 @@
 import { ADVISOR_INPUT_TOKEN_BUDGET, ADVISOR_MAX_OUTPUT_TOKENS } from "./config.ts";
 import type { EvidenceRef } from "./evidence.ts";
-import { redact } from "./redact.ts";
+import { redact } from "pylon-core/redact";
 
 export type SectionAllocation = {
   estimatedTokens: number;

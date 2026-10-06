@@ -4,6 +4,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { defineTool, getAgentDir, SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { requestDelegateName } from "pylon-core/delegate-names";
+import { unregisterToolPolicy } from "pylon-core/tools";
 import { createBackgroundRuns } from "../src/background.ts";
 import {
   configPath,
@@ -447,7 +448,7 @@ export default async function spawnExtension(
   });
   pi.on("session_shutdown", async () => {
     await background.shutdown();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-spawn" });
+    unregisterToolPolicy(pi, "pi-spawn");
   });
 
   const agentTool = defineTool({

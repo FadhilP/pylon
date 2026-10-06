@@ -1,20 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   definePackageSettings,
   effectivePackageSettingValue,
   validPackageSettingValue,
 } from "pylon-core/package-settings";
-import { assertJsonConfigWritable } from "pylon-core/json-config";
+import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
+import { thinkingLevels, type ThinkingLevel } from "pylon-core/model-ref";
+
+export { thinkingLevels, type ThinkingLevel };
 
 export const toolAvailabilities = ["deferred", "active"] as const;
 export type ToolAvailability = (typeof toolAvailabilities)[number];
-export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export const SPAWN_DEFAULT_PROMPT_POLICY =
   "Pi generates the default system prompt for each private agent at spawn time from its enabled tools, working directory, loaded instructions, resources, skills, and runtime context. There is no single static default prompt.";
-export type ThinkingLevel = (typeof thinkingLevels)[number];
 
 export const spawnSettings = definePackageSettings({
   version: 1,
@@ -156,55 +155,39 @@ export const configuredPrivateAgentSystemPrompt = (
 ): string | undefined => (setting.mode === "default" ? undefined : setting.text);
 
 export async function loadConfig(path = configPath()): Promise<SpawnConfig> {
-  try {
-    const value = JSON.parse(await readFile(path, "utf8"));
-    if (Number.isSafeInteger(value?.version) && value.version > 1) return defaultConfig();
-    if (value?.version !== 1) throw new Error("invalid config");
-    if (value.toolAvailability !== undefined) {
-      if (
-        value.agentAvailability !== undefined ||
-        value.sessionAvailability !== undefined ||
-        !validAvailability(value.toolAvailability)
-      )
-        throw new Error("invalid config");
-      return { version: 1, agentAvailability: value.toolAvailability, sessionAvailability: value.toolAvailability };
-    }
-    if (
-      !validAvailability(value.agentAvailability) ||
-      !validAvailability(value.sessionAvailability) ||
-      (value.models !== undefined && !validModels(value.models)) ||
-      (value.agentThinkingLevels !== undefined && !validThinkingLevels(value.agentThinkingLevels))
-    )
-      throw new Error("invalid config");
-    const config: SpawnConfig = {
-      version: 1,
-      agentAvailability: value.agentAvailability,
-      sessionAvailability: value.sessionAvailability,
-      ...(value.models ? { models: value.models } : {}),
-      ...(value.agentThinkingLevels ? { agentThinkingLevels: value.agentThinkingLevels } : {}),
-    };
-    for (const field of spawnSettings.fields) {
-      if (value[field.key] !== undefined && !validPackageSettingValue(field, value[field.key]))
-        throw new Error("invalid config");
-      if (value[field.key] !== undefined) (config as any)[field.key] = value[field.key];
-    }
-    return config;
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return defaultConfig();
-    await rename(path, `${path}.corrupt-${randomUUID()}`).catch(() => {});
-    return defaultConfig();
-  }
+  return loadJsonConfig(path, parseConfig, defaultConfig, 1);
 }
 
-export async function saveConfig(config: SpawnConfig, path = configPath()): Promise<void> {
-  await assertJsonConfigWritable(path, 1);
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => {});
-    throw error;
+function parseConfig(value: any): SpawnConfig | undefined {
+  if (value?.version !== 1) return undefined;
+  if (value.toolAvailability !== undefined) {
+    if (
+      value.agentAvailability !== undefined ||
+      value.sessionAvailability !== undefined ||
+      !validAvailability(value.toolAvailability)
+    )
+      return undefined;
+    return { version: 1, agentAvailability: value.toolAvailability, sessionAvailability: value.toolAvailability };
   }
+  if (
+    !validAvailability(value.agentAvailability) ||
+    !validAvailability(value.sessionAvailability) ||
+    (value.models !== undefined && !validModels(value.models)) ||
+    (value.agentThinkingLevels !== undefined && !validThinkingLevels(value.agentThinkingLevels))
+  )
+    return undefined;
+  const config: SpawnConfig = {
+    version: 1,
+    agentAvailability: value.agentAvailability,
+    sessionAvailability: value.sessionAvailability,
+    ...(value.models ? { models: value.models } : {}),
+    ...(value.agentThinkingLevels ? { agentThinkingLevels: value.agentThinkingLevels } : {}),
+  };
+  for (const field of spawnSettings.fields) {
+    if (value[field.key] !== undefined && !validPackageSettingValue(field, value[field.key])) return undefined;
+    if (value[field.key] !== undefined) (config as any)[field.key] = value[field.key];
+  }
+  return config;
 }
+
+export const saveConfig = (config: SpawnConfig, path = configPath()) => saveJsonConfig(config, path);

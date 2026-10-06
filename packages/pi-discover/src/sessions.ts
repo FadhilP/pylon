@@ -9,6 +9,8 @@ import {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { meterFromBranch, type ProviderUsage } from "pylon-core/token-meter";
+import { boundedJson, contentText } from "pylon-core/message-content";
+import { redact } from "pylon-core/redact";
 import { listSessionInventory } from "pylon-core/session-inventory";
 import { canonicalPath as resolveCanonical, fitJson } from "./search-common.ts";
 
@@ -16,14 +18,6 @@ const MAX_SESSIONS = 200;
 const MAX_MATCHES = 12;
 const MAX_EXCERPT_CHARS = 1_200;
 const MAX_TOOL_STATS = 25;
-
-const REDACTION_PATTERNS: RegExp[] = [
-  /-----BEGIN [^-]+PRIVATE KEY-----[\s\S]*?-----END [^-]+PRIVATE KEY-----/gi,
-  /\b(?:sk-ant-|sk-proj-|sk-|ghp_|github_pat_|AIza|xox[baprs]-)[A-Za-z0-9._-]{12,}\b/g,
-  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
-  /\b(?:authorization\s*[:=]\s*(?:bearer\s+)?[^\s,;]+|(?:api[_-]?key|token|password|secret|cookie)\s*[:=]\s*[^\s,;]+)/gi,
-  /\b[A-Za-z0-9+/=_-]{40,}\b/g,
-];
 
 export type SessionSearchScope = "current_cwd" | "all";
 export type SessionSearchMode = "text" | "tools";
@@ -84,54 +78,6 @@ function canonicalPath(path: string): string {
 
 function queryTerms(query: string): string[] {
   return [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
-}
-
-function textOf(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part: any) => part?.type === "text")
-    .map((part: any) => part.text)
-    .join("\n");
-}
-
-function redact(text: string): { text: string; count: number } {
-  const marker = "\uE000";
-  let count = 0;
-  let output = text;
-  for (const pattern of REDACTION_PATTERNS)
-    output = output.replace(pattern, () => {
-      count++;
-      return marker;
-    });
-  return { text: output.replaceAll(marker, "[possible credential redacted]"), count };
-}
-
-function boundedJson(value: unknown, max = 4_000): string {
-  const seen = new WeakSet<object>();
-  const visit = (item: any, depth: number): any => {
-    if (typeof item === "string") return item.slice(0, max);
-    if (item === null || typeof item !== "object") return item;
-    if (depth >= 4 || seen.has(item)) return "[truncated]";
-    seen.add(item);
-    if (Array.isArray(item)) return item.slice(0, 25).map(child => visit(child, depth + 1));
-    const output: Record<string, unknown> = {};
-    let count = 0;
-    for (const key in item) {
-      if (!Object.hasOwn(item, key)) continue;
-      if (count++ >= 25) {
-        output["[truncated]"] = true;
-        break;
-      }
-      output[key.slice(0, 200)] = visit(item[key], depth + 1);
-    }
-    return output;
-  };
-  try {
-    return (JSON.stringify(visit(value, 0)) ?? "null").slice(0, max);
-  } catch {
-    return "[unserializable arguments]";
-  }
 }
 
 function boundedTextOf(content: unknown, max = 4_000): string {
@@ -252,7 +198,7 @@ type SessionCandidate = {
 function messageCandidates(branch: SessionBranch): SessionCandidate[] {
   return branch.flatMap(entry =>
     entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant")
-      ? [{ entry, role: entry.message.role, text: textOf(entry.message.content) }]
+      ? [{ entry, role: entry.message.role, text: contentText(entry.message.content) }]
       : [],
   );
 }
@@ -285,7 +231,7 @@ function toolCandidates(
           {
             entry,
             role: "assistant" as const,
-            text: `${part.name} ${boundedJson(part.arguments)}${resultText ? `\n${status} result: ${resultText}` : `\nstatus: ${status}`}`,
+            text: `${part.name} ${boundedJson(part.arguments, 4_000)}${resultText ? `\n${status} result: ${resultText}` : `\nstatus: ${status}`}`,
             part,
             result,
             status,

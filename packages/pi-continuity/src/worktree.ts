@@ -4,19 +4,11 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { promisify } from "node:util";
+import { git } from "pylon-core/git";
 import type { EvidenceRange } from "./memory.ts";
 
 const exec = promisify(execFile);
-async function git(cwd: string, args: string[], env?: Record<string, string>) {
-  const result = await exec("git", args, {
-    cwd,
-    env: env ? { ...process.env, ...env } : process.env,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 120_000,
-    windowsHide: true,
-  });
-  return String(result.stdout).replace(/\r?\n$/, "");
-}
+
 const within = (root: string, target: string) => {
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));

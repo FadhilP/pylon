@@ -1,6 +1,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { unregisterToolPolicy } from "pylon-core/tools";
 import {
   capturePapercut,
   listPapercuts,
@@ -293,7 +294,7 @@ export default function papercutExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     stateRevision++;
     pi.events.emit("pi-papercut:state-change", stateSnapshot(false));
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-papercut" });
+    unregisterToolPolicy(pi, "pi-papercut");
     disposeStateRequest();
     disposeListRequest();
     disposeMutationRequest();

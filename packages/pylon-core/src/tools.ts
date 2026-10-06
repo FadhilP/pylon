@@ -144,3 +144,37 @@ export function reconcileTools(
   }
   return [...result];
 }
+
+type ToolPolicyEvents = { events: { emit(channel: string, data: unknown): void } };
+
+/** Registers a tool policy with pylon-core; returns whether a coordinator acknowledged it. */
+export function registerToolPolicy(
+  pi: ToolPolicyEvents,
+  policy: Omit<ToolPolicyMessage, "version" | "kind" | "acknowledge">,
+): boolean {
+  let coordinated = false;
+  pi.events.emit("pylon:tool-policy", {
+    version: PROTOCOL_VERSION,
+    kind: "register",
+    ...policy,
+    acknowledge: () => {
+      coordinated = true;
+    },
+  });
+  return coordinated;
+}
+
+export function unregisterToolPolicy(pi: ToolPolicyEvents, owner: string): void {
+  pi.events.emit("pylon:tool-policy", { version: PROTOCOL_VERSION, kind: "unregister", owner });
+}
+
+/** Fallback without pylon-core: activate exactly the enabled tools among those a package manages. */
+export function activateManagedTools(
+  pi: { getActiveTools(): string[]; setActiveTools(tools: string[]): void },
+  managedTools: readonly string[],
+  enabledTools: readonly string[],
+): void {
+  const active = pi.getActiveTools().filter(name => !managedTools.includes(name));
+  active.push(...enabledTools);
+  pi.setActiveTools(active);
+}

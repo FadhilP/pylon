@@ -1,11 +1,11 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { getPackageDir, truncateHead } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import { truncateHead } from "@earendil-works/pi-coding-agent";
 import {
   addCostParts,
   contextWindowTokensFromUsage,
   emptyCostParts,
+  getPiInvocation,
+  terminate,
   usageSnapshot,
   type CostParts,
 } from "pylon-core/child-process";
@@ -154,41 +154,6 @@ export function spawnTimeoutMs(value = process.env.PI_SPAWN_TIMEOUT_MS): number 
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 7_200_000)
     throw new Error("PI_SPAWN_TIMEOUT_MS must be an integer between 1 and 7200000");
   return timeout;
-}
-
-export function getPiInvocation(args: string[]): Invocation {
-  const packageDir = getPackageDir();
-  const cli = join(packageDir, "dist", "cli.js");
-  const script = process.argv[1];
-  const piEntrypoints = [cli, join(packageDir, "src", "cli.ts"), join(packageDir, "src", "cli-new.ts")].map(path =>
-    resolve(path),
-  );
-  if (script && !script.startsWith("/$bunfs/root/") && existsSync(script) && piEntrypoints.includes(resolve(script)))
-    return { command: process.execPath, args: [script, ...args] };
-  if (!/^(node|bun)(\.exe)?$/i.test(basename(process.execPath))) return { command: process.execPath, args };
-  return { command: process.execPath, args: [cli, ...args] };
-}
-
-function terminate(child: ChildProcess): void {
-  if (child.exitCode !== null) return;
-  if (process.platform === "win32" && child.pid) {
-    spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { shell: false, stdio: "ignore" });
-    return;
-  }
-  if (!child.pid) return;
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    child.kill("SIGTERM");
-  }
-  setTimeout(() => {
-    if (child.exitCode !== null) return;
-    try {
-      process.kill(-child.pid!, "SIGKILL");
-    } catch {
-      child.kill("SIGKILL");
-    }
-  }, 1000).unref();
 }
 
 const textContent = (message: any): string =>

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
-import { BlockList, isIP, connect as netConnect, type Socket } from "node:net";
+import { isIP, connect as netConnect, type Socket } from "node:net";
 import {
   createServer,
   request as httpRequest,
@@ -9,6 +9,9 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { Duplex } from "node:stream";
+import { isPublicAddress } from "pylon-core/public-address";
+
+export { isPublicAddress };
 
 export type ResolvedAddress = { address: string; family: 4 | 6 };
 export type Resolver = (hostname: string) => Promise<ResolvedAddress[]>;
@@ -19,49 +22,6 @@ export type PublicProxyOptions = {
   maxBytes?: number;
   maxTunnels?: number;
 };
-
-const blockedV4 = new BlockList();
-for (const [address, prefix] of [
-  ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.0.2.0", 24],
-  ["192.52.193.0", 24],
-  ["192.88.99.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["198.51.100.0", 24],
-  ["203.0.113.0", 24],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
-] as const)
-  blockedV4.addSubnet(address, prefix, "ipv4");
-
-const globalV6 = new BlockList();
-globalV6.addSubnet("2000::", 3, "ipv6");
-const blockedV6 = new BlockList();
-for (const [address, prefix] of [
-  ["2001::", 32],
-  ["2001:2::", 48],
-  ["2001:10::", 28],
-  ["2001:20::", 28],
-  ["2001:db8::", 32],
-  ["2002::", 16],
-  ["3fff::", 20],
-] as const)
-  blockedV6.addSubnet(address, prefix, "ipv6");
-
-export function isPublicAddress(address: string, family: 4 | 6 = isIP(address) as 4 | 6): boolean {
-  const normalized = address.replace(/^\[|\]$/g, "").split("%")[0];
-  if (family === 4 && isIP(normalized) === 4) return !blockedV4.check(normalized, "ipv4");
-  if (family !== 6 || isIP(normalized) !== 6) return false;
-  if (normalized.toLowerCase().startsWith("::ffff:")) return false;
-  return globalV6.check(normalized, "ipv6") && !blockedV6.check(normalized, "ipv6");
-}
 
 async function defaultResolver(hostname: string): Promise<ResolvedAddress[]> {
   return (await lookup(hostname, { all: true, verbatim: true })) as ResolvedAddress[];

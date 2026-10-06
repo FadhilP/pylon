@@ -4,6 +4,9 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { requestDelegateName, type DelegateNameHandle } from "pylon-core/delegate-names";
 import { toolResultUsage } from "pylon-core/child-process";
+import { createSerialQueue } from "pylon-core/concurrency";
+import { modelName, selectableModelNames } from "pylon-core/model-ref";
+import { activateManagedTools, registerToolPolicy, unregisterToolPolicy } from "pylon-core/tools";
 import { ADVISOR_MAX_CALLS, capAdvice } from "../src/advisor.ts";
 import { advisorBudget } from "../src/budget.ts";
 import { ADVISOR_IMMUTABLE_FOOTER, ADVISOR_PROMPT } from "../src/prompts.ts";
@@ -60,7 +63,6 @@ type Details = {
   failureMessage?: string;
   attempts?: number;
 };
-const modelName = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
 const HEARTBEAT_MS = 1_000;
 
 const snapshotDetails = (snapshot: Snapshot) => ({
@@ -149,32 +151,17 @@ export default function advisorExtension(
 ) {
   let calls = 0;
   let previousAdvice: string | undefined;
-  let advisorQueue = Promise.resolve();
-  const serializeAdvisor = async <T>(run: () => Promise<T>): Promise<T> => {
-    const previousRun = advisorQueue;
-    let releaseRun = () => {};
-    advisorQueue = new Promise<void>(resolve => {
-      releaseRun = resolve;
-    });
-    await previousRun;
-    try {
-      return await run();
-    } finally {
-      releaseRun();
-    }
-  };
+  const serializeAdvisor = createSerialQueue();
   const refreshTool = async (ctx: any, agentDir?: string) => {
     const raw = await loadConfig(agentDir ? configPath(agentDir) : undefined);
     const config = effectiveAdvisor(raw);
     const model = configuredModel(ctx, config);
     const enabled = Boolean(model && ctx.modelRegistry.hasConfiguredAuth(model));
-    let coordinated = false;
-    pi.events.emit("pylon:tool-policy", {
-      version: 1,
-      kind: "register",
+    const enabledTools = enabled ? ["advisor"] : [];
+    const coordinated = registerToolPolicy(pi, {
       owner: "pi-advisor",
       managedTools: ["advisor"],
-      enabledTools: enabled ? ["advisor"] : [],
+      enabledTools,
       ...(enabled
         ? {
             toolUsage: {
@@ -182,14 +169,8 @@ export default function advisorExtension(
             },
           }
         : {}),
-      acknowledge: () => {
-        coordinated = true;
-      },
     });
-    if (coordinated) return;
-    const active = pi.getActiveTools().filter(name => name !== "advisor");
-    if (enabled) active.push("advisor");
-    pi.setActiveTools(active);
+    if (!coordinated) activateManagedTools(pi, ["advisor"], enabledTools);
   };
 
   pi.on("input", event => {
@@ -229,7 +210,7 @@ export default function advisorExtension(
     projectAdvisor = undefined;
     disposeSettingsRefresh();
     disposeProjectModels();
-    pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-advisor" });
+    unregisterToolPolicy(pi, "pi-advisor");
   });
 
   type PreparedCall = {
@@ -611,14 +592,7 @@ export default function advisorExtension(
         ctx.ui.notify("Advisor model selection is available only in Pi TUI.", "error");
         return;
       }
-      selected =
-        (await ctx.ui.select(
-          "Advisor model",
-          (ctx.scopedModels.length
-            ? ctx.scopedModels.map(({ model }: any) => model)
-            : ctx.modelRegistry.getAvailable()
-          ).map(modelName),
-        )) ?? "";
+      selected = (await ctx.ui.select("Advisor model", selectableModelNames(ctx))) ?? "";
       if (!selected) return;
     }
     const ref = parseModelRef(selected);

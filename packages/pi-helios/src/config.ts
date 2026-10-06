@@ -1,13 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   definePackageSettings,
-  effectivePackageSettingValue,
-  validPackageSettingValue,
+  effectivePackageSettings,
+  parsePackageSettingsConfig,
 } from "pylon-core/package-settings";
-import { assertJsonConfigWritable } from "pylon-core/json-config";
+import { loadJsonConfig, saveJsonConfig } from "pylon-core/json-config";
 
 export const heliosSettings = definePackageSettings({
   version: 1,
@@ -88,52 +86,17 @@ export type EffectiveHeliosConfig = {
 };
 export const configPath = (agentDir = getAgentDir()) => join(agentDir, "pi-helios", "config.json");
 
-const fields = Object.fromEntries(heliosSettings.fields.map(field => [field.key, field]));
 export function effectiveConfig(config: HeliosConfig): EffectiveHeliosConfig {
-  return {
-    version: 1,
-    headed: effectivePackageSettingValue(fields.headed, config.headed) as boolean,
-    androidStartTimeoutMs: effectivePackageSettingValue(
-      fields.androidStartTimeoutMs,
-      config.androidStartTimeoutMs,
-    ) as number,
-    androidInstallTimeoutMs: effectivePackageSettingValue(
-      fields.androidInstallTimeoutMs,
-      config.androidInstallTimeoutMs,
-    ) as number,
-    browserLeaseIdleMs: effectivePackageSettingValue(fields.browserLeaseIdleMs, config.browserLeaseIdleMs) as number,
-    browserResultTabs: effectivePackageSettingValue(fields.browserResultTabs, config.browserResultTabs) as number,
-  };
+  return effectivePackageSettings(heliosSettings, config);
 }
 
 export async function loadConfig(path = configPath()): Promise<HeliosConfig> {
-  try {
-    const value = JSON.parse(await readFile(path, "utf8"));
-    if (Number.isSafeInteger(value?.version) && value.version > 1) return { version: 1 };
-    if (value?.version !== 1 || typeof value !== "object") throw new Error("invalid config");
-    const config: HeliosConfig = { version: 1 };
-    for (const field of heliosSettings.fields) {
-      const setting = value[field.key];
-      if (setting !== undefined && !validPackageSettingValue(field, setting)) throw new Error("invalid config");
-      if (setting !== undefined) (config as any)[field.key] = setting;
-    }
-    return config;
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return { version: 1 };
-    await rename(path, `${path}.corrupt-${randomUUID()}`).catch(() => {});
-    return { version: 1 };
-  }
+  return loadJsonConfig(
+    path,
+    value => parsePackageSettingsConfig(heliosSettings, value),
+    () => ({ version: 1 }),
+    1,
+  );
 }
 
-export async function saveConfig(config: HeliosConfig, path = configPath()): Promise<void> {
-  await assertJsonConfigWritable(path, 1);
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    await rename(temporary, path);
-  } catch (error) {
-    await rm(temporary, { force: true }).catch(() => {});
-    throw error;
-  }
-}
+export const saveConfig = (config: HeliosConfig, path = configPath()) => saveJsonConfig(config, path);

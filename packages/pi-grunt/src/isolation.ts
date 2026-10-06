@@ -17,6 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { mapLimit } from "pylon-core/concurrency";
 import { captureWorktree, compareWorktrees, type Exec, type WorktreeSnapshot } from "./worktree.ts";
 
 export type IsolatedWorktree = {
@@ -93,15 +94,6 @@ async function mirrorPath(sourceRoot: string, targetRoot: string, path: string):
   await chmod(target, info.mode);
 }
 
-async function mapConcurrent<T>(items: readonly T[], limit: number, task: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) await task(items[next++]);
-    }),
-  );
-}
-
 export async function createIsolatedWorktree(exec: Exec, cwd: string, signal?: AbortSignal): Promise<IsolatedWorktree> {
   const initial = await captureWorktree(exec, cwd);
   if (!initial.available || !initial.root || !initial.head)
@@ -142,7 +134,7 @@ export async function createIsolatedWorktree(exec: Exec, cwd: string, signal?: A
 
     // Worktree add already checked out every clean tracked file. Mirror only dirty/deleted
     // tracked paths and ordinary untracked paths captured in the parent baseline.
-    await mapConcurrent([...parentBaseline.paths.keys()], 8, path => mirrorPath(parentRoot, workerRoot!, path));
+    await mapLimit([...parentBaseline.paths.keys()], 8, path => mirrorPath(parentRoot, workerRoot!, path));
 
     const addBaseline = await exec("git", ["-C", workerRoot, "add", "-A"], { timeout: 60_000, signal });
     if (addBaseline.code !== 0) throw failure("Unable to stage isolated baseline", addBaseline);

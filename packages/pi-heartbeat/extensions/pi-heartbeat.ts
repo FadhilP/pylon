@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { unregisterToolPolicy } from "pylon-core/tools";
 import { Text } from "@earendil-works/pi-tui";
 import { isActive, JobManager, pruneStaleSessionDirs, type Job } from "../src/jobs.ts";
 import { jobContext } from "../src/context.ts";
@@ -154,7 +155,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       announced.clear();
       jobMeta.clear();
       lastToolPolicy = "";
-      pi.events.emit("pylon:tool-policy", { version: 1, kind: "unregister", owner: "pi-heartbeat" });
+      unregisterToolPolicy(pi, "pi-heartbeat");
     }
   });
   pi.on("context", event => {
