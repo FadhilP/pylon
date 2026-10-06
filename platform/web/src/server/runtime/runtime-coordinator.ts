@@ -176,6 +176,28 @@ function sameCheckout(left: CheckoutState, right: CheckoutState): boolean {
   );
 }
 
+/** The project-folder state a checkout record parked, or undefined when the record lacks it. */
+function storedParkedCheckout(record: SessionWorkspaceRecord | undefined): CheckoutState | undefined {
+  if (!record?.parkedRoot || !record.parkedCommonDir || !record.parkedIndexTree || !record.parkedWorktreeTree) return;
+  return {
+    root: record.parkedRoot,
+    commonDir: record.parkedCommonDir,
+    head: record.parkedHead,
+    headRef: record.parkedHeadRef,
+    indexTree: record.parkedIndexTree,
+    worktreeTree: record.parkedWorktreeTree,
+  };
+}
+
+const parkedCheckoutFields = (parked: CheckoutState) => ({
+  parkedRoot: parked.root,
+  parkedCommonDir: parked.commonDir,
+  parkedHead: parked.head,
+  parkedHeadRef: parked.headRef,
+  parkedIndexTree: parked.indexTree,
+  parkedWorktreeTree: parked.worktreeTree,
+});
+
 class WorkspaceApplyConflictError extends Error {
   constructor(readonly conflicts: Array<{ path: string; context?: string }>) {
     super(
@@ -527,46 +549,22 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async conversationHistory(input: ConversationHistoryQuery): Promise<ConversationHistoryPage> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const page = await slot.driver.conversationHistory(input);
-    this.assertSelected(slot, generation, "loading history");
-    return { ...page, sessionGeneration: generation };
+    return this.readSelected("loading history", driver => driver.conversationHistory(input));
   }
 
   async conversationAttachment(input: ConversationAttachmentQuery): Promise<ConversationAttachmentContent> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.conversationAttachment) throw new Error("conversation attachments are unavailable");
-    const attachment = await slot.driver.conversationAttachment(input);
-    this.assertSelected(slot, generation, "loading attachment");
-    return { ...attachment, sessionGeneration: generation };
+    return this.readSelected("loading attachment", driver => driver.conversationAttachment(input));
   }
 
   async localImage(input: LocalImageQuery): Promise<LocalImageContent> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.localImage) throw new Error("local images are unavailable");
-    const image = await slot.driver.localImage(input);
-    this.assertSelected(slot, generation, "loading local image");
-    return { ...image, sessionGeneration: generation };
+    return this.readSelected("loading local image", driver => driver.localImage(input));
   }
   async turnDiff(input: TurnDiffQuery): Promise<TurnDiffResult> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.turnDiff) throw new Error("turn diffs are unavailable");
-    const result = await slot.driver.turnDiff(input);
-    this.assertSelected(slot, generation, "loading turn diff");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("loading turn diff", driver => driver.turnDiff(input));
   }
 
   async conversationTurnIndex(input: ConversationTurnIndexQuery): Promise<ConversationTurnIndexPage> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.conversationTurnIndex) throw new Error("conversation turn index is unavailable");
-    const page = await slot.driver.conversationTurnIndex(input);
-    this.assertSelected(slot, generation, "loading turn index");
-    return { ...page, sessionGeneration: generation };
+    return this.readSelected("loading turn index", driver => driver.conversationTurnIndex(input));
   }
 
   async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
@@ -676,37 +674,19 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async listPackages(): Promise<PackageListSnapshot> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const result = await slot.driver.listPackages();
-    this.assertSelected(slot, generation, "listing packages");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("listing packages", driver => driver.listPackages());
   }
 
   async listExtensions(): Promise<ExtensionListSnapshot> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.listExtensions) throw new Error("native extensions are unavailable");
-    const result = await slot.driver.listExtensions();
-    this.assertSelected(slot, generation, "listing extensions");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("listing extensions", driver => driver.listExtensions());
   }
 
   async listSkills(): Promise<SkillListSnapshot> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.listSkills) throw new Error("skills are unavailable");
-    const result = await slot.driver.listSkills();
-    this.assertSelected(slot, generation, "listing skills");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("listing skills", driver => driver.listSkills());
   }
 
   async listHookSettings(): Promise<HookSettingsSnapshot> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const result = await slot.driver.listHookSettings();
-    this.assertSelected(slot, generation, "listing hook settings");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("listing hook settings", driver => driver.listHookSettings());
   }
 
   async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
@@ -740,11 +720,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async fileSuggestions(input: FileSuggestionInput): Promise<FileSuggestionList> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const result = await slot.driver.fileSuggestions(input);
-    this.assertSelected(slot, generation, "loading file suggestions");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("loading file suggestions", driver => driver.fileSuggestions(input));
   }
 
   async workspaceFiles(input: WorkspaceFilesInput): Promise<WorkspaceFilePage> {
@@ -790,12 +766,7 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async workspaceSymbols(query: string, signal?: AbortSignal): Promise<WorkspaceSymbolResult> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.workspaceSymbols) throw new Error("Workspace symbols are unavailable");
-    const result = await slot.driver.workspaceSymbols(query, signal);
-    this.assertSelected(slot, generation, "searching workspace symbols");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("searching workspace symbols", driver => driver.workspaceSymbols(query, signal));
   }
 
   async workspaceEntry(path: string, moveDestination?: string, includeGitIndex = true): Promise<WorkspaceEntry> {
@@ -941,19 +912,11 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async timelineCheckpointFiles(input: TimelineCheckpointInput): Promise<TimelineCheckpointFiles> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const result = await slot.driver.timelineCheckpointFiles(input);
-    this.assertSelected(slot, generation, "loading checkpoint files");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("loading checkpoint files", driver => driver.timelineCheckpointFiles(input));
   }
 
   async timelineCheckpointDiff(input: TimelineCheckpointDiffInput): Promise<TimelineCheckpointDiff> {
-    const slot = this.selected();
-    const generation = this.generation;
-    const result = await slot.driver.timelineCheckpointDiff(input);
-    this.assertSelected(slot, generation, "loading a checkpoint diff");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("loading a checkpoint diff", driver => driver.timelineCheckpointDiff(input));
   }
 
   async fileHistory(input: FileHistoryQuery, signal?: AbortSignal): Promise<WorkspaceFileHistory> {
@@ -990,12 +953,10 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async stateqlSnapshot(historyLimit: number, workspace: StateQLWorkspace = "session"): Promise<StateQLSnapshot> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.stateqlSnapshot) throw new Error("StateQL snapshot is unavailable");
-    const result = await slot.driver.stateqlSnapshot(historyLimit, workspace);
-    this.assertSelected(slot, generation, "loading StateQL status");
-    return { ...result, sessionGeneration: generation, workspace };
+    const result = await this.readSelected("loading StateQL status", driver =>
+      driver.stateqlSnapshot(historyLimit, workspace),
+    );
+    return { ...result, workspace };
   }
 
   async stateqlRows(
@@ -1005,12 +966,10 @@ export class RuntimeCoordinator implements PiDriver {
     signal?: AbortSignal,
     workspace: StateQLWorkspace = "session",
   ): Promise<StateQLRowsPage> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.stateqlRows) throw new Error("StateQL rows are unavailable");
-    const result = await slot.driver.stateqlRows(handle, offset, limit, signal, workspace);
-    this.assertSelected(slot, generation, "loading StateQL rows");
-    return { ...result, sessionGeneration: generation, workspace };
+    const result = await this.readSelected("loading StateQL rows", driver =>
+      driver.stateqlRows(handle, offset, limit, signal, workspace),
+    );
+    return { ...result, workspace };
   }
 
   async stateqlCommand(
@@ -1020,12 +979,10 @@ export class RuntimeCoordinator implements PiDriver {
     operationId?: string,
     workspace: StateQLWorkspace = "session",
   ): Promise<StateQLCommandResult> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.stateqlCommand) throw new Error("StateQL commands are unavailable");
-    const result = await slot.driver.stateqlCommand(input, signal, expectedConnectionId, operationId, workspace);
-    this.assertSelected(slot, generation, `running StateQL ${input.command}`);
-    return { ...result, sessionGeneration: generation, workspace };
+    const result = await this.readSelected(`running StateQL ${input.command}`, driver =>
+      driver.stateqlCommand(input, signal, expectedConnectionId, operationId, workspace),
+    );
+    return { ...result, workspace };
   }
 
   async papercutList(
@@ -1034,21 +991,11 @@ export class RuntimeCoordinator implements PiDriver {
     offset: number,
     limit: number,
   ): Promise<PapercutListPage> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.papercutList) throw new Error("Papercuts are unavailable");
-    const result = await slot.driver.papercutList(status, query, offset, limit);
-    this.assertSelected(slot, generation, "loading papercuts");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("loading papercuts", driver => driver.papercutList(status, query, offset, limit));
   }
 
   async papercutMutation(input: PapercutMutationInput): Promise<PapercutMutationResult> {
-    const slot = this.selected();
-    const generation = this.generation;
-    if (!slot.driver.papercutMutation) throw new Error("Papercut mutations are unavailable");
-    const result = await slot.driver.papercutMutation(input);
-    this.assertSelected(slot, generation, "updating a papercut");
-    return { ...result, sessionGeneration: generation };
+    return this.readSelected("updating a papercut", driver => driver.papercutMutation(input));
   }
 
   async prompt(input: PromptInput): Promise<AcceptedCommand> {
@@ -1152,34 +1099,30 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
-    return this.withLifecycle(async () => {
-      this.assertGeneration(input.expectedGeneration);
-      const slot = this.selected();
-      slot.lastActivityAt = Date.now();
-      slot.suppressEvents = true;
-      try {
-        await slot.driver.editPrompt({ ...input, expectedGeneration: slot.innerGeneration });
-        slot.receivedInput = true;
-        this.sessionIndex.invalidate();
-        this.generation++;
-        const runtime = await this.selectedSnapshot();
-        slot.suppressEvents = false;
-        this.emit({ type: "session.replaced", sessionId: slot.id, sessionGeneration: this.generation, runtime });
-        return { commandId: input.commandId, sessionGeneration: this.generation, accepted: true };
-      } finally {
-        slot.suppressEvents = false;
-      }
+    return this.rewriteSelectedHistory(input, async slot => {
+      await slot.driver.editPrompt({ ...input, expectedGeneration: slot.innerGeneration });
+      slot.receivedInput = true;
     });
   }
 
   async rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand> {
+    return this.rewriteSelectedHistory(input, slot =>
+      slot.driver.rewindPrompt({ ...input, expectedGeneration: slot.innerGeneration }),
+    );
+  }
+
+  /** Rewrites the selected session's history in place, then announces it as a replaced session. */
+  private async rewriteSelectedHistory(
+    input: { commandId: string; expectedGeneration: number },
+    rewrite: (slot: RuntimeSlot) => Promise<unknown>,
+  ): Promise<AcceptedCommand> {
     return this.withLifecycle(async () => {
       this.assertGeneration(input.expectedGeneration);
       const slot = this.selected();
       slot.lastActivityAt = Date.now();
       slot.suppressEvents = true;
       try {
-        await slot.driver.rewindPrompt({ ...input, expectedGeneration: slot.innerGeneration });
+        await rewrite(slot);
         this.sessionIndex.invalidate();
         this.generation++;
         const runtime = await this.selectedSnapshot();
@@ -1298,23 +1241,9 @@ export class RuntimeCoordinator implements PiDriver {
       const uniqueSessions = [...new Map(sessions.map(session => [session.id, session])).values()];
       for (const session of uniqueSessions) {
         const workspace = registry.workspaceForSession(session.id);
-        if (
-          workspace?.mode === "checkout" &&
-          workspace.commonDir &&
-          workspace.branch &&
-          workspace.parkedRoot &&
-          workspace.parkedCommonDir &&
-          workspace.parkedIndexTree &&
-          workspace.parkedWorktreeTree
-        ) {
-          await restoreCheckoutState(project.cwd, {
-            root: workspace.parkedRoot,
-            commonDir: workspace.parkedCommonDir,
-            head: workspace.parkedHead,
-            headRef: workspace.parkedHeadRef,
-            indexTree: workspace.parkedIndexTree,
-            worktreeTree: workspace.parkedWorktreeTree,
-          });
+        const parked = storedParkedCheckout(workspace);
+        if (workspace?.mode === "checkout" && workspace.commonDir && workspace.branch && parked) {
+          await restoreCheckoutState(project.cwd, parked);
           await removeSessionBranch(project.cwd, workspace.branch, workspace.commonDir);
         } else if (
           workspace?.mode === "worktree" &&
@@ -1610,24 +1539,9 @@ export class RuntimeCoordinator implements PiDriver {
       }
       const record = registry.workspaceForSession(input.sessionId);
       const project = record ? registry.get(record.projectId) : undefined;
-      if (
-        record?.mode === "checkout" &&
-        project &&
-        record.commonDir &&
-        record.branch &&
-        record.parkedRoot &&
-        record.parkedCommonDir &&
-        record.parkedIndexTree &&
-        record.parkedWorktreeTree
-      ) {
-        await restoreCheckoutState(project.cwd, {
-          root: record.parkedRoot,
-          commonDir: record.parkedCommonDir,
-          head: record.parkedHead,
-          headRef: record.parkedHeadRef,
-          indexTree: record.parkedIndexTree,
-          worktreeTree: record.parkedWorktreeTree,
-        });
+      const parked = storedParkedCheckout(record);
+      if (record?.mode === "checkout" && project && record.commonDir && record.branch && parked) {
+        await restoreCheckoutState(project.cwd, parked);
         await removeSessionBranch(project.cwd, record.branch, record.commonDir);
       } else if (record?.mode === "worktree" && project && record.worktreePath && record.commonDir && record.branch) {
         await removeSessionWorktree(
@@ -2021,43 +1935,27 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   async updateContinuityMemory(input: UpdateContinuityMemoryInput): Promise<void> {
-    await this.withLifecycle(async () => {
-      this.assertGeneration(input.expectedGeneration);
-      const slot = this.selected();
-      slot.lastActivityAt = Date.now();
-      await slot.driver.updateContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
-      this.assertGeneration(input.expectedGeneration);
-    });
+    await this.mutateSelected(input.expectedGeneration, (driver, innerGeneration) =>
+      driver.updateContinuityMemory({ ...input, expectedGeneration: innerGeneration }),
+    );
   }
 
   async deleteContinuityMemory(input: DeleteContinuityMemoryInput): Promise<void> {
-    await this.withLifecycle(async () => {
-      this.assertGeneration(input.expectedGeneration);
-      const slot = this.selected();
-      slot.lastActivityAt = Date.now();
-      await slot.driver.deleteContinuityMemory({ ...input, expectedGeneration: slot.innerGeneration });
-      this.assertGeneration(input.expectedGeneration);
-    });
+    await this.mutateSelected(input.expectedGeneration, (driver, innerGeneration) =>
+      driver.deleteContinuityMemory({ ...input, expectedGeneration: innerGeneration }),
+    );
   }
 
   async migrateContinuityMemory(input: MigrateContinuityMemoryInput): Promise<void> {
-    await this.withLifecycle(async () => {
-      this.assertGeneration(input.expectedGeneration);
-      const slot = this.selected();
-      slot.lastActivityAt = Date.now();
-      await slot.driver.migrateContinuityMemory({ expectedGeneration: slot.innerGeneration });
-      this.assertGeneration(input.expectedGeneration);
-    });
+    await this.mutateSelected(input.expectedGeneration, (driver, innerGeneration) =>
+      driver.migrateContinuityMemory({ expectedGeneration: innerGeneration }),
+    );
   }
 
   async continuityPlanAction(input: ContinuityPlanActionInput): Promise<void> {
-    await this.withLifecycle(async () => {
-      this.assertGeneration(input.expectedGeneration);
-      const slot = this.selected();
-      slot.lastActivityAt = Date.now();
-      await slot.driver.continuityPlanAction({ ...input, expectedGeneration: slot.innerGeneration });
-      this.assertGeneration(input.expectedGeneration);
-    });
+    await this.mutateSelected(input.expectedGeneration, (driver, innerGeneration) =>
+      driver.continuityPlanAction({ ...input, expectedGeneration: innerGeneration }),
+    );
   }
 
   async answerUiRequest(input: UiResponse): Promise<void> {
@@ -2187,12 +2085,7 @@ export class RuntimeCoordinator implements PiDriver {
         branch: checkout.branch,
         baseline: checkout.baseline,
         baselineTree: checkout.baselineTree,
-        parkedRoot: checkout.parked.root,
-        parkedCommonDir: checkout.parked.commonDir,
-        parkedHead: checkout.parked.head,
-        parkedHeadRef: checkout.parked.headRef,
-        parkedIndexTree: checkout.parked.indexTree,
-        parkedWorktreeTree: checkout.parked.worktreeTree,
+        ...parkedCheckoutFields(checkout.parked),
       });
       slot.checkoutProvisional = {
         projectId: project.id,
@@ -2340,18 +2233,7 @@ export class RuntimeCoordinator implements PiDriver {
     const registry = this.registry();
     const project = registry.get(projectId);
     if (!project) throw new Error("project is unavailable");
-    const owner = this.checkoutOwner(projectId);
-    if (owner?.parkedRoot && owner.parkedCommonDir && owner.parkedIndexTree && owner.parkedWorktreeTree) {
-      return {
-        root: owner.parkedRoot,
-        commonDir: owner.parkedCommonDir,
-        head: owner.parkedHead,
-        headRef: owner.parkedHeadRef,
-        indexTree: owner.parkedIndexTree,
-        worktreeTree: owner.parkedWorktreeTree,
-      };
-    }
-    return captureCheckoutState(project.cwd, true);
+    return storedParkedCheckout(this.checkoutOwner(projectId)) ?? captureCheckoutState(project.cwd, true);
   }
 
   private async applySlotChanges(slot: RuntimeSlot, expectedRevision: string): Promise<void> {
@@ -2566,17 +2448,9 @@ export class RuntimeCoordinator implements PiDriver {
   }
 
   private parkedCheckout(record: NonNullable<ReturnType<ProjectRegistry["workspaceForSession"]>>): CheckoutState {
-    if (!record.parkedRoot || !record.parkedCommonDir || !record.parkedIndexTree || !record.parkedWorktreeTree) {
-      throw new Error("parked project-folder state is unavailable");
-    }
-    return {
-      root: record.parkedRoot,
-      commonDir: record.parkedCommonDir,
-      head: record.parkedHead,
-      headRef: record.parkedHeadRef,
-      indexTree: record.parkedIndexTree,
-      worktreeTree: record.parkedWorktreeTree,
-    };
+    const parked = storedParkedCheckout(record);
+    if (!parked) throw new Error("parked project-folder state is unavailable");
+    return parked;
   }
 
   private async publishWorkspaceState(slot: RuntimeSlot): Promise<void> {
@@ -2711,12 +2585,7 @@ export class RuntimeCoordinator implements PiDriver {
         await registry.setSessionWorkspace({
           ...record,
           mode: "checkout",
-          parkedRoot: parked.root,
-          parkedCommonDir: parked.commonDir,
-          parkedHead: parked.head,
-          parkedHeadRef: parked.headRef,
-          parkedIndexTree: parked.indexTree,
-          parkedWorktreeTree: parked.worktreeTree,
+          ...parkedCheckoutFields(parked),
         });
         const previousId = slot.id;
         slot.suppressEvents = true;
@@ -2743,18 +2612,9 @@ export class RuntimeCoordinator implements PiDriver {
         throw error;
       }
     } else {
-      if (!record.parkedRoot || !record.parkedCommonDir || !record.parkedIndexTree || !record.parkedWorktreeTree) {
-        throw new Error("parked project checkout state is unavailable");
-      }
+      const parked = storedParkedCheckout(record);
+      if (!parked) throw new Error("parked project checkout state is unavailable");
       const session = await captureCheckoutState(project.cwd, true);
-      const parked = {
-        root: record.parkedRoot,
-        commonDir: record.parkedCommonDir,
-        head: record.parkedHead,
-        headRef: record.parkedHeadRef,
-        indexTree: record.parkedIndexTree,
-        worktreeTree: record.parkedWorktreeTree,
-      };
       await registry.writeHandoffJournal({
         version: 1,
         sessionId: slot.id,
@@ -2836,12 +2696,7 @@ export class RuntimeCoordinator implements PiDriver {
         branch: checkout.branch,
         baseline: checkout.baseline,
         baselineTree: checkout.baselineTree,
-        parkedRoot: checkout.parked.root,
-        parkedCommonDir: checkout.parked.commonDir,
-        parkedHead: checkout.parked.head,
-        parkedHeadRef: checkout.parked.headRef,
-        parkedIndexTree: checkout.parked.indexTree,
-        parkedWorktreeTree: checkout.parked.worktreeTree,
+        ...parkedCheckoutFields(checkout.parked),
       });
       await this.refreshWorkspace(slot, true);
       return;
@@ -2894,23 +2749,8 @@ export class RuntimeCoordinator implements PiDriver {
     await slot.driver.timelineRelocationReady();
     const session = await captureCheckoutState(slot.driver.runtimeDetails().cwd, true);
     if (record.mode === "checkout") {
-      if (
-        !record.parkedRoot ||
-        !record.parkedCommonDir ||
-        !record.parkedIndexTree ||
-        !record.parkedWorktreeTree ||
-        !record.branch ||
-        !record.commonDir
-      )
-        throw new Error("parked project-folder state is unavailable");
-      const parked: CheckoutState = {
-        root: record.parkedRoot,
-        commonDir: record.parkedCommonDir,
-        head: record.parkedHead,
-        headRef: record.parkedHeadRef,
-        indexTree: record.parkedIndexTree,
-        worktreeTree: record.parkedWorktreeTree,
-      };
+      const parked = storedParkedCheckout(record);
+      if (!parked || !record.branch || !record.commonDir) throw new Error("parked project-folder state is unavailable");
       try {
         await restoreCheckoutState(project.cwd, {
           ...parked,
@@ -3993,6 +3833,32 @@ export class RuntimeCoordinator implements PiDriver {
       throw new Error(`session changed while ${action}`);
     }
   }
+  /** Runs a session-changing command on the selected session under the lifecycle lock, rechecking the generation after. */
+  private async mutateSelected(
+    expectedGeneration: number,
+    run: (driver: SessionRuntime, innerGeneration: number) => Promise<void>,
+  ): Promise<void> {
+    await this.withLifecycle(async () => {
+      this.assertGeneration(expectedGeneration);
+      const slot = this.selected();
+      slot.lastActivityAt = Date.now();
+      await run(slot.driver, slot.innerGeneration);
+      this.assertGeneration(expectedGeneration);
+    });
+  }
+
+  /** Reads from the selected session, failing if another session was selected before the read returned. */
+  private async readSelected<T extends object>(
+    action: string,
+    read: (driver: SessionRuntime) => Promise<T>,
+  ): Promise<T & { sessionGeneration: number }> {
+    const slot = this.selected();
+    const generation = this.generation;
+    const result = await read(slot.driver);
+    this.assertSelected(slot, generation, action);
+    return { ...result, sessionGeneration: generation };
+  }
+
 
   private async withLifecycle<T>(action: () => Promise<T>): Promise<T> {
     if (this.lifecycleBusy) throw new Error("another session operation is in progress");

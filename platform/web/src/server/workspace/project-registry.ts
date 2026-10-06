@@ -994,20 +994,7 @@ export class ProjectRegistry {
   }
 
   private async resolveProjects(
-    records: Array<{
-      directory: string;
-      label?: string;
-      archivedAt?: string;
-      setupCommand?: string;
-      verifyPolicy?: VerifyPolicyReadModel;
-      timelineEnabled?: boolean;
-      guardEnabled?: boolean;
-      guardRules?: GuardRuleOverrides;
-      workspacePolicy?: WorkspacePolicyMode;
-      guardTimeoutSeconds?: DialogTimeoutSeconds;
-      clarifyTimeoutSeconds?: DialogTimeoutSeconds;
-      toolOverrides?: ToolOverrideReadModel;
-    }>,
+    records: Array<Omit<RegisteredProject, "id" | "cwd" | "label"> & { directory: string; label?: string }>,
   ): Promise<RegisteredProject[]> {
     const projects: RegisteredProject[] = [];
     for (const record of records.slice(0, MAX_PROJECTS)) {

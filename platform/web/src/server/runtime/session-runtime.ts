@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { realpath, unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
@@ -35,10 +35,8 @@ import {
   loadConfig as loadPylonCoreConfig,
 } from "pylon-core/src/config.ts";
 import {
-  buildSessionContext,
   createAgentSessionRuntime,
   createEventBus,
-  estimateTokens,
   ModelRuntime,
   SessionManager,
   sessionEntryToContextMessages,
@@ -51,29 +49,19 @@ import {
   type CreateAgentSessionRuntimeFactory,
   type ExtensionError,
   type InlineExtension,
-  type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_GUARD_RULES } from "../../shared/settings/guard-policy.ts";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import { STATEQL_GLOBAL_UI_ACTOR } from "../../shared/protocol/snapshots.ts";
-import type { AcceptedCommand, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
-import type { HeliosBrowserInput, HeliosBrowserResult, HeliosPageIdentity } from "../../shared/protocol/helios.ts";
+import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
+import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
   HeliosAndroidToolingCommand,
   HeliosAndroidToolingResult,
 } from "../../shared/protocol/helios-android-tooling.ts";
-import {
-  MAX_COMPACTION_DISPLAY_HISTORY_ITEMS,
-  MAX_COMPACTION_DISPLAY_PATH,
-  MAX_COMPACTION_DISPLAY_RECORDS,
-  MAX_COMPACTION_DISPLAY_SOURCE_ID,
-  MAX_COMPACTION_DISPLAY_TEXT,
-} from "../../shared/protocol/events.ts";
 import type {
   ChangedFileReadModel,
-  CompactionDisplayReadModel,
   DelegatedAgentRunReadModel,
-  MessageReadModel,
   ModelOptionReadModel,
   ProviderAuthReadModel,
   ProviderAuthType,
@@ -113,7 +101,6 @@ import type {
   StateQLCommandInput,
   StateQLExport,
   StateQLCommandResult,
-  StateQLCommandResponseReadModel,
   StateQLRowsPage,
   StateQLSnapshot,
   StateQLWorkspace,
@@ -121,14 +108,8 @@ import type {
   TimelineCheckpointFiles,
   TurnDiffQuery,
   TurnDiffResult,
-  VerifyPolicyReadModel,
 } from "../../shared/protocol/snapshots.ts";
-import {
-  isPapercutListPage,
-  isStateQLCommandInput,
-  isStateQLRowsPage,
-  isStateQLSnapshot,
-} from "../../shared/protocol/validation.ts";
+import { isStateQLCommandInput } from "../../shared/protocol/validation.ts";
 import { GenerationGate } from "./generation-gate.ts";
 import type {
   DeleteSessionInput,
@@ -143,17 +124,9 @@ import type {
   HeliosBrowserStreamInput,
   ForkInput,
   NewSessionInput,
-  PiDriver,
   PapercutMutationInput,
-  ProjectInput,
-  ProjectArchiveInput,
   PromptInput,
-  QueueMutationInput,
   RewindPromptInput,
-  ReorderActiveSessionInput,
-  ReorderProjectInput,
-  RemoveProjectInput,
-  RenameProjectInput,
   ReplacementResult,
   RuntimeHandle,
   RuntimeTarget,
@@ -163,23 +136,19 @@ import type {
   SetProjectTrustInput,
   SetPackageEnabledInput,
   SetModelInput,
-  SetSessionActiveInput,
-  SetSessionPinnedInput,
   SetThinkingLevelInput,
   SetSessionControlsInput,
   StartProviderLoginInput,
-  SessionArchiveInput,
   SwitchSessionInput,
   TimelineCheckpointDiffInput,
   TimelineCheckpointInput,
   UpdateContinuityMemoryInput,
   UpdatePackageSettingsInput,
   UpdateHookSettingsInput,
-  UpdateRuntimePolicyInput,
-  UpdateToolPolicyInput,
 } from "./pi-driver.ts";
 import { RemoteUiBridge, type ProviderAuthPrompt, type UiRequest, type UiResponse } from "./remote-ui-bridge.ts";
 import type { StateQLCredentialVault } from "../database/stateql-credential-vault.ts";
+import { packageRequest } from "./package-request.ts";
 import { createPylonModelRuntime, createPylonRuntimeFactory, type StartupHookTiming } from "./runtime-factory.ts";
 import type { ExtensionLoadTiming } from "./pi-startup-timings.ts";
 import {
@@ -228,6 +197,15 @@ import { modelRateLookup, type UsageRateLookup } from "../usage/usage-aggregatio
 import { reconciledSessionCost } from "../usage/usage-history.ts";
 import { projectIdForCwd, SessionIndex } from "../sessions/session-index.ts";
 import { ProjectRegistry } from "../workspace/project-registry.ts";
+import {
+  heliosAndroidToolingResult,
+  heliosResult,
+  papercutListResult,
+  stateqlCommandResult,
+  stateqlResult,
+  stateqlRowsResult,
+} from "./package-results.ts";
+import { compactionTranscriptMessage, projectedCompactionMessage } from "./compaction-display.ts";
 
 interface TrashAttempt {
   status: number | null;
@@ -242,11 +220,15 @@ interface TimelineEditTransaction {
   cancel(): Promise<void>;
 }
 
-function cloneVerifyPolicy(value: VerifyPolicyReadModel): VerifyPolicyReadModel {
-  return value.mode === "auto" ? { mode: "auto" } : { mode: "selected", checks: [...value.checks] };
+/** A deep copy of a runtime policy, with absent tool overrides filled in as empty. */
+function cloneRuntimePolicy(policy: RuntimePolicyReadModel): RuntimePolicyReadModel {
+  const copy = structuredClone(policy);
+  copy.global.toolOverrides ??= {};
+  copy.project.toolOverrides ??= {};
+  copy.session.toolOverrides ??= {};
+  copy.effective.toolOverrides ??= {};
+  return copy;
 }
-
-const cloneToolOverrides = (value: RuntimePolicyReadModel["effective"]["toolOverrides"]) => ({ ...(value ?? {}) });
 
 function defaultRuntimePolicy(): RuntimePolicyReadModel {
   return {
@@ -382,587 +364,6 @@ function parseContinuityCompactionContinuation(
     sessionId: raw.sessionId,
     sessionGeneration: Number(raw.sessionGeneration),
     taskGeneration: Number(raw.taskGeneration),
-  };
-}
-
-const PYLON_COMPACTION_SOURCE = "pylon-compaction";
-
-function compactionSourceEntryCount(details: unknown): number | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
-  const raw = details as Record<string, unknown>;
-  return raw.type === "pi-continuity-compaction" &&
-    (raw.version === 1 || raw.version === 2 || raw.version === 3) &&
-    Number.isSafeInteger(raw.sourceEntryCount) &&
-    Number(raw.sourceEntryCount) >= 0
-    ? Number(raw.sourceEntryCount)
-    : undefined;
-}
-
-function compactionDisplay(details: unknown): CompactionDisplayReadModel | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
-  const raw = details as Record<string, unknown>;
-  const bounded = (value: unknown, maximum: number, required = false) =>
-    typeof value === "string" && value.length <= maximum && (!required || value.length > 0);
-  const historyRecord = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const item = value as Record<string, unknown>;
-    return (
-      bounded(item.path, MAX_COMPACTION_DISPLAY_PATH, true) &&
-      (item.sourceEntryId === undefined || bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID))
-    );
-  };
-  const record = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const item = value as Record<string, unknown>;
-    return (
-      bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) &&
-      (item.role === "user" || item.role === "assistant" || item.role === "tool" || item.role === "summary") &&
-      bounded(item.text, MAX_COMPACTION_DISPLAY_TEXT, true) &&
-      (item.isError === undefined || typeof item.isError === "boolean")
-    );
-  };
-  const supplement = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const item = value as Record<string, unknown>;
-    return (
-      bounded(item.sourceEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) &&
-      (item.role === "user" || item.role === "assistant" || item.role === "tool") &&
-      (item.category === "constraint" ||
-        item.category === "decision" ||
-        item.category === "error" ||
-        item.category === "outcome" ||
-        item.category === "context") &&
-      bounded(item.quote, 800, true) &&
-      typeof item.sourceHash === "string" &&
-      /^[a-f0-9]{64}$/.test(item.sourceHash) &&
-      typeof item.quoteHash === "string" &&
-      item.quoteHash ===
-        createHash("sha256")
-          .update(item.quote as string)
-          .digest("hex")
-    );
-  };
-  const history = raw.history as Record<string, unknown> | undefined;
-  const generic = raw.mode === "generic";
-  const activeWork = raw.mode === "active-work";
-  // Persisted detail versions are trusted only when their exact shape is known.
-  if (
-    raw.type !== "pi-continuity-compaction" ||
-    raw.version !== 3 ||
-    (!generic && !activeWork) ||
-    !Number.isSafeInteger(raw.sourceEntryCount) ||
-    Number(raw.sourceEntryCount) < 0 ||
-    (raw.currentTaskEntryId !== undefined && !bounded(raw.currentTaskEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)) ||
-    (activeWork &&
-      (!bounded(raw.runId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) ||
-        !bounded(raw.timelineId, MAX_COMPACTION_DISPLAY_SOURCE_ID, true) ||
-        (raw.handoffEntryId !== undefined && !bounded(raw.handoffEntryId, MAX_COMPACTION_DISPLAY_SOURCE_ID)))) ||
-    !history ||
-    Array.isArray(history) ||
-    !Array.isArray(history.read) ||
-    history.read.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS ||
-    !history.read.every(historyRecord) ||
-    !Array.isArray(history.modified) ||
-    history.modified.length > MAX_COMPACTION_DISPLAY_HISTORY_ITEMS ||
-    !history.modified.every(historyRecord) ||
-    !Array.isArray(raw.supplements) ||
-    raw.supplements.length > 8 ||
-    !raw.supplements.every(supplement) ||
-    ((generic || raw.records !== undefined) &&
-      (!Array.isArray(raw.records) ||
-        raw.records.length > MAX_COMPACTION_DISPLAY_RECORDS ||
-        !raw.records.every(record)))
-  )
-    return undefined;
-  const records = Array.isArray(raw.records)
-    ? (raw.records as Array<Record<string, unknown>>)
-    : (raw.supplements as Array<Record<string, unknown>>).map(item => ({
-        sourceEntryId: item.sourceEntryId,
-        role: item.role,
-        text: item.quote,
-        ...(item.category === "error" ? { isError: true } : {}),
-      }));
-  const source = (item: Record<string, unknown>) => ({
-    sourceEntryId: item.sourceEntryId as string,
-    text: item.text as string,
-  });
-  const historySource = (item: unknown) => {
-    const record = item as Record<string, unknown>;
-    return {
-      path: record.path as string,
-      ...(typeof record.sourceEntryId === "string" ? { sourceEntryId: record.sourceEntryId } : {}),
-    };
-  };
-  return {
-    records: records.flatMap(item =>
-      item.role === "user" || item.role === "assistant" ? [{ ...source(item), role: item.role }] : [],
-    ),
-    failedTools: records.flatMap(item => (item.role === "tool" && item.isError === true ? [source(item)] : [])),
-    toolResults: records.flatMap(item => (item.role === "tool" && item.isError !== true ? [source(item)] : [])),
-    history: {
-      read: (history.read as unknown[]).map(historySource),
-      modified: (history.modified as unknown[]).map(historySource),
-    },
-  };
-}
-
-function compactionTranscriptMessage(branch: SessionEntry[], entry: CompactionEntry): Record<string, unknown> {
-  const contextAfter = buildSessionContext(branch, entry.id).messages;
-  const estimatedContextAfter = contextAfter.reduce((total, message) => total + estimateTokens(message), 0);
-  const contextAfterTokens = Number.isFinite(estimatedContextAfter)
-    ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, estimatedContextAfter))
-    : 0;
-  const contextBeforeTokens =
-    Number.isSafeInteger(entry.tokensBefore) && entry.tokensBefore >= 0 ? entry.tokensBefore : undefined;
-  const sourceEntryCount = compactionSourceEntryCount(entry.details);
-  const display = compactionDisplay(entry.details);
-  return {
-    role: "custom",
-    customType: PYLON_COMPACTION_SOURCE,
-    display: true,
-    content: entry.summary,
-    entryId: entry.id,
-    timestamp: entry.timestamp,
-    compaction: {
-      contextAfterTokens,
-      ...(contextBeforeTokens === undefined ? {} : { contextBeforeTokens }),
-      ...(sourceEntryCount === undefined ? {} : { sourceEntryCount }),
-      ...(display ? { display } : {}),
-    },
-  };
-}
-
-function projectedCompactionMessage(branch: SessionEntry[], entry: CompactionEntry): MessageReadModel | undefined {
-  const message = projectConversation([compactionTranscriptMessage(branch, entry)], { limitMessages: false })
-    .messages[0];
-  return message ? { ...message, id: `compaction-${entry.id}` } : undefined;
-}
-
-const MAX_HELIOS_FRAME_BYTES = 5 * 1024 * 1024;
-const MAX_HELIOS_FRAME_BASE64 = Math.ceil(MAX_HELIOS_FRAME_BYTES / 3) * 4;
-
-function heliosPage(value: unknown): HeliosPageIdentity | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const page = value as Record<string, unknown>;
-  if (
-    !Number.isInteger(page.index) ||
-    (page.index as number) < 0 ||
-    (page.index as number) > 100 ||
-    typeof page.title !== "string" ||
-    page.title.length > 500 ||
-    typeof page.url !== "string" ||
-    page.url.length > 4096
-  )
-    return undefined;
-  return { index: page.index as number, title: page.title, url: page.url };
-}
-
-function stateqlResult(
-  value: unknown,
-  sessionId: string,
-  sessionGeneration: number,
-  workspace: StateQLWorkspace,
-): StateQLSnapshot {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("StateQL returned an invalid snapshot");
-  const raw = value as Record<string, any>;
-  const closed = raw.session?.status === "closed";
-  const candidate = {
-    ...raw,
-    protocolVersion: PROTOCOL_VERSION,
-    sessionGeneration,
-    workspace,
-    history: Array.isArray(raw.history)
-      ? raw.history.map((item: any) => ({
-          ...item,
-          origin: ["legacy", "user", "model", "system", "api"].includes(String(item?.origin)) ? item.origin : "legacy",
-        }))
-      : raw.history,
-    ...(closed ? { connection: null, transaction: null } : {}),
-  };
-  const actorId = workspace === "global" ? STATEQL_GLOBAL_UI_ACTOR : sessionId;
-  if (!isStateQLSnapshot(candidate) || candidate.actor_id !== actorId || candidate.workspace !== workspace)
-    throw new Error("StateQL returned an invalid snapshot");
-  const snapshot = candidate as StateQLSnapshot;
-  const result: StateQLSnapshot = {
-    protocolVersion: PROTOCOL_VERSION,
-    sessionGeneration,
-    workspace,
-    session: { session_id: snapshot.session.session_id, name: snapshot.session.name, status: snapshot.session.status },
-    actor_id: snapshot.actor_id,
-    connection: snapshot.connection
-      ? {
-          connection_id: snapshot.connection.connection_id,
-          ...(snapshot.connection.alias !== undefined ? { alias: snapshot.connection.alias } : {}),
-          name: snapshot.connection.name,
-          status: snapshot.connection.status,
-          driver: snapshot.connection.driver,
-          database: snapshot.connection.database,
-          read_only: snapshot.connection.read_only,
-        }
-      : null,
-    transaction: snapshot.transaction
-      ? {
-          transaction_id: snapshot.transaction.transaction_id,
-          owner_actor_id: snapshot.transaction.owner_actor_id,
-          state: snapshot.transaction.state,
-        }
-      : null,
-    state_version: snapshot.state_version,
-    state_confidence: snapshot.state_confidence,
-    recent_results: snapshot.recent_results.map(item => ({ alias: item.alias, handle: item.handle, rows: item.rows })),
-    recent_operations: snapshot.recent_operations.map(item => ({
-      handle: item.handle,
-      actor_id: item.actor_id,
-      type: item.type,
-      affected_rows: item.affected_rows,
-      status: item.status,
-    })),
-    history: snapshot.history.map(item => ({
-      command_id: item.command_id,
-      timestamp: item.timestamp,
-      session_id: item.session_id,
-      actor_id: item.actor_id,
-      origin: item.origin,
-      command: item.command,
-      sql: item.sql,
-      ...(item.target ? { target: item.target } : {}),
-      handle: item.handle,
-      executed: item.executed,
-      cached: item.cached,
-      success: item.success,
-      error_code: item.error_code,
-    })),
-  };
-  // ponytail: reject escape-heavy aggregate payloads instead of budgeting for the protocol's theoretical JSON worst case.
-  if (Buffer.byteLength(JSON.stringify(result), "utf8") > 512 * 1024)
-    throw new Error("StateQL returned an oversized snapshot");
-  return result;
-}
-
-const MAX_STATEQL_ROWS_BYTES = 256 * 1024;
-
-function stateqlJsonValue(value: unknown, depth: number, budget: { bytes: number }): unknown {
-  if (depth > 6) throw new Error("StateQL returned invalid rows");
-  budget.bytes++;
-  if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
-  if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
-    budget.bytes += Buffer.byteLength(String(value), "utf8");
-    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
-    return value;
-  }
-  if (typeof value === "string") {
-    if (value.length > 64 * 1024) throw new Error("StateQL returned invalid rows");
-    budget.bytes += Buffer.byteLength(value, "utf8");
-    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
-    return value;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > 100) throw new Error("StateQL returned invalid rows");
-    return value.map(item => stateqlJsonValue(item, depth + 1, budget));
-  }
-  if (
-    !value ||
-    typeof value !== "object" ||
-    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
-  ) {
-    throw new Error("StateQL returned invalid rows");
-  }
-  const entries = Object.entries(value);
-  if (entries.length > 100) throw new Error("StateQL returned invalid rows");
-  const result: Record<string, unknown> = Object.create(null);
-  for (const [key, item] of entries) {
-    if (key.length > 500) throw new Error("StateQL returned invalid rows");
-    budget.bytes += Buffer.byteLength(key, "utf8");
-    if (budget.bytes > MAX_STATEQL_ROWS_BYTES) throw new Error("StateQL returned oversized rows");
-    result[key] = stateqlJsonValue(item, depth + 1, budget);
-  }
-  return result;
-}
-
-function stateqlRowsResult(
-  value: unknown,
-  handle: string,
-  offset: number,
-  limit: number,
-  actorId: string,
-  sessionGeneration: number,
-  workspace: StateQLWorkspace,
-): StateQLRowsPage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("StateQL returned invalid rows");
-  const raw = value as Record<string, unknown>;
-  if (raw.result_id !== handle || raw.offset !== offset || raw.limit !== limit || !Array.isArray(raw.rows)) {
-    throw new Error("StateQL returned invalid rows");
-  }
-  const budget = { bytes: 0 };
-  const rows = raw.rows.map(row => stateqlJsonValue(row, 0, budget));
-  const candidate = {
-    protocolVersion: PROTOCOL_VERSION,
-    sessionGeneration,
-    workspace,
-    actor_id: actorId,
-    handle,
-    ...(Array.isArray(raw.columns)
-      ? {
-          columns: stateqlJsonValue(raw.columns, 0, budget),
-          full_values: true,
-          row_tokens: stateqlJsonValue(raw.row_tokens ?? rows.map(() => null), 0, budget),
-          writable_columns: stateqlJsonValue(raw.writable_columns ?? [], 0, budget),
-          ...(typeof raw.editing_reason === "string" ? { editing_reason: raw.editing_reason.slice(0, 500) } : {}),
-        }
-      : {}),
-    offset: raw.offset,
-    limit: raw.limit,
-    rows,
-    returned: raw.returned,
-    total: raw.total,
-    truncated: raw.truncated,
-    next_offset: raw.next_offset,
-  };
-  if (!isStateQLRowsPage(candidate)) throw new Error("StateQL returned invalid rows");
-  const page = candidate as StateQLRowsPage;
-  if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_STATEQL_ROWS_BYTES)
-    throw new Error("StateQL returned oversized rows");
-  return page;
-}
-
-function stateqlCommandResult(
-  value: unknown,
-  input: StateQLCommandInput,
-  actorId: string,
-  sessionGeneration: number,
-  workspace: StateQLWorkspace,
-): StateQLCommandResult {
-  const base = {
-    protocolVersion: PROTOCOL_VERSION,
-    sessionGeneration,
-    workspace,
-    actor_id: actorId,
-    command: input.command,
-  } as const;
-  if (
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as Record<string, unknown>).declined === true
-  )
-    return { ...base, status: "declined" };
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("StateQL returned an invalid command response");
-  const raw = value as Record<string, any>;
-  if (
-    typeof raw.ok !== "boolean" ||
-    typeof raw.command_id !== "string" ||
-    !raw.command_id ||
-    raw.command_id.length > 128 ||
-    typeof raw.session_id !== "string" ||
-    !raw.session_id ||
-    raw.session_id.length > 128 ||
-    !raw.meta ||
-    typeof raw.meta !== "object" ||
-    !Number.isFinite(raw.meta.duration_ms) ||
-    raw.meta.duration_ms < 0
-  )
-    throw new Error("StateQL returned an invalid command response");
-  const meta = {
-    duration_ms: raw.meta.duration_ms,
-    ...(typeof raw.meta.state_version === "string" && raw.meta.state_version.length <= 128
-      ? { state_version: raw.meta.state_version }
-      : {}),
-    ...(typeof raw.meta.state_confidence === "string" && raw.meta.state_confidence.length <= 100
-      ? { state_confidence: raw.meta.state_confidence }
-      : {}),
-  };
-  let response: StateQLCommandResponseReadModel;
-  if (raw.ok) {
-    if (
-      !Array.isArray(raw.warnings) ||
-      raw.warnings.length > 100 ||
-      !raw.warnings.every(
-        (warning: unknown) =>
-          Boolean(warning) &&
-          typeof warning === "object" &&
-          !Array.isArray(warning) &&
-          typeof (warning as any).code === "string" &&
-          (warning as any).code.length <= 100 &&
-          typeof (warning as any).message === "string" &&
-          (warning as any).message.length <= 2_000,
-      )
-    )
-      throw new Error("StateQL returned an invalid command response");
-    response = {
-      ok: true,
-      command_id: raw.command_id,
-      session_id: raw.session_id,
-      data: stateqlJsonValue(raw.data, 0, { bytes: 0 }),
-      warnings: raw.warnings.map((warning: any) => ({ code: warning.code, message: warning.message })),
-      meta,
-    };
-  } else {
-    const error = raw.error;
-    if (
-      !error ||
-      typeof error !== "object" ||
-      typeof error.code !== "string" ||
-      !error.code ||
-      error.code.length > 100 ||
-      typeof error.message !== "string" ||
-      typeof error.retryable !== "boolean" ||
-      typeof error.executed !== "boolean" ||
-      (error.suggested_action !== undefined && typeof error.suggested_action !== "string")
-    )
-      throw new Error("StateQL returned an invalid command response");
-    const redact = (text: string) =>
-      text
-        .slice(0, 2_000)
-        .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+(?::[^\s/@]*)?@/giu, "$1***@")
-        .replace(/\b(password|token|secret|api[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1=***");
-    response = {
-      ok: false,
-      command_id: raw.command_id,
-      session_id: raw.session_id,
-      error: {
-        code: error.code,
-        message: redact(error.message),
-        retryable: error.retryable,
-        executed: error.executed,
-        ...(typeof error.suggested_action === "string" ? { suggested_action: redact(error.suggested_action) } : {}),
-      },
-      meta,
-    };
-  }
-  const result: StateQLCommandResult = { ...base, status: "completed", response };
-  if (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_STATEQL_ROWS_BYTES)
-    throw new Error("StateQL returned an oversized command response");
-  return result;
-}
-
-function papercutListResult(
-  value: unknown,
-  status: PapercutStatusReadModel | "all",
-  query: string,
-  offset: number,
-  limit: number,
-  sessionId: string,
-  sessionGeneration: number,
-  sanitize: (value: string) => string,
-): PapercutListPage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Papercut returned an invalid list");
-  const raw = value as Record<string, any>;
-  if (
-    raw.version !== 1 ||
-    raw.sessionId !== sessionId ||
-    raw.status !== status ||
-    raw.query !== query ||
-    raw.offset !== offset ||
-    raw.limit !== limit ||
-    !Array.isArray(raw.records)
-  )
-    throw new Error("Papercut returned an invalid list");
-  const candidate = {
-    protocolVersion: PROTOCOL_VERSION,
-    sessionGeneration,
-    revision: raw.revision,
-    status,
-    query,
-    offset,
-    limit,
-    total: raw.total,
-    records: raw.records,
-    nextOffset:
-      Number.isSafeInteger(raw.total) && offset + raw.records.length < raw.total ? offset + raw.records.length : null,
-  };
-  if (!isPapercutListPage(candidate)) throw new Error("Papercut returned an invalid list");
-  const source = candidate as PapercutListPage;
-  const result: PapercutListPage = {
-    ...source,
-    records: source.records.map(record => ({
-      ...record,
-      message: sanitize(record.message),
-      ...(record.resolution !== undefined ? { resolution: sanitize(record.resolution) } : {}),
-      ...(record.dismissal !== undefined ? { dismissal: sanitize(record.dismissal) } : {}),
-    })),
-  };
-  if (!isPapercutListPage(result)) throw new Error("Papercut returned an invalid list");
-  return result;
-}
-
-function heliosAndroidToolingResult(value: unknown, sessionGeneration: number): HeliosAndroidToolingResult {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Helios returned an invalid Android tooling response");
-  const raw = value as Record<string, unknown>;
-  const allowed = new Set(["state", "appiumVersion", "driverVersion", "message"]);
-  const version = (item: unknown) => typeof item === "string" && /^[0-9A-Za-z.+-]{1,50}$/.test(item);
-  if (
-    Object.keys(raw).some(key => !allowed.has(key)) ||
-    typeof raw.state !== "string" ||
-    !["missing", "ready", "invalid", "busy"].includes(raw.state) ||
-    !version(raw.appiumVersion) ||
-    !version(raw.driverVersion) ||
-    (raw.message !== undefined &&
-      (typeof raw.message !== "string" ||
-        !raw.message ||
-        raw.message.length > 300 ||
-        /[\u0000-\u001f\u007f-\u009f]/u.test(raw.message)))
-  ) {
-    throw new Error("Helios returned an invalid Android tooling response");
-  }
-  return {
-    version: 1,
-    sessionGeneration,
-    state: raw.state as HeliosAndroidToolingResult["state"],
-    appiumVersion: raw.appiumVersion as string,
-    driverVersion: raw.driverVersion as string,
-    ...(raw.message === undefined ? {} : { message: raw.message as string }),
-  };
-}
-
-function heliosResult(value: unknown, sessionGeneration: number): HeliosBrowserResult {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Helios returned an invalid embedded browser response");
-  const raw = value as Record<string, unknown>;
-  if (raw.version !== 1 || typeof raw.active !== "boolean" || typeof raw.controlled !== "boolean")
-    throw new Error("Helios returned an invalid embedded browser response");
-  const ownership = ["owned", "cdp-attached", "extension-attached"].includes(String(raw.ownership))
-    ? (raw.ownership as HeliosBrowserResult["ownership"])
-    : undefined;
-  const state = ["starting", "ready", "cleanup-required", "closing", "closed"].includes(String(raw.state))
-    ? (raw.state as HeliosBrowserResult["state"])
-    : undefined;
-  const page = raw.page === undefined ? undefined : heliosPage(raw.page);
-  const tabs = Array.isArray(raw.tabs) ? raw.tabs.slice(0, 101).map(heliosPage) : undefined;
-  if ((raw.page !== undefined && !page) || tabs?.some(tab => !tab))
-    throw new Error("Helios returned invalid page metadata");
-  let frame: HeliosBrowserResult["frame"];
-  if (raw.frame !== undefined) {
-    const image =
-      raw.frame && typeof raw.frame === "object" && !Array.isArray(raw.frame)
-        ? (raw.frame as Record<string, unknown>)
-        : undefined;
-    if (
-      image?.mimeType !== "image/png" ||
-      typeof image.data !== "string" ||
-      !image.data ||
-      image.data.length > MAX_HELIOS_FRAME_BASE64 ||
-      image.data.length % 4 !== 0 ||
-      !/^[A-Za-z0-9+/]*={0,2}$/.test(image.data)
-    )
-      throw new Error("Helios returned an invalid embedded browser frame");
-    const padding = image.data.endsWith("==") ? 2 : image.data.endsWith("=") ? 1 : 0;
-    if ((image.data.length / 4) * 3 - padding > MAX_HELIOS_FRAME_BYTES)
-      throw new Error("Helios returned an oversized embedded browser frame");
-    frame = { mimeType: "image/png", data: image.data };
-  }
-  return {
-    version: 1,
-    sessionGeneration,
-    active: raw.active,
-    controlled: raw.controlled,
-    ...(ownership ? { ownership } : {}),
-    ...(state ? { state } : {}),
-    ...(page ? { page } : {}),
-    ...(tabs ? { tabs: tabs as HeliosPageIdentity[] } : {}),
-    ...(frame ? { frame } : {}),
   };
 }
 
@@ -1117,7 +518,7 @@ export interface SessionRuntimeOptions {
   stateqlCredentialVault?: StateQLCredentialVault;
 }
 
-export class SessionRuntime implements PiDriver {
+export class SessionRuntime {
   private runtime?: AgentSessionRuntime;
   private readonly gate = new GenerationGate();
   private readonly eventBus: EventBusController = createEventBus();
@@ -1795,22 +1196,6 @@ export class SessionRuntime implements PiDriver {
     });
   }
 
-  queuePrompt(_input: PromptInput): Promise<AcceptedCommand> {
-    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
-  }
-
-  queuedPrompt(_input: QueueMutationInput): Promise<QueuedPromptPayload> {
-    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
-  }
-
-  restoreQueuedPrompt(_input: QueueMutationInput): Promise<void> {
-    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
-  }
-
-  steerQueuedPrompt(_input: QueueMutationInput): Promise<AcceptedCommand> {
-    return Promise.reject(new Error("prompt queuing requires the runtime coordinator"));
-  }
-
   async steer(input: PromptInput): Promise<AcceptedCommand> {
     const session = this.sessionFor(input.expectedGeneration);
     this.pendingUserMessageIds.push(input.commandId);
@@ -1908,83 +1293,12 @@ export class SessionRuntime implements PiDriver {
   }
 
   async applyRuntimePolicy(policy: RuntimePolicyReadModel): Promise<void> {
-    this.runtimePolicy = {
-      ...policy,
-      global: {
-        ...policy.global,
-        guardRules: { ...DEFAULT_GUARD_RULES, ...policy.global.guardRules },
-        toolOverrides: cloneToolOverrides(policy.global.toolOverrides),
-      },
-      project: {
-        ...policy.project,
-        verify: cloneVerifyPolicy(policy.project.verify),
-        ...(policy.project.guardRules ? { guardRules: { ...policy.project.guardRules } } : {}),
-        toolOverrides: cloneToolOverrides(policy.project.toolOverrides),
-      },
-      session: {
-        toolOverrides: cloneToolOverrides(policy.session.toolOverrides),
-        ...(policy.session.verify ? { verify: cloneVerifyPolicy(policy.session.verify) } : {}),
-        ...(policy.session.timelineEnabled !== undefined ? { timelineEnabled: policy.session.timelineEnabled } : {}),
-        ...(policy.session.guardEnabled !== undefined ? { guardEnabled: policy.session.guardEnabled } : {}),
-        ...(policy.session.guardRules ? { guardRules: { ...policy.session.guardRules } } : {}),
-        ...(policy.session.workspace ? { workspace: policy.session.workspace } : {}),
-        ...(policy.session.guardTimeoutSeconds !== undefined
-          ? { guardTimeoutSeconds: policy.session.guardTimeoutSeconds }
-          : {}),
-        ...(policy.session.clarifyTimeoutSeconds !== undefined
-          ? { clarifyTimeoutSeconds: policy.session.clarifyTimeoutSeconds }
-          : {}),
-      },
-      effective: {
-        ...policy.effective,
-        verify: cloneVerifyPolicy(policy.effective.verify),
-        guardRules: { ...DEFAULT_GUARD_RULES, ...policy.effective.guardRules },
-        toolOverrides: cloneToolOverrides(policy.effective.toolOverrides),
-      },
-      availableVerifyChecks: policy.availableVerifyChecks.map(check => ({ ...check })),
-    };
+    const next = cloneRuntimePolicy(policy);
+    next.global.guardRules = { ...DEFAULT_GUARD_RULES, ...next.global.guardRules };
+    next.effective.guardRules = { ...DEFAULT_GUARD_RULES, ...next.effective.guardRules };
+    this.runtimePolicy = next;
     await this.publishRuntimePolicy();
     this.refreshSnapshot();
-  }
-
-  updateRuntimePolicy(_input: UpdateRuntimePolicyInput): Promise<void> {
-    return Promise.reject(new Error("runtime policy updates require the runtime coordinator"));
-  }
-
-  updateToolPolicy(_input: UpdateToolPolicyInput): Promise<void> {
-    return Promise.reject(new Error("tool policy updates require the runtime coordinator"));
-  }
-
-  addProject(_input: ProjectInput): Promise<ReplacementResult> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  removeProject(_input: RemoveProjectInput): Promise<ReplacementResult> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  renameProject(_input: RenameProjectInput): Promise<void> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  reorderProject(_input: ReorderProjectInput): Promise<void> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  archiveProject(_input: ProjectArchiveInput): Promise<ReplacementResult> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  restoreProject(_input: ProjectArchiveInput): Promise<void> {
-    return Promise.reject(new Error("project management requires the runtime coordinator"));
-  }
-
-  archiveSession(_input: SessionArchiveInput): Promise<ReplacementResult> {
-    return Promise.reject(new Error("session archiving requires the runtime coordinator"));
-  }
-
-  restoreSession(_input: SessionArchiveInput): Promise<void> {
-    return Promise.reject(new Error("session archiving requires the runtime coordinator"));
   }
 
   newSession(input?: NewSessionInput): Promise<ReplacementResult> {
@@ -2253,32 +1567,15 @@ export class SessionRuntime implements PiDriver {
   ): Promise<StateQLExport> {
     const runtime = this.requireRuntime();
     const generation = this.gate.generation;
-    const controller = new AbortController();
-    signal?.throwIfAborted();
-    const abort = () => controller.abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    this.eventBus.emit("pylon:stateql-export-request", {
-      version: 1,
-      workspace,
-      sessionId: runtime.session.sessionId,
-      handle,
-      format,
-      signal: controller.signal,
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      },
-      respond: (value: Promise<unknown>) => {
-        response ??= Promise.resolve(value);
-      },
-    });
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:stateql-export-request",
+      { version: 1, workspace, sessionId: runtime.session.sessionId, handle, format },
+      { unavailable: "StateQL exports are unavailable", signal },
+    );
     try {
-      if (!response) throw new Error("StateQL exports are unavailable");
-      const value = await response;
-      controller.signal.throwIfAborted();
+      const value = await request.answer;
+      request.signal.throwIfAborted();
       if (this.gate.generation !== generation) throw new Error("Session changed during export");
       const data = value as { content?: unknown; format?: unknown };
       if (
@@ -2297,50 +1594,23 @@ export class SessionRuntime implements PiDriver {
         format,
       };
     } finally {
-      controller.abort();
-      signal?.removeEventListener("abort", abort);
+      request.close();
     }
   }
 
   async stateqlSnapshot(historyLimit: number, workspace: StateQLWorkspace = "session"): Promise<StateQLSnapshot> {
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:stateql-snapshot-request", {
-      version: 1,
-      workspace,
-      sessionId: runtime.session.sessionId,
-      historyLimit,
-      signal: controller.signal,
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      },
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("StateQL snapshot is unavailable");
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:stateql-snapshot-request",
+      { version: 1, workspace, sessionId: runtime.session.sessionId, historyLimit },
+      { unavailable: "StateQL snapshot is unavailable" },
+    );
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener("abort", () => reject(new Error("StateQL snapshot request timed out")), {
-            once: true,
-          }),
-        ),
-      ]);
+      const value = await request.result(5_000, "StateQL snapshot request timed out");
       return stateqlResult(value, runtime.session.sessionId, this.gate.generation, workspace);
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
+      request.close();
     }
   }
 
@@ -2363,48 +1633,14 @@ export class SessionRuntime implements PiDriver {
     )
       throw new Error("StateQL rows request is invalid");
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
-    signal?.throwIfAborted();
-    const abort = () => controller.abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:stateql-rows-request", {
-      version: 1,
-      workspace,
-      sessionId: runtime.session.sessionId,
-      handle,
-      offset,
-      limit,
-      signal: controller.signal,
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      },
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) {
-      signal?.removeEventListener("abort", abort);
-      controller.abort();
-      throw new Error("StateQL rows are unavailable");
-    }
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:stateql-rows-request",
+      { version: 1, workspace, sessionId: runtime.session.sessionId, handle, offset, limit },
+      { unavailable: "StateQL rows are unavailable", signal },
+    );
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener("abort", () => reject(new Error("StateQL rows request timed out")), {
-            once: true,
-          }),
-        ),
-      ]);
+      const value = await request.result(5_000, "StateQL rows request timed out");
       return stateqlRowsResult(
         value,
         handle,
@@ -2415,9 +1651,7 @@ export class SessionRuntime implements PiDriver {
         workspace,
       );
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
-      signal?.removeEventListener("abort", abort);
+      request.close();
     }
   }
 
@@ -2435,46 +1669,25 @@ export class SessionRuntime implements PiDriver {
     )
       throw new Error("StateQL operation correlation is invalid");
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
+    // Checked before the UI context is created, since creating it can cancel older dialogs.
     signal?.throwIfAborted();
-    const abort = () => controller.abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:stateql-command-request", {
-      version: 1,
-      workspace,
-      sessionId: runtime.session.sessionId,
-      command: input,
-      expectedConnectionId,
-      operationId,
-      signal: controller.signal,
-      ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database", operationId),
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:stateql-command-request",
+      {
+        version: 1,
+        workspace,
+        sessionId: runtime.session.sessionId,
+        command: input,
+        expectedConnectionId,
+        operationId,
+        ui: this.ui.context(runtime.session.sessionId, this.gate.generation, "database", operationId),
       },
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("StateQL commands are unavailable");
+      { unavailable: "StateQL commands are unavailable", signal },
+    );
     const timeoutMs = Math.min(input.command === "query" ? (input.timeout_ms ?? 30_000) + 60_000 : 300_000, 300_000);
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    timeout.unref?.();
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener("abort", () => reject(new Error("StateQL command request cancelled")), {
-            once: true,
-          }),
-        ),
-      ]);
+      const value = await request.result(timeoutMs, "StateQL command request cancelled");
       return stateqlCommandResult(
         value,
         input,
@@ -2483,9 +1696,7 @@ export class SessionRuntime implements PiDriver {
         workspace,
       );
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
-      signal?.removeEventListener("abort", abort);
+      request.close();
     }
   }
 
@@ -2507,37 +1718,14 @@ export class SessionRuntime implements PiDriver {
     )
       throw new Error("Papercut list request is invalid");
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:papercut-list-request", {
-      version: 1,
-      sessionId: runtime.session.sessionId,
-      status,
-      query,
-      offset,
-      limit,
-      signal: controller.signal,
-      claim: () => (claimed ? false : (claimed = true)),
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("Papercuts are unavailable");
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:papercut-list-request",
+      { version: 1, sessionId: runtime.session.sessionId, status, query, offset, limit },
+      { unavailable: "Papercuts are unavailable" },
+    );
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener("abort", () => reject(new Error("Papercut list request timed out")), {
-            once: true,
-          }),
-        ),
-      ]);
+      const value = await request.result(5_000, "Papercut list request timed out");
       return papercutListResult(
         value,
         status,
@@ -2550,10 +1738,9 @@ export class SessionRuntime implements PiDriver {
       );
     } catch (error) {
       this.recordError(error);
-      throw new Error(controller.signal.aborted ? "Papercut list request timed out" : "Unable to load papercuts");
+      throw new Error(request.signal.aborted ? "Papercut list request timed out" : "Unable to load papercuts");
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
+      request.close();
     }
   }
 
@@ -2567,41 +1754,20 @@ export class SessionRuntime implements PiDriver {
       throw new Error("Papercut mutation request is invalid");
     const runtime = this.requireRuntime();
     const generation = this.gate.generation;
-    const controller = new AbortController();
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:papercut-mutation-request", {
-      version: 1,
-      sessionId: runtime.session.sessionId,
-      ...input,
-      signal: controller.signal,
-      claim: () => (claimed ? false : (claimed = true)),
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("Papercut mutations are unavailable");
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:papercut-mutation-request",
+      { version: 1, sessionId: runtime.session.sessionId, ...input },
+      { unavailable: "Papercut mutations are unavailable" },
+    );
     let value: unknown;
     try {
-      value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener("abort", () => reject(new Error("Papercut mutation request timed out")), {
-            once: true,
-          }),
-        ),
-      ]);
+      value = await request.result(5_000, "Papercut mutation request timed out");
     } catch (error) {
       this.recordError(error);
-      throw new Error(controller.signal.aborted ? "Papercut mutation request timed out" : "Unable to update papercut");
+      throw new Error(request.signal.aborted ? "Papercut mutation request timed out" : "Unable to update papercut");
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
+      request.close();
     }
     const raw =
       value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -2621,45 +1787,18 @@ export class SessionRuntime implements PiDriver {
   async heliosBrowser(input: HeliosBrowserInput): Promise<HeliosBrowserResult> {
     if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:helios-browser-request", {
-      version: 1,
-      ...input,
-      sessionId: runtime.session.sessionId,
-      signal: controller.signal,
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      },
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("Helios embedded browser is unavailable");
-    const timeout = setTimeout(() => controller.abort(), 80_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:helios-browser-request",
+      { version: 1, ...input, sessionId: runtime.session.sessionId },
+      { unavailable: "Helios embedded browser is unavailable" },
+    );
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Helios embedded browser request timed out")),
-            { once: true },
-          ),
-        ),
-      ]);
+      const value = await request.result(80_000, "Helios embedded browser request timed out");
       if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
       return heliosResult(value, this.gate.generation);
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
+      request.close();
     }
   }
 
@@ -2694,45 +1833,19 @@ export class SessionRuntime implements PiDriver {
   async heliosAndroidTooling(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult> {
     if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
     const runtime = this.requireRuntime();
-    const controller = new AbortController();
-    let response: Promise<unknown> | undefined;
-    let claimed = false;
-    let answered = false;
-    this.eventBus.emit("pylon:helios-android-tooling-request", {
-      version: 1,
-      ...input,
-      sessionId: runtime.session.sessionId,
-      signal: controller.signal,
-      claim: () => {
-        if (claimed) return false;
-        claimed = true;
-        return true;
-      },
-      respond: (value: Promise<unknown>) => {
-        if (answered) return;
-        answered = true;
-        response = Promise.resolve(value);
-      },
-    });
-    if (!response) throw new Error("Helios Android tooling is unavailable");
-    const timeout = setTimeout(() => controller.abort(), input.action === "install" ? 12 * 60_000 : 60_000);
-    timeout.unref?.();
+    const request = packageRequest(
+      this.eventBus,
+      "pylon:helios-android-tooling-request",
+      { version: 1, ...input, sessionId: runtime.session.sessionId },
+      { unavailable: "Helios Android tooling is unavailable" },
+    );
     try {
-      const value = await Promise.race([
-        response,
-        new Promise<never>((_resolve, reject) =>
-          controller.signal.addEventListener(
-            "abort",
-            () => reject(new Error("Helios Android tooling request timed out")),
-            { once: true },
-          ),
-        ),
-      ]);
+      const timeoutMs = input.action === "install" ? 12 * 60_000 : 60_000;
+      const value = await request.result(timeoutMs, "Helios Android tooling request timed out");
       if (input.expectedGeneration !== this.gate.generation) throw new Error("stale session generation");
       return heliosAndroidToolingResult(value, this.gate.generation);
     } finally {
-      clearTimeout(timeout);
-      controller.abort();
+      request.close();
     }
   }
 
@@ -2765,21 +1878,6 @@ export class SessionRuntime implements PiDriver {
       SessionManager.open(session.path).appendSessionInfo(name);
     }
     this.sessionIndex.invalidate();
-  }
-
-  setSessionActive(input: SetSessionActiveInput): Promise<void> {
-    const current = this.requireRuntime().session.sessionId;
-    if (input.sessionId === current && input.active) return Promise.resolve();
-    if (input.sessionId === current) return Promise.reject(new Error("cannot deactivate the selected session"));
-    return Promise.reject(new Error("manual session activation requires the runtime coordinator"));
-  }
-
-  setSessionPinned(_input: SetSessionPinnedInput): Promise<void> {
-    return Promise.reject(new Error("session pinning requires the runtime coordinator"));
-  }
-
-  reorderActiveSession(_input: ReorderActiveSessionInput): Promise<void> {
-    return Promise.reject(new Error("session ordering requires the runtime coordinator"));
   }
 
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
@@ -4374,52 +3472,15 @@ export class SessionRuntime implements PiDriver {
       ...(this.discoverIndex ? { discoverIndex: { ...this.discoverIndex } } : {}),
       extensionUi: this.ui.snapshot(),
       ...(this.commandResult ? { commandResult: { ...this.commandResult } } : {}),
-      runtimePolicy: {
-        ...this.runtimePolicy,
-        global: {
-          ...this.runtimePolicy.global,
-          guardRules: { ...(this.runtimePolicy.global.guardRules ?? DEFAULT_GUARD_RULES) },
-          toolOverrides: cloneToolOverrides(this.runtimePolicy.global.toolOverrides),
-        },
-        project: {
-          ...this.runtimePolicy.project,
-          verify: cloneVerifyPolicy(this.runtimePolicy.project.verify),
-          ...(this.runtimePolicy.project.guardRules
-            ? { guardRules: { ...this.runtimePolicy.project.guardRules } }
-            : {}),
-          toolOverrides: cloneToolOverrides(this.runtimePolicy.project.toolOverrides),
-        },
-        session: {
-          toolOverrides: cloneToolOverrides(this.runtimePolicy.session.toolOverrides),
-          ...(this.runtimePolicy.session.verify
-            ? { verify: cloneVerifyPolicy(this.runtimePolicy.session.verify) }
-            : {}),
-          ...(this.runtimePolicy.session.timelineEnabled !== undefined
-            ? { timelineEnabled: this.runtimePolicy.session.timelineEnabled }
-            : {}),
-          ...(this.runtimePolicy.session.guardEnabled !== undefined
-            ? { guardEnabled: this.runtimePolicy.session.guardEnabled }
-            : {}),
-          ...(this.runtimePolicy.session.guardRules
-            ? { guardRules: { ...this.runtimePolicy.session.guardRules } }
-            : {}),
-          ...(this.runtimePolicy.session.workspace ? { workspace: this.runtimePolicy.session.workspace } : {}),
-          ...(this.runtimePolicy.session.guardTimeoutSeconds !== undefined
-            ? { guardTimeoutSeconds: this.runtimePolicy.session.guardTimeoutSeconds }
-            : {}),
-          ...(this.runtimePolicy.session.clarifyTimeoutSeconds !== undefined
-            ? { clarifyTimeoutSeconds: this.runtimePolicy.session.clarifyTimeoutSeconds }
-            : {}),
-        },
-        effective: {
-          ...this.runtimePolicy.effective,
-          verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
-          guardRules: { ...(this.runtimePolicy.effective.guardRules ?? DEFAULT_GUARD_RULES) },
-          toolOverrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides),
-        },
-        availableVerifyChecks: this.runtimePolicy.availableVerifyChecks.map(check => ({ ...check })),
-      },
+      runtimePolicy: this.runtimePolicySnapshot(),
     };
+  }
+
+  private runtimePolicySnapshot(): RuntimePolicyReadModel {
+    const policy = cloneRuntimePolicy(this.runtimePolicy);
+    policy.global.guardRules ??= { ...DEFAULT_GUARD_RULES };
+    policy.effective.guardRules ??= { ...DEFAULT_GUARD_RULES };
+    return policy;
   }
 
   private displayProject(cwd: string, sessionId?: string) {
@@ -4446,7 +3507,7 @@ export class SessionRuntime implements PiDriver {
       version: 2,
       sessionId,
       waitUntil: (work: Promise<void>) => pending.push(work),
-      verify: cloneVerifyPolicy(this.runtimePolicy.effective.verify),
+      verify: structuredClone(this.runtimePolicy.effective.verify),
       timelineEnabled: this.runtimePolicy.effective.timelineEnabled,
       guardEnabled: this.runtimePolicy.effective.guardEnabled,
       guardRules: { ...(this.runtimePolicy.effective.guardRules ?? DEFAULT_GUARD_RULES) },
@@ -4457,7 +3518,7 @@ export class SessionRuntime implements PiDriver {
     });
     this.eventBus.emit("pylon:tool-overrides", {
       version: 1,
-      overrides: cloneToolOverrides(this.runtimePolicy.effective.toolOverrides),
+      overrides: { ...(this.runtimePolicy.effective.toolOverrides ?? {}) },
     });
     this.eventBus.emit("pi-verify:catalog-request", {
       version: 1,

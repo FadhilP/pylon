@@ -208,20 +208,25 @@ function databaseSourceDriver(value: string): "sqlite" | "postgres" | "mysql" | 
   return undefined;
 }
 
+const CREDENTIAL_FORMATS: Record<string, string> = {
+  postgres: "complete PostgreSQL connection URL",
+  mysql: "complete MySQL connection URL",
+  mongodb: "complete MongoDB connection URL",
+  sqlite: "explicit sqlite:<path> source",
+};
+
+/** How a credential for `driver` must be written; any supported source when the driver is unknown. */
+function expectedCredentialFormat(driver: string | undefined): string {
+  const known = driver ? CREDENTIAL_FORMATS[driver] : undefined;
+  return known ?? "complete PostgreSQL/MySQL/MongoDB/Redis URL or explicit sqlite:<path> source";
+}
+
 function validateCredentialValue(request: StateQLCredentialRequest, value: string): void {
   const driver = databaseSourceDriver(value);
   if (!driver || (request.connection && driver !== request.connection.driver)) {
-    const expected =
-      request.connection?.driver === "postgres"
-        ? "complete PostgreSQL connection URL"
-        : request.connection?.driver === "mysql"
-          ? "complete MySQL connection URL"
-          : request.connection?.driver === "mongodb"
-            ? "complete MongoDB connection URL"
-            : request.connection?.driver === "sqlite"
-              ? "explicit sqlite:<path> source"
-              : "complete PostgreSQL/MySQL/MongoDB/Redis URL or explicit sqlite:<path> source";
-    throw new Error(`StateQL credential must use the expected source format: ${expected}`);
+    throw new Error(
+      `StateQL credential must use the expected source format: ${expectedCredentialFormat(request.connection?.driver)}`,
+    );
   }
 }
 
@@ -596,16 +601,7 @@ class StateQLCredentialBroker {
       : request.profile
         ? `profile ${safeMetadata(request.profile.name, 120)}`
         : "the requested database";
-    const expected =
-      request.connection?.driver === "postgres"
-        ? "complete PostgreSQL connection URL"
-        : request.connection?.driver === "mysql"
-          ? "complete MySQL connection URL"
-          : request.connection?.driver === "mongodb"
-            ? "complete MongoDB connection URL"
-            : request.connection?.driver === "sqlite"
-              ? "explicit sqlite:<path> source"
-              : "complete PostgreSQL/MySQL/MongoDB URL or explicit sqlite:<path> source";
+    const expected = expectedCredentialFormat(request.connection?.driver);
     const passwordTargetLabel = passwordTarget
       ? `${safeMetadata(passwordTarget.username, 120)}@${safeMetadata(passwordTarget.hostname, 200)}:${passwordTarget.port}/${safeMetadata(passwordTarget.database || "(default)", 200)}`
       : undefined;
