@@ -1,5 +1,20 @@
 [
   {
+    "version": "3.4.0",
+    "date": "Oct 6, 2026",
+    "title": "Searchable documentation and more reliable workspaces",
+    "summary": "Pylon 3.4 adds search across shipped documentation, fixes fresh-session creation and codemode reads, corrects submodule change tracking, and upgrades Pi while consolidating shared runtime code.",
+    "notes": [
+      "Added ranked, case-insensitive search across shipped Pylon documentation with section headings, source locations, bounded excerpts, and all-term matching.",
+      "Made New Session create a fresh session instead of reopening an existing project draft, while preserving saved drafts in their original sessions.",
+      "Restored image results from numbered reads in Web codemode and kept programmatic text reads consistent with numbered output, encoding warnings, and native long-line fallbacks.",
+      "Corrected file status, base content, diffs, and revision tracking for registered and nested submodules to use each submodule's current HEAD, while preserving parent-baseline comparisons for applying workspace changes.",
+      "Hardened Spawn private-agent tool allowlists against unlisted native MCP access, including late-registered tools and indirect codemode calls, and rejected wildcard or comma-expanded tool names on creation and continuation.",
+      "Consolidated shared configuration, file locking, session leases, model parsing, and tool-policy helpers, and split worktree, Continuity memory-command, and Web runtime code into focused modules.",
+      "Upgraded Pi runtime packages to 1.0.4 and expanded behavioral regression coverage for documentation search, fresh sessions, programmatic reads, submodule tracking, and private-agent tool restrictions."
+    ]
+  },
+  {
     "version": "3.3.1",
     "date": "Oct 5, 2026",
     "title": "Safer codemode cancellation and reliable image attachments",
