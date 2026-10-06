@@ -1,6 +1,11 @@
 import { SPAWN_TOOLS, SPECIALIST_TOOLS } from "./constants.ts";
 import type { SpawnKind } from "./sessions.ts";
 
+/** CLI lists accept patterns and commas; private-agent policies accept exact tool names only. */
+export function agentToolAllowlistError(tools: readonly string[]): string | undefined {
+  if (tools.some(name => /[*,]/.test(name))) return "Agent tools must be exact names without '*' or ','.";
+}
+
 const creationOnlyAgentFields = (params: any) =>
   params.name !== undefined ||
   params.model !== undefined ||
@@ -28,6 +33,8 @@ const create: Rule = (kind, params) => {
   if (kind === "session" && params.project !== undefined && !params.project.trim())
     return "session project must not be empty.";
   if (kind !== "agent" || params.tools === undefined) return;
+  const invalidTools = agentToolAllowlistError(params.tools);
+  if (invalidTools) return invalidTools;
   const excluded = new Set([...SPAWN_TOOLS, ...(params.disableSpecialists === false ? [] : SPECIALIST_TOOLS)]);
   const forbidden = params.tools.find((tool: string) => excluded.has(tool));
   if (forbidden) return `Agent tool allowlist cannot include excluded tool: ${forbidden}.`;

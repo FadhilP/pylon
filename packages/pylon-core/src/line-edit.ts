@@ -6,6 +6,7 @@ import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createReadTool,
+  createReadToolDefinition,
   formatSize,
   generateDiffString,
   generateUnifiedPatch,
@@ -424,16 +425,18 @@ async function numberedRead(
 
   const decoded = decodeText(before);
   if (!decoded) {
+    const content = result.content.map(block =>
+      block.type === "text"
+        ? {
+            ...block,
+            text: `${block.text}\n\n[Numbered line editing is unavailable for this encoding or mixed line endings.]`,
+          }
+        : block,
+    );
     return {
       ...result,
-      content: result.content.map(block =>
-        block.type === "text"
-          ? {
-              ...block,
-              text: `${block.text}\n\n[Numbered line editing is unavailable for this encoding or mixed line endings.]`,
-            }
-          : block,
-      ),
+      content,
+      structuredContent: content.map(block => (block.type === "text" ? block.text : "")).join("\n"),
     };
   }
 
@@ -452,7 +455,7 @@ async function numberedRead(
     continuationNote(truncation, { startLine, endLine, selectedEnd, totalLines: lines.length });
   const details: ReadToolDetails & { lineEdit: { version: 1; revision: string; startLine: number; endLine: number } } =
     { ...(result.details ?? {}), lineEdit: { version: 1, revision: snapshot.tag, startLine, endLine } };
-  return { content: [{ type: "text" as const, text: output }], details };
+  return { ...result, content: [{ type: "text" as const, text: output }], structuredContent: output, details };
 }
 
 /**
@@ -572,6 +575,7 @@ export function registerLineEditTools(pi: ExtensionAPI): void {
     promptSnippet: "Read files with numbered lines and revision tags for guarded edits",
     promptGuidelines: READ_GUIDELINES,
     parameters: readSchema,
+    outputSchema: createReadToolDefinition(process.cwd()).outputSchema,
     execute: (toolCallId, params, signal, onUpdate, ctx) =>
       numberedRead(snapshots, toolCallId, params, signal, onUpdate, ctx),
   });

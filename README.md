@@ -40,7 +40,7 @@ See the complete [Pylon Web guide](./docs/web/README.md) for workspaces, session
 
 ## Terminal Setup (Alternative)
 
-Requires an existing [Pi](https://pi.dev) install (the web app bundles its own).
+Requires an existing [Pi](https://pi.dev) 1.0.4 install (the web app bundles its own).
 
 ```sh
 pi install npm:@fadhilp/pylon   # or an absolute path to a local checkout

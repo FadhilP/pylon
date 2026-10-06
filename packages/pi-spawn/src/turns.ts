@@ -13,6 +13,7 @@ import {
   type SpawnMarker,
 } from "./sessions.ts";
 import { runSpawn, type SpawnActivity, type SpawnUiRequest, type SpawnUiResponse } from "./runner.ts";
+import { agentToolAllowlistError } from "./validate.ts";
 
 export type RunChild = typeof runSpawn;
 
@@ -50,6 +51,20 @@ export function childArgs(kind: SpawnKind, path: string, policy?: AgentPolicy | 
   }
   const agentPolicy = policy as AgentPolicy | undefined;
   const excluded = [...SPAWN_TOOLS, ...(agentPolicy?.disableSpecialists ? SPECIALIST_TOOLS : [])];
+  if (agentPolicy?.tools !== undefined) {
+    const tools = agentPolicy.tools;
+    const invalidTools = agentToolAllowlistError(tools);
+    if (invalidTools) throw new Error(invalidTools);
+    // Pi keeps unlisted MCP tools for indirect calls unless --tools names an MCP server tool.
+    if (tools.length && !tools.some(name => name.startsWith("mcp__"))) {
+      excluded.push(
+        "mcp__*",
+        ...["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].filter(
+          name => !tools.includes(name),
+        ),
+      );
+    }
+  }
   args.push("--exclude-tools", excluded.join(","));
   if (agentPolicy?.model) args.push("--model", agentPolicy.model);
   if (agentPolicy?.thinking) args.push("--thinking", agentPolicy.thinking);

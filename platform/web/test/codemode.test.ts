@@ -378,6 +378,30 @@ test("parallel codemode edits retain Pylon revision guards and file-mutation que
   }
 });
 
+test("numbered image reads reach Web codemode and retain their saved bytes", { timeout: 30_000 }, async () => {
+  const value = await fixture(true, [], true);
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  let savedPath: string | undefined;
+  try {
+    await writeFile(join(value.cwd, "pixel.png"), png);
+    const result = await value.run('image(await tools.read({path:"pixel.png"}));');
+    savedPath = output(result).match(/Image saved to (.+) \(image\/png,/)?.[1];
+    assert.equal(result.isError, false, output(result));
+    const image = result.content.find(block => block.type === "image");
+    assert.ok(image?.type === "image");
+    assert.equal(image.mimeType, "image/png");
+    assert.deepEqual(Buffer.from(image.data, "base64"), png);
+    assert.ok(savedPath);
+    assert.deepEqual(await readFile(savedPath), png);
+  } finally {
+    if (savedPath) await rm(savedPath, { force: true });
+    await value.close();
+  }
+});
+
 test("Pylon Guard blocks dangerous nested commands before shell execution", { timeout: 30_000 }, async () => {
   const value = await fixture(true, [], false, true);
   try {

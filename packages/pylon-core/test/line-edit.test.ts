@@ -32,6 +32,7 @@ test("numbered reads issue compact revisions and reject unseen or stale edits", 
     const first = await invoke(read, { path: "sample.txt", offset: 1, limit: 2 }, cwd);
     assert.match(first.content[0].text, /^\[sample\.txt#[0-9a-f]{12}\]\n1:one\n2:two/);
     assert.match(first.content[0].text, /2 more lines/);
+    assert.equal(first.structuredContent, first.content[0].text);
     const tag = revision(first);
 
     await assert.rejects(
@@ -61,6 +62,22 @@ test("numbered reads issue compact revisions and reject unseen or stale edits", 
       ),
       /File changed after revision/,
     );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("programmatic reads retain encoding warnings and native long-line fallback", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "pylon-line-output-"));
+  try {
+    const read = tools().get("read");
+    for (const content of ["first\r\nsecond\n", "x".repeat(60_000)]) {
+      await writeFile(join(cwd, "sample.txt"), content);
+      const result = await invoke(read, { path: "sample.txt" }, cwd);
+      assert.equal(result.structuredContent, result.content[0].text);
+      if (content.length < 60_000) assert.match(result.structuredContent, /unavailable for this encoding/);
+      else assert.match(result.structuredContent, /exceeds 50\.0KB limit/);
+    }
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

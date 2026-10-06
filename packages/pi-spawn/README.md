@@ -26,7 +26,7 @@ Use private agents for specialized, resumable work that should remain accessible
 
 Calls are synchronous by default. `background: true` returns `id`/`runId` immediately for independent work. Overlap is `busy` unless a background continuation also sets `queue: true`, which creates a parent-runtime FIFO job. Background work and queues are runtime-local, reject dialogs, and cancel at session shutdown. `recent` defaults to 8 messages/800 characters, permits at most 50/2,000, and caps total output at 12,000 characters.
 
-`systemPrompt` replaces Pi's default prompt; `tools` is an allowlist and `[]` disables tools. `disableSpecialists` defaults true, excluding Advisor, Grunt, and Scout. pi-spawn is always excluded from private agents, preventing recursive escape. Creation policy cannot change later.
+`systemPrompt` replaces Pi's default prompt; `tools` is an allowlist of exact tool names (no `*` patterns or comma-separated entries), including MCP tools, and `[]` disables tools. Unlisted MCP tools stay unavailable even through codemode; omitting `tools` retains normal Pi tool selection. `disableSpecialists` defaults true, excluding Advisor, Grunt, and Scout. pi-spawn is always excluded from private agents, preventing recursive escape. Creation policy cannot change later.
 
 ## Ordinary sessions: `spawn_session`
 
