@@ -1,3 +1,4 @@
+import { GitHubAuthService } from "../src/server/settings/github-auth.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1323,6 +1324,66 @@ test("keyboard preferences are sessionless, CSRF protected, replayable and rejec
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });
+
+test("GitHub login is sessionless, CSRF/tab protected, and device instructions stay with the initiating browser", async () => {
+  const driver = new FakeDriver();
+  let outgoing = 0;
+  const githubAuth = new GitHubAuthService({
+    store: { async read() { return undefined; }, async write() { assert.fail("Unexpected credential write"); }, async remove() {} },
+    fetch: async () => {
+      outgoing++;
+      return new Response(JSON.stringify({ device_code: "server-only-device", user_code: "ABCD-EFGH", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5 }));
+    },
+    wait: (_ms, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Cancelled")), { once: true })),
+  });
+  let transport: ServerTransport;
+  const server = createServer((request, response) => void transport.handle(request, response));
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver, { allowedHosts: [`127.0.0.1:${port}`], githubAuth });
+  try {
+    driver.emitCleared();
+    const connect = async (tab: string) => {
+      const response = await fetch(`${origin}/api/v1/bootstrap`, { headers: { "x-pylon-tab-id": tab } });
+      const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0];
+      const boot = await body(response);
+      assert.equal(boot.runtime, null);
+      return { cookie, "x-pylon-tab-id": tab, "x-pylon-csrf": String(boot.csrfToken), "content-type": "application/json" };
+    };
+    const first = await connect("github-first");
+    const second = await connect("github-second");
+    const read = (headers = first) => fetch(`${origin}/api/v1/settings/github`, { headers });
+    const post = (headers: Record<string, string>, input: unknown) => fetch(`${origin}/api/v1/settings/github`, { method: "POST", headers, body: JSON.stringify(input) });
+    assert.equal((await fetch(`${origin}/api/v1/settings/github`)).status, 403);
+    const initial = await body(await read());
+    const start = { action: "start", clientId: "Iv1.example", expectedRevision: initial.revision };
+    assert.equal((await post({ ...first, "x-pylon-csrf": "wrong" }, start)).status, 403);
+    assert.equal((await post({ ...first, "x-pylon-tab-id": "unknown" }, start)).status, 403);
+    assert.equal((await post(first, { ...start, accessToken: "must-not-be-accepted" })).status, 400);
+    assert.equal(outgoing, 0);
+    assert.equal((await post(first, start)).status, 200);
+    let own: Record<string, unknown> = {};
+    for (let i = 0; i < 50; i++) {
+      const response = await read();
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      own = await body(response);
+      if (own.device) break;
+    }
+    assert.equal((own.device as { userCode: string }).userCode, "ABCD-EFGH");
+    assert.equal((await body(await read(second))).device, undefined);
+    assert.ok(!JSON.stringify(own).includes("server-only-device"));
+    assert.equal((await post(second, start)).status, 409);
+    assert.equal((await post(second, { action: "cancel", expectedRevision: own.revision })).status, 403);
+    assert.equal((await post(first, { action: "cancel", expectedRevision: own.revision })).status, 200);
+    assert.equal((await body(await read())).phase, "disconnected");
+    assert.equal(outgoing, 1);
+  } finally {
+    await transport.close();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 
 test("host preferences persist large model visibility batches and enforce validation and CAS", async () => {
   const driver = new FakeDriver();

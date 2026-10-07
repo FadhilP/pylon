@@ -1,6 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { copyFile, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -14,6 +15,7 @@ import { initialOperational } from "../src/server/runtime/operational-projection
 import { RuntimeCoordinator } from "../src/server/runtime/runtime-coordinator.ts";
 import { projectIdForCwd, SessionIndex } from "../src/server/sessions/session-index.ts";
 import { ProjectRegistry } from "../src/server/workspace/project-registry.ts";
+import { KeyboardSettingsStore } from "../src/server/settings/keyboard-settings.ts";
 
 import { WorkspaceInventories } from "../src/server/workspace/workspace-inventory.ts";
 const run = promisify(execFile);
@@ -2400,6 +2402,66 @@ test("General sessions use the built-in home scope instead of the selected proje
   }
 });
 
+test("unsent draft sessions remain listed and reopenable after switching and restarting", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-reopen-draft-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  const target = { cwd, agentDir, repositoryRoot: root };
+  const settingsPath = join(agentDir, "web-state.sqlite");
+  let settings = new KeyboardSettingsStore(settingsPath);
+  let driver = new RuntimeCoordinator();
+
+  try {
+    const startup = await driver.start(target);
+    const startupPath = (driver as any).slots.get(startup.sessionId).driver.runtimeDetails().sessionPath;
+    assert.equal(existsSync(startupPath), false, "automatic startup must not create an empty session file");
+    const internal = driver as any;
+    const select = internal.select;
+    let failedPath = "";
+    internal.select = async (slot: any) => {
+      failedPath = slot.driver.runtimeDetails().sessionPath;
+      throw new Error("selection failed");
+    };
+    await assert.rejects(driver.newSession({ expectedGeneration: startup.sessionGeneration }), /selection failed/);
+    internal.select = select;
+    assert.equal(existsSync(failedPath), false, "failed creation must not leave a catalog-visible session file");
+    const created = await driver.newSession({ expectedGeneration: startup.sessionGeneration });
+    const projectId = projectIdForCwd(cwd);
+    settings.updateComposer(null, { sessionId: created.sessionId, projectId, text: "unfinished work" });
+    const catalog = await driver.listSessions({ projectId });
+    const listed = catalog.projects.flatMap(project => project.sessions).find(session => session.id === created.sessionId);
+    assert.equal(listed?.userMessageCount, 0);
+
+    const second = await driver.newSession({ expectedGeneration: created.sessionGeneration });
+    assert.notEqual(second.sessionId, created.sessionId);
+    await driver.switchSession({ sessionId: created.sessionId, expectedGeneration: second.sessionGeneration });
+    assert.equal((await driver.snapshot()).metrics.userMessages, 0);
+    assert.equal(settings.readComposer(created.sessionId)?.text, "unfinished work");
+
+    await driver.dispose();
+    settings.close();
+    settings = new KeyboardSettingsStore(settingsPath);
+    driver = new RuntimeCoordinator();
+    const restarted = await driver.start(target);
+    const restoredCatalog = await driver.listSessions({ projectId });
+    const restored = restoredCatalog.projects.flatMap(project => project.sessions);
+    assert.ok(restored.some(session => session.id === created.sessionId && session.userMessageCount === 0));
+    assert.ok(restored.some(session => session.id === second.sessionId));
+    await driver.switchSession({ sessionId: created.sessionId, expectedGeneration: restarted.sessionGeneration });
+    const snapshot = await driver.snapshot();
+    assert.equal(snapshot.sessionId, created.sessionId);
+    assert.equal(snapshot.metrics.userMessages, 0);
+    assert.equal(settings.readComposer(snapshot.sessionId)?.text, "unfinished work");
+  } finally {
+    settings.close();
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    await Promise.all(sessions.map(session => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("new sessions apply the effective workspace policy before the first prompt", { timeout: 20_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-new-session-workspace-"));
   const cwd = join(root, "workspace");
@@ -2448,6 +2510,12 @@ test("new sessions apply the effective workspace policy before the first prompt"
     assert.equal(isolatedSnapshot.workspace?.mode, isolatedSnapshot.runtimePolicy.effective.workspace);
     assert.equal(isolatedSnapshot.workspace?.mode, "worktree");
     assert.equal(registry.workspaceForSession(isolated.sessionId)?.mode, "worktree");
+    const catalog = await driver.listSessions({ projectId });
+    assert.ok(catalog.projects.flatMap(project => project.sessions).some(session =>
+      session.id === isolated.sessionId && session.userMessageCount === 0));
+    const files = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    const selectedIds = new Set([created.sessionId, movedSnapshot.sessionId, isolated.sessionId]);
+    assert.ok(files.every(session => selectedIds.has(session.id)), "provisional precursor sessions must not be persisted");
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));

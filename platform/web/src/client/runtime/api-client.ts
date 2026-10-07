@@ -1,3 +1,4 @@
+import type { GitHubAuthAction, GitHubAuthSnapshot } from "../../shared/settings/github";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations";
 import type { KeyboardSettings, Keymap } from "../../shared/settings/keyboard";
 import type {
@@ -122,6 +123,17 @@ export class ApiClient {
     );
     this.csrfToken = snapshot.csrfToken;
     return snapshot;
+  }
+
+  async githubAuth(signal?: AbortSignal): Promise<GitHubAuthSnapshot> {
+    return json(await fetch("/api/v1/settings/github", {
+      headers: { "x-pylon-tab-id": this.tabId }, credentials: "same-origin", signal,
+    }));
+  }
+  async githubAuthAction(input: GitHubAuthAction): Promise<GitHubAuthSnapshot> {
+    return json(await fetch("/api/v1/settings/github", {
+      method: "POST", credentials: "same-origin", headers: this.headers(), body: JSON.stringify(input),
+    }));
   }
 
   async keyboardSettings(): Promise<KeyboardSettings> {

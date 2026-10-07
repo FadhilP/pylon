@@ -1,3 +1,5 @@
+import { GitHubAuthService, osGitHubCredentialStore } from "../settings/github-auth.ts";
+import { validGitHubAuthAction } from "../../shared/settings/github.ts";
 import { validWorkspacePath } from "../../shared/workspace/workspace-mutations.ts";
 import { validGitDetailQuery } from "../../shared/workspace/git.ts";
 import { validAnnotationMutation, type AnnotationMutation, type AnnotationRequest } from "../../shared/workspace/annotations.ts";
@@ -87,6 +89,7 @@ export interface ServerTransportOptions extends SecurityOptions {
   dialogReconnectGraceMs?: number;
   terminalSpawn?: TerminalSpawn;
   keyboardSettingsPath?: string;
+  githubAuth?: GitHubAuthService;
 }
 
 /** HTTP/SSE adapter. It deliberately owns no Pi state beyond bounded projections. */
@@ -105,6 +108,7 @@ export class ServerTransport {
   private dialogOwner?: DialogOwner;
   private readonly tabLossTimers = new Map<string, NodeJS.Timeout>();
   private readonly keyboardSettings: KeyboardSettingsStore;
+  private readonly githubAuth: GitHubAuthService;
   private disposed = false;
 
   constructor(
@@ -113,12 +117,16 @@ export class ServerTransport {
     private readonly options: ServerTransportOptions,
   ) {
     this.keyboardSettings = new KeyboardSettingsStore(options.keyboardSettingsPath ?? ":memory:");
+    this.githubAuth = options.githubAuth ?? new GitHubAuthService({
+      store: osGitHubCredentialStore(options.keyboardSettingsPath ?? ":memory:"),
+      clientId: process.env.PYLON_GITHUB_CLIENT_ID,
+    });
     try {
       this.journal = new EventJournal(initial.sessionGeneration, initial.sessionId);
       this.projection = new RuntimeProjection(initial, (type, payload) => this.publish(type, payload));
       this.terminal = new TerminalServer(driver, this.sessions, options, options.terminalSpawn);
       this.unsubscribe = driver.subscribe(event => this.onDriverEvent(event));
-    } catch (error) { this.keyboardSettings.close(); throw error; }
+    } catch (error) { this.keyboardSettings.close(); this.githubAuth.dispose(); throw error; }
   }
 
   static async create(driver: PiDriver, options: ServerTransportOptions): Promise<ServerTransport> {
@@ -128,6 +136,7 @@ export class ServerTransport {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.githubAuth.dispose();
     this.keyboardSettings.close();
     this.unsubscribe();
     this.databaseCommand?.controller.abort();
@@ -144,6 +153,11 @@ export class ServerTransport {
     this.tabLossTimers.clear();
     this.clearDialogOwner();
     this.terminal.dispose();
+  }
+
+  async close(): Promise<void> {
+    this.dispose();
+    await this.githubAuth.close();
   }
 
   handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
@@ -228,6 +242,8 @@ export class ServerTransport {
         return await this.heliosBrowser(request, response);
       if (request.method === "POST" && url.pathname === "/api/v1/helios-android-tooling")
         return await this.heliosAndroidTooling(request, response);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/github")
+        return await this.githubSettings(request, response);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/keyboard")
         return await this.keyboardPreferences(request, response);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/preferences")
@@ -284,6 +300,17 @@ export class ServerTransport {
     }
   }
 
+  private async githubSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    const tabId = request.method === "POST"
+      ? this.tab(request, this.mutatingSession(request)) : this.requireTab(request);
+    const session = this.sessions.get(request)!;
+    const owner = this.tabTimerKey(session, tabId);
+    if (request.method === "GET") return this.send(response, 200, await this.githubAuth.snapshot(owner));
+    const input = await readJson(request, 4096);
+    if (!validGitHubAuthAction(input)) throw httpError(400, "Invalid GitHub action");
+    return this.send(response, 200, await this.githubAuth.action(input, owner));
+  }
   private async annotations(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     const mutation = request.method === "POST";
     const tabId = mutation ? this.tab(request, this.mutatingSession(request)) : this.requireTab(request);
@@ -1949,8 +1976,10 @@ export class ServerTransport {
     if (this.tabLossTimers.has(key)) return;
     const timer = setTimeout(() => {
       this.tabLossTimers.delete(key);
-      if (![...this.clients].some(client => client.session === session && client.tabId === tabId))
+      if (![...this.clients].some(client => client.session === session && client.tabId === tabId)) {
         session.tabs.delete(tabId);
+        void this.githubAuth.cancelOwner(key);
+      }
     }, this.options.dialogReconnectGraceMs ?? 10_000);
     timer.unref?.();
     this.tabLossTimers.set(key, timer);

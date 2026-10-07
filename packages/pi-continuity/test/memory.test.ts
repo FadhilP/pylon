@@ -119,7 +119,15 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
       parseReviewerOutput(
         JSON.stringify({
           version: 2,
-          decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local", extra: true }],
+          decisions: [
+            {
+              proposalIndex: 0,
+              verdict: "reject",
+              reasonCode: "task_local",
+              explanation: "Applies only to this task.",
+              extra: true,
+            },
+          ],
         }),
         1,
       ),
@@ -128,7 +136,17 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
   assert.throws(
     () =>
       parseReviewerOutput(
-        JSON.stringify({ version: 2, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "task_local" }] }),
+        JSON.stringify({
+          version: 2,
+          decisions: [
+            {
+              proposalIndex: 1,
+              verdict: "reject",
+              reasonCode: "task_local",
+              explanation: "Applies only to this task.",
+            },
+          ],
+        }),
         1,
       ),
     /unknown/,
@@ -137,8 +155,13 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
     JSON.stringify({
       version: 2,
       decisions: [
-        { proposalIndex: 1, verdict: "reject", reasonCode: "task_local" },
-        { proposalIndex: 0, verdict: "defer", reasonCode: "insufficient_context" },
+        { proposalIndex: 1, verdict: "reject", reasonCode: "task_local", explanation: "Applies only to this task." },
+        {
+          proposalIndex: 0,
+          verdict: "defer",
+          reasonCode: "insufficient_context",
+          explanation: "Future reuse is not established.",
+        },
       ],
     }),
     2,
@@ -149,12 +172,40 @@ test("reviewer output is V2, strict, and conservatively archives missing or inva
   );
 });
 
+test("rejection and deferral explanations are required, bounded, safe, and normalized", () => {
+  for (const [verdict, reasonCode] of [
+    ["reject", "task_local"],
+    ["defer", "insufficient_context"],
+  ]) {
+    const decision = { proposalIndex: 0, verdict, reasonCode };
+    const parse = (fields: Record<string, unknown>) =>
+      parseReviewerOutput(JSON.stringify({ version: 2, decisions: [{ ...decision, ...fields }] }), 1);
+    for (const explanation of [undefined, "", "   ", 42, "x".repeat(241), "Contains api_key=super-secret-value"])
+      assert.throws(() => parse({ explanation }), /invalid decisions/);
+    assert.throws(() => parse({ explanation: "Applies only here.", reasonCode: "invented" }), /invalid decisions/);
+    const parsed = parse({ explanation: "  Future reuse\n is not established.  " }).decisions[0];
+    assert.ok(parsed.verdict === "reject" || parsed.verdict === "defer");
+    assert.equal(parsed.explanation, "Future reuse is not established.");
+    assert.equal(parsed.reasonCode, reasonCode);
+  }
+});
+
 test("every documented reviewer decision branch parses", () => {
   const targetId = randomUUID(),
     draft = archivalActivationDraft();
   const decisions = [
-    { proposalIndex: 0, verdict: "reject", reasonCode: "not_durable" },
-    { proposalIndex: 0, verdict: "defer", reasonCode: "insufficient_context" },
+    {
+      proposalIndex: 0,
+      verdict: "reject",
+      reasonCode: "not_durable",
+      explanation: "Describes current implementation, not a future rule.",
+    },
+    {
+      proposalIndex: 0,
+      verdict: "defer",
+      reasonCode: "insufficient_context",
+      explanation: "Future reuse is not established.",
+    },
     {
       proposalIndex: 0,
       verdict: "accept",

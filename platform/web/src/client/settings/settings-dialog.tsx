@@ -39,6 +39,7 @@ import {
 } from "../../shared/settings/guard-policy";
 import { defaultGlobalPolicy } from "../../shared/settings/policy-defaults";
 import { KeyboardSettingsPanel } from "./keyboard-settings";
+import { GitHubSettingsPanel } from "./github-settings";
 import type {
   ModelOptionReadModel,
   ProviderAuthReadModel,
@@ -69,6 +70,7 @@ import { HookSettingsFields } from "./hook-settings-fields";
 import { RuntimePolicyTimeoutControl } from "./runtime-policy-timeout";
 import {
   buildSettingsSearchIndex,
+  GITHUB_INTEGRATION_UI_ENABLED,
   searchSettings,
   settingSearchTarget,
   type SettingsSearchEntry,
@@ -95,6 +97,7 @@ import {
 
 export type SettingsTab =
   | "providers"
+  | "integrations"
   | "models"
   | "agent-models"
   | "packages"
@@ -112,6 +115,9 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
     group: "Accounts",
     tabs: [
       { tab: "providers", label: "Providers", icon: <IconPlugConnected size={15} /> },
+      ...(GITHUB_INTEGRATION_UI_ENABLED
+        ? [{ tab: "integrations" as const, label: "Integrations", icon: <IconPlugConnected size={15} /> }]
+        : []),
       { tab: "models", label: "Models", icon: <IconStack2 size={15} /> },
     ],
   },
@@ -249,7 +255,9 @@ export function SettingsDialog({
   onUpdateGlobalToolPolicy,
 }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(
+    !GITHUB_INTEGRATION_UI_ENABLED && initialTab === "integrations" ? "packages" : initialTab,
+  );
   const [providerQuery, setProviderQuery] = useState(initialProviderQuery);
   const [providerFilter, setProviderFilter] = useState<"all" | "connected" | "available">("all");
   const [packageQuery, setPackageQuery] = useState(initialPackageQuery);
@@ -1097,6 +1105,17 @@ export function SettingsDialog({
                 </div>
               )}
             </section>
+
+            {GITHUB_INTEGRATION_UI_ENABLED && (
+              <section
+                id="settings-panel-integrations"
+                className="settings-pane"
+                role="tabpanel"
+                aria-labelledby="settings-tab-integrations"
+                hidden={Boolean(searchQuery.trim()) || activeTab !== "integrations"}>
+                {!searchQuery.trim() && activeTab === "integrations" && <GitHubSettingsPanel />}
+              </section>
+            )}
 
             <section
               id="settings-panel-hooks"

@@ -24,6 +24,7 @@ const help = `Pylon — local web coding agent workspace built on Pi.
 
 Usage:
   pylon                         Start Pylon for the current directory
+  pylon install <source> [options] Install a Pi package into Pylon (npm, Git, or local path)
   pylon changelog [version]     Show the installed or selected release
   pylon changelog --list        List available releases
   pylon migrate                 Retry migration from ~/.pi/agent
@@ -44,7 +45,17 @@ Environment:
   PI_CODING_AGENT_DIR   Pylon data directory (default: ~/.pylon/agent)
   PYLON_NO_UPDATE_CHECK Disable update checks when set to 1`;
 
-if (process.argv.includes("--help") || process.argv.includes("-h")) {
+if (process.argv[2] === "install") {
+  try {
+    await preparePylonStorage();
+    const piRoot = new URL("../", import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const { bin } = JSON.parse(readFileSync(new URL("package.json", piRoot), "utf8"));
+    await import(new URL(bin.pi, piRoot).href);
+  } catch (error) {
+    console.error(`Pylon install failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+} else if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(help);
 } else if (process.argv.includes("--version")) {
   console.log(version);

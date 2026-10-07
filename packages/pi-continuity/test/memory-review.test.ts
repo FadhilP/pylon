@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   callMemoryReviewer,
+  formatReviewOutcome,
   preflightMemoryProposals,
   resolveExactUserQuote,
   reviewedRecord,
@@ -65,7 +66,14 @@ const packet = (proposals: ReviewPacket["proposals"], notes: NotebookNote[] = []
 const preparedUser = (proposal: MemoryProposal, quote = "Keep replies concise."): PreflightProposal => ({
   proposal,
   owner: "default",
-  quote: { quote, context: quote, sessionId: "s", entryId: "u", quoteSha256: sha256(quote), entrySha256: sha256(quote) },
+  quote: {
+    quote,
+    context: quote,
+    sessionId: "s",
+    entryId: "u",
+    quoteSha256: sha256(quote),
+    entrySha256: sha256(quote),
+  },
   sourceRefs: [{ type: "user_message", sessionId: "s", entryId: "u", quoteSha256: sha256(quote) }],
   verificationStatus,
 });
@@ -131,7 +139,6 @@ test("quote resolution ignores assistant text and hashes the immutable user entr
   assert.equal(result.entrySha256, sha256(quote));
 });
 
-
 test("quote resolution sends bounded credential-redacted message context", () => {
   const quote = "Keep replies concise.";
   const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
@@ -193,7 +200,6 @@ test("preflight allows durable task-like words and routes fuzzy duplicates to re
   assert.equal(result.packet.candidateDuplicates[0]?.note.id, existing.id);
 });
 
-
 test("task-local source context reaches the reviewer and rejection produces no mutation", async () => {
   const quote = "Keep replies concise.";
   const message = `For this task only: ${quote}`;
@@ -222,7 +228,17 @@ test("task-local source context reaches the reviewer and rejection produces no m
     completeReview: (async (_model: any, context: any) => {
       request = context.messages[0].content[0].text;
       return reviewResponse(
-        JSON.stringify({ version: 2, decisions: [{ proposalIndex: 0, verdict: "reject", reasonCode: "task_local" }] }),
+        JSON.stringify({
+          version: 2,
+          decisions: [
+            {
+              proposalIndex: 0,
+              verdict: "reject",
+              reasonCode: "task_local",
+              explanation: "This instruction applies only to the current task.",
+            },
+          ],
+        }),
       );
     }) as any,
   });
@@ -238,6 +254,15 @@ test("task-local source context reaches the reviewer and rejection produces no m
   });
   assert.deepEqual(record.operations, []);
   assert.equal(record.rejectionCounts.task_local, 1);
+  const { outcomes } = formatReviewOutcome(reviewed.decisions, preflight.proposals, record);
+  assert.deepEqual(outcomes, [
+    {
+      proposalIndex: 0,
+      status: "rejected",
+      reasonCodes: ["task_local"],
+      explanation: "This instruction applies only to the current task.",
+    },
+  ]);
 });
 
 test("project-local user instructions retain project scope and ownership", async () => {
@@ -516,7 +541,17 @@ test("reviewer strictly rejects malformed, incomplete, unknown, and secret-rewri
   for (const output of [
     "not json",
     JSON.stringify({ version: 2, decisions: [] }),
-    JSON.stringify({ version: 2, decisions: [{ proposalIndex: 1, verdict: "reject", reasonCode: "unsupported" }] }),
+    JSON.stringify({
+      version: 2,
+      decisions: [
+        {
+          proposalIndex: 1,
+          verdict: "reject",
+          reasonCode: "unsupported",
+          explanation: "The evidence does not support this guidance.",
+        },
+      ],
+    }),
     JSON.stringify({
       version: 2,
       decisions: [

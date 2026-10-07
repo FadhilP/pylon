@@ -117,6 +117,7 @@ export type ReviewerDecision =
   | {
       proposalIndex: number;
       verdict: "defer";
+      explanation: string;
       reasonCode:
         | "ambiguous_instruction"
         | "insufficient_context"
@@ -127,6 +128,7 @@ export type ReviewerDecision =
   | {
       proposalIndex: number;
       verdict: "reject";
+      explanation: string;
       reasonCode:
         | "not_durable"
         | "descriptive_only"
@@ -822,14 +824,15 @@ function parseRuleDecision(value: any): ReviewerDecision | undefined {
 }
 function parseDecision(value: any): ReviewerDecision | undefined {
   if (!value || !integer(value.proposalIndex)) return;
-  if (value.verdict === "reject")
-    return exactKeys(value, ["proposalIndex", "verdict", "reasonCode"]) && rejectReasons.has(value.reasonCode)
-      ? value
+  if (value.verdict === "reject" || value.verdict === "defer") {
+    const reasons = value.verdict === "reject" ? rejectReasons : deferReasons;
+    return exactKeys(value, ["proposalIndex", "verdict", "reasonCode", "explanation"]) &&
+      reasons.has(value.reasonCode) &&
+      text(value.explanation, 240) &&
+      safe(value.explanation)
+      ? { ...value, explanation: normalizeRuleText(value.explanation) }
       : undefined;
-  if (value.verdict === "defer")
-    return exactKeys(value, ["proposalIndex", "verdict", "reasonCode"]) && deferReasons.has(value.reasonCode)
-      ? value
-      : undefined;
+  }
   if (value.verdict === "accept" && value.operation === "remove")
     return exactKeys(value, [
       "proposalIndex",

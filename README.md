@@ -35,6 +35,7 @@ See the complete [Pylon Web guide](./docs/web/README.md) for workspaces, session
 - Sessions, settings, and package state live in `~/.pylon/agent` (`PI_CODING_AGENT_DIR` overrides). Existing `~/.pi/agent` data is copied on first run; `pylon migrate` retries.
 - Run `pylon changelog` for the installed release, `pylon changelog <version>` for an older release, or `pylon changelog --list` to list available versions.
 - Manage Pi-native extensions in **Settings → Extensions**. Extensions run arbitrary code with the server's permissions — review sources before enabling.
+- Run `pylon install <source>` to install a Pi extension/package from npm, Git, or a local file/directory into Pylon. For example: `pylon install /absolute/path/extension.ts`. Pi's install options are forwarded unchanged; use `--local --approve` for project scope after reviewing the project, and `pylon install --help` for usage. Reload extensions in Settings afterward.
 - Pylon Web agents can use the deferred `pylon_settings` tool to inspect package settings and apply revision-checked updates after confirmation. The tool does not expose hooks, project policy, trust, extensions, Guard controls, credentials, or raw configuration files.
 - Agents can activate the deferred `pylon_docs` tool to search, list, and read the shipped Web and package documentation on demand; documentation is not injected into every prompt.
 

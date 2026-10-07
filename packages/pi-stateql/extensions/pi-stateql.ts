@@ -109,9 +109,23 @@ const toolSchema = Type.Object(
         { description: "inspect or objects.list only" },
       ),
     ),
-    schema: Type.Optional(Type.String({ description: "objects.list/object.describe only", maxLength: 500 })),
+    schema: Type.Optional(Type.String({ description: "objects.list only", maxLength: 500 })),
     search: Type.Optional(Type.String({ description: "objects.list only", maxLength: 200 })),
-    object: Type.Optional(Type.Any({ description: "object.describe only" })),
+    object: Type.Optional(
+      Type.Object(
+        {
+          kind: StringEnum(["table", "view", "collection", "function", "trigger", "enum", "key"] as const),
+          name: Type.String({ minLength: 1, maxLength: 500 }),
+          schema: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+          identity: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
+        },
+        {
+          description:
+            'object.describe only: nested catalog reference, e.g. {"kind":"table","schema":"public","name":"items"}',
+          additionalProperties: false,
+        },
+      ),
+    ),
     redis: Type.Optional(Type.Any({ description: "redis.query/redis.exec/redis.plan only" })),
     table: Type.Optional(Type.String({ description: "inspect only: optional qualified table name", maxLength: 500 })),
     mongo: Type.Optional(
@@ -447,7 +461,8 @@ function validateInput(input: StateQLToolInput): StateQLToolInput {
   if (input.command === "workspace.select") {
     if (input.workspace === undefined) throw new Error("workspace.select requires workspace");
     for (const [key, value] of Object.entries(input))
-      if (value !== undefined && key !== "command" && key !== "workspace") throw new Error(`workspace.select does not accept ${key}`);
+      if (value !== undefined && key !== "command" && key !== "workspace")
+        throw new Error(`workspace.select does not accept ${key}`);
     return input;
   }
   if (input.command === "workspace.status") {
@@ -471,6 +486,8 @@ function validateInput(input: StateQLToolInput): StateQLToolInput {
       if (unexpected) throw new Error(`${input.command} does not accept ${unexpected}`);
       if (input.params !== undefined) boundedJson(input.params, "params");
       if (input.command.startsWith("mongo.")) throw new Error(`${input.command} has an invalid MongoDB command`);
+      if (input.command === "object.describe")
+        throw new Error("object.describe has invalid input; expected object: {kind, name, schema?, identity?}");
       throw new Error(`${input.command} has invalid input`);
     }
     return { ...parsed, ...(workspace ? { workspace } : {}) } as StateQLToolInput;
@@ -731,7 +748,11 @@ function boundedResponse(
   selectedWorkspace?: WorkspaceName,
 ): { text: string; truncated: boolean } {
   const output = JSON.stringify(
-    { ...modelResponse(response, command), workspace, ...(selectedWorkspace && selectedWorkspace !== workspace ? { selected_workspace: selectedWorkspace } : {}) },
+    {
+      ...modelResponse(response, command),
+      workspace,
+      ...(selectedWorkspace && selectedWorkspace !== workspace ? { selected_workspace: selectedWorkspace } : {}),
+    },
     null,
     2,
   );
@@ -794,9 +815,7 @@ export default function stateqlExtension(
   let globalUiRuntime: Runtime | undefined;
   let selectedWorkspace: WorkspaceName = "session";
   let activeCredentialHost: StateQLCredentialHost | undefined;
-  const activePasswordResolution: {
-    value?: { request: CredentialRequest; target: StateQLPasswordTarget };
-  } = {};
+  const activePasswordResolution: { value?: { request: CredentialRequest; target: StateQLPasswordTarget } } = {};
   const takeActivePasswordResolution = (): typeof activePasswordResolution.value => {
     const value = activePasswordResolution.value;
     activePasswordResolution.value = undefined;
@@ -849,7 +868,9 @@ export default function stateqlExtension(
           const credential = hostRequest(request);
           const password = await host.requestStateQLPassword(credential, target.prompt, {
             timeoutMs:
-              approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null ? approvalTiming.timeoutSeconds * 1000 : 0,
+              approvalTiming.guardEnabled && approvalTiming.timeoutSeconds !== null
+                ? approvalTiming.timeoutSeconds * 1000
+                : 0,
             savedPassword: { reference: request.reference, target: target.source },
           });
           if (password !== undefined) activePasswordResolution.value = { request: credential, target: target.prompt };
@@ -857,7 +878,11 @@ export default function stateqlExtension(
         }
         if (request.reference.startsWith(BROKERED_REFERENCE_PREFIX)) {
           const target = brokeredTargets.get(request.reference);
-          if (!target || target.actorId !== request.actorId || (target.stateqlSessionId && target.stateqlSessionId !== request.session.id))
+          if (
+            !target ||
+            target.actorId !== request.actorId ||
+            (target.stateqlSessionId && target.stateqlSessionId !== request.session.id)
+          )
             return undefined;
           target.stateqlSessionId ??= request.session.id;
           const credential = hostRequest(request);
@@ -882,7 +907,9 @@ export default function stateqlExtension(
         options.createWorkspaceStateQL ??
         (StateQL as typeof StateQL & { forWorkspace?: WorkspaceFactory }).forWorkspace;
       if (typeof factory !== "function")
-        throw new Error("StateQL global workspace requires a runtime exposing StateQL.forWorkspace; upgrade @fadhilp/stateql.");
+        throw new Error(
+          "StateQL global workspace requires a runtime exposing StateQL.forWorkspace; upgrade @fadhilp/stateql.",
+        );
       stateql = factory({ ...stateqlOptions, workspace: GLOBAL_WORKSPACE });
     }
     return { actorId, piActorId, workspace, controller, stateql };
@@ -924,7 +951,9 @@ export default function stateqlExtension(
       if (signal?.aborted) throw new Error(`StateQL ${origin === "user" ? "command request" : "operation"} cancelled`);
       if (!record(shown.data)) return undefined;
       const data = shown.data;
-      const sourceCount = [data.target, data.secret_env, data.credential_ref].filter(value => typeof value === "string").length;
+      const sourceCount = [data.target, data.secret_env, data.credential_ref].filter(
+        value => typeof value === "string",
+      ).length;
       if (sourceCount !== 1 || typeof data.target !== "string") return undefined;
       const target = brokeredTarget(data.target);
       if (!target) return undefined;
@@ -1081,11 +1110,13 @@ export default function stateqlExtension(
     if (!request.claim()) return;
     const expectedConnectionId =
       request.expectedConnectionId === undefined
-        ? (current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null)
+        ? (current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection
+            ?.connection_id ?? null)
         : request.expectedConnectionId;
     const checkConnection = () => {
       const connectionId =
-        current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ?? null;
+        current(request.sessionId, workspace, true).stateql.snapshot({ historyLimit: 1 }).connection?.connection_id ??
+        null;
       if (connectionId !== expectedConnectionId)
         throw new Error("Database connection changed; review and submit again.");
     };
@@ -1172,10 +1203,11 @@ export default function stateqlExtension(
         ) {
           const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
           if (
-            !(await ui.confirm(title, workspaceConfirmationText(workspace, input as StateQLToolInput, Boolean(target), target?.source), {
-              timeout: passwordTimeoutMs,
-              ...(request.signal ? { signal: request.signal } : {}),
-            }))
+            !(await ui.confirm(
+              title,
+              workspaceConfirmationText(workspace, input as StateQLToolInput, Boolean(target), target?.source),
+              { timeout: passwordTimeoutMs, ...(request.signal ? { signal: request.signal } : {}) },
+            ))
           ) {
             return { declined: true };
           }
@@ -1227,13 +1259,21 @@ export default function stateqlExtension(
           } else if (input.command === "connect") {
             reference = transientReference;
             executionCommand = brokeredConnectCommand(withoutCredential, transientReference, profileBrokered);
-            brokeredTargets.set(transientReference, { ...target, actorId: current(request.sessionId, workspace, true).actorId, passwordTimeoutMs });
+            brokeredTargets.set(transientReference, {
+              ...target,
+              actorId: current(request.sessionId, workspace, true).actorId,
+              passwordTimeoutMs,
+            });
           }
         } else if (target && input.command === "connect") {
           const transientReference = brokeredReference();
           reference = transientReference;
           executionCommand = brokeredConnectCommand(stateqlInput as BatchCommand, transientReference, profileBrokered);
-          brokeredTargets.set(transientReference, { ...target, actorId: current(request.sessionId, workspace, true).actorId, passwordTimeoutMs });
+          brokeredTargets.set(transientReference, {
+            ...target,
+            actorId: current(request.sessionId, workspace, true).actorId,
+            passwordTimeoutMs,
+          });
         }
 
         ui.setStatus?.("pi-stateql", `database: ${input.command}`);
@@ -1499,7 +1539,9 @@ export default function stateqlExtension(
           const selected = current(id, selectedWorkspace);
           const transaction = selected.stateql.snapshot({ historyLimit: 1 }).transaction;
           if (transaction?.owner_actor_id === selected.actorId)
-            throw new Error(`[${workspaceLabel(selectedWorkspace)}] Commit or roll back the active transaction before switching workspaces.`);
+            throw new Error(
+              `[${workspaceLabel(selectedWorkspace)}] Commit or roll back the active transaction before switching workspaces.`,
+            );
         }
         selectedWorkspace = command.workspace!;
         return {
@@ -1531,7 +1573,8 @@ export default function stateqlExtension(
       const requiresConfirmation =
         CONFIRMED_COMMANDS.has(command.command) && (!target || profileBrokered?.fromProfile || insecureBrokeredConnect);
       if (requiresConfirmation) {
-        if (!ctx.hasUI) throw new Error(`[${workspaceLabel(workspace)}] ${input.command} requires interactive confirmation`);
+        if (!ctx.hasUI)
+          throw new Error(`[${workspaceLabel(workspace)}] ${input.command} requires interactive confirmation`);
         const title = insecureBrokeredConnect ? "Allow insecure database TLS?" : "Allow StateQL operation?";
         if (
           !(await ctx.ui.confirm(title, workspaceConfirmationText(workspace, input, Boolean(target), target?.source), {
@@ -1540,7 +1583,12 @@ export default function stateqlExtension(
           }))
         ) {
           return {
-            content: [{ type: "text" as const, text: `User declined the StateQL operation; nothing was executed (${workspaceLabel(workspace)}).` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `User declined the StateQL operation; nothing was executed (${workspaceLabel(workspace)}).`,
+              },
+            ],
             details: { command: input.command, declined: true, workspace },
           };
         }
@@ -1554,18 +1602,22 @@ export default function stateqlExtension(
         ) as BatchCommand & StateQLToolInput;
       } else if (target) {
         reference = brokeredReference();
-        executionCommand = brokeredConnectCommand(command as BatchCommand, reference, profileBrokered) as BatchCommand & StateQLToolInput;
+        executionCommand = brokeredConnectCommand(command as BatchCommand, reference, profileBrokered) as BatchCommand &
+          StateQLToolInput;
         brokeredTargets.set(reference, { ...target, actorId: active.actorId, passwordTimeoutMs });
       }
       onUpdate?.({
-        content: [{ type: "text" as const, text: `Running StateQL ${input.command} (${workspaceLabel(workspace)})...` }],
+        content: [
+          { type: "text" as const, text: `Running StateQL ${input.command} (${workspaceLabel(workspace)})...` },
+        ],
         details: { command: input.command, workspace },
       });
       if (ctx.hasUI) ctx.ui.setStatus?.("pi-stateql", `database: ${input.command}`);
       try {
         return await exclusive(async () => {
           // Resolve before the exclusive operation so a global runtime is never mistaken for the private actor.
-          if (active !== current(id, workspace)) throw new Error(`[${workspaceLabel(workspace)}] StateQL runtime changed`);
+          if (active !== current(id, workspace))
+            throw new Error(`[${workspaceLabel(workspace)}] StateQL runtime changed`);
           if (signal?.aborted) throw new Error("StateQL operation cancelled");
           let response: Response<unknown>;
           activePasswordResolution.value = undefined;
@@ -1587,10 +1639,13 @@ export default function stateqlExtension(
             } else if (command.command === "object.describe") {
               if (!active.stateql.describeObject)
                 throw new Error("Object descriptions require the current StateQL package.");
-              response = await active.stateql.describeObject(command.object, { signal, timeoutMs: command.timeout_ms });
+              response = await active.stateql.describeObject(command.object!, { signal, timeoutMs: command.timeout_ms });
             } else {
               const { workspace: _workspace, ...stateqlCommand } = executionCommand;
-              response = await active.stateql.executeCommand(stateqlCommand as BatchCommand, { signal, origin: "model" });
+              response = await active.stateql.executeCommand(stateqlCommand as BatchCommand, {
+                signal,
+                origin: "model",
+              });
             }
           } catch (error) {
             if (reference) brokeredTargets.delete(reference);

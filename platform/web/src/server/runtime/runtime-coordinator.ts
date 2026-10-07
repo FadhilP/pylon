@@ -1161,8 +1161,10 @@ export class RuntimeCoordinator implements PiDriver {
         parentSessionId: parent?.id ?? current?.sessionId,
       });
       let slot = draft;
+      let draftSessionPath: string | undefined;
       try {
         slot = await this.ensureDraftWorkspace(slot);
+        draftSessionPath = slot.driver.persistDraftSession();
         this.invalidateSlotSession(slot);
         const result = slot.provisional
           ? await this.commitProvisional(slot).then(() => this.replacement(false))
@@ -1176,6 +1178,10 @@ export class RuntimeCoordinator implements PiDriver {
             .removeSessionWorkspace(draft.id)
             .catch(() => {});
           await this.disposeSlot(draft).catch(() => {});
+        }
+        if (draftSessionPath && slot.id !== this.selectedId) {
+          await unlink(draftSessionPath).catch(() => {});
+          this.sessionIndex.remove(slot.id);
         }
         throw error;
       }

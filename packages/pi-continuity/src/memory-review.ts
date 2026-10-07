@@ -33,12 +33,14 @@ const REVIEW_MAX_USER_CONTEXT_CHARS = 4_000;
 export const MEMORY_REVIEWER_OUTPUT_CONTRACT = `ReviewerOutput is exactly {"version":2,"decisions":[Decision,...]}. Emit exactly one Decision per proposal, in proposal order, using its zero-based non-negative integer proposalIndex. No extra keys are allowed. targetId and expectedRevision must come from supplied data. Every accepted mutation is self-contained: add includes scope; replace and removal include scope, targetId, and expectedRevision.
 
 Decision is exactly one of:
-- Reject: {"proposalIndex":number,"verdict":"reject","reasonCode":"not_durable"|"descriptive_only"|"task_local"|"speculative"|"unsupported"|"duplicate"|"wrong_scope"|"conflict"|"unsafe"}
-- Defer: {"proposalIndex":number,"verdict":"defer","reasonCode":"ambiguous_instruction"|"insufficient_context"|"evidence_unverifiable"|"conflict_unresolvable"|"material_rewrite_required"}
+- Reject: {"proposalIndex":number,"verdict":"reject","reasonCode":"not_durable"|"descriptive_only"|"task_local"|"speculative"|"unsupported"|"duplicate"|"wrong_scope"|"conflict"|"unsafe","explanation":string}
+- Defer: {"proposalIndex":number,"verdict":"defer","reasonCode":"ambiguous_instruction"|"insufficient_context"|"evidence_unverifiable"|"conflict_unresolvable"|"material_rewrite_required","explanation":string}
 - Accept rule: {"proposalIndex":number,"verdict":"accept","operation":"add"|"replace","scope":"user"|"project",[replace only: "targetId":string,"expectedRevision":number,]"trigger":string,"guidance":string,"authority":"user_instruction"|"project_contract",[optional "activationDraft":ActivationDraft,]"reasonCode":"durable_rule"}
 - Rewrite rule: same complete mutation with "verdict":"rewrite","rewriteCharacter":"format_only"|"clarified_without_broadening","reasonCode":"normalized_rule".
 - Merge: a complete replace mutation with "verdict":"merge","operation":"replace","scope", supplied targetId/expectedRevision, canonical text, authority, optional activationDraft, "rewriteCharacter":"format_only"|"clarified_without_broadening","reasonCode":"existing_rule".
 - Accept removal: {"proposalIndex":number,"verdict":"accept","operation":"remove","scope":"user"|"project","targetId":string,"expectedRevision":number,"reasonCode":"revoked_rule"|"contradicted_rule"}
+
+For every reject or defer decision, explanation is required: one brief, direct sentence (1–240 characters) stating why this specific proposal was rejected or deferred. Lead with the concrete reason; no preamble, hedging, apologies, or verbose analysis. Do not merely restate the reason code or quote credentials or sensitive evidence.
 
 ActivationDraft is exactly {"classification":"grounded"|"semantic_guarded"|"archival","subscriptions":EventKind[],"predicate"?:TriggerExpression,"semanticGuard"?:{"condition":string,"abstainOnUnknown":true},"delivery":"inject_once"|"warn"|"block_candidate"|"validate_candidate","lifecycle":{"activateUntil":"event_complete"|"task_complete"|"session_complete"|"source_changes"|"explicit_revocation","rearmOn":EventKind[]},"examples":{"positive":EventFixture[],"hardNegative":EventFixture[]}}.
 EventKind is "task_started"|"before_tool_call"|"after_tool_result"|"context_compacted". TriggerExpression is {"all":[...]}, {"any":[...]}, {"not":...}, or {"fact":"event.kind"|"tool.name"|"tool.command"|"tool.exitCode"|"tool.isError"|"tool.errorSignature"|"file.path"|"task.phase"|"attempt.count","op":"eq"|"neq"|"contains"|"startsWith"|"matchesGlob"|"gte","value":string|number|boolean}. EventFixture is {"event":EventKind,"facts":{fact:value}}.
@@ -118,8 +120,7 @@ export function userMessageText(entry: any) {
 }
 function boundedUserContext(content: string, quote: string) {
   const safe = redactSecrets(content);
-  if (safe.length <= REVIEW_MAX_USER_CONTEXT_CHARS)
-    return sanitizeAndClip(safe, REVIEW_MAX_USER_CONTEXT_CHARS);
+  if (safe.length <= REVIEW_MAX_USER_CONTEXT_CHARS) return sanitizeAndClip(safe, REVIEW_MAX_USER_CONTEXT_CHARS);
   const quoteOffset = safe.indexOf(quote);
   if (quoteOffset < 0) return sanitizeAndClip(safe, REVIEW_MAX_USER_CONTEXT_CHARS);
   const marker = "\n[message context omitted]\n";
@@ -127,9 +128,11 @@ function boundedUserContext(content: string, quote: string) {
   let start = Math.max(0, quoteOffset - Math.floor((bodyBudget - quote.length) / 2));
   start = Math.min(start, safe.length - bodyBudget);
   const end = Math.min(safe.length, start + bodyBudget);
-  return sanitizeAndClip(`${start > 0 ? marker : ""}${safe.slice(start, end)}${end < safe.length ? marker : ""}`, REVIEW_MAX_USER_CONTEXT_CHARS);
+  return sanitizeAndClip(
+    `${start > 0 ? marker : ""}${safe.slice(start, end)}${end < safe.length ? marker : ""}`,
+    REVIEW_MAX_USER_CONTEXT_CHARS,
+  );
 }
-
 
 export function resolveExactUserQuote(activeBranch: any[], quote: string, sessionId: string): QuoteEvidence {
   const matches: Array<{ entryId: string; count: number }> = [];
@@ -631,6 +634,7 @@ export type ReviewOutcome = {
   proposalIndex: number;
   status: "covered" | "rejected" | "deferred" | "archival" | "active_advisory";
   reasonCodes: string[];
+  explanation?: string;
   memoryId?: string;
 };
 
@@ -657,7 +661,7 @@ export function formatReviewOutcome(
       covered
         ? `- already covered by ${covered.scope}/${covered.id}: proposal ${proposalIndex + 1}`
         : settled
-          ? `- ${decision.verdict}red [${decision.reasonCode}]: proposal ${proposalIndex + 1}`
+          ? `- ${decision.verdict === "reject" ? "rejected" : "deferred"} [${decision.reasonCode}]: proposal ${proposalIndex + 1} — ${decision.explanation}`
           : `- ${decision.verdict === "accept" ? "accepted" : decision.verdict} and staged: proposal ${proposalIndex + 1}`,
     );
 
@@ -673,6 +677,7 @@ export function formatReviewOutcome(
               ? "archival"
               : "active_advisory",
       reasonCodes: [covered ? "duplicate" : decision.reasonCode],
+      ...(!covered && settled ? { explanation: decision.explanation } : {}),
       ...(memoryId ? { memoryId } : {}),
     });
   });

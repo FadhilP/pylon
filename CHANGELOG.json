@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.4.1",
+    "date": "Oct 6, 2026",
+    "title": "Native package installation and clearer memory reviews",
+    "summary": "A maintenance release adds Pi-native package installation, preserves unsent sessions, tightens StateQL object-description validation, explains rejected and deferred memory proposals, and prepares secure GitHub authentication with its Settings UI still disabled.",
+    "notes": [
+      "Added pylon install for npm, Git, and local Pi packages and extensions, forwarding Pi's install options while preserving Pylon storage migration, directory overrides, and project trust approval requirements.",
+      "Required bounded, safety-validated explanations for rejected and deferred Continuity memory proposals and included those explanations in review outcomes.",
+      "Added GitHub device-login backend support, account and repository-access checks, revision-checked actions, and local disconnect with OS-vault credential storage, tab-owned device instructions, cancellation cleanup, and refresh-token replay protection; the Integrations Settings UI remains disabled.",
+      "Persisted explicitly created sessions before their first prompt so unsent drafts remain listed and reopenable after switching sessions or restarting, while preserving setup and branch state, avoiding empty startup sessions, and cleaning up failed creation attempts.",
+      "Tightened StateQL object.describe validation to require a nested catalog reference with kind and name, optional schema and identity, and clear errors for malformed or unsupported fields before calling StateQL.",
+      "Expanded behavioral regression coverage for installation, memory-review explanations, GitHub authentication lifecycle and credential failures, transport security, unsent-session persistence and failure cleanup, and StateQL object-description validation."
+    ]
+  },
+  {
     "version": "3.4.0",
     "date": "Oct 6, 2026",
     "title": "Searchable documentation and more reliable workspaces",

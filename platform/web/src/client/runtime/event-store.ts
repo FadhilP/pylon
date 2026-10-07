@@ -1,3 +1,4 @@
+import type { GitHubAuthAction, GitHubAuthSnapshot } from "../../shared/settings/github";
 import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/settings/keyboard";
 import {
   isComposerWebStateEvent,
@@ -394,6 +395,14 @@ export class RuntimeEventStore {
       void this.refreshHostPreferences().catch(() => undefined);
     }
   }
+  githubAuth(signal?: AbortSignal): Promise<GitHubAuthSnapshot> {
+    return this.api.githubAuth(signal);
+  }
+  githubAuthAction(input: GitHubAuthAction): Promise<GitHubAuthSnapshot> {
+    if (this.snapshot.connection !== "connected") throw new Error("Reconnect to Pylon before changing the GitHub connection");
+    return this.api.githubAuthAction(input);
+  }
+
   async refreshKeyboardSettings(): Promise<void> {
     const epoch = this.bootstrapEpoch;
     const value = await this.api.keyboardSettings();

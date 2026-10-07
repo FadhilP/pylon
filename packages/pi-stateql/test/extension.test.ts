@@ -79,7 +79,11 @@ function harness(real = false, workspace = true) {
     events: {
       on(name: string, handler: Function) {
         events.set(name, [...(events.get(name) ?? []), handler]);
-        return () => events.set(name, (events.get(name) ?? []).filter(item => item !== handler));
+        return () =>
+          events.set(
+            name,
+            (events.get(name) ?? []).filter(item => item !== handler),
+          );
       },
       emit(name: string, value: unknown) {
         emitted.push({ name, value });
@@ -102,9 +106,7 @@ function harness(real = false, workspace = true) {
     };
     stateqlExtension(pi as any, {
       createStateQL: create,
-      ...(workspace
-        ? { createWorkspaceStateQL: (options: StateQLActorOptions) => create(options) }
-        : {}),
+      ...(workspace ? { createWorkspaceStateQL: (options: StateQLActorOptions) => create(options) } : {}),
     });
   }
   return { tools, handlers, events, emitted, instances };
@@ -174,23 +176,15 @@ test("does not switch away from an actor-owned transaction", async () => {
     transaction: { transaction_id: "tx_1", owner_actor_id: "pi-session", state: "active" },
   });
   await assert.rejects(
-    value.tools.get("stateql").execute(
-      "select",
-      { command: "workspace.select", workspace: "global" },
-      undefined,
-      undefined,
-      context(),
-    ),
+    value.tools
+      .get("stateql")
+      .execute("select", { command: "workspace.select", workspace: "global" }, undefined, undefined, context()),
     /Commit or roll back.*before switching workspaces/,
   );
   await assert.rejects(
-    value.tools.get("stateql").execute(
-      "status",
-      { command: "workspace.status", workspace: "global" },
-      undefined,
-      undefined,
-      context(),
-    ),
+    value.tools
+      .get("stateql")
+      .execute("status", { command: "workspace.status", workspace: "global" }, undefined, undefined, context()),
     /workspace.status does not accept workspace/,
   );
 });
@@ -198,7 +192,13 @@ test("does not switch away from an actor-owned transaction", async () => {
 test("uses stable distinct global actors and closes every client", async () => {
   const value = await start();
   const tool = value.tools.get("stateql");
-  await tool.execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context());
+  await tool.execute(
+    "global",
+    { command: "query", sql: "SELECT 1", workspace: "global" },
+    undefined,
+    undefined,
+    context(),
+  );
   const agentActor = value.instances[1].options.actor;
   assert.notEqual(agentActor, "pi-session");
 
@@ -218,7 +218,13 @@ test("uses stable distinct global actors and closes every client", async () => {
   assert.notEqual(value.instances[2].options.actor, agentActor);
   await value.handlers.get("session_shutdown")![0]();
   await value.handlers.get("session_start")![0]({}, context());
-  await tool.execute("global-again", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context());
+  await tool.execute(
+    "global-again",
+    { command: "query", sql: "SELECT 1", workspace: "global" },
+    undefined,
+    undefined,
+    context(),
+  );
   assert.equal(value.instances[4].options.actor, agentActor);
   await value.handlers.get("session_shutdown")![0]();
   assert.ok(value.instances.every(instance => instance.closed));
@@ -231,7 +237,9 @@ test("fails clearly when the installed runtime lacks global workspace support", 
     runtime.forWorkspace = undefined;
     const value = await start(harness(false, false));
     await assert.rejects(
-      value.tools.get("stateql").execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context()),
+      value.tools
+        .get("stateql")
+        .execute("global", { command: "query", sql: "SELECT 1", workspace: "global" }, undefined, undefined, context()),
       /forWorkspace/,
     );
   } finally {
@@ -332,14 +340,7 @@ test("Pylon Web password-brokers username-only server targets without leaking th
         requestedReadOnly: true,
       });
       assert.equal(new URL(String(resumed)).hostname, "db.example.com");
-      return {
-        ok: true,
-        command_id: "cmd_query",
-        session_id: "s_1",
-        data: {},
-        warnings: [],
-        meta: { duration_ms: 1 },
-      };
+      return { ok: true, command_id: "cmd_query", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
     }
     assert.equal(command.command, "connect");
     assert.equal(command.target, undefined);
@@ -1450,6 +1451,37 @@ test("confirmed operations use the Guard timeout only while Guard is enabled", a
   });
   await value.handlers.get("session_start")![0]({}, context());
   assert.deepEqual(await attempt("reset"), { timeout: 0 });
+});
+
+test("describes nested catalog objects and rejects malformed references before StateQL", async () => {
+  const value = await start();
+  const tool = value.tools.get("stateql");
+  const described: unknown[] = [];
+  (value.instances[0] as any).describeObject = async (object: unknown) => {
+    described.push(object);
+    return { ok: true, command_id: "describe", session_id: "s_1", data: {}, warnings: [], meta: { duration_ms: 1 } };
+  };
+  for (const [input, message] of [
+    [
+      { command: "object.describe", kind: "table", schema: "public", object: "otps" },
+      /object.describe does not accept kind/,
+    ],
+    [{ command: "object.describe", schema: "public", object: "otps" }, /object.describe does not accept schema/],
+    [{ command: "object.describe", object: "public.otps" }, /expected object: \{kind, name, schema\?, identity\?\}/],
+    [{ command: "object.describe", object: { name: "otps" } }, /expected object:/],
+    [{ command: "object.describe", object: { kind: "table" } }, /expected object:/],
+    [{ command: "object.describe", object: { kind: "schema", name: "public" } }, /expected object:/],
+    [{ command: "object.describe", object: { kind: "table", name: "otps", extra: true } }, /expected object:/],
+  ] as const) {
+    await assert.rejects(tool.execute("invalid", input, undefined, undefined, context()), message);
+  }
+  assert.equal(value.instances[0].commands.length, 0);
+  assert.deepEqual(described, []);
+
+  const input = { command: "object.describe", object: { kind: "table", schema: "public", name: "otps" } };
+  await tool.execute("describe", input, undefined, undefined, context());
+  assert.deepEqual(described, [input.object]);
+  assert.equal(value.instances[0].commands.length, 0);
 });
 
 test("rejects irrelevant, ambiguous, and oversized inputs before StateQL", async () => {

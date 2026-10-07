@@ -1,7 +1,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { copyFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,49 @@ after(async () => {
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+});
+
+test("persisting an empty draft preserves setup and supports the first prompt without overwriting history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-persist-draft-"));
+  const manager = SessionManager.create(root, root, { parentSession: join(root, "parent.jsonl") });
+  const path = manager.getSessionFile()!;
+  const persist = () => SessionRuntime.prototype.persistDraftSession.call({
+    requireRuntime: () => ({ session: { sessionManager: manager } }),
+  } as any);
+
+  try {
+    const modelEntry = manager.appendModelChange("mock", "test");
+    manager.appendThinkingLevelChange("medium");
+    manager.appendCustomEntry("setup", { enabled: true });
+    manager.branch(modelEntry);
+    const header = manager.getHeader();
+    const entries = manager.getEntries();
+    const reload = manager.setSessionFile.bind(manager);
+    manager.setSessionFile = () => { throw new Error("reload failed"); };
+    assert.throws(persist, /reload failed/);
+    assert.equal(existsSync(path), false, "a failed persistence attempt must remove its own file");
+    manager.setSessionFile = reload;
+
+    assert.equal(persist(), path);
+    assert.deepEqual(manager.getHeader(), header);
+    assert.deepEqual(manager.getEntries(), entries);
+    assert.equal(manager.getLeafId(), modelEntry);
+    manager.appendMessage({ role: "user", content: "first prompt", timestamp: Date.now() });
+    const written = await readFile(path, "utf8");
+    assert.equal(persist(), undefined);
+    assert.equal(await readFile(path, "utf8"), written);
+    const reopened = SessionManager.open(path);
+    assert.equal(reopened.getSessionId(), manager.getSessionId());
+    assert.equal(reopened.getHeader()?.parentSession, join(root, "parent.jsonl"));
+    assert.equal(reopened.getEntries().filter(entry => entry.type === "message").length, 1);
+    assert.deepEqual(reopened.getEntries().slice(0, entries.length), entries);
+
+    assert.equal(SessionRuntime.prototype.persistDraftSession.call({
+      requireRuntime: () => ({ session: { sessionManager: SessionManager.inMemory(root) } }),
+    } as any), undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

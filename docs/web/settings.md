@@ -23,6 +23,22 @@ Save timing is shown by a package field when the package provides it. A change m
 
 Disconnect removes a credential only when Pylon reports it as stored and active sessions are idle. Provider credentials are sensitive: use the provider flow/dialog, do not paste them into prompts, and see [Safety and storage](./safety-and-storage.md) for disclosure limits.
 
+## Integrations → GitHub
+
+**GitHub** is separate from AI providers and Git transport authentication. This first slice supports GitHub.com, one account per Pylon agent-data directory, device login, account verification, a repository-metadata access check, and local disconnect. It does not add a PR viewer or change Git credential helpers, SSH configuration, or remotes.
+
+A registered **GitHub App** is required; Pylon does not ship a registered client ID or a confidential client secret:
+
+1. [Register a GitHub App](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app), enable **Device flow**, and keep user-access-token expiration enabled. Webhooks are not needed for this integration.
+2. For the intended future read-only PR workflow, configure **Pull requests: Read-only** and **Contents: Read-only**. Install the app on selected repositories; organizations may require approval. App permissions and your own permissions both constrain access.
+3. Enter the app's public **client ID** (not its app ID, installation ID, or client secret) in **Settings → Integrations**. Alternatively set `PYLON_GITHUB_CLIENT_ID` on the Pylon server before starting it.
+4. Choose **Connect GitHub**, follow the GitHub verification link, and enter the displayed one-time user code. Check that GitHub shows the app you intended to authorize. Only the initiating browser tab receives the code. Login can be cancelled there; losing that tab's connection cancels pending login after the reconnect grace period.
+5. After restarting Pylon, a saved account is not yet verified. **Reconnect / verify account** verifies it and renews an expiring device-flow token when needed. **Check access** accepts `owner/repository` and checks repository metadata, not source or permission for future PR actions. A public-repository metadata response does not prove the app is installed there.
+
+Tokens and rotating refresh tokens are persisted only in the server's OS credential vault; unavailable or failing vault access has no plaintext fallback. Token renewal records uncertainty before exchange: if interrupted, or if replacement credentials cannot be saved, disconnect and sign in again rather than retrying the old refresh token. Login codes and network requests have finite expiry/time limits; provider denial, rate limits, inaccessible repositories, and incomplete disconnect are reported explicitly. Native vault writes and deletions are awaited, not force-cancelled: disconnect or shutdown may wait for the OS vault to finish.
+
+**Disconnect locally** cancels pending work and deletes Pylon's saved credentials. It does not revoke GitHub authorization; use **GitHub Settings → Applications → Authorized GitHub Apps** to [review or revoke authorization](https://docs.github.com/en/apps/using-github-apps/reviewing-and-revoking-authorization-of-github-apps). Disconnect does not alter Git or AI-provider credentials. Use one Pylon server per agent-data directory; independent servers sharing that directory do not coordinate credential writes.
+
 ## Models
 
 **Models** controls which provider models are visible in Pylon's model selectors. Filter by provider/model, show or hide individual models, or show all models for a provider. Hiding a model does not remove provider access or change an already active session model; the active model remains visible. If no models appear, connect/configure a provider first.

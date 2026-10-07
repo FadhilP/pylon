@@ -98,7 +98,7 @@ export async function startPylonServer(options: PylonServerOptions = {}): Promis
     close() {
       return (closePromise ??= (async () => {
         server.off("upgrade", readyTransport.handleUpgrade);
-        try { readyTransport.dispose(); }
+        try { await readyTransport.close(); }
         finally {
           try { await new Promise<void>((resolve, reject) => server.close(error => (error ? reject(error) : resolve()))); }
           finally { try { await assets.close(); } finally { await driver.dispose(); } }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpath, unlink } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -2605,6 +2605,35 @@ export class SessionRuntime {
 
   canSleep(): boolean {
     return this.runtimeState() === "idle" && !this.sessionMutation && !this.packageUpdate && !this.indexUpdate;
+  }
+
+  /** Explicitly created sessions must be reopenable before their first prompt. */
+  persistDraftSession(): string | undefined {
+    const manager = this.requireRuntime().session.sessionManager;
+    const path = manager.getSessionFile();
+    if (!manager.isPersisted() || !path || existsSync(path)) return;
+    const header = manager.getHeader();
+    if (!header) throw new Error("session header is unavailable");
+    const contents = [header, ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n") + "\n";
+    const leafId = manager.getLeafId();
+    const fd = openSync(path, "wx", 0o600);
+    try {
+      try {
+        writeFileSync(fd, contents);
+      } finally {
+        closeSync(fd);
+      }
+      // Reload through the public API so the first prompt appends to this file.
+      manager.setSessionFile(path);
+      if (leafId) manager.branch(leafId);
+      else manager.resetLeaf();
+      return path;
+    } catch (error) {
+      try {
+        unlinkSync(path);
+      } catch {}
+      throw error;
+    }
   }
 
   runtimeDetails(): {

@@ -103,7 +103,7 @@ export function ExtensionSettingsFields({
             value={source}
             disabled={disabled}
             onChange={event => setSource(event.target.value)}
-            placeholder="npm:@scope/package@1.0.0"
+            placeholder="npm:@scope/package or git:github.com/user/repo"
           />
           <select
             aria-label="Install target"

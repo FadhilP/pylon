@@ -14,6 +14,8 @@ Provider requests can include the prompt, conversation context, selected attachm
 
 Credentials handled through supported provider dialogs remain machine-local where the provider/Pi integration supports that. Do not treat that as a promise that all data is secret: prompts and tool output are a different path. StateQL's connection form and supported credential prompts submit database credentials through a separate secret-response channel for a bounded, approved context. Form passwords are not stored in browser drafts or command payloads; submitted credentials stay in server memory for up to one hour unless you explicitly opt into the OS credential vault. They do not enter transcript/tool details, diagnostics, or StateQL persistence; database content still has the disclosure boundary above.
 
+GitHub device login in **Settings → Integrations** sends authorization and explicit account/repository-metadata checks to GitHub.com. Tokens and refresh tokens stay server-owned in a separate OS-vault entry scoped to the Pylon settings path; there is no plaintext fallback or automatic injection into chat/model context. Only the initiating browser tab receives the one-time user code. Saved accounts require explicit verification after restart. Local disconnect removes Pylon's credentials but does not revoke authorization on GitHub or change Git transport credentials. See [GitHub setup](./settings.md#integrations--github).
+
 ## Confirmations and controls
 
 | Class | What to expect |

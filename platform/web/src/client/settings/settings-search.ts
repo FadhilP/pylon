@@ -9,8 +9,12 @@ import type {
   SkillListSnapshot,
 } from "../../shared/protocol/snapshots.ts";
 
+// Temporarily hide GitHub integration surfaces without disabling the backend.
+export const GITHUB_INTEGRATION_UI_ENABLED = false;
+
 export type SettingsSearchTab =
   | "providers"
+  | "integrations"
   | "models"
   | "agent-models"
   | "packages"
@@ -88,6 +92,11 @@ function entry(input: EntryInput): SettingsSearchEntry {
 }
 
 const STATIC_ENTRIES: SettingsSearchEntry[] = [
+  entry({
+    id: "github-account", tab: "integrations", section: "Integrations", label: "GitHub account",
+    description: "Connect GitHub, verify repository access, and disconnect local credentials.",
+    keywords: "login sign in device authorization client id", target: "github-account",
+  }),
   entry({
     id: "providers",
     tab: "providers",
@@ -259,7 +268,7 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
 ];
 
 export function buildSettingsSearchIndex(input: SearchIndexInput): SettingsSearchEntry[] {
-  const entries = [...STATIC_ENTRIES];
+  const entries = STATIC_ENTRIES.filter(item => GITHUB_INTEGRATION_UI_ENABLED || item.tab !== "integrations");
   for (const command of KEY_COMMANDS) entries.push(entry({
     id: `keyboard-${command.id}`, tab: "keyboard", section: "Keyboard", label: command.label,
     description: `${command.scope} keyboard shortcut`, keywords: "hotkey keymap binding record preset reset", target: `keyboard-${command.id}`,
