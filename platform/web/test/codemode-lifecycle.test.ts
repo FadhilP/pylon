@@ -21,7 +21,7 @@ async function waitFor(predicate: () => boolean) {
   }
 }
 
-async function fixture(extensionFactories: ExtensionFactory[] = []) {
+async function fixture(extensionFactories: ExtensionFactory[] = [], setup?: (cwd: string, agentDir: string) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), "pylon-codemode-lifecycle-"));
   const cwd = join(root, "project"),
     agentDir = join(root, "agent");
@@ -38,6 +38,7 @@ async function fixture(extensionFactories: ExtensionFactory[] = []) {
     { version: 1, lineEditEnabled: true, codemodeEnabled: true },
     join(agentDir, "pylon-core", "config.json"),
   );
+  await setup?.(cwd, agentDir);
   const faux = fauxProvider();
   const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
   modelRuntime.registerNativeProvider(faux.provider);
@@ -74,6 +75,7 @@ async function fixture(extensionFactories: ExtensionFactory[] = []) {
   return {
     root,
     cwd,
+    agentDir,
     driver,
     requests,
     closed,
@@ -94,6 +96,62 @@ async function fixture(extensionFactories: ExtensionFactory[] = []) {
     },
   };
 }
+
+
+test("MCP settings drive native process startup, reload and shutdown without exposing configuration values", { timeout: 30_000 }, async () => {
+  let pidPath = "";
+  const value = await fixture([], async (_cwd, agentDir) => {
+    pidPath = join(agentDir, "fixture.pid");
+    const script = `
+      require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      let buffer = '';
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', chunk => {
+        buffer += chunk;
+        let newline;
+        while ((newline = buffer.indexOf('\\n')) >= 0) {
+          const request = JSON.parse(buffer.slice(0, newline)); buffer = buffer.slice(newline + 1);
+          if (request.id === undefined) continue;
+          const result = request.method === 'initialize'
+            ? {protocolVersion:request.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'fixture',version:'1'}}
+            : {tools:[{name:'hello',inputSchema:{type:'object',properties:{}}}]};
+          process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,result}) + '\\n');
+        }
+      });
+    `;
+    await writeFile(join(agentDir, "mcp.json"), JSON.stringify({mcpServers:{fixture:{command:process.execPath,args:["-e",script],env:{PRIVATE_SETTING:"fixture-private-value"},enabled:false}}}));
+  });
+  try {
+    const runtime = await value.driver.snapshot();
+    const query = {sessionId:runtime.sessionId!,expectedGeneration:runtime.sessionGeneration};
+    let snapshot = await value.driver.mcpSettings(query);
+    assert.equal(snapshot.servers[0]?.enabled,false);
+    assert.doesNotMatch(JSON.stringify(snapshot),/fixture-private-value|PRIVATE_SETTING|writeFileSync/);
+    await assert.rejects(value.driver.mcpSettings({...query,sessionId:"wrong-session"}),/Session changed/);
+    // Follow the setup guide's returned path, then prove native MCP loads that file.
+    assert.equal(snapshot.userConfigPath,join(value.agentDir,"mcp.json"));
+    const config = JSON.parse(await readFile(snapshot.userConfigPath!,"utf8"));
+    config.mcpServers.fixture.enabled = true;
+    await writeFile(snapshot.userConfigPath!,JSON.stringify(config));
+    assert.equal((await value.driver.mcpSettings(query)).needsReload,true);
+    await value.driver.reloadExtensions();
+    const deadline = Date.now()+10_000;
+    do {
+      snapshot = await value.driver.mcpSettings(query);
+      if (snapshot.servers[0]?.state === "connected") break;
+      assert.ok(Date.now()<deadline,"native MCP did not connect");
+      await delay(20);
+    } while (true);
+    assert.equal(snapshot.servers[0]?.toolCount,1);
+    assert.equal(snapshot.needsReload,false);
+    const pid = Number(await readFile(pidPath,"utf8"));
+    assert.ok(pid>0);
+    await value.driver.mcpAction({...query,action:"enabled",name:"fixture",enabled:false,confirmed:true,expectedRevision:snapshot.revision});
+    await value.driver.reloadExtensions();
+    await waitFor(()=>{try {process.kill(pid,0);return false;} catch {return true;}});
+    assert.equal((await value.driver.mcpSettings(query)).servers[0]?.enabled,false);
+  } finally {await value.close();}
+});
 
 const text = (result: any) => result.content.map((part: any) => part.text ?? "").join("\n");
 const absent = (path: string) => assert.rejects(readFile(path), { code: "ENOENT" });

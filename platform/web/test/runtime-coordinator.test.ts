@@ -2435,7 +2435,7 @@ test("unsent draft sessions remain listed and reopenable after switching and res
 
     const second = await driver.newSession({ expectedGeneration: created.sessionGeneration });
     assert.notEqual(second.sessionId, created.sessionId);
-    await driver.switchSession({ sessionId: created.sessionId, expectedGeneration: second.sessionGeneration });
+    await driver.switchSession({ sessionId: created.sessionId });
     assert.equal((await driver.snapshot()).metrics.userMessages, 0);
     assert.equal(settings.readComposer(created.sessionId)?.text, "unfinished work");
 
@@ -2443,12 +2443,12 @@ test("unsent draft sessions remain listed and reopenable after switching and res
     settings.close();
     settings = new KeyboardSettingsStore(settingsPath);
     driver = new RuntimeCoordinator();
-    const restarted = await driver.start(target);
+    await driver.start(target);
     const restoredCatalog = await driver.listSessions({ projectId });
     const restored = restoredCatalog.projects.flatMap(project => project.sessions);
     assert.ok(restored.some(session => session.id === created.sessionId && session.userMessageCount === 0));
     assert.ok(restored.some(session => session.id === second.sessionId));
-    await driver.switchSession({ sessionId: created.sessionId, expectedGeneration: restarted.sessionGeneration });
+    await driver.switchSession({ sessionId: created.sessionId });
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.sessionId, created.sessionId);
     assert.equal(snapshot.metrics.userMessages, 0);

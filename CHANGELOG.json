@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.5.0",
+    "date": "Oct 7, 2026",
+    "title": "Native MCP servers and safer tool orchestration",
+    "summary": "Pylon 3.5 adds native MCP support and server settings to the Web workspace, enables permitted MCP calls in codemode, strengthens tool approvals, and improves memory-review diagnostics and test reporting.",
+    "notes": [
+      "Added native Pi stdio and streamable HTTP MCP servers to Pylon Web, with user and trusted-project configuration, tool discovery, and HTTP sign-in and sign-out support.",
+      "Added an MCP servers Settings panel with connection status, tool counts, exposure controls, enable and disable actions, reconnect, and reload; confirmed changes require idle sessions, reject stale revisions, preserve unrelated configuration and secrets, and reload live runtimes without exposing credentials or raw server configuration to the browser.",
+      "Enabled permitted direct, codemode, and deferred MCP tools in Web codemode with native discovery helpers and full MCP result content, while preserving hidden and disabled-tool restrictions, workflow gates, call and output budgets, cancellation, and bounded connection waits.",
+      "Required fresh Guard confirmation for MCP tool and resource calls when Guard is enabled, with fail-closed handling for missing UI, cancellation, and policy changes; server startup, metadata discovery, and credential resolution remain outside tool-call approval.",
+      "Made invalid Continuity memory-review output report specific, bounded validation reasons without echoing rejected credential or private-field values.",
+      "Made test and verification output error-focused by default with optional verbose reporting, preserved failure exit codes and verification phase ordering, and expanded behavioral coverage for MCP settings, approvals, codemode policy and lifecycle, memory-review diagnostics, and test-runner failures."
+    ]
+  },
+  {
     "version": "3.4.1",
     "date": "Oct 6, 2026",
     "title": "Native package installation and clearer memory reviews",

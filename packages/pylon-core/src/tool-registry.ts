@@ -36,6 +36,10 @@ export function createToolRegistry(pi: ExtensionAPI) {
     for (const tool of pi.getAllTools?.() ?? []) if (!managed.has(tool.name)) capable.add(tool.name);
     return capable;
   };
+  const allowsIndirect = (name: string) =>
+    capableTools().has(name) &&
+    toolOverrides.get(name) !== "disabled" &&
+    [...policies.values()].every(policy => !policy.allowOnly || policy.allowOnly.includes(name));
   const discoverableTools = () => {
     const capable = capableTools();
     const result = new Set(
@@ -272,6 +276,7 @@ export function createToolRegistry(pi: ExtensionAPI) {
     rejected,
     selectedTools,
     managedTools,
+    allowsIndirect,
     captureBaseline,
     reconcile,
     handlePolicy,

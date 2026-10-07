@@ -1,5 +1,26 @@
 export const PROTOCOL_VERSION = 1;
 
+/** Native Pi MCP tools, including the shared resource operations. */
+export function isMcpTool(name: string): boolean {
+  return (
+    name.startsWith("mcp__") ||
+    ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].includes(name)
+  );
+}
+
+/** Ask the coordinator without treating inactive indirect tools as disabled. */
+export function allowsIndirectTool(pi: ToolPolicyEvents, name: string): boolean {
+  let allowed = true;
+  pi.events.emit("pylon:tool-access", {
+    version: PROTOCOL_VERSION,
+    name,
+    respond: (value: boolean) => {
+      allowed = allowed && value;
+    },
+  });
+  return allowed;
+}
+
 export type ToolPolicy = {
   owner: string;
   managedTools: string[];

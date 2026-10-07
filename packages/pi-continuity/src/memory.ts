@@ -779,17 +779,16 @@ export function normalizeProposalBatch(value: unknown): MemoryProposal[] {
   return value.map(normalizeProposal);
 }
 
-function parseRuleDecision(value: any): ReviewerDecision | undefined {
-  if (
-    !scopes.has(value.scope) ||
-    !["add", "replace"].includes(value.operation) ||
-    !text(value.trigger, 240) ||
-    !text(value.guidance, 800) ||
-    value.trigger.trim().length + value.guidance.trim().length > 1_000 ||
-    (value.authority !== "user_instruction" && value.authority !== "project_contract") ||
-    !safe(value.trigger, value.guidance)
-  )
-    return;
+function parseRuleDecision(value: any): ReviewerDecision | string {
+  if (!scopes.has(value.scope)) return "scope must be user or project";
+  if (!["add", "replace"].includes(value.operation)) return "rule operation must be add or replace";
+  if (!text(value.trigger, 240)) return "trigger must be non-empty and at most 240 characters";
+  if (!text(value.guidance, 800)) return "guidance must be non-empty and at most 800 characters";
+  if (value.trigger.trim().length + value.guidance.trim().length > 1_000)
+    return "trigger and guidance exceed 1000 characters combined";
+  if (value.authority !== "user_instruction" && value.authority !== "project_contract")
+    return "authority must be user_instruction or project_contract";
+  if (!safe(value.trigger, value.guidance)) return "trigger or guidance contains a possible credential";
   const targetKeys = value.operation === "replace" || value.verdict === "merge" ? ["targetId", "expectedRevision"] : [];
   const rewriteKeys = value.verdict === "rewrite" || value.verdict === "merge" ? ["rewriteCharacter"] : [];
   const activationKeys = Object.hasOwn(value, "activationDraft") ? ["activationDraft"] : [];
@@ -808,12 +807,17 @@ function parseRuleDecision(value: any): ReviewerDecision | undefined {
       "reasonCode",
     ])
   )
-    return;
-  if (targetKeys.length && (!uuid.test(value.targetId) || !integer(value.expectedRevision, 1))) return;
-  if (rewriteKeys.length && !rewriteCharacters.has(value.rewriteCharacter)) return;
-  if (value.verdict === "accept" && value.reasonCode !== "durable_rule") return;
-  if (value.verdict === "rewrite" && value.reasonCode !== "normalized_rule") return;
-  if (value.verdict === "merge" && (value.reasonCode !== "existing_rule" || value.operation !== "replace")) return;
+    return "rule decision contains unexpected fields";
+  if (targetKeys.length && !uuid.test(value.targetId)) return "targetId must be a UUID";
+  if (targetKeys.length && !integer(value.expectedRevision, 1)) return "expectedRevision must be a positive integer";
+  if (rewriteKeys.length && !rewriteCharacters.has(value.rewriteCharacter)) return "invalid rewriteCharacter";
+  if (value.verdict === "accept" && value.reasonCode !== "durable_rule")
+    return "accept reasonCode must be durable_rule";
+  if (value.verdict === "rewrite" && value.reasonCode !== "normalized_rule")
+    return "rewrite reasonCode must be normalized_rule";
+  if (value.verdict === "merge" && value.reasonCode !== "existing_rule")
+    return "merge reasonCode must be existing_rule";
+  if (value.verdict === "merge" && value.operation !== "replace") return "merge operation must be replace";
   const fallback = archivalActivationDraft();
   return {
     ...value,
@@ -822,36 +826,40 @@ function parseRuleDecision(value: any): ReviewerDecision | undefined {
     activationDraft: activationDraft(value.activationDraft) ? validateActivationDraft(value.activationDraft) : fallback,
   } as ReviewerDecision;
 }
-function parseDecision(value: any): ReviewerDecision | undefined {
-  if (!value || !integer(value.proposalIndex)) return;
+function parseDecision(value: any): ReviewerDecision | string {
+  if (!value || !integer(value.proposalIndex)) return "proposalIndex must be a non-negative integer";
   if (value.verdict === "reject" || value.verdict === "defer") {
     const reasons = value.verdict === "reject" ? rejectReasons : deferReasons;
-    return exactKeys(value, ["proposalIndex", "verdict", "reasonCode", "explanation"]) &&
-      reasons.has(value.reasonCode) &&
-      text(value.explanation, 240) &&
-      safe(value.explanation)
-      ? { ...value, explanation: normalizeRuleText(value.explanation) }
-      : undefined;
+    if (!exactKeys(value, ["proposalIndex", "verdict", "reasonCode", "explanation"]))
+      return "reject/defer decision contains unexpected fields";
+    if (!reasons.has(value.reasonCode)) return "invalid reasonCode for reject/defer verdict";
+    if (!text(value.explanation, 240)) return "explanation is required, non-empty, and at most 240 characters";
+    if (!safe(value.explanation)) return "explanation contains a possible credential";
+    return { ...value, explanation: normalizeRuleText(value.explanation) };
   }
-  if (value.verdict === "accept" && value.operation === "remove")
-    return exactKeys(value, [
-      "proposalIndex",
-      "verdict",
-      "operation",
-      "scope",
-      "targetId",
-      "expectedRevision",
-      "reasonCode",
-    ]) &&
-      scopes.has(value.scope) &&
-      uuid.test(value.targetId) &&
-      integer(value.expectedRevision, 1) &&
-      (value.reasonCode === "revoked_rule" || value.reasonCode === "contradicted_rule")
-      ? value
-      : undefined;
+  if (value.verdict === "accept" && value.operation === "remove") {
+    if (
+      !exactKeys(value, [
+        "proposalIndex",
+        "verdict",
+        "operation",
+        "scope",
+        "targetId",
+        "expectedRevision",
+        "reasonCode",
+      ])
+    )
+      return "removal decision contains unexpected fields";
+    if (!scopes.has(value.scope)) return "scope must be user or project";
+    if (!uuid.test(value.targetId)) return "targetId must be a UUID";
+    if (!integer(value.expectedRevision, 1)) return "expectedRevision must be a positive integer";
+    if (value.reasonCode !== "revoked_rule" && value.reasonCode !== "contradicted_rule")
+      return "removal reasonCode must be revoked_rule or contradicted_rule";
+    return value;
+  }
   if (value.verdict === "accept" || value.verdict === "rewrite" || value.verdict === "merge")
     return parseRuleDecision(value);
-  return;
+  return "verdict must be accept, rewrite, merge, reject, or defer";
 }
 export function parseReviewerOutput(raw: string, proposalCount: number): ReviewerOutput {
   let value: any;
@@ -883,12 +891,12 @@ export function parseReviewerOutput(raw: string, proposalCount: number): Reviewe
     );
   }
   const decisions = value.decisions.map(parseDecision);
-  const invalidIndexes = decisions.flatMap((item: ReviewerDecision | undefined, index: number) =>
-    item ? [] : [index],
+  const invalidIndexes = decisions.flatMap((item: ReviewerDecision | string, index: number) =>
+    typeof item === "string" ? [index] : [],
   );
   if (invalidIndexes.length)
     throw Error(
-      `memory reviewer returned invalid decisions (count:${invalidIndexes.length}; first-output-indexes:${invalidIndexes.slice(0, 10).join(",")})`,
+      `memory reviewer returned invalid decisions (count:${invalidIndexes.length}; first-output-indexes:${invalidIndexes.slice(0, 10).join(",")}; first-failure:${decisions[invalidIndexes[0]]})`,
     );
   const indexes = new Set<number>(decisions.map((item: ReviewerDecision) => item.proposalIndex));
   if (indexes.size !== proposalCount || [...indexes].some(index => index < 0 || index >= proposalCount))

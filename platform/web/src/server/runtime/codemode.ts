@@ -1,9 +1,10 @@
 import { createCodemodeExtension, type ExtensionAPI, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { allowsIndirectTool, isMcpTool } from "pylon-core/src/tools.ts";
 
 const TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_TOKENS = 2_000;
 const MAX_CALLS = 32;
-// Workflow controls, tool activation, delegates and MCP stay outside scripts.
+// Workflow controls, tool activation and delegates stay outside scripts.
 const SCRIPT_TOOLS = new Set([
   "read",
   "edit",
@@ -22,7 +23,7 @@ const SCRIPT_TOOLS = new Set([
 ]);
 
 /** Clamp the two native first-line options; leave JavaScript parsing to Pi. */
-function boundedSource(source: string): { code: string; timeoutMs: number } {
+export function boundedSource(source: string): { code: string; timeoutMs: number } {
   let options: Record<string, unknown> = {};
   const newline = source.indexOf("\n");
   const firstLine = (newline < 0 ? source : source.slice(0, newline)).trimStart();
@@ -56,10 +57,18 @@ function boundedSource(source: string): { code: string; timeoutMs: number } {
 
 export function createPylonCodemodeExtension(): ExtensionFactory {
   return pi => {
-    const eligible = (name: string): boolean =>
-      SCRIPT_TOOLS.has(name) &&
-      pi.getActiveTools().includes(name) &&
-      (pi.getAllTools().find(tool => tool.name === name)?.exposure ?? "direct") === "direct";
+    const permitted = (name: string, exposure: string): boolean => {
+      if (isMcpTool(name)) {
+        return ["direct", "codemode", "deferred"].includes(exposure) && allowsIndirectTool(pi, name);
+      }
+      return SCRIPT_TOOLS.has(name) && exposure === "direct";
+    };
+    const eligible = (name: string): boolean => {
+      const tool = pi.getAllTools().find(tool => tool.name === name);
+      if (!tool) return false;
+      const exposure = tool.exposure ?? "direct";
+      return permitted(name, exposure) && (exposure !== "direct" || pi.getActiveTools().includes(name));
+    };
     const nativeApi: ExtensionAPI = Object.create(pi, {
       registerTool: {
         value: (tool: Parameters<ExtensionAPI["registerTool"]>[0]) => {
@@ -69,14 +78,14 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
             prepareLoadout: loadout => {
               const changes = tool.prepareLoadout?.({
                 ...loadout,
-                callable: loadout.callable.filter(
-                  candidate => SCRIPT_TOOLS.has(candidate.name) && loadout.getExposure(candidate.name) === "direct",
+                callable: loadout.callable.filter(candidate =>
+                  permitted(candidate.name, loadout.getExposure(candidate.name)),
                 ),
               });
               if (changes?.descriptions?.codemode)
                 changes.descriptions = {
                   ...changes.descriptions,
-                  codemode: `${changes.descriptions.codemode}\n\nPylon Web: active coding/search tools only; no workflow controls or models. At most ${MAX_CALLS} calls, ${TIMEOUT_MS / 1_000}s, ${MAX_OUTPUT_TOKENS} output tokens. Lower first-line limits are respected. Completed side effects are not rolled back.`,
+                  codemode: `${changes.descriptions.codemode}\n\nPylon Web: active direct coding/search tools and permitted MCP tools; no workflow controls or models. At most ${MAX_CALLS} calls, ${TIMEOUT_MS / 1_000}s execution, ${MAX_OUTPUT_TOKENS} output tokens. Lower first-line limits are respected. Completed side effects are not rolled back.`,
                 };
               return changes;
             },
@@ -106,7 +115,7 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
                       deadline.abort(error); // Stop caught-error retry loops as well as excess fan-out.
                       throw error;
                     }
-                    if (!eligible(name)) throw new Error(`Tool "${name}" is not an active direct coding/search tool`);
+                    if (!eligible(name)) throw new Error(`Tool "${name}" is not a permitted coding/search or MCP tool`);
                     pending++;
                     // The native sandbox also cancels unawaited calls on successful exit.
                     const cancelScope = () => lifecycle.abort(new Error("Codemode nested work cancelled"));

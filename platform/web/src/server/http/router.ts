@@ -1,3 +1,4 @@
+import { validMcpSettingsAction, type McpSettingsQuery, type McpSettingsAction } from "../../shared/settings/mcp.ts";
 import { GitHubAuthService, osGitHubCredentialStore } from "../settings/github-auth.ts";
 import { validGitHubAuthAction } from "../../shared/settings/github.ts";
 import { validWorkspacePath } from "../../shared/workspace/workspace-mutations.ts";
@@ -246,6 +247,8 @@ export class ServerTransport {
         return await this.githubSettings(request, response);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/keyboard")
         return await this.keyboardPreferences(request, response);
+      if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/mcp")
+        return await this.mcpSettings(request, response, url);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/preferences")
         return await this.hostPreferences(request, response);
       if ((request.method === "GET" || request.method === "POST") && url.pathname === "/api/v1/settings/explorer")
@@ -299,6 +302,26 @@ export class ServerTransport {
       });
     }
   }
+
+  private async mcpSettings(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    response.setHeader("Cache-Control", "no-store");
+    const mutation = request.method === "POST";
+    const tabId = mutation ? this.tab(request, this.mutatingSession(request)) : this.requireTab(request);
+    const input: McpSettingsQuery | McpSettingsAction = mutation ? await readJson(request, 4096) as McpSettingsAction : {
+      sessionId:url.searchParams.get("sessionId") ?? "", expectedGeneration:Number(url.searchParams.get("generation")),
+    };
+    if (mutation && !validMcpSettingsAction(input)) throw httpError(400, "Invalid MCP action");
+    if (mutation && ![...this.clients].some(client => client.tabId === tabId)) throw httpError(409, "the browser tab must have an SSE connection");
+    const runtime = this.projection.snapshot();
+    if (!runtime.ready || input.sessionId !== runtime.sessionId || input.expectedGeneration !== this.journal.sessionGeneration)
+      throw httpError(409, "Session changed or is unavailable. Refresh MCP settings.");
+    if (!this.driver.mcpSettings || !this.driver.mcpAction) throw httpError(409, "MCP settings are unavailable");
+    const result = mutation ? await this.driver.mcpAction(input as McpSettingsAction) : await this.driver.mcpSettings(input);
+    if (result.sessionGeneration !== this.journal.sessionGeneration || result.sessionId !== this.projection.snapshot().sessionId)
+      throw httpError(409, "Session changed. Refresh MCP settings.");
+    this.send(response, 200, result);
+  }
+
 
   private async githubSettings(request: IncomingMessage, response: ServerResponse): Promise<void> {
     response.setHeader("Cache-Control", "no-store");

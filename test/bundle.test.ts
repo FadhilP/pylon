@@ -5,6 +5,7 @@ import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { availableParallelism, tmpdir } from "node:os";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import advisor from "../packages/pi-advisor/extensions/pi-advisor.ts";
 import pylon from "../packages/pylon-core/extensions/pylon-core.ts";
 import continuity from "../packages/pi-continuity/extensions/pi-continuity.ts";
@@ -22,6 +23,101 @@ import sieve from "../packages/pi-sieve/extensions/pi-sieve.ts";
 import timeline from "../packages/pi-timeline/extensions/pi-timeline.ts";
 import verify from "../packages/pi-verify/extensions/pi-verify.ts";
 import { mapLimit } from "../scripts/run-packages-lib.mjs";
+
+test("quiet test reporting preserves assertion, startup, and late-activity failures and exit codes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-test-reporter-"));
+  const file = join(root, "fixture.test.mjs");
+  const runner = fileURLToPath(new URL("../scripts/run-tests.mjs", import.meta.url));
+  try {
+    for (const scenario of ["pass", "assertion", "startup", "late", "todo"]) {
+      await writeFile(file, `
+        import test from "node:test";
+        import assert from "node:assert/strict";
+        console.log("debug output");
+        test("passing test", () => {});
+        ${scenario === "assertion" ? 'test("failed assertion", () => assert.equal("actual-value", "expected-value"));' : ""}
+        ${scenario === "startup" ? 'throw new Error("startup failure details");' : ""}
+        ${scenario === "late" ? 'test("late failure", () => { setTimeout(() => { throw new Error("late failure details"); }, 10); });' : ""}
+        ${scenario === "todo" ? 'test("expected failure", { todo: true }, () => { throw new Error("todo failure"); });' : ""}
+      `);
+      for (const verbose of [false, true]) {
+        const run = promisify(execFile)(process.execPath, [runner, file, ...(verbose ? ["--verbose"] : [])]);
+        if (scenario === "pass" || scenario === "todo") {
+          const { stdout } = await run;
+          if (verbose) assert.ok(stdout.includes("debug output"));
+          else assert.equal(stdout, "");
+        } else {
+          await assert.rejects(run, (error: any) => {
+            assert.equal(error.code, 1);
+            if (scenario === "assertion") {
+              assert.ok(error.stdout.includes("actual-value"));
+              assert.ok(error.stdout.includes("expected-value"));
+            } else {
+              assert.ok(error.stdout.includes(`${scenario} failure details`));
+            }
+            return true;
+          });
+        }
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("verification forwards verbosity to tests, preserves phase ordering, and stops on failures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-verify-runner-"));
+  const eventsFile = join(root, "events.jsonl");
+  const npmCli = join(root, "npm.mjs");
+  try {
+    for (const path of ["scripts", "packages/a", "platform/web"]) await mkdir(join(root, path), { recursive: true });
+    for (const file of ["verify.mjs", "run-packages.mjs", "run-packages-lib.mjs"])
+      await copyFile(new URL(`../scripts/${file}`, import.meta.url), join(root, "scripts", file));
+    await writeFile(npmCli, `
+      import { appendFileSync } from "node:fs";
+      const script = process.argv[3], args = process.argv.slice(4);
+      appendFileSync(process.env.RUNNER_EVENTS, JSON.stringify({ script, args }) + "\\n");
+      if (script === process.env.RUNNER_FAIL) {
+        console.error("original failure details");
+        process.exit(7);
+      }
+    `);
+    for (const scenario of [
+      { mode: "root", verbose: false, fail: "" },
+      { mode: "root", verbose: true, fail: "" },
+      { mode: "fast", verbose: true, fail: "" },
+      { mode: "web", verbose: true, fail: "" },
+      { mode: "root", verbose: true, fail: "test:update" },
+      { mode: "web", verbose: true, fail: "test" },
+    ]) {
+      await writeFile(eventsFile, "");
+      const run = promisify(execFile)(process.execPath, [join(root, "scripts", "verify.mjs"),
+        ...(scenario.mode === "root" ? [] : [`--${scenario.mode}`]), ...(scenario.verbose ? ["--verbose"] : [])],
+        { env: { ...process.env, npm_execpath: npmCli, RUNNER_EVENTS: eventsFile, RUNNER_FAIL: scenario.fail } });
+      if (scenario.fail) await assert.rejects(run, (error: any) => {
+        assert.equal(error.code, 7);
+        assert.ok((error.stdout + error.stderr).includes("original failure details"));
+        return true;
+      });
+      else await run;
+      const events = (await readFile(eventsFile, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      const scripts = events.map(event => event.script);
+      if (scenario.mode === "web") assert.deepEqual(scripts, scenario.fail ? ["test"] : ["test", "build"]);
+      else if (scenario.fail) assert.deepEqual(scripts, ["test:bundle", "test:update"]);
+      else {
+        assert.deepEqual(scripts.slice(0, 5), ["test:bundle", "test:update", "test:storage", "test:install", "check"]);
+        if (scenario.mode === "fast") assert.deepEqual(scripts.slice(5), ["build"]);
+        else assert.deepEqual(new Set(scripts.slice(5)), new Set(["test", "verify"]));
+      }
+      for (const event of events) {
+        if (event.script === "build") assert.deepEqual(event.args, scenario.mode === "fast" ? ["--workspace", "@pylon/web"] : []);
+        else assert.deepEqual(event.args, scenario.verbose && event.script !== "check" ? ["--", "--verbose"] : []);
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("package runner bounds concurrency and preserves result order", async () => {
   let active = 0;
@@ -56,28 +152,40 @@ test("package verification shares its bounded pool with web and preserves phase 
       import { appendFileSync } from "node:fs";
       import { basename } from "node:path";
       const name = basename(process.cwd()), script = process.argv[3];
-      const emit = kind => appendFileSync(process.env.RUNNER_EVENTS, JSON.stringify({ kind, name, script }) + "\\n");
+      const emit = kind => appendFileSync(process.env.RUNNER_EVENTS, JSON.stringify({ kind, name, script, args: process.argv.slice(4) }) + "\\n");
       emit("start");
       setTimeout(() => {
         emit("finish");
+        console.log("job output:" + name + ":" + script);
+        if (name + ":" + script === process.env.RUNNER_FAIL) console.error("job failure:" + name + ":" + script);
         process.exit(name + ":" + script === process.env.RUNNER_FAIL ? 7 : 0);
       }, 20);
     `,
     );
     for (const scenario of [
-      { web: true, fail: "" },
-      { web: true, fail: "a:check" },
-      { web: true, fail: "web:verify" },
-      { web: false, fail: "" },
+      { web: true, fail: "", verbose: false },
+      { web: true, fail: "a:check", verbose: false },
+      { web: true, fail: "web:verify", verbose: false },
+      { web: false, fail: "", verbose: false },
+      { web: false, fail: "", verbose: true },
     ]) {
       await writeFile(eventsFile, "");
       const run = promisify(execFile)(
         process.execPath,
-        [join(root, "scripts", "run-packages.mjs"), "verify", ...(scenario.web ? ["--web"] : [])],
+        [join(root, "scripts", "run-packages.mjs"), "verify", ...(scenario.web ? ["--web"] : []), ...(scenario.verbose ? ["--verbose"] : [])],
         { env: { ...process.env, npm_execpath: npmCli, RUNNER_EVENTS: eventsFile, RUNNER_FAIL: scenario.fail } },
       );
-      if (scenario.fail) await assert.rejects(run, { code: 7 });
-      else await run;
+      if (scenario.fail) await assert.rejects(run, (error: any) => {
+        assert.equal(error.code, 7);
+        assert.ok(error.stdout.includes(`job failure:${scenario.fail}`));
+        assert.ok(!error.stdout.includes("job output:b:"), "successful job logs must not bury a failed job");
+        return true;
+      });
+      else {
+        const { stdout } = await run;
+        if (scenario.verbose) assert.ok(stdout.includes("job output:b:"));
+        else assert.equal(stdout, "");
+      }
       const events = (await readFile(eventsFile, "utf8"))
         .trim()
         .split("\n")
@@ -88,6 +196,7 @@ test("package verification shares its bounded pool with web and preserves phase 
       for (const event of events) {
         const key = `${event.name}:${event.script}`;
         if (event.kind === "start") {
+          assert.deepEqual(event.args, scenario.verbose && event.script !== "check" ? ["--", "--verbose"] : []);
           assert.ok(!active.has(key));
           active.add(key);
           started.push(key);

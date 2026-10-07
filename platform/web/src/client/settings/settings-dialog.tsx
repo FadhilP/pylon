@@ -40,6 +40,7 @@ import {
 import { defaultGlobalPolicy } from "../../shared/settings/policy-defaults";
 import { KeyboardSettingsPanel } from "./keyboard-settings";
 import { GitHubSettingsPanel } from "./github-settings";
+import { McpSettingsPanel } from "./mcp-settings";
 import type {
   ModelOptionReadModel,
   ProviderAuthReadModel,
@@ -102,6 +103,7 @@ export type SettingsTab =
   | "agent-models"
   | "packages"
   | "extensions"
+  | "mcp"
   | "skills"
   | "hooks"
   | "policy"
@@ -127,6 +129,7 @@ const SETTINGS_NAV: { group: string; tabs: { tab: SettingsTab; label: string; ic
       { tab: "agent-models", label: "Agent models", icon: <IconSettings size={15} /> },
       { tab: "packages", label: "Packages", icon: <IconPackages size={15} /> },
       { tab: "extensions", label: "Extensions", icon: <IconPuzzle size={15} /> },
+      { tab: "mcp", label: "MCP servers", icon: <IconPlugConnected size={15} /> },
       { tab: "skills", label: "Skills", icon: <IconBook size={15} /> },
       { tab: "hooks", label: "Hooks", icon: <IconWebhook size={15} /> },
     ],
@@ -1014,6 +1017,15 @@ export function SettingsDialog({
                 onTrust={onSetProjectTrust}
                 onReload={onReloadExtensions}
               />
+            </section>
+
+            <section id="settings-panel-mcp" className="settings-pane" role="tabpanel" aria-labelledby="settings-tab-mcp"
+              hidden={Boolean(searchQuery.trim()) || activeTab !== "mcp"}>
+              {!searchQuery.trim() && activeTab === "mcp" && <McpSettingsPanel onClose={onClose} onNavigate={tab => {
+                setSearchQuery("");
+                setActiveTab(tab);
+                dialogRef.current?.querySelector<HTMLButtonElement>(`#settings-tab-${tab}`)?.focus();
+              }} />}
             </section>
 
             <section

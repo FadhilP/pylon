@@ -4,7 +4,7 @@ const env = { ...process.env };
 delete env.PI_SPAWN_AUTONOMOUS;
 delete env.PI_SPAWN_CHILD;
 
-const result = spawnSync(process.execPath, ["--test", ...process.argv.slice(2), "test/*.test.ts"], {
+const result = spawnSync(process.execPath, ["../../scripts/run-tests.mjs", ...process.argv.slice(2), "test/*.test.ts"], {
   cwd: new URL("..", import.meta.url),
   env,
   stdio: "inherit",

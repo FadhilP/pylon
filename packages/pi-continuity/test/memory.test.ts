@@ -180,9 +180,31 @@ test("rejection and deferral explanations are required, bounded, safe, and norma
     const decision = { proposalIndex: 0, verdict, reasonCode };
     const parse = (fields: Record<string, unknown>) =>
       parseReviewerOutput(JSON.stringify({ version: 2, decisions: [{ ...decision, ...fields }] }), 1);
-    for (const explanation of [undefined, "", "   ", 42, "x".repeat(241), "Contains api_key=super-secret-value"])
-      assert.throws(() => parse({ explanation }), /invalid decisions/);
-    assert.throws(() => parse({ explanation: "Applies only here.", reasonCode: "invented" }), /invalid decisions/);
+    for (const explanation of [undefined, "", "   ", 42, "x".repeat(241)])
+      assert.throws(
+        () => parse({ explanation }),
+        /first-failure:explanation is required, non-empty, and at most 240 characters/,
+      );
+    assert.throws(
+      () => parse({ explanation: "Contains api_key=super-secret-value" }),
+      (error: Error) => {
+        assert.match(error.message, /first-failure:explanation contains a possible credential/);
+        assert.doesNotMatch(error.message, /super-secret-value|api_key/);
+        return true;
+      },
+    );
+    assert.throws(
+      () => parse({ explanation: "Applies only here.", reasonCode: "invented" }),
+      /first-failure:invalid reasonCode/,
+    );
+    assert.throws(
+      () => parse({ explanation: "Applies only here.", "private-field": "private-value" }),
+      (error: Error) => {
+        assert.match(error.message, /first-failure:reject\/defer decision contains unexpected fields/);
+        assert.doesNotMatch(error.message, /private-field|private-value/);
+        return true;
+      },
+    );
     const parsed = parse({ explanation: "  Future reuse\n is not established.  " }).decisions[0];
     assert.ok(parsed.verdict === "reject" || parsed.verdict === "defer");
     assert.equal(parsed.explanation, "Future reuse is not established.");
@@ -270,7 +292,7 @@ test("invalid decision diagnostics are bounded and do not echo model fields", ()
     (error: Error) => {
       assert.equal(
         error.message,
-        "memory reviewer returned invalid decisions (count:20; first-output-indexes:0,1,2,3,4,5,6,7,8,9)",
+        "memory reviewer returned invalid decisions (count:20; first-output-indexes:0,1,2,3,4,5,6,7,8,9; first-failure:verdict must be accept, rewrite, merge, reject, or defer)",
       );
       assert.doesNotMatch(error.message, /private|guidance/);
       return true;

@@ -1,3 +1,4 @@
+import type { McpSettingsSnapshot } from "../src/shared/settings/mcp.ts";
 import { GitHubAuthService } from "../src/server/settings/github-auth.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1382,6 +1383,56 @@ test("GitHub login is sessionless, CSRF/tab protected, and device instructions s
     await transport.close();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
+});
+
+
+test("MCP settings bind the selected session and enforce CSRF, live-tab ownership, confirmation and stale generations", async () => {
+  const driver = new FakeDriver();
+  let changes = 0;
+  let readEntered: (() => void) | undefined;
+  let releaseRead!: () => void;
+  const settings: McpSettingsSnapshot = {sessionId:"session-1",sessionGeneration:1,available:true,revision:"a".repeat(64),servers:[],needsReload:false,configurationError:false};
+  (driver as PiDriver).mcpSettings = async () => {
+    if (readEntered) { readEntered(); await new Promise<void>(resolve => {releaseRead=resolve;}); }
+    return settings;
+  };
+  (driver as PiDriver).mcpAction = async input => {changes++;assert.equal(input.sessionId,"session-1");return settings;};
+  let transport: ServerTransport;
+  const server = createServer((request,response)=>void transport.handle(request,response));
+  await new Promise<void>(resolve=>server.listen(0,"127.0.0.1",resolve));
+  const port = (server.address() as AddressInfo).port, origin = `http://127.0.0.1:${port}`;
+  transport = await ServerTransport.create(driver,{allowedHosts:[`127.0.0.1:${port}`]});
+  const stream = new AbortController();
+  try {
+    const bootstrap = await fetch(`${origin}/api/v1/bootstrap`,{headers:{"x-pylon-tab-id":"mcp-tab"}});
+    const boot = await body(bootstrap);
+    const headers = {cookie:(bootstrap.headers.get("set-cookie") ?? "").split(";")[0]!,"x-pylon-tab-id":"mcp-tab","x-pylon-csrf":String(boot.csrfToken),"content-type":"application/json"};
+    const read = () => fetch(`${origin}/api/v1/settings/mcp?sessionId=session-1&generation=1`,{headers});
+    const action = {action:"enabled",name:"fixture",enabled:true,confirmed:true,sessionId:"session-1",expectedGeneration:1,expectedRevision:settings.revision};
+    const post = (input: unknown, extra = {}) => fetch(`${origin}/api/v1/settings/mcp`,{method:"POST",headers:{...headers,...extra},body:JSON.stringify(input)});
+    assert.equal((await fetch(`${origin}/api/v1/settings/mcp?sessionId=session-1&generation=1`)).status,403);
+    const initial = await read();
+    assert.equal(initial.headers.get("cache-control"),"no-store");
+    assert.equal((await body(initial)).revision,settings.revision);
+    assert.equal((await post(action,{"x-pylon-csrf":"wrong"})).status,403);
+    assert.equal((await post({...action,confirmed:false})).status,400);
+    assert.equal((await post({...action,headers:{Authorization:"not-accepted"}})).status,400);
+    assert.equal((await post(action)).status,409,"a settings write requires a live SSE tab");
+    assert.equal(changes,0);
+    await fetch(`${origin}/api/v1/events?tabId=mcp-tab`,{headers,signal:stream.signal});
+    assert.equal((await post({...action,sessionId:"other"})).status,409);
+    assert.equal((await post({...action,expectedGeneration:0})).status,409);
+    assert.equal(changes,0);
+    assert.equal((await post(action)).status,200);
+    assert.equal(changes,1);
+    const entered = new Promise<void>(resolve => {readEntered=resolve;});
+    const pending = read();
+    await entered;
+    driver.emitRuntime({...structuredClone(snapshot),sessionId:"other",sessionGeneration:2});
+    releaseRead();
+    assert.equal((await pending).status,409);
+    assert.equal(changes,1);
+  } finally {stream.abort();transport.dispose();server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 });
 
 

@@ -1,0 +1,45 @@
+.mcp-settings { gap: 16px; }
+.mcp-settings .settings-pane-header { margin-bottom: 0; }
+.mcp-settings .mcp-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.mcp-settings .mcp-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.mcp-empty { padding: 32px 24px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); text-align: center; }
+.mcp-empty p { max-width: 440px; margin: 0 auto; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.mcp-empty .mcp-actions { justify-content: center; margin-top: 12px; }
+.mcp-onboarding { display: grid; justify-items: center; gap: 12px; }
+.mcp-empty-icon { display: grid; width: 56px; height: 56px; place-items: center; border-radius: 16px; background: var(--accent-soft); color: var(--accent-text); }
+.mcp-onboarding h3 { font-size: 16px; font-weight: 650; letter-spacing: -0.02em; }
+.mcp-setup { width: 100%; margin-top: 4px; }
+.mcp-setup > summary { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent-text); font-size: 12px; font-weight: 600; list-style: none; cursor: pointer; }
+.mcp-setup > summary::-webkit-details-marker { display: none; }
+.mcp-setup[open] .mcp-chevron { transform: rotate(90deg); }
+.mcp-setup ol { display: grid; gap: 20px; max-width: 460px; margin: 24px auto 0; padding-left: 24px; text-align: left; }
+.mcp-setup li { padding-left: 6px; color: var(--text-soft); font-size: 12px; }
+.mcp-setup li::marker { color: var(--accent-text); font-weight: 650; }
+.mcp-setup li strong { color: var(--text); font-weight: 600; }
+.mcp-setup li p { margin-top: 6px; }
+.mcp-setup .mcp-actions { justify-content: flex-start; }
+.mcp-settings code { padding: 1px 4px; border-radius: 3px; background: var(--surface-subtle); color: var(--text-soft); overflow-wrap: anywhere; }
+.mcp-notice { padding: 10px 12px; border-radius: var(--radius-control); background: var(--accent-soft); color: var(--accent-text); font-size: 12px; line-height: 1.5; }
+.mcp-notice-error { background: var(--red-soft); color: var(--red); }
+.mcp-connection-summary { display: grid; gap: 5px; color: var(--text-soft); font-size: 12px; }
+.mcp-connection-summary > span { font-weight: 600; }
+.mcp-connection-summary p { color: var(--text-muted); line-height: 1.5; }
+.mcp-server-list { display: grid; gap: 12px; }
+.mcp-server-card { display: grid; gap: 18px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--surface); }
+.mcp-server-card > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.mcp-server-card h3 { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.mcp-server-card header p { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
+.mcp-status { padding: 4px 8px; border-radius: var(--radius-control); background: var(--surface-subtle); color: var(--text-soft); font-size: 11px; }
+.mcp-status[data-state="connected"] { background: var(--green-soft); color: var(--green); }
+.mcp-status[data-state="failed"], .mcp-status[data-state="needs-auth"] { background: var(--amber-soft); color: var(--amber); }
+.mcp-server-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px 20px; }
+.mcp-server-controls label { display: grid; gap: 5px; color: var(--text-soft); font-size: 11px; }
+.mcp-server-controls select { min-height: 30px; min-width: 120px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface-raised); color: var(--text); font-size: 12px; }
+.mcp-server-controls select:disabled { opacity: .5; }
+.mcp-readonly { color: var(--text-muted); font-size: 11px; }
+.mcp-help { padding-top: 12px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 12px; }
+.mcp-help summary { display: flex; align-items: center; gap: 6px; width: fit-content; cursor: pointer; }
+.mcp-help[open] summary { color: var(--text-soft); }
+.mcp-help ul { display: grid; gap: 10px; padding: 14px 0 0 20px; line-height: 1.6; }
+.mcp-settings .mcp-inline-link { padding: 0; border: 0; background: none; color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.mcp-settings summary:focus-visible, .mcp-inline-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: var(--radius-control); }

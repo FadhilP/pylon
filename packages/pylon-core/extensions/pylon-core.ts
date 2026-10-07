@@ -5,6 +5,7 @@ import { runDoctor } from "../src/doctor.ts";
 import { createLineEditMode } from "../src/line-edit-mode.ts";
 import { createTelemetry } from "../src/telemetry.ts";
 import { createToolRegistry } from "../src/tool-registry.ts";
+import { isMcpTool } from "../src/tools.ts";
 import { createWorktreeObserver } from "../src/worktree-observer.ts";
 
 const KNOWN_ADAPTERS = ["pi-advisor", "pi-scout", "pi-continuity"];
@@ -23,6 +24,10 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     delegates.dispose,
     pi.events.on("pylon:tool-policy", registry.handlePolicy),
     pi.events.on("pylon:tool-overrides", registry.applyOverrides),
+    pi.events.on("pylon:tool-access", (request: any) => {
+      if (request?.version === 1 && typeof request.name === "string" && typeof request.respond === "function")
+        request.respond(registry.allowsIndirect(request.name));
+    }),
     pi.events.on("pylon:tool-discovery", (request: any) => {
       if (request?.version === 1 && typeof request.respond === "function")
         request.respond(registry.discoveryCapability);
@@ -59,7 +64,11 @@ export default function pylonCoreExtension(pi: ExtensionAPI) {
     telemetry.rebuild(ctx);
     await worktree.agentSettled(ctx);
   });
-  pi.on("tool_call", (event, ctx) => worktree.toolCall(event, ctx));
+  pi.on("tool_call", (event, ctx) => {
+    if ((isMcpTool(event.toolName) || event.toolName === "tool_search") && !registry.allowsIndirect(event.toolName))
+      return { block: true, reason: "Tool is disabled by Pylon policy" };
+    return worktree.toolCall(event, ctx);
+  });
   pi.on("tool_result", event => telemetry.recordToolResult(event));
   pi.on("turn_end", (_event, ctx) => worktree.turnEnd(ctx));
   pi.on("session_shutdown", () => {

@@ -35,10 +35,9 @@ Numbered `read` returns absolute lines and a compact version tag backed by SHA-2
 
 Enable **Web codemode** in Pylon Web's `pylon-core` package settings (`codemodeEnabled`, default false), then create a new session or reconstruct/reload its runtime. This uses Pi 1.0 native JavaScript execution alongside ordinary tools; it does not change standalone Pi CLI codemode settings.
 
-Scripts can call only active direct coding/search tools. Workflow controls, discovery/activation, verification, delegates, and model APIs stay outside scripts. Native validation, Guard approvals, revision guards, and file queues still apply to each call. Scripts are capped at 60 seconds, 32 nested calls, and 2,000 estimated text output tokens; valid lower native first-line limits are respected. Failed scripts retain partial output and do not roll back completed side effects.
+Scripts can call active direct coding/search tools and permitted native MCP tools/resources, including inactive indirect MCP tools. Hidden or policy-disabled MCP tools remain unreachable. Workflow controls, discovery/activation, verification, delegates, and model APIs stay outside scripts. Native validation, Guard approvals, revision guards, and file queues still apply to each call. Scripts are capped at 60 seconds of execution, 32 nested calls, and 2,000 estimated text output tokens; valid lower native first-line limits are respected. MCP readiness waits before scripts are separately bounded by the same timeout. Failed scripts retain partial output and do not roll back completed side effects. See [Web MCP configuration](../../docs/web/settings.md#mcp-servers).
 
 Nested activity is bounded parent metadata, not a second transcript of inner results. Hidden inner payloads do not count toward model-facing tool token estimates. Native stores follow the current branch and commit only after successful scripts. Trusted extensions still run with host permissions; codemode is not an OS sandbox.
-
 
 ## Coordination behavior
 

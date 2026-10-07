@@ -147,6 +147,18 @@ export default function guardExtension(pi: ExtensionAPI) {
   // This closure is per extension instance; Pi replaces it when a session is replaced.
   const sessionApprovals = new Set<string>();
   const codemodeSignals = new Map<string, AbortSignal>();
+  // Coordination is optional: standalone Guard must not depend on pylon-core.
+  const mcpAllowed = (name: string) => {
+    let allowed = true;
+    pi.events.emit("pylon:tool-access", {
+      version: 1,
+      name,
+      respond: (value: boolean) => {
+        allowed = allowed && value;
+      },
+    });
+    return allowed;
+  };
   const disposeCodemode = pi.events.on("pylon:codemode-scope", (event: any) => {
     if (event?.version !== 1 || typeof event.toolCallId !== "string") return;
     if (event.active === false) codemodeSignals.delete(event.toolCallId);
@@ -311,6 +323,40 @@ export default function guardExtension(pi: ExtensionAPI) {
     if (ctx.signal?.aborted) return { block: true, reason: "Operation aborted" };
     if (!enabled) return;
     const block = (message: string) => ({ block: true as const, reason: message });
+
+    if (
+      event.toolName.startsWith("mcp__") ||
+      ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].includes(event.toolName)
+    ) {
+      const reason = `MCP call ${event.toolName}`;
+      if (!mcpAllowed(event.toolName)) return block("Tool is disabled by Pylon policy");
+      // An MCP server's annotations are hints, not trusted authorization.
+      if (!ctx.hasUI) {
+        deny(ctx, reason, event.toolCallId);
+        return block(blockedMessage(reason, "; interactive approval required"));
+      }
+      let approved = false;
+      const blockingId = `pi-guard:${randomUUID()}`;
+      try {
+        pi.events.emit("pylon:ui-blocking", { version: 1, id: blockingId, source: "pi-guard", active: true });
+        approved = await ctx.ui.confirm(
+          "Allow MCP call?",
+          `${event.toolName}\n\nArguments:\n${JSON.stringify(event.input).slice(0, 2000)}\n\nThis server runs with its configured credentials and may affect files or remote services.`,
+          { ...dialogOptions(), signal: ctx.signal },
+        );
+      } catch {
+        // Approval errors and cancellation must fail closed.
+      } finally {
+        pi.events.emit("pylon:ui-blocking", { version: 1, id: blockingId, source: "pi-guard", active: false });
+      }
+      if (!approved || ctx.signal?.aborted || !mcpAllowed(event.toolName)) {
+        deny(ctx, reason, event.toolCallId);
+        return block(blockedMessage(reason));
+      }
+      confirmed++;
+      publish(ctx, "confirmed", reason, event.toolCallId);
+      return;
+    }
 
     if (isToolCallEventType("bash", event) || event.toolName === "heartbeat_start") {
       const command = isToolCallEventType("bash", event)

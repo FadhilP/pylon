@@ -17,6 +17,7 @@ import type { PromptPackageSettingValue } from "pylon-core/package-settings";
 import { configPath, effectiveConfig, loadConfig } from "pylon-core/src/config.ts";
 import { collectExtensionLoadTimings, type ExtensionLoadTiming } from "./pi-startup-timings.ts";
 import { createPylonCodemodeExtension } from "./codemode.ts";
+import { createPylonMcpExtensions } from "./mcp.ts";
 
 export function createPylonModelRuntime(agentDir: string): Promise<ModelRuntime> {
   const fixedAgentDir = resolve(agentDir);
@@ -47,6 +48,7 @@ export async function createPylonRuntimeFactory(options: {
   const fixedAgentDir = resolve(options.agentDir);
   const modelRuntime = options.modelRuntime ?? (await createPylonModelRuntime(fixedAgentDir));
   const timedHandlers = new WeakSet<Function>();
+  const mcpExtensions = await createPylonMcpExtensions(fixedAgentDir);
 
   return async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
     if (resolve(agentDir) !== fixedAgentDir) {
@@ -70,6 +72,7 @@ export async function createPylonRuntimeFactory(options: {
         eventBus,
         extensionFactories: [
           ...(coreConfig.codemodeEnabled ? [{ name: "pylon-codemode", factory: createPylonCodemodeExtension() }] : []),
+          ...mcpExtensions,
           ...(options.extensionFactories ?? []),
         ],
         extensionsOverride: loaded => {
@@ -77,7 +80,10 @@ export async function createPylonRuntimeFactory(options: {
           for (const extension of loaded.extensions) {
             if (extension.tools.has("codemode") && extension.path !== "<inline:pylon-codemode>") {
               extension.tools.delete("codemode");
-              loaded.errors.push({ path: extension.path, error: "Pylon Web reserves codemode; enable Web codemode in pylon-core settings instead." });
+              loaded.errors.push({
+                path: extension.path,
+                error: "Pylon Web reserves codemode; enable Web codemode in pylon-core settings instead.",
+              });
             }
           }
           if (!options.onStartupHook) return loaded;
@@ -121,7 +127,9 @@ export async function createPylonRuntimeFactory(options: {
     });
     // Resource discovery reloads Pi settings, so apply the opt-in afterward.
     if (coreConfig.codemodeEnabled) {
-      services.settingsManager.applyOverrides({ defaultTools: [...(services.settingsManager.getSettings().defaultTools ?? []), "+codemode"] });
+      services.settingsManager.applyOverrides({
+        defaultTools: [...(services.settingsManager.getSettings().defaultTools ?? []), "+codemode"],
+      });
     }
     options.onStartupPhase?.("extension-loading", performance.now() - extensionLoadingStartedAt);
     if (options.onExtensionLoadTimings) {

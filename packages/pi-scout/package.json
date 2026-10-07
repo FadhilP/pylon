@@ -17,7 +17,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
-    "test": "node --test test/*.test.ts",
+    "test": "node ../../scripts/run-tests.mjs test/*.test.ts",
     "check": "tsc --noEmit"
   },
   "pi": {

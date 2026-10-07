@@ -375,3 +375,47 @@ test(
     assert.equal(await app.user({ command: "rm -rf generated" }, context(root, [])), undefined);
   },
 );
+
+test("MCP approvals fail closed, stay fresh, respect policy changes and inherit script cancellation", async () => {
+  const app = harness();
+  const call = { type: "tool_call", toolName: "mcp__fixture__echo", toolCallId: "mcp-call", input: { value: "data" } };
+  let prompts = 0;
+  let permitted = true;
+  let confirm = async () => {
+    prompts++;
+    return true;
+  };
+  const ctx = { cwd: process.cwd(), hasUI: true, ui: { confirm: () => confirm(), setStatus() {} } };
+  app.events.on("pylon:tool-access", request => request.respond(permitted));
+  assert.equal((await app.tool(call, { ...ctx, hasUI: false })).block, true);
+  assert.equal(prompts, 0);
+  assert.equal(await app.tool(call, ctx), undefined);
+  assert.equal(await app.tool(call, ctx), undefined);
+  assert.equal(prompts, 2, "MCP approvals are not reused");
+  permitted = false;
+  assert.equal((await app.tool(call, ctx)).block, true);
+  assert.equal(prompts, 2, "policy-denied calls never prompt");
+  permitted = true;
+  confirm = async () => {
+    prompts++;
+    permitted = false;
+    return true;
+  };
+  assert.equal((await app.tool(call, ctx)).block, true, "policy changes during approval prevent dispatch");
+  permitted = true;
+  confirm = async () => false;
+  assert.equal((await app.tool({ ...call, toolName: "read_mcp_resource" }, ctx)).block, true);
+  confirm = async () => {
+    throw new Error("dialog failed");
+  };
+  assert.equal((await app.tool(call, ctx)).block, true);
+  const deadline = new AbortController();
+  app.events.emit("pylon:codemode-scope", { version: 1, toolCallId: "script", active: true, signal: deadline.signal });
+  confirm = async () => {
+    deadline.abort();
+    return true;
+  };
+  assert.equal((await app.tool({ ...call, parentToolCallId: "script" }, ctx)).block, true);
+  assert.equal(app.blocking.at(-1).active, false, "approval failures release the UI blocking scope");
+  app.shutdown();
+});

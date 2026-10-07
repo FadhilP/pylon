@@ -1,3 +1,5 @@
+import { validMcpSettingsAction, type McpSettingsQuery, type McpSettingsAction, type McpSettingsSnapshot } from "../../shared/settings/mcp.ts";
+import type { McpManagement } from "./mcp-settings.ts";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpath, unlink } from "node:fs/promises";
@@ -2079,6 +2081,33 @@ export class SessionRuntime {
     this.refreshSnapshot();
     return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
   }
+  private mcpManager(sessionId: string): McpManagement | undefined {
+    let manager: McpManagement | undefined;
+    this.eventBus.emit("pylon:mcp-management", {version:1,sessionId,respond:(value: McpManagement)=>{manager=value;}});
+    return manager;
+  }
+  async mcpSettings(input: McpSettingsQuery): Promise<McpSettingsSnapshot> {
+    const session = this.sessionFor(input.expectedGeneration);
+    if (input.sessionId !== session.sessionId) throw new Error("Session changed. Refresh MCP settings.");
+    const manager = this.mcpManager(session.sessionId);
+    const result = manager ? await manager.snapshot() : {
+      sessionId:session.sessionId,available:false,revision:"0".repeat(64),servers:[],needsReload:false,configurationError:false,
+    };
+    this.gate.assert(input.expectedGeneration);
+    return {...result,sessionGeneration:this.gate.generation};
+  }
+  async mcpAction(input: McpSettingsAction): Promise<McpSettingsSnapshot> {
+    if (!validMcpSettingsAction(input)) throw new Error("Invalid MCP action");
+    const session = this.sessionFor(input.expectedGeneration);
+    if (input.sessionId !== session.sessionId) throw new Error("Session changed. Refresh MCP settings.");
+    if (!this.canSleep()) throw new Error("MCP servers can only change while the session is idle");
+    const manager = this.mcpManager(session.sessionId);
+    if (!manager) throw new Error("Native MCP management is unavailable");
+    await this.withSettingsUpdate(() => manager.action(input));
+    this.gate.assert(input.expectedGeneration);
+    return this.mcpSettings(input);
+  }
+
 
   async updatePackageSettings(input: UpdatePackageSettingsInput): Promise<ReplacementResult> {
     const catalog = this.packageCatalog;

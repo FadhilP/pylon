@@ -1,6 +1,6 @@
 # pi-guard
 
-A conservative confirmation guard for destructive shell commands and risky write/edit paths in Pi.
+A conservative confirmation guard for destructive shell commands, risky write/edit paths, and native MCP calls in Pi.
 
 ## Install and use
 
@@ -13,6 +13,8 @@ pi install git:github.com/FadhilP/pylon
 Reload Pi, then run `/guard` for session counters. Guard intercepts agent `bash`, `write`, and `edit`, plus user `!` and `!!` commands. For approvable risks it offers **Allow once**, **Always allow this session**, **Always allow on this project**, or **Deny**. Without confirmation UI, all risky actions fail closed, including remembered approvals.
 
 Session approvals last only for the extension runtime. Project approvals are stored in Pi's user-controlled agent directory, never the repository. Because Pi Bash is Bash on every platform, Guard blocks redirection to bare `nul` (which creates a file); use `/dev/null`, or explicit `./nul` if that file is intentional.
+
+Native MCP tools (`mcp__…`) and shared MCP resource operations require a fresh confirmation for every call, including nested codemode calls. Read-only annotations are server-provided hints and do not grant permission. MCP approvals are never remembered; denied, cancelled, aborted, or UI-less calls fail closed. This does not guard server startup or configuration credential-resolution commands, and an approved server retains its configured file/network access.
 
 ## Protected paths and policy
 

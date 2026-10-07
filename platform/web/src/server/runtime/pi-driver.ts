@@ -1,3 +1,4 @@
+import type { McpSettingsQuery, McpSettingsAction, McpSettingsSnapshot } from "../../shared/settings/mcp.ts";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import type { WorkspaceEntry, WorkspaceGitIndex, WorkspaceMutationInput, WorkspaceMutationResult } from "../../shared/workspace/workspace-mutations.ts";
 import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
@@ -462,6 +463,8 @@ export interface PiDriver {
   removeExtensionPackage?(input: ExtensionPackageInput): Promise<ReplacementResult>;
   setProjectTrust?(input: SetProjectTrustInput): Promise<ReplacementResult>;
   reloadExtensions?(): Promise<ReplacementResult>;
+  mcpSettings?(input: McpSettingsQuery): Promise<McpSettingsSnapshot>;
+  mcpAction?(input: McpSettingsAction): Promise<McpSettingsSnapshot>;
   updateHookSettings?(input: UpdateHookSettingsInput): Promise<void>;
   rebuildDiscoverIndex(): Promise<void>;
   refreshModelCatalogs?(expectedGeneration: number): Promise<void>;

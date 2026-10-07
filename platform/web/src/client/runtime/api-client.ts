@@ -1,3 +1,4 @@
+import type { McpSettingsQuery, McpSettingsAction, McpSettingsSnapshot } from "../../shared/settings/mcp";
 import type { GitHubAuthAction, GitHubAuthSnapshot } from "../../shared/settings/github";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations";
 import type { KeyboardSettings, Keymap } from "../../shared/settings/keyboard";
@@ -123,6 +124,14 @@ export class ApiClient {
     );
     this.csrfToken = snapshot.csrfToken;
     return snapshot;
+  }
+
+  async mcpSettings(input: McpSettingsQuery, signal?: AbortSignal): Promise<McpSettingsSnapshot> {
+    const query = new URLSearchParams({sessionId:input.sessionId,generation:String(input.expectedGeneration)});
+    return json(await fetch(`/api/v1/settings/mcp?${query}`, {headers:{"x-pylon-tab-id":this.tabId},credentials:"same-origin",signal}));
+  }
+  async mcpAction(input: McpSettingsAction): Promise<McpSettingsSnapshot> {
+    return json(await fetch("/api/v1/settings/mcp", {method:"POST",credentials:"same-origin",headers:this.headers(),body:JSON.stringify(input)}));
   }
 
   async githubAuth(signal?: AbortSignal): Promise<GitHubAuthSnapshot> {

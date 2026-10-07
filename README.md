@@ -91,4 +91,6 @@ npm run web
 
 For development without a production build, run `npm run dev --workspace @pylon/web`.
 
+Run `npm run verify` for the full checks. Test output hides passing results and success summaries by default, and package verification prints only failed jobs. Failure details and exit codes are preserved. For normal output, pass `--verbose` after npm’s argument separator: `npm test --workspace @pylon/web -- --verbose`, `npm run test:bundle -- --verbose`, or `npm run verify -- --verbose`.
+
 On Windows, use workspace-relative temporary files when passing paths between Git Bash and native Node/Pylon tools; MSYS paths such as `/tmp/...` are not native Windows paths. Stop a running Pylon process or use a separate worktree/copy before `npm ci`, because Windows cannot replace native addons loaded by the active process.

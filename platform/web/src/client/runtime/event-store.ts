@@ -1,3 +1,4 @@
+import type { McpSettingsInput, McpSettingsSnapshot } from "../../shared/settings/mcp";
 import type { GitHubAuthAction, GitHubAuthSnapshot } from "../../shared/settings/github";
 import { isKeyboardSettings, type KeyboardSettings, type Keymap } from "../../shared/settings/keyboard";
 import {
@@ -395,6 +396,25 @@ export class RuntimeEventStore {
       void this.refreshHostPreferences().catch(() => undefined);
     }
   }
+  async mcpSettings(signal?: AbortSignal): Promise<McpSettingsSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    const result = await this.api.mcpSettings({sessionId:runtime.sessionId,expectedGeneration:runtime.sessionGeneration}, signal);
+    const current = this.requireReadyRuntime();
+    if (result.sessionId !== current.sessionId || result.sessionGeneration !== current.sessionGeneration)
+      throw new Error("Session changed. Refresh MCP settings.");
+    return result;
+  }
+  async mcpAction(input: McpSettingsInput, snapshot: McpSettingsSnapshot): Promise<McpSettingsSnapshot> {
+    const runtime = this.requireReadyRuntime();
+    if (snapshot.sessionId !== runtime.sessionId || snapshot.sessionGeneration !== runtime.sessionGeneration)
+      throw new Error("Session changed. Refresh MCP settings.");
+    const result = await this.api.mcpAction({...input,expectedRevision:snapshot.revision,sessionId:snapshot.sessionId,expectedGeneration:snapshot.sessionGeneration});
+    const current = this.requireReadyRuntime();
+    if (result.sessionId !== current.sessionId || result.sessionGeneration !== current.sessionGeneration)
+      throw new Error("Session changed. Refresh MCP settings.");
+    return result;
+  }
+
   githubAuth(signal?: AbortSignal): Promise<GitHubAuthSnapshot> {
     return this.api.githubAuth(signal);
   }

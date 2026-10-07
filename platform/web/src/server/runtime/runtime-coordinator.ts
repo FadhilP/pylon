@@ -1,3 +1,4 @@
+import { validMcpSettingsAction, type McpSettingsQuery, type McpSettingsAction, type McpSettingsSnapshot } from "../../shared/settings/mcp.ts";
 import { AnnotationStore } from "../workspace/annotation-store.ts";
 import type { AnnotationList, AnnotationMutation, AnnotationRequest } from "../../shared/workspace/annotations.ts";
 import { readWorkspaceEntry, mutateWorkspace } from "../workspace/workspace-mutations.ts";
@@ -1854,6 +1855,30 @@ export class RuntimeCoordinator implements PiDriver {
       return { cancelled: false, sessionId: selected.id, sessionGeneration: this.generation };
     });
   }
+  async mcpSettings(input: McpSettingsQuery): Promise<McpSettingsSnapshot> {
+    this.assertGeneration(input.expectedGeneration);
+    if (input.sessionId !== this.selectedId) throw new Error("Session changed. Refresh MCP settings.");
+    return this.readSelected("reading MCP settings", driver => driver.mcpSettings({...input,expectedGeneration:this.selected().innerGeneration}));
+  }
+  async mcpAction(input: McpSettingsAction): Promise<McpSettingsSnapshot> {
+    if (!validMcpSettingsAction(input)) throw new Error("Invalid MCP action");
+    return this.withExtensionLifecycle(async () => {
+      this.assertGeneration(input.expectedGeneration);
+      const slot = this.selected();
+      if (input.sessionId !== slot.id) throw new Error("Session changed. Refresh MCP settings.");
+      await slot.driver.mcpAction({...input,expectedGeneration:slot.innerGeneration});
+      if (input.action !== "reconnect") {
+        try {
+          for (const current of this.slots.values()) await current.driver.reloadExtensions();
+        } catch {
+          throw new Error("MCP configuration is saved, but not all sessions could reload. Use Reload to retry.");
+        }
+      }
+      this.assertGeneration(input.expectedGeneration);
+      return this.mcpSettings(input);
+    });
+  }
+
 
   async updateHookSettings(input: UpdateHookSettingsInput): Promise<void> {
     await this.withLifecycle(() => this.selected().driver.updateHookSettings(input));

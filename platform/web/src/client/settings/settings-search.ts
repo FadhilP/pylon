@@ -20,6 +20,7 @@ export type SettingsSearchTab =
   | "packages"
   | "extensions"
   | "skills"
+  | "mcp"
   | "hooks"
   | "policy"
   | "notifications"
@@ -92,6 +93,7 @@ function entry(input: EntryInput): SettingsSearchEntry {
 }
 
 const STATIC_ENTRIES: SettingsSearchEntry[] = [
+  entry({id:"mcp-servers",tab:"mcp",section:"MCP servers",label:"MCP servers",description:"Inspect native MCP connections, enable servers, change exposure, reconnect and open sign-in.",keywords:"model context protocol stdio http tools codemode resources",target:"mcp-servers"}),
   entry({
     id: "github-account", tab: "integrations", section: "Integrations", label: "GitHub account",
     description: "Connect GitHub, verify repository access, and disconnect local credentials.",
