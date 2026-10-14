@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.5.1",
+    "date": "Oct 14, 2026",
+    "title": "Pi 1.2 compatibility and reliable session recovery",
+    "summary": "A maintenance release upgrades Pi to 1.2.0, preserves user attachments across custom continuations, improves tool timing and aborted-run recovery, and sharpens minimal-change coding guidance.",
+    "notes": [
+      "Upgraded Pi runtime packages to 1.2.0 and updated the Focus dark theme to use Pi's hosted theme schema.",
+      "Kept staged user attachments out of custom continuation messages without consuming them, so the next user prompt still receives its files while startup hooks remain active.",
+      "Used valid native tool durations when available, with rounding, bounds, persistence, and elapsed-time fallback for missing or invalid values.",
+      "Recovered stopped-run metadata and completed active tool state when an aborted agent settles without an agent-end event, without attaching the stopped duration to an earlier assistant message or publishing duplicate end events.",
+      "Expanded Ponytail guidance for session-long minimal-change work, caller and scope checks, reuse, small runnable checks, and explicit reporting of skipped work and risks while preserving security, validation, accessibility, and error handling.",
+      "Expanded behavioral regression coverage for custom continuation attachments, aborted settlement and projection recovery, and native tool-duration validation and persistence."
+    ]
+  },
+  {
     "version": "3.5.0",
     "date": "Oct 7, 2026",
     "title": "Native MCP servers and safer tool orchestration",

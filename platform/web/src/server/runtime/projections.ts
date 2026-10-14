@@ -1201,6 +1201,8 @@ export class RuntimeProjection {
     if (kind === "prompt_undo") return this.promptUndo(raw);
     if (kind === "agent_start") return this.agentStart(raw);
     if (kind === "agent_end" || kind === "agent_error") return this.agentEnd(raw, kind);
+    if (kind === "agent_settled" && raw.stopped === true && this.runtime.conversation.workStartedAt)
+      return this.agentEnd(raw, "agent_end");
   }
 
   /** Routes one extension UI request or surface update onto the read model. */

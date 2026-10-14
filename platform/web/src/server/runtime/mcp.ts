@@ -12,7 +12,7 @@ import { allowsIndirectTool, isMcpTool } from "pylon-core/src/tools.ts";
 import { boundedSource } from "./codemode.ts";
 import { McpSettingsManager } from "./mcp-settings.ts";
 
-/** Pi 1.0.4 has no public exports for its file config/credential helpers.
+/** Pi has no public exports for its file config/credential helpers.
  * Keep this pinned-layout bridge here rather than copy validation or mutate process.env.
  */
 export async function createPylonMcpExtensions(agentDir: string): Promise<InlineExtension[]> {

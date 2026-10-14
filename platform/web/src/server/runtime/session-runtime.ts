@@ -2897,7 +2897,11 @@ export class SessionRuntime {
           const started = this.activeToolStarts.get(toolCallId);
           this.activeToolStarts.delete(toolCallId);
           if (started) {
-            const durationMs = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Date.now() - started.startedAtMs));
+            const measuredDurationMs =
+              typeof raw.durationMs === "number" && Number.isFinite(raw.durationMs) && raw.durationMs >= 0
+                ? raw.durationMs
+                : Date.now() - started.startedAtMs;
+            const durationMs = Math.min(MAX_WORK_DURATION_MS, Math.max(0, Math.round(measuredDurationMs)));
             this.toolDurations.set(toolCallId, durationMs);
             try {
               if (!appendToolDuration(session.sessionManager, toolCallId, durationMs)) {
@@ -3118,6 +3122,31 @@ export class SessionRuntime {
         if (this.compactionContinuation?.resuming) {
           this.abandonCompactionContinuation(this.compactionContinuation.requestId, generation);
         } else if (!this.compactionContinuation) {
+          if (raw.aborted === true) {
+            const durationMs = Math.min(
+              MAX_WORK_DURATION_MS,
+              Math.max(0, Date.now() - (this.workStartedAtMs ?? Date.now())),
+            );
+            this.stoppedRun = {
+              turnId: this.workTurnId ?? `turn-${++this.nextTurnId}`,
+              userEntryId: this.workUserEntryId,
+              durationMs,
+              modelName: this.workModelName,
+              thinkingLevel: this.workThinkingLevel,
+            };
+            forwarded = {
+              ...raw,
+              stopped: true,
+              workDurationMs: durationMs,
+              turnId: this.stoppedRun.turnId,
+              userEntryId: this.workUserEntryId,
+              modelName: this.workModelName,
+              thinkingLevel: this.workThinkingLevel,
+              gitBranch: this.gitBranch,
+              metrics: this.lastSnapshot?.metrics,
+              assistantMessage: null,
+            };
+          }
           this.workStartedAt = undefined;
           this.workStartedAtMs = undefined;
           this.workModelName = undefined;

@@ -14,7 +14,12 @@ import {
   SessionManager,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
-import { appendToolDuration, appendTurnGitBranch, appendWorkDuration } from "pylon-core/src/work-duration.ts";
+import {
+  appendToolDuration,
+  appendTurnGitBranch,
+  appendWorkDuration,
+  MAX_WORK_DURATION_MS,
+} from "pylon-core/src/work-duration.ts";
 import { DELEGATED_USAGE_ENTRY_TYPE } from "pylon-core/child-process";
 import {
   correlatePendingUserMessageStart,
@@ -23,7 +28,7 @@ import {
   SessionRuntime,
   terminalAgentError,
 } from "../src/server/runtime/session-runtime.ts";
-import { encodeHistoryCursor } from "../src/server/runtime/projections.ts";
+import { encodeHistoryCursor, RuntimeProjection } from "../src/server/runtime/projections.ts";
 import { PROMPT_IMAGE_ATTACHMENT_VERSION, promptFilesMessage } from "../src/server/runtime/prompt-attachments.ts";
 import { mergeHistoryMessages } from "../src/client/runtime/history-cache.ts";
 import type {
@@ -352,20 +357,77 @@ test(
   },
 );
 
+test("custom continuations retain startup hooks without consuming the next user's files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-custom-startup-"));
+  const faux = fauxProvider();
+  faux.setResponses([
+    fauxAssistantMessage([fauxText("Custom answer")]),
+    fauxAssistantMessage([fauxText("User answer")]),
+  ]);
+  const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
+  modelRuntime.registerNativeProvider(faux.provider);
+  await modelRuntime.refresh({ allowNetwork: false });
+  const starts: { messageType: string; idle: boolean; systemPrompt: string }[] = [];
+  const driver = new SessionRuntime({
+    modelRuntime,
+    extensionFactories: [
+      {
+        name: "custom-startup-probe",
+        factory(pi) {
+          pi.on("before_agent_start", (event, ctx) => {
+            starts.push({ messageType: event.messageType, idle: ctx.isIdle(), systemPrompt: event.systemPrompt });
+          });
+        },
+      },
+    ],
+  });
+  try {
+    await driver.start({ cwd: root, agentDir: join(root, "agent"), repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    await session.setModel(faux.getModel());
+    (driver as any).hookInjection.settings.beforeAgentStart = {
+      enabled: true,
+      sources: [
+        { id: "probe", name: "Probe", kind: "text", content: "Startup hook marker", reinjectOnCompaction: false },
+      ],
+    };
+    const attachments = (driver as any).promptAttachments;
+    attachments.stage("next-user", [{ name: "context.txt", text: "User file marker", size: 16 }]);
+    await session.sendCustomMessage({ customType: "resume", content: "Continue", display: false }, { triggerTurn: true });
+    assert.equal(attachments.consumed("next-user"), false);
+    assert.equal(JSON.stringify(session.messages).includes("User file marker"), false);
+    await session.prompt("Next user prompt");
+    assert.equal(attachments.consumed("next-user"), true);
+    assert.equal(JSON.stringify(session.messages).includes("User file marker"), true);
+    assert.deepEqual(starts.map(({ messageType, idle }) => ({ messageType, idle })), [
+      { messageType: "custom", idle: false },
+      { messageType: "user", idle: false },
+    ]);
+    for (const start of starts) assert.match(start.systemPrompt, /Startup hook marker/);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("agent_settled recovers missed agent_end state and abort does not latch stopping", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-settled-fallback-"));
   const cwd = join(root, "workspace"),
     agentDir = join(root, "agent");
   await Promise.all([mkdir(cwd), mkdir(agentDir)]);
   const driver = new SessionRuntime();
+  let unsubscribe = () => {};
 
   try {
     await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
     const session = (driver as any).runtime.session;
+    const previousAssistantId = persistSession(session.sessionManager, "Previous answer");
+    const published: string[] = [];
+    const projection = new RuntimeProjection(await driver.snapshot(), type => published.push(type));
+    unsubscribe = driver.subscribe(event => projection.apply(event));
 
     session._emit({ type: "agent_start" });
     assert.ok((await driver.snapshot()).conversation.workStartedAt);
-    session._emit({ type: "agent_settled" });
+    session._emit({ type: "agent_settled", aborted: false });
     let conversation = (await driver.snapshot()).conversation;
     assert.equal(conversation.workStartedAt, undefined);
     assert.equal(conversation.stopping ?? false, false);
@@ -377,11 +439,28 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
     await driver.abort();
     assert.equal((await driver.snapshot()).conversation.stopping ?? false, false);
 
-    session._emit({ type: "agent_settled" });
+    session._emit({ type: "agent_settled", aborted: false });
     conversation = (await driver.snapshot()).conversation;
     assert.equal(conversation.workStartedAt, undefined);
     assert.equal(conversation.stopping ?? false, false);
+
+    session._emit({ type: "agent_start" });
+    session._emit({ type: "tool_execution_start", toolCallId: "cancelled-read", toolName: "read", args: {} });
+    session._emit({ type: "agent_settled", aborted: true });
+    conversation = (await driver.snapshot()).conversation;
+    assert.equal(conversation.workStartedAt, undefined);
+    assert.ok(conversation.stoppedRun);
+    const projected = projection.snapshot().conversation;
+    assert.deepEqual(projected.stoppedRun, conversation.stoppedRun);
+    assert.equal(projected.tools.find(tool => tool.id === "cancelled-read")?.status, "completed");
+    assert.equal(
+      projected.messages.find(message => message.entryId === previousAssistantId)?.workDurationMs,
+      undefined,
+    );
+    session._emit({ type: "agent_settled", aborted: true });
+    assert.equal(published.filter(type => type === "agent.end").length, 1);
   } finally {
+    unsubscribe();
     await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
@@ -1017,6 +1096,50 @@ test("completed background delegate cost survives runtime restart", { timeout: 4
   } finally {
     await first.dispose();
     await restarted.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tool timing prefers bounded native duration and persists the fallback for legacy results", async t => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-native-tool-duration-"));
+  const driver = new SessionRuntime();
+  const events: any[] = [];
+  const unsubscribe = driver.subscribe(event => events.push(event));
+  try {
+    await driver.start({ cwd: root, agentDir: join(root, "agent"), repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    let now = Date.now();
+    t.mock.method(Date, "now", () => now);
+    const cases: [unknown, number][] = [
+      [0, 0],
+      [1_234.6, 1_235],
+      [MAX_WORK_DURATION_MS + 1, MAX_WORK_DURATION_MS],
+      [undefined, 2_000],
+      [-1, 2_000],
+      [NaN, 2_000],
+      [Infinity, 2_000],
+      ["123", 2_000],
+    ];
+    for (const [index, [nativeDuration, expected]] of cases.entries()) {
+      const toolCallId = `timed-${index}`;
+      session._emit({ type: "tool_execution_start", toolCallId, toolName: "read", args: {} });
+      now += 2_000;
+      session._emit({ type: "tool_execution_end", toolCallId, toolName: "read", durationMs: nativeDuration });
+      assert.equal(events.at(-1).payload.durationMs, expected);
+      const stored = session.sessionManager
+        .getBranch()
+        .find(
+          (entry: any) =>
+            entry.type === "custom" &&
+            entry.customType === "pylon-tool-duration" &&
+            entry.data.toolCallId === toolCallId,
+        );
+      assert.equal(stored?.data.durationMs, expected);
+    }
+  } finally {
+    t.mock.restoreAll();
+    unsubscribe();
+    await driver.dispose();
     await rm(root, { recursive: true, force: true });
   }
 });

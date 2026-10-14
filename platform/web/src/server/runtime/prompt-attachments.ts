@@ -33,7 +33,8 @@ export class PromptAttachmentBridge {
           },
         };
       });
-      pi.on("before_agent_start", () => {
+      pi.on("before_agent_start", event => {
+        if (event.messageType !== "user") return;
         const staged = this.staged;
         if (!staged) return;
         staged.consumed = true;
