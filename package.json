@@ -91,7 +91,7 @@
     ]
   },
   "dependencies": {
-    "@fadhilp/stateql": "0.13.3",
+    "@fadhilp/stateql": "0.15.0",
     "@napi-rs/keyring": "1.3.0",
     "@playwright/cli": "0.1.18",
     "diff": "9.0.0",

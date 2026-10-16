@@ -156,7 +156,7 @@ test("routes model calls by selected and one-call workspaces", async () => {
   assert.match(status.content[0].text, /"global"/);
   const global = await tool.execute("global", { command: "query", sql: "SELECT 2" }, undefined, undefined, context());
   assert.equal(value.instances.length, 2);
-  assert.match(global.content[0].text, /"workspace": "global"/);
+  assert.match(global.content[0].text, /"workspace":\s*"global"/);
 
   const override = await tool.execute(
     "override",
@@ -165,7 +165,7 @@ test("routes model calls by selected and one-call workspaces", async () => {
     undefined,
     context(),
   );
-  assert.match(override.content[0].text, /"selected_workspace": "global"/);
+  assert.match(override.content[0].text, /"selected_workspace":\s*"global"/);
   assert.equal(value.instances[0].commands.length, 2);
 });
 
@@ -887,7 +887,7 @@ test("executes reads without confirmation and returns compact details", async ()
   ]);
   assert.equal(result.details.commandId, "cmd_1");
   assert.equal("data" in result.details, false);
-  assert.match(result.content[0].text, /"ok": true/);
+  assert.match(result.content[0].text, /"ok":\s*true/);
 });
 
 test("formats materialized rows as parallel arrays for model output", async () => {
@@ -936,9 +936,8 @@ test("formats materialized rows as parallel arrays for model output", async () =
     .get("stateql")
     .execute("query", { command: "query", sql: "SELECT id, name FROM users" }, undefined, undefined, context());
   const queryOutput = JSON.parse(queryResult.content[0].text);
-  assert.deepEqual(queryOutput.data.columns, ["id", "name"]);
-  assert.deepEqual(queryOutput.data.column_types, ["integer", "text"]);
-  assert.deepEqual(queryOutput.data.preview, [
+  assert.deepEqual(queryOutput.columns, ["id", "name"]);
+  assert.deepEqual(queryOutput.rows, [
     [1, "Ada"],
     [2, "Lin"],
   ]);
@@ -954,9 +953,8 @@ test("formats materialized rows as parallel arrays for model output", async () =
       context(),
     );
   const mongoOutput = JSON.parse(mongoResult.content[0].text);
-  assert.deepEqual(mongoOutput.data.columns, ["id", "name"]);
-  assert.deepEqual(mongoOutput.data.column_types, ["integer", "text"]);
-  assert.deepEqual(mongoOutput.data.preview, [
+  assert.deepEqual(mongoOutput.columns, ["id", "name"]);
+  assert.deepEqual(mongoOutput.rows, [
     [1, "Ada"],
     [2, "Lin"],
   ]);
@@ -965,8 +963,8 @@ test("formats materialized rows as parallel arrays for model output", async () =
     .get("stateql")
     .execute("rows", { command: "rows", handle: "q_1", offset: 0, limit: 2 }, undefined, undefined, context());
   const rowsOutput = JSON.parse(rowsResult.content[0].text);
-  assert.deepEqual(rowsOutput.data.columns, ["id", "name"]);
-  assert.deepEqual(rowsOutput.data.rows, [
+  assert.deepEqual(rowsOutput.columns, ["id", "name"]);
+  assert.deepEqual(rowsOutput.rows, [
     [1, "Ada"],
     [2, "Lin"],
   ]);
@@ -1782,6 +1780,7 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
     const result = await owner.query("SELECT id, name FROM users ORDER BY id LIMIT 5");
     if (!result.ok) throw new Error(result.error.message);
     const handle = String((result.data as { result_id: string }).result_id);
+    const generatedHandle = String((result.data as { display_alias: string }).display_alias);
     await owner.setAlias("users", handle);
     await owner.linkActor("shared-workspace", "pi-session");
     owner.close();
@@ -1790,7 +1789,7 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
     const shown = await value.tools
       .get("stateql")
       .execute("show", { command: "show", handle: "users" }, undefined, undefined, ctx);
-    assert.match(shown.content[0].text, new RegExp(handle));
+    assert.equal(JSON.parse(shown.content[0].text).handle, generatedHandle);
 
     let response: Promise<StateQLSnapshot> | undefined;
     value.events.get("pylon:stateql-snapshot-request")![0]({
@@ -1845,7 +1844,7 @@ test("real StateQL integration persists commands and exposes bounded SQL snapsho
       ctx,
     );
     const doctor = await tool.execute("doctor", { command: "doctor" }, undefined, undefined, ctx);
-    assert.match(doctor.content[0].text, /"integrity": "ok"/);
+    assert.match(doctor.content[0].text, /"integrity":\s*"ok"/);
     assert.match(doctor.content[0].text, /"initial_schema_v1"/);
 
     let response: Promise<StateQLSnapshot> | undefined;

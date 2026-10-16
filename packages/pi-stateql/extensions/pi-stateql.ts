@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  agentResponse,
   StateQL,
   type BatchCommand,
   type CatalogObjectKind,
@@ -693,70 +694,21 @@ function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function tabularRows(value: unknown, declaredColumns?: string[]): { columns: string[]; rows: unknown[][] } | undefined {
-  if (!Array.isArray(value) || !value.every(record)) return undefined;
-  const columns = declaredColumns ? [...declaredColumns] : [...new Set(value.flatMap(row => Object.keys(row)))];
-  if (
-    new Set(columns).size !== columns.length ||
-    !value.every(row => {
-      const keys = Object.keys(row);
-      return (
-        keys.length === columns.length &&
-        columns.every(column => Object.hasOwn(row, column) && row[column] !== undefined)
-      );
-    })
-  )
-    return undefined;
-  return { columns, rows: value.map(row => columns.map(column => row[column])) };
-}
-
-function modelResponse(response: Response<unknown>, command: StateQLToolInput["command"]): Response<unknown> {
-  if (!response.ok || !record(response.data)) return response;
-  const data = response.data;
-  if (
-    (command === "query" || command === "filter" || command === "mongo.query") &&
-    Array.isArray(data.columns) &&
-    data.columns.every(column => record(column) && typeof column.name === "string" && typeof column.type === "string")
-  ) {
-    const columnMetadata = data.columns as Array<{ name: string; type: string }>;
-    const table = tabularRows(
-      data.preview,
-      columnMetadata.map(column => column.name),
-    );
-    if (table)
-      return {
-        ...response,
-        data: {
-          ...data,
-          columns: table.columns,
-          column_types: columnMetadata.map(column => column.type),
-          preview: table.rows,
-        },
-      };
-  }
-  if (command === "rows") {
-    const table = tabularRows(data.rows);
-    if (table) return { ...response, data: { ...data, columns: table.columns, rows: table.rows } };
-  }
-  return response;
-}
-
 function boundedResponse(
   response: Response<unknown>,
   command: StateQLToolInput["command"],
   workspace: WorkspaceName,
   selectedWorkspace?: WorkspaceName,
 ): { text: string; truncated: boolean } {
-  const output = JSON.stringify(
-    {
-      ...modelResponse(response, command),
-      workspace,
-      ...(selectedWorkspace && selectedWorkspace !== workspace ? { selected_workspace: selectedWorkspace } : {}),
-    },
-    null,
-    2,
-  );
-  const result = truncateHead(output, { maxLines: 1_000, maxBytes: MAX_OUTPUT_BYTES });
+  const payload = {
+    ...agentResponse(response, command),
+    workspace,
+    ...(selectedWorkspace && selectedWorkspace !== workspace ? { selected_workspace: selectedWorkspace } : {}),
+  };
+  const compact = JSON.stringify(payload);
+  if (Buffer.byteLength(compact, "utf8") <= MAX_OUTPUT_BYTES) return { text: compact, truncated: false };
+  // truncateHead keeps whole lines and drops a first line over the limit, so oversized output stays multi-line.
+  const result = truncateHead(JSON.stringify(payload, null, 2), { maxLines: 1_000, maxBytes: MAX_OUTPUT_BYTES });
   if (!result.truncated) return { text: result.content, truncated: false };
   const notice = `\n\n[StateQL output truncated at ${formatSize(MAX_OUTPUT_BYTES)}. Request a smaller rows limit or narrower query.]`;
   return {
@@ -1522,7 +1474,7 @@ export default function stateqlExtension(
       "Use the session workspace by default. Access or select global only when the user explicitly asks to use the shared/global workspace; do not choose global merely for convenience. workspace.select changes later calls, while an explicit workspace on one call is only an override.",
       "For PostgreSQL/MySQL targets, include the username but never a password in target; Pylon Web will request the password through a masked dialog. Use secret_env when the complete source already lives in an environment variable.",
       "Never weaken TLS or certificate verification without explicit user authorization; prefer configuring the database CA certificate with a native host absolute path, not a shell-only path such as /tmp on Windows.",
-      "StateQL query output already includes preview rows in model context. Call StateQL rows only when the result is truncated or missing needed rows; when the complete preview is present, continue from preview_count instead of duplicating it from offset 0.",
+      "StateQL query output already includes preview rows in model context as columns plus row arrays. Call StateQL rows only when next_offset is present or needed rows are missing, starting from next_offset instead of offset 0.",
       "Reuse StateQL result handles with filter, rows, count, and columns instead of rerunning queries.",
       "Use StateQL plan before consequential writes when practical; never set replay, unbounded, or destructive overrides without explicit user authorization.",
       "Use mongo.query for bounded find or aggregate reads and mongo.plan before consequential MongoDB writes; use mongo.exec only with explicit user authorization.",
