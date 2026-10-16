@@ -3,9 +3,9 @@
     "version": "3.5.2",
     "date": "Oct 16, 2026",
     "title": "Leaner StateQL output for the model",
-    "summary": "A maintenance release upgrades StateQL to 0.14.0 and sends the model compact StateQL results, cutting typical database tool output by more than half while keeping full responses for the Database panel.",
+    "summary": "A maintenance release upgrades StateQL to 0.15.0 and sends the model compact StateQL results, cutting typical database tool output by more than half while keeping full responses for the Database panel.",
     "notes": [
-      "Upgraded StateQL to 0.14.0.",
+      "Upgraded StateQL to 0.15.0.",
       "Sent StateQL tool results to the model as compact JSON in StateQL's agent format: column names once with row arrays, short stable result handles, and no null fields, internal IDs, or echoed handles, reducing typical output by about 57% and fitting about twice as many rows under the 40 KB cap.",
       "Kept oversized StateQL results on the previous multi-line truncation path so partial output still reaches the model.",
       "Removed Pylon's separate StateQL row-table conversion in favor of the shared StateQL formatter."
