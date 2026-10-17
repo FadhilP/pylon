@@ -16,7 +16,7 @@ function fakeKeyring(values = new Map<string, string>()): { values: Map<string, 
         values.set(`${service}\0${account}`, value);
       },
       async getPassword() {
-        return values.get(`${service}\0${account}`);
+        return values.get(`${service}\0${account}`) ?? null;
       },
       async deleteCredential() {
         return values.delete(`${service}\0${account}`);

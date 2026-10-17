@@ -75,12 +75,12 @@ interface GitHubKeyringEntry {
   deleteCredential(signal?: AbortSignal): Promise<boolean>;
 }
 
-/** Dedicated OS-vault entry, isolated from model-provider and StateQL credentials. */
 export function osGitHubCredentialStore(
   settingsPath: string,
   createEntry: (service: string, account: string) => Promise<GitHubKeyringEntry> = async (service, account) => {
     const { AsyncEntry } = await import("@napi-rs/keyring");
-    return new AsyncEntry(service, account);
+    // Keyutils fallback loses saved credentials after reboot.
+    return new AsyncEntry(service, account, { linux: { store: "secret-service" } });
   },
 ): GitHubCredentialStore {
   const namespace = createHash("sha256").update(resolve(settingsPath)).digest("hex");

@@ -30,7 +30,7 @@ const TLS_QUERY_KEYS = new Set([
 
 interface KeyringEntry {
   setPassword(password: string, signal?: AbortSignal | null): Promise<void>;
-  getPassword(signal?: AbortSignal | null): Promise<string | undefined>;
+  getPassword(signal?: AbortSignal | null): Promise<string | null | undefined>;
   deleteCredential(signal?: AbortSignal | null): Promise<boolean>;
 }
 
@@ -378,7 +378,10 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
 export async function createOsStateQLCredentialVault(): Promise<StateQLCredentialVault | undefined> {
   try {
     const { AsyncEntry } = await import("@napi-rs/keyring");
-    return new OsStateQLCredentialVault((service, account) => new AsyncEntry(service, account));
+    // Keyutils fallback loses saved credentials after reboot.
+    return new OsStateQLCredentialVault(
+      (service, account) => new AsyncEntry(service, account, { linux: { store: "secret-service" } }),
+    );
   } catch {
     return undefined;
   }

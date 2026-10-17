@@ -1489,6 +1489,13 @@ test("rejects irrelevant, ambiguous, and oversized inputs before StateQL", async
     [{ command: "status", sql: "SELECT 1" }, /status does not accept sql/],
     [{ command: "inspect", kind: "columns", table: "items", limit: 10 }, /inspect does not accept limit/],
     [{ command: "query", sql: "SELECT 1", read_only: true }, /query does not accept read_only/],
+    [{ command: "query", sql: "SELECT 1", columns: ["id"] }, /query does not accept columns/],
+    [{ command: "summarize" }, /summarize requires handle/],
+    [{ command: "summarize", handle: "q_1", columns: ["id"] }, /summarize does not accept columns/],
+    ...[[], "id", [1], [""], ["x".repeat(501)], Array(101).fill("id")].map(columns => [
+      { command: "rows", handle: "q_1", columns },
+      /rows has invalid columns/,
+    ]),
   ] as const) {
     await assert.rejects(tool.execute("call", input, undefined, undefined, context()), message);
   }
@@ -1804,6 +1811,52 @@ test("real StateQL integration reuses a linked workspace handle", async () => {
     assert.ok(response);
     assert.equal((await response).session.name, "shared-workspace");
     assert.equal((await response).actor_id, "pi-session");
+  } finally {
+    await value.handlers.get("session_shutdown")![0]({}, ctx);
+    if (previousHome === undefined) delete process.env.STQL_HOME;
+    else process.env.STQL_HOME = previousHome;
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("real StateQL summarizes and projects a materialized result without changing it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "pi-stateql-results-"));
+  const previousHome = process.env.STQL_HOME;
+  process.env.STQL_HOME = home;
+  const value = harness(true);
+  const ctx = context();
+  try {
+    await value.handlers.get("session_start")![0]({}, ctx);
+    const tool = value.tools.get("stateql");
+    const execute = async (input: Record<string, unknown>) =>
+      JSON.parse((await tool.execute("results", input, undefined, undefined, ctx)).content[0].text);
+    await execute({ command: "connect", target: join(home, "app.sqlite"), read_only: false });
+    const query = await execute({
+      command: "query",
+      sql: "SELECT 1 AS id, 'Ada' AS name UNION ALL SELECT 2, NULL UNION ALL SELECT 3, 'Ada' ORDER BY id",
+    });
+    const handle = query.handle;
+    assert.equal(typeof handle, "string");
+    const projected = await execute({ command: "rows", handle, columns: ["name"], offset: 1, limit: 2 });
+    assert.deepEqual(projected.columns, ["name"]);
+    assert.deepEqual(projected.rows, [[null], ["Ada"]]);
+    await assert.rejects(execute({ command: "rows", handle, columns: ["unknown"] }), /Unknown column/);
+    const summary = await execute({ command: "summarize", handle });
+    assert.equal(summary.total, 3);
+    const statistics = summary.rows.map((row: unknown[]) =>
+      Object.fromEntries(summary.columns.map((name: string, index: number) => [name, row[index]])),
+    );
+    assert.deepEqual(statistics, [
+      { name: "id", nulls: 0, distinct: 3, min: 1, max: 3 },
+      { name: "name", nulls: 1, distinct: 1, min: "Ada", max: "Ada" },
+    ]);
+    const original = await execute({ command: "rows", handle });
+    assert.deepEqual(original.columns, ["id", "name"]);
+    assert.deepEqual(original.rows, [
+      [1, "Ada"],
+      [2, null],
+      [3, "Ada"],
+    ]);
   } finally {
     await value.handlers.get("session_shutdown")![0]({}, ctx);
     if (previousHome === undefined) delete process.env.STQL_HOME;

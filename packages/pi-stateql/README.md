@@ -21,10 +21,14 @@ StateQL manages connection profiles, read queries, materialized result handles, 
 { "command": "connect", "secret_env": "APP_DATABASE_URL", "read_only": true }
 { "command": "query", "sql": "SELECT id, name FROM users WHERE status = ? ORDER BY id LIMIT 50", "params": ["active"] }
 { "command": "rows", "handle": "q_1", "offset": 0, "limit": 20 }
+{ "command": "rows", "handle": "q_1", "columns": ["name"], "limit": 20 }
+{ "command": "summarize", "handle": "q_1" }
 { "command": "doctor" }
 ```
 
 Prefer profiles and credential environment variables. `secret_env` replaces `target`; it must resolve to a complete PostgreSQL/MySQL URL or `sqlite:<path>`, not a password or bare SQLite path. Do not provide both. Set `STQL_HOME` to override StateQL's platform data directory.
+
+Use `rows.columns` to return only the named columns without rerunning the query. `summarize` reports each column's null count, distinct non-null count, and min/max over the complete materialized result, not just its preview or current page. Neither operation changes the saved result.
 
 ### Workspace scopes
 
@@ -45,6 +49,8 @@ StateQL checks remain authoritative. Connection changes, writes, plan applicatio
 
 In Pylon Web, enter passwords directly in the connection form. The form answers only its matching, owned password request through the secure response channel; it never adds a password to StateQL input. Passwordless remote targets (including saved target profiles) use the same broker; agent-initiated requests can still open a masked password dialog. A missing `secret_env` can open a masked complete-source dialog; invalid source types are rejected. Required approvals replace the form rather than appearing inside it. Credential prompts follow the configured Guard timeout; `Never` disables UI expiry, while StateQL retains a bounded 24-hour-plus-one-minute safety deadline. Submitted credentials stay in server memory for up to one hour, scoped to runtime generation, actor, workspace, reference, database identity, and approved access; explicit Remember consent can additionally store them in the OS credential vault. Authentication failure, cancellation, session replacement, shutdown, expiry, identity mismatch, or read-to-write escalation clears/requires the credential and fails closed as appropriate. Credentials never appear in tool content/details, transcripts, UI request events, diagnostics, or StateQL persistence. In ordinary Pi, a missing environment variable fails closed; it never prompts or falls back.
 
+On Linux, remembered passwords require a Secret Service provider. Pylon does not use keyring's memory-only keyutils fallback, which loses credentials after reboot.
+
 TLS/network retry can reuse approved credentials for the same endpoint. `sslmode=prefer`, `require`, and `verify-ca` use strict StateQL verification unless `uselibpqcompat=true`; that opt-out requires separate insecure-TLS confirmation.
 
 For AWS RDS, the Web form can explicitly select Pylon's packaged official **AWS RDS global trust bundle**. The preset remains connection-scoped and keeps certificate and hostname verification enabled. Other PostgreSQL servers can use the server runtime's default trust store or a **Custom CA file**; custom paths map to `sslrootcert` and must be readable by the server process.
@@ -55,7 +61,7 @@ The Web form submits one `connection.setup` operation. Its reviewed configuratio
 
 New remembered literal-target profiles persist a password-free `target` plus `password_ref`; the OS vault stores a destination-bound password-only v2 record. Existing environment and complete-URL vault profiles remain readable. Explicit replacement edits use only a matching legacy password, not the legacy URL's configuration. Valid same-destination retries reuse the existing bounded password broker; newly entered passwords supersede cached values.
 
-This setup requires the updated StateQL runtime exposing `StateQL.passwordReferenceVersion === 1`; global workspaces additionally require `StateQL.forWorkspace`. Older runtimes fail closed rather than silently ignoring password references or misrouting global work. The current development checkout can use the rebuilt sibling `../StateQL` package. Publish and pin a compatible StateQL release before distributing this change; reinstalling the currently pinned registry version is not sufficient. Stop Pylon and back up the complete StateQL data directory before upgrading. The password-reference schema migration is not downgrade-safe: do not open state homes containing password references with older StateQL binaries.
+The pinned StateQL runtime provides `StateQL.passwordReferenceVersion === 1` and `StateQL.forWorkspace`. Older runtimes fail closed rather than silently ignoring password references or misrouting global work. Stop Pylon and back up the complete StateQL data directory before upgrading. The password-reference schema migration is not downgrade-safe: do not open state homes containing password references with older StateQL binaries.
 
 ## Pylon Web workspace view
 

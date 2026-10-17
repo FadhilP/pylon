@@ -47,6 +47,7 @@ const COMMANDS = [
   "rows",
   "count",
   "columns",
+  "summarize",
   "alias.set",
   "inspect",
   "transaction.begin",
@@ -81,7 +82,7 @@ const toolSchema = Type.Object(
     handle: Type.Optional(
       Type.String({
         description:
-          "show/rows/count/columns/alias.set/transaction.status/transaction.commit/transaction.rollback/apply/receipt only",
+          "show/rows/count/columns/summarize/alias.set/transaction.status/transaction.commit/transaction.rollback/apply/receipt only",
         maxLength: 200,
       }),
     ),
@@ -157,6 +158,13 @@ const toolSchema = Type.Object(
       ),
     ),
     limit: Type.Optional(Type.Integer({ description: "rows/history only", minimum: 1, maximum: 100 })),
+    columns: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+        description: "rows only: return just these materialized-result columns",
+        minItems: 1,
+        maxItems: 100,
+      }),
+    ),
     history_origin: Type.Optional(
       StringEnum(["legacy", "user", "model", "system", "api"] as const, {
         description: "history retrieval origin filter; does not change attribution",
@@ -314,9 +322,10 @@ const fields: Record<StateQLToolInput["command"], readonly (keyof StateQLToolInp
   "objects.list": ["kind", "schema", "search", "offset", "limit", "timeout_ms"],
   "object.describe": ["object", "timeout_ms"],
   show: ["handle"],
-  rows: ["handle", "offset", "limit"],
+  rows: ["handle", "offset", "limit", "columns"],
   count: ["handle"],
   columns: ["handle"],
+  summarize: ["handle"],
   "alias.set": ["name", "handle"],
   inspect: ["kind", "table", "timeout_ms"],
   "transaction.begin": ["isolation"],
@@ -350,6 +359,7 @@ const required: Partial<Record<StateQLToolInput["command"], readonly (keyof Stat
   rows: ["handle"],
   count: ["handle"],
   columns: ["handle"],
+  summarize: ["handle"],
   "alias.set": ["name", "handle"],
   inspect: ["kind"],
   plan: ["sql"],
@@ -565,6 +575,14 @@ function validateInput(input: StateQLToolInput): StateQLToolInput {
       throw new Error(`${input.command} has invalid ${key}`);
     if ((key === "timeout_ms" || key === "limit") && value === 0) throw new Error(`${key} must be positive`);
   }
+  if (
+    input.columns !== undefined &&
+    (!Array.isArray(input.columns) ||
+      input.columns.length === 0 ||
+      input.columns.length > 100 ||
+      input.columns.some(column => typeof column !== "string" || column.length === 0 || column.length > 500))
+  )
+    throw new Error("rows has invalid columns");
   if (input.cache !== undefined && !["auto", "bypass", "require"].includes(input.cache))
     throw new Error("cache is invalid");
   if (input.params !== undefined) boundedJson(input.params, "params");
@@ -1467,15 +1485,15 @@ export default function stateqlExtension(
     name: "stateql",
     label: "StateQL",
     description:
-      "Perform user-requested SQLite, PostgreSQL, MySQL, MongoDB, or Redis work in the private session workspace or shared global workspace. Prefer read-only profiles and parameterized SQL or bounded native commands. Query output includes normalized parallel-column previews; call rows only when truncated or additional rows are needed. Plan consequential writes when practical and confirm writes, plan application, and transaction completion. Cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
+      "Perform user-requested SQLite, PostgreSQL, MySQL, MongoDB, or Redis work in the private session workspace or shared global workspace. Prefer read-only profiles and parameterized SQL or bounded native commands. Query output includes normalized parallel-column previews; use rows with optional columns for narrower or additional rows, or summarize for per-column statistics of a materialized result. Plan consequential writes when practical and confirm writes, plan application, and transaction completion. Cross-session lifecycle, purge, and arbitrary export are unavailable. Output is capped at 40 KB.",
     promptSnippet: "Query and safely modify databases with durable StateQL result handles",
     promptGuidelines: [
       "Use stateql for user-requested database work; prefer read-only profiles and parameterized SQL with explicit ORDER BY and LIMIT.",
       "Use the session workspace by default. Access or select global only when the user explicitly asks to use the shared/global workspace; do not choose global merely for convenience. workspace.select changes later calls, while an explicit workspace on one call is only an override.",
       "For PostgreSQL/MySQL targets, include the username but never a password in target; Pylon Web will request the password through a masked dialog. Use secret_env when the complete source already lives in an environment variable.",
       "Never weaken TLS or certificate verification without explicit user authorization; prefer configuring the database CA certificate with a native host absolute path, not a shell-only path such as /tmp on Windows.",
-      "StateQL query output already includes preview rows in model context as columns plus row arrays. Call StateQL rows only when next_offset is present or needed rows are missing, starting from next_offset instead of offset 0.",
-      "Reuse StateQL result handles with filter, rows, count, and columns instead of rerunning queries.",
+      "StateQL query output already includes preview rows in model context as columns plus row arrays. Call StateQL rows only when next_offset is present, needed rows are missing, or column projection is needed; use columns to select only the needed fields. Start additional pages from next_offset instead of offset 0.",
+      "Reuse StateQL result handles with filter, rows, count, columns, and summarize instead of rerunning queries. summarize returns per-column null and distinct counts and min/max values from the materialized result.",
       "Use StateQL plan before consequential writes when practical; never set replay, unbounded, or destructive overrides without explicit user authorization.",
       "Use mongo.query for bounded find or aggregate reads and mongo.plan before consequential MongoDB writes; use mongo.exec only with explicit user authorization.",
       "Use history_origin=user to filter Database panel history retrieval without changing the command origin.",
