@@ -1,5 +1,38 @@
 [
   {
+    "version": "3.5.5",
+    "date": "Oct 19, 2026",
+    "title": "Clearer project trust and reliable extension settings",
+    "summary": "A maintenance release brings project trust approval into the conversation, keeps trust and extension state scoped to the active session, and fixes idle-session checks for extension changes.",
+    "notes": [
+      "Added an inline project-trust prompt that grants trust and reloads project resources, while blocking prompt submission until trust is granted.",
+      "Loaded the extension catalog without opening Settings and keyed its snapshot by session ID and generation so another session's trust state is not reused.",
+      "Moved idle-session checks before settings updates so trust changes, extension enablement, and package installation or removal work while idle and remain blocked during active runs."
+    ]
+  },
+  {
+    "version": "3.5.4",
+    "date": "Oct 17, 2026",
+    "title": "StateQL result summaries and durable Linux credentials",
+    "summary": "A maintenance release upgrades StateQL to 0.17.0, adds column projection and summaries for saved results, and uses Linux Secret Service for persistent credentials.",
+    "notes": [
+      "Upgraded StateQL from 0.15.1 to 0.17.0.",
+      "Added optional column selection to StateQL rows and a summarize command for per-column null and distinct counts and minimum and maximum values, reusing materialized result handles without rerunning queries.",
+      "Validated projection and summary inputs and added regression coverage for projected rows, summary statistics, and preserving the original materialized result.",
+      "Upgraded the OS keyring dependency to 2.1.1 and explicitly selected Linux Secret Service for database and GitHub credentials, avoiding the keyutils fallback that loses credentials after reboot; remembering passwords on Linux requires a Secret Service provider."
+    ]
+  },
+  {
+    "version": "3.5.3",
+    "date": "Oct 16, 2026",
+    "title": "StateQL maintenance update",
+    "summary": "A maintenance release upgrades StateQL to 0.15.1.",
+    "notes": [
+      "Upgraded StateQL from 0.15.0 to 0.15.1.",
+      "Corrected the 3.5.2 release notes to identify its StateQL upgrade as 0.15.0."
+    ]
+  },
+  {
     "version": "3.5.2",
     "date": "Oct 16, 2026",
     "title": "Leaner StateQL output for the model",

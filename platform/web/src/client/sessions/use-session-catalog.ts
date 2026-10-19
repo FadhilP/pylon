@@ -73,14 +73,14 @@ function useSessionResource<T>(live: RuntimeStoreSnapshot, resource: SessionReso
   return loading;
 }
 
-/**
- * The installed packages, extensions, skills, and hook settings for the selected session,
- * plus the per-area busy flags the settings dialog drives.
- */
 export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: boolean, reportError: ReportError) {
   const [packages, setPackages] = useState<PackageSummary[]>([]);
   const [packageBusy, setPackageBusy] = useState("");
-  const [extensions, setExtensions] = useState<ExtensionListSnapshot>();
+  const sessionKey = `${live.runtime?.sessionId}:${live.runtime?.sessionGeneration}`;
+  const [extensionCatalog, setExtensionCatalog] = useState<{ sessionKey: string; snapshot: ExtensionListSnapshot }>();
+  const extensions = extensionCatalog?.sessionKey === sessionKey ? extensionCatalog.snapshot : undefined;
+  const setExtensions = (snapshot: ExtensionListSnapshot | undefined) =>
+    setExtensionCatalog(snapshot ? { sessionKey, snapshot } : undefined);
   const [extensionBusy, setExtensionBusy] = useState("");
   const [skills, setSkills] = useState<SkillListSnapshot>();
   const [hookSettings, setHookSettings] = useState<HookSettingsReadModel>();
@@ -109,7 +109,7 @@ export function useSessionCatalog(live: RuntimeStoreSnapshot, settingsOpen: bool
     stale: /session changed while listing extensions|extension list is stale/i,
     fallback: "Unable to list extensions",
     reportError,
-  }, settingsOpen);
+  });
 
   const skillsLoading = useSessionResource(live, {
     load: () => runtimeStore.listSkills(),

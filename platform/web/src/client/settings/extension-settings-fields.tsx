@@ -9,6 +9,7 @@ export function ExtensionSettingsFields({
   projects,
   loading,
   disabled,
+  trustDisabled,
   onToggle,
   onInstall,
   onRemove,
@@ -19,6 +20,7 @@ export function ExtensionSettingsFields({
   projects: { id: string; label: string }[];
   loading: boolean;
   disabled: boolean;
+  trustDisabled: boolean;
   onToggle: (extension: NativeExtensionReadModel, enabled: boolean) => Promise<void>;
   onInstall: (source: string, scope: "user" | "project", projectId?: string) => Promise<void>;
   onRemove: (source: string, scope: "user" | "project") => Promise<void>;
@@ -83,7 +85,7 @@ export function ExtensionSettingsFields({
                   : "Project .pi resources are blocked until you trust this folder."}
               </p>
             </div>
-            <button type="button" disabled={disabled} onClick={() => void run(() => onTrust(!snapshot.projectTrusted))}>
+            <button type="button" disabled={trustDisabled} onClick={() => void run(() => onTrust(!snapshot.projectTrusted))}>
               {snapshot.projectTrusted ? "Revoke trust" : "Trust project"}
             </button>
           </header>

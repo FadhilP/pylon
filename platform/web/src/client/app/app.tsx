@@ -374,7 +374,8 @@ export function App() {
       ? Boolean(continuitySettings.memoryReviewer?.model)
       : undefined;
   const stateqlEnabled = activePackages.has("pi-stateql");
-  const git = useGitWorkspace(live, reference === "git" || surface === "review");
+  const projectTrusted = !!extensions && (!extensions.projectTrustRequired || extensions.projectTrusted);
+  const git = useGitWorkspace(live, projectTrusted && (reference === "git" || surface === "review"));
   const reviewAvailable = !reviewDismissed && (!!live.runtime?.workspace?.changedCount || !!git.state?.files.length || !!git.state?.operation);
   const navContext = useMemo<NavContext>(
     () => ({
@@ -1141,6 +1142,7 @@ export function App() {
       await action();
       await refreshExtensions();
     } catch (cause) {
+      await refreshExtensions().catch(() => undefined);
       reportError(cause, failure);
       throw cause;
     } finally {
@@ -1165,8 +1167,13 @@ export function App() {
       () => runtimeStore.removeExtensionPackage(source, scope),
       "Unable to remove extension package",
     );
-  const setProjectTrust = (trusted: boolean) =>
-    manageExtension("trust", () => runtimeStore.setProjectTrust(trusted), "Unable to update project trust");
+  const setProjectTrust = async (trusted: boolean) => {
+    await manageExtension("trust", () => runtimeStore.setProjectTrust(trusted), "Unable to update project trust");
+    setToast({
+      id: ++toastId.current,
+      message: "Project trust saved. Running sessions keep their loaded resources until reloaded.",
+    });
+  };
   const reloadExtensions = () =>
     manageExtension("reload", () => runtimeStore.reloadExtensions(), "Unable to reload extensions");
   const refreshModels = async () => {
@@ -1438,6 +1445,14 @@ export function App() {
             }
           : undefined
       }
+      projectTrust={
+        extensions?.projectTrustRequired && !extensions.projectTrusted
+          ? {
+              busy: Boolean(extensionBusy),
+              onTrust: () => setProjectTrust(true),
+            }
+          : undefined
+      }
       composerSessionSwitcher={{
         projectAvailable: live.runtime?.projectAvailable !== false,
         projectId: composerProject?.id,
@@ -1458,7 +1473,7 @@ export function App() {
         catalogRevision: live.sessionRevision ?? 0,
         canLoadCatalog:
           live.connection === "connected" && live.generation !== undefined && live.runtime?.ready !== false && !pendingSession,
-        branchAvailable: live.runtime?.workspace?.gitAvailable === true && !pendingSession,
+        branchAvailable: projectTrusted && live.runtime?.workspace?.gitAvailable === true && !pendingSession,
         unseenCompletions: live.unseenCompletions,
         busy: sessionBusy || projectBusy,
         deleting: sessionDeleting,
@@ -2064,6 +2079,7 @@ export function App() {
             Boolean(live.pendingUi) ||
             activeSessions.some(session => session.runtimeState === "running" || session.runtimeState === "attention")
           }
+          projectTrustDisabled={extensionBusy !== "" || live.connection !== "connected" || live.runtime?.ready !== true}
           loading={packagesLoading}
           extensionLoading={extensionsLoading}
           skillLoading={skillsLoading}

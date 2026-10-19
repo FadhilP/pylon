@@ -2030,8 +2030,8 @@ export class SessionRuntime {
     const manager = this.extensionManager;
     const runtime = this.requireRuntime();
     if (!manager) throw new Error("runtime is not ready");
+    if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
     return this.withSettingsUpdate(async () => {
-      if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
       await manager.setEnabled(input.extensionId, input.enabled);
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
@@ -2048,7 +2048,6 @@ export class SessionRuntime {
     const runtime = this.requireRuntime();
     if (!manager) throw new Error("runtime is not ready");
     return this.withSettingsUpdate(async () => {
-      if (!this.canSleep()) throw new Error("project trust can only change while the session is idle");
       await manager.setProjectTrusted(input.trusted);
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
@@ -2061,8 +2060,8 @@ export class SessionRuntime {
     const manager = this.extensionManager;
     const runtime = this.requireRuntime();
     if (!manager) throw new Error("runtime is not ready");
+    if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
     return this.withSettingsUpdate(async () => {
-      if (!this.canSleep()) throw new Error("extensions can only change while the session is idle");
       if (action === "install") await manager.install(input.source, input.scope);
       else await manager.remove(input.source, input.scope);
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };

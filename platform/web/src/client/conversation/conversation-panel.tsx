@@ -258,6 +258,7 @@ export function ConversationPanel({
   onDraftChange,
   pendingSession,
   composerSessionSwitcher,
+  projectTrust,
   onSelectAgent,
   agentColors,
   onOpenLogin,
@@ -277,6 +278,7 @@ export function ConversationPanel({
   onDraftChange?: (draft: string) => void;
   pendingSession?: PendingSessionView;
   composerSessionSwitcher?: ComposerSessionSwitcherProps;
+  projectTrust?: { busy: boolean; onTrust: () => Promise<void> };
   onSelectAgent?: (id?: string) => void;
   agentColors: AgentColorMap;
   onOpenLogin?: (provider?: string) => void;
@@ -387,7 +389,7 @@ export function ConversationPanel({
   const stopping = runtime?.conversation.stopping === true;
   const queuedItems = runtime?.conversation.queue.items ?? [];
   const pendingUi = live.pendingUi?.surface === "database" ? undefined : live.pendingUi;
-  const composerBlocked = !draftingOnly && Boolean(pendingUi);
+  const composerBlocked = !draftingOnly && Boolean(pendingUi || projectTrust);
   const hasDraft = Boolean(message.trim() || images.length || files.length || hasNotes);
   const sending = submitting && !edit && !undo && !fork;
   const planAvailable =
@@ -1321,6 +1323,23 @@ export function ConversationPanel({
             })}
         </div>
       )}
+      {!draftingOnly && projectTrust && (
+        <section className="composer-surface ui-request ui-request-inline" aria-label="Project trust">
+          <header className="ui-request-header">
+            <strong>Trust this project?</strong>
+          </header>
+          <p>Project resources and Git are blocked. Trusting this folder allows code to run with Pylon’s permissions.</p>
+          <div className="ui-request-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!connected || projectTrust.busy}
+              onClick={() => void projectTrust.onTrust().catch(() => undefined)}>
+              {projectTrust.busy ? "Trusting project…" : "Trust project"}
+            </button>
+          </div>
+        </section>
+      )}
       <RetainedUiDialog request={draftingOnly ? undefined : pendingUi} />
       {pendingSession && (
         <div className={`pending-session-draft-note is-${pendingSession.phase}`} role="status">
@@ -1329,7 +1348,7 @@ export function ConversationPanel({
         </div>
       )}
       <form
-        className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${(!draftingOnly && pendingUi) || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
+        className={`prompt-form${draftingOnly ? " is-drafting-only" : ""}${dropActive ? " is-drop-active" : ""}${composerBlocked || runtime?.commandResult || suggestions.length > 0 || fileSuggestions.length > 0 ? " is-joined" : ""}`}
         onSubmit={submit}
         onDragEnter={event => {
           event.preventDefault();

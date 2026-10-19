@@ -164,6 +164,7 @@ interface SettingsDialogProps {
   runtimePolicy?: RuntimePolicyReadModel;
   toolPolicies: ToolPolicyReadModel[];
   policyDisabled: boolean;
+  projectTrustDisabled: boolean;
   loading: boolean;
   extensionLoading: boolean;
   skillLoading: boolean;
@@ -220,6 +221,7 @@ export function SettingsDialog({
   runtimePolicy,
   toolPolicies,
   policyDisabled,
+  projectTrustDisabled,
   loading,
   extensionLoading,
   skillLoading,
@@ -1011,6 +1013,7 @@ export function SettingsDialog({
                 projects={projects}
                 loading={extensionLoading}
                 disabled={extensionBusy || policyDisabled}
+                trustDisabled={projectTrustDisabled}
                 onToggle={onToggleExtension}
                 onInstall={onInstallExtensionPackage}
                 onRemove={onRemoveExtensionPackage}

@@ -169,6 +169,80 @@ test("model catalog refresh reports provider failures", async () => {
   }
 });
 
+test("project trust ignores busy sibling sessions and reloads only an idle selected session", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  const effects: string[] = [];
+  let selectedIdle = true;
+  let trusted = false;
+  const selected = {
+    id: "selected",
+    queuedPrompts: [] as unknown[],
+    driver: {
+      canSleep: () => selectedIdle,
+      setProjectTrust: async (input: { trusted: boolean }) => {
+        trusted = input.trusted;
+        effects.push("save");
+      },
+      reloadExtensions: async () => { effects.push("selected reload"); },
+    },
+  };
+  internal.selectedId = selected.id;
+  internal.generation = 3;
+  internal.slots.set(selected.id, selected);
+  internal.slots.set("other", { driver: {
+    canSleep: () => false,
+    reloadExtensions: async () => { effects.push("other reload"); },
+  } });
+  internal.externalSpawnRuns.set("delegate", { state: "running" });
+
+  assert.deepEqual(await coordinator.setProjectTrust({ trusted: true }), {
+    cancelled: false, sessionId: selected.id, sessionGeneration: 3,
+  });
+  assert.equal(trusted, true);
+  assert.deepEqual(effects, ["save", "selected reload"]);
+
+  effects.length = 0;
+  selectedIdle = false;
+  await coordinator.setProjectTrust({ trusted: false });
+  assert.equal(trusted, false);
+  assert.deepEqual(effects, ["save"]);
+
+  effects.length = 0;
+  selectedIdle = true;
+  selected.queuedPrompts.push({});
+  await coordinator.setProjectTrust({ trusted: true });
+  assert.deepEqual(effects, ["save"]);
+
+  internal.lifecycleBusy = true;
+  await assert.rejects(coordinator.setProjectTrust({ trusted: false }), /operation is in progress/);
+  assert.equal(trusted, true);
+});
+
+test("project trust stays saved when the selected-session reload fails or is unavailable", async () => {
+  const coordinator = new RuntimeCoordinator();
+  const internal = coordinator as any;
+  let trusted = false;
+  const driver = {
+    canSleep: () => true,
+    setProjectTrust: async (input: { trusted: boolean }) => { trusted = input.trusted; },
+    reloadExtensions: async () => { throw new Error("reload failed"); },
+  };
+  internal.selectedId = "selected";
+  internal.generation = 4;
+  internal.slots.set("selected", { id: "selected", driver });
+
+  await assert.rejects(coordinator.setProjectTrust({ trusted: true }), /trust is saved, but this session could not reload/);
+  assert.equal(trusted, true);
+  assert.equal(internal.lifecycleBusy, false);
+
+  delete (driver as any).reloadExtensions;
+  assert.deepEqual(await coordinator.setProjectTrust({ trusted: false }), {
+    cancelled: false, sessionId: "selected", sessionGeneration: 4,
+  });
+  assert.equal(trusted, false);
+});
+
 test("private annotation storage is scoped by the selected server session and rejects lifecycle races", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-annotation-coordinator-"));
   const coordinator = new RuntimeCoordinator();

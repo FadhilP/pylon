@@ -1840,10 +1840,19 @@ export class RuntimeCoordinator implements PiDriver {
     );
   }
   async setProjectTrust(input: SetProjectTrustInput): Promise<ReplacementResult> {
-    return this.withExtensionLifecycle(
-      () =>
-        this.selected().driver.setProjectTrust?.(input) ?? Promise.reject(new Error("project trust is unavailable")),
-    );
+    return this.withLifecycle(async () => {
+      const slot = this.selected();
+      if (!slot.driver.setProjectTrust) throw new Error("project trust is unavailable");
+      await slot.driver.setProjectTrust(input);
+      if (slot.driver.reloadExtensions && this.slotCanSleep(slot)) {
+        try {
+          await slot.driver.reloadExtensions();
+        } catch {
+          throw new Error("Project trust is saved, but this session could not reload. Reload it when idle.");
+        }
+      }
+      return this.replacement(false);
+    });
   }
   async reloadExtensions(): Promise<ReplacementResult> {
     return this.withExtensionLifecycle(async () => {

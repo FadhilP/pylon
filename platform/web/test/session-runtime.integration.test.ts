@@ -466,6 +466,54 @@ test("agent_settled recovers missed agent_end state and abort does not latch sto
   }
 });
 
+test("project trust can change during a turn without reloading its active resources", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-project-trust-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const skillDir = join(cwd, ".agents", "skills", "project-only");
+  await Promise.all([mkdir(skillDir, { recursive: true }), mkdir(agentDir)]);
+  await writeFile(
+    join(skillDir, "SKILL.md"),
+    "---\nname: project-only\ndescription: Project trust regression fixture\n---\nReview this project.\n",
+  );
+  const driver = new SessionRuntime();
+
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+    const session = (driver as any).runtime.session;
+    const hasProjectSkill = async () => (await driver.listSkills()).skills.some(skill => skill.name === "project-only");
+    assert.equal((await driver.listExtensions()).projectTrusted, false);
+    assert.equal(await hasProjectSkill(), false);
+
+    session._isAgentRunActive = true;
+    session._emit({ type: "agent_start" });
+    await driver.setProjectTrust({ trusted: true });
+    assert.equal((await driver.listExtensions()).projectTrusted, true);
+    assert.equal(driver.runtimeState(), "running");
+    assert.equal(await hasProjectSkill(), false);
+    await assert.rejects(driver.reloadExtensions(), /only reload while the session is idle/);
+    session._isAgentRunActive = false;
+    session._emit({ type: "agent_end", messages: [] });
+
+    await driver.reloadExtensions();
+    assert.equal(await hasProjectSkill(), true);
+
+    session._isAgentRunActive = true;
+    session._emit({ type: "agent_start" });
+    await driver.setProjectTrust({ trusted: false });
+    assert.equal((await driver.listExtensions()).projectTrusted, false);
+    assert.equal(await hasProjectSkill(), true);
+    await assert.rejects(driver.reloadExtensions(), /only reload while the session is idle/);
+    session._isAgentRunActive = false;
+    session._emit({ type: "agent_end", messages: [] });
+    await driver.reloadExtensions();
+    assert.equal(await hasProjectSkill(), false);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("terminal status and completed todo progress follow the active turn", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-terminal-status-"));
   const cwd = join(root, "workspace"),
