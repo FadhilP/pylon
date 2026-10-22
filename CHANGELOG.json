@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.5.6",
+    "date": "Oct 22, 2026",
+    "title": "Database passwords shared with the stql CLI",
+    "summary": "A maintenance release upgrades StateQL to 0.19.0 and saves remembered database passwords in the StateQL OS credential store, so profiles saved in Pylon also connect from the stql CLI.",
+    "notes": [
+      "Upgraded StateQL from 0.17.0 to 0.19.0.",
+      "Changed remembered database passwords to save as StateQL `os:` password references, which the stql CLI reads without a second password prompt.",
+      "Kept existing `pylon:stateql:v1` passwords readable in Pylon; a profile moves to the shared store when you edit it and remember its password again.",
+      "Kept each shared password bound to its destination host, user, port, database, and query, ignoring TLS settings and the AWS RDS CA preset so the raw profile target and the materialized connection target match.",
+      "Kept Linux Secret Service as the store for shared passwords, and kept stale marking after an authentication failure.",
+      "Added regression coverage for routing `os:` references to the StateQL store and for keeping integration tests off the real OS keyring."
+    ]
+  },
+  {
     "version": "3.5.5",
     "date": "Oct 19, 2026",
     "title": "Clearer project trust and reliable extension settings",

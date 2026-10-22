@@ -1,4 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  deleteOsPassword,
+  invalidateOsPassword,
+  isOsPasswordRef,
+  readOsPassword,
+  saveOsPassword,
+} from "@fadhilp/stateql";
 
 const SERVICE = "works.earendil.pylon.stateql";
 const REFERENCE_PATTERN = /^pylon:stateql:v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -35,6 +42,21 @@ interface KeyringEntry {
 }
 
 export type KeyringEntryFactory = (service: string, account: string) => KeyringEntry;
+
+/** StateQL-owned `os:` password entries, which the stql CLI can also read. */
+export interface OsPasswordStore {
+  save(reference: string, target: string, password: string): Promise<void>;
+  read(reference: string, target: string): Promise<string | undefined>;
+  invalidate(reference: string): Promise<boolean>;
+  delete(reference: string): Promise<void>;
+}
+
+const stateqlOsPasswords: OsPasswordStore = {
+  save: saveOsPassword,
+  read: readOsPassword,
+  invalidate: invalidateOsPassword,
+  delete: deleteOsPassword,
+};
 
 interface StoredCredentialV1 {
   version: 1;
@@ -267,7 +289,10 @@ function legacyPassword(source: string): string | undefined {
 }
 
 export class OsStateQLCredentialVault implements StateQLCredentialVault {
-  constructor(private readonly entry: KeyringEntryFactory) {}
+  constructor(
+    private readonly entry: KeyringEntryFactory,
+    private readonly osPasswords: OsPasswordStore = stateqlOsPasswords,
+  ) {}
 
   async save(reference: string, target: string | undefined, source: string, signal?: AbortSignal): Promise<boolean> {
     if (!isStateQLCredentialReference(reference) || signal?.aborted) return false;
@@ -308,6 +333,15 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
   }
 
   async savePassword(reference: string, target: string, password: string, signal?: AbortSignal): Promise<boolean> {
+    if (isOsPasswordRef(reference)) {
+      if (signal?.aborted) return false;
+      try {
+        await this.osPasswords.save(reference, target, password);
+        return !signal?.aborted;
+      } catch {
+        return false;
+      }
+    }
     if (!isStateQLCredentialReference(reference) || signal?.aborted || !validPassword(password)) return false;
     const fingerprint = passwordFingerprint(target);
     if (!fingerprint) return false;
@@ -323,6 +357,15 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
   }
 
   async resolvePassword(reference: string, target: string, signal?: AbortSignal): Promise<string | undefined> {
+    if (isOsPasswordRef(reference)) {
+      if (signal?.aborted) return undefined;
+      try {
+        const password = await this.osPasswords.read(reference, target);
+        return signal?.aborted ? undefined : password;
+      } catch {
+        return undefined;
+      }
+    }
     if (!isStateQLCredentialReference(reference) || signal?.aborted) return undefined;
     const expected = passwordFingerprint(target);
     if (!expected) return undefined;
@@ -352,6 +395,14 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
   }
 
   async invalidate(reference: string, signal?: AbortSignal): Promise<boolean> {
+    if (isOsPasswordRef(reference)) {
+      if (signal?.aborted) return false;
+      try {
+        return (await this.osPasswords.invalidate(reference)) && !signal?.aborted;
+      } catch {
+        return false;
+      }
+    }
     if (!isStateQLCredentialReference(reference) || signal?.aborted) return false;
     try {
       const entry = this.entry(SERVICE, reference);
@@ -365,6 +416,15 @@ export class OsStateQLCredentialVault implements StateQLCredentialVault {
   }
 
   async forget(reference: string, signal?: AbortSignal): Promise<boolean> {
+    if (isOsPasswordRef(reference)) {
+      if (signal?.aborted) return false;
+      try {
+        await this.osPasswords.delete(reference);
+        return !signal?.aborted;
+      } catch {
+        return false;
+      }
+    }
     if (!isStateQLCredentialReference(reference) || signal?.aborted) return false;
     try {
       const deleted = await this.entry(SERVICE, reference).deleteCredential(signal);

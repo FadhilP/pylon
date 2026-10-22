@@ -7,7 +7,7 @@ import test from "node:test";
 import { StateQL } from "@fadhilp/stateql";
 import stateqlExtension from "../../../packages/pi-stateql/extensions/pi-stateql.ts";
 import { databasePasswordSubmission } from "../src/client/database/database-password-submission.ts";
-import { OsStateQLCredentialVault } from "../src/server/database/stateql-credential-vault.ts";
+import { OsStateQLCredentialVault, type OsPasswordStore } from "../src/server/database/stateql-credential-vault.ts";
 import { RemoteUiBridge, type UiRequest } from "../src/server/runtime/remote-ui-bridge.ts";
 
 // These are driver-boundary integration tests: pg is intercepted before it can open a socket.
@@ -31,7 +31,30 @@ function memoryKeyring(values = new Map<string, string>()) {
         return values.delete(`${service}\0${account}`);
       },
     }),
+    // Stands in for StateQL's OS store so tests never write to the real keyring.
+    osPasswords: {
+      async save(reference, _target, password) {
+        values.set(`stql\0${reference}`, JSON.stringify({ version: 2, fingerprint: "memory", password }));
+      },
+      async read(reference) {
+        const record = JSON.parse(values.get(`stql\0${reference}`) ?? "null");
+        return record && !record.stale ? record.password : undefined;
+      },
+      async invalidate(reference) {
+        const record = JSON.parse(values.get(`stql\0${reference}`) ?? "null");
+        if (!record) return false;
+        values.set(`stql\0${reference}`, JSON.stringify({ ...record, stale: true }));
+        return true;
+      },
+      async delete(reference) {
+        values.delete(`stql\0${reference}`);
+      },
+    } satisfies OsPasswordStore,
   };
+}
+
+function memoryVault(keyring = memoryKeyring()) {
+  return new OsStateQLCredentialVault(keyring.entry, keyring.osPasswords);
 }
 
 function extensionHarness(home: string) {
@@ -233,7 +256,7 @@ test("driver-boundary setup saves a password_ref only after real pg connect", { 
   const ca = join(home, "test-ca.pem");
   const secret = "p%@:/# Ü";
   const keyring = memoryKeyring();
-  const vault = new OsStateQLCredentialVault(keyring.entry);
+  const vault = memoryVault(keyring);
   const target = `postgres://ada@db.example.test:5432/app?sslmode=verify-full&sslrootcert=${encodeURIComponent(ca)}`;
   const ui = browserUi(vault, [secret], { formTarget: target });
   const pg = installPgBoundary(() => undefined);
@@ -265,7 +288,7 @@ test("driver-boundary setup saves a password_ref only after real pg connect", { 
     assert.equal(profile.target, target);
     assert.equal(typeof profile.password_ref, "string");
     assert.equal(JSON.stringify(profile).includes(secret), false);
-    const record = JSON.parse(keyring.values.get(`works.earendil.pylon.stateql\0${profile.password_ref}`) ?? "{}");
+    const record = JSON.parse(keyring.values.get(`stql\0${profile.password_ref}`) ?? "{}");
     assert.deepEqual(Object.keys(record).sort(), ["fingerprint", "password", "version"]);
     assert.equal(record.version, 2);
     assert.equal(record.password, secret);
@@ -313,7 +336,7 @@ test("driver-boundary setup saves a password_ref only after real pg connect", { 
 test("AWS RDS preset persists portably and reconnects with the packaged verified CA", { timeout: 20_000 }, async () => {
   const home = await mkdtemp(join(tmpdir(), "pylon-database-rds-ca-"));
   const secret = "rds-password";
-  const vault = new OsStateQLCredentialVault(memoryKeyring().entry);
+  const vault = memoryVault();
   const target = "postgresql://ada@rds.example.test/app?sslmode=verify-full&pylon_tls_ca=aws-rds";
   const ui = browserUi(vault, [secret], { formTarget: target });
   const pg = installPgBoundary(() => undefined);
@@ -361,7 +384,7 @@ test(
   async () => {
     const home = await mkdtemp(join(tmpdir(), "pylon-database-tls-"));
     const ca = join(home, "retry-ca.pem");
-    const vault = new OsStateQLCredentialVault(memoryKeyring().entry);
+    const vault = memoryVault();
     const ui = browserUi(vault, ["retry-secret"]);
     const pg = installPgBoundary(parameters => {
       if (parameters.ssl === false) return new Error("pg_hba.conf requires SSL; no encryption is permitted");
@@ -437,7 +460,7 @@ test(
     const home = await mkdtemp(join(tmpdir(), "pylon-database-legacy-"));
     const ca = join(home, "override-ca.pem");
     const keyring = memoryKeyring();
-    const vault = new OsStateQLCredentialVault(keyring.entry);
+    const vault = memoryVault(keyring);
     const ui = browserUi(vault, []);
     const pg = installPgBoundary(() => undefined);
     const harness = extensionHarness(home);
@@ -526,7 +549,7 @@ test(
   async () => {
     const home = await mkdtemp(join(tmpdir(), "pylon-database-save-failure-"));
     const keyring = memoryKeyring();
-    const vault = new OsStateQLCredentialVault(keyring.entry);
+    const vault = memoryVault(keyring);
     const ui = browserUi(vault, ["first", "second"]);
     const pg = installPgBoundary(() => undefined);
     const harness = extensionHarness(home);
@@ -656,7 +679,7 @@ test(
   async () => {
     const home = await mkdtemp(join(tmpdir(), "pylon-database-auth-"));
     const keyring = memoryKeyring();
-    const vault = new OsStateQLCredentialVault(keyring.entry);
+    const vault = memoryVault(keyring);
     const pg = installPgBoundary(parameters =>
       parameters.password === "bad" ? new Error("password authentication failed for user ada") : undefined,
     );

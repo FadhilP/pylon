@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { BatchCommand, CredentialRequest, Response, StateQLSnapshot } from "@fadhilp/stateql";
+import { createOsPasswordRef, type BatchCommand, type CredentialRequest, type Response, type StateQLSnapshot } from "@fadhilp/stateql";
 import type { StateQLPanelCommand } from "./stateql-command.ts";
 
 export type ConnectionSetupInput = Extract<StateQLPanelCommand, { command: "connection.setup" }>;
@@ -338,7 +338,7 @@ export async function runConnectionSetup(
       if (signal?.aborted) throw new Error("Connection completed, but saving was cancelled.");
       ui.setStatus?.(statusKey, "saving");
       if (input.target && input.remember && password !== undefined) {
-        newReference = `pylon:stateql:v1:${randomUUID()}`;
+        newReference = createOsPasswordRef();
         if (!(await ui.rememberStateQLPassword?.(newReference, connectionTarget, password, signal)))
           throw new Error("The password could not be saved in the OS vault. Settings were not saved.");
       }

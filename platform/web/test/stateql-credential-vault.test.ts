@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createOsPasswordRef } from "@fadhilp/stateql";
 import {
   createStateQLCredentialReference,
   isStateQLCredentialReference,
@@ -103,6 +104,52 @@ test("OS credential vault persists v2 passwords without connection URLs", async 
   assert.equal(await vault.savePassword(reference, "postgres://ada:secret@db.example.com/shop", "replacement"), false);
   assert.equal(await vault.savePassword(reference, "postgres://ada@db.example.com/shop?host=other", "replacement"), false);
   assert.equal(await vault.resolvePassword(reference, "postgres://ada@other.example.com/shop?application_name=pylon"), undefined);
+});
+
+test("OS credential vault stores os: passwords in the StateQL store the stql CLI reads", async () => {
+  const keyring = fakeKeyring();
+  const saved = new Map<string, string>();
+  const calls: string[] = [];
+  const vault = new OsStateQLCredentialVault(keyring.entry, {
+    async save(reference, target, password) {
+      calls.push(`save ${target}`);
+      saved.set(reference, password);
+    },
+    async read(reference, target) {
+      calls.push(`read ${target}`);
+      return saved.get(reference);
+    },
+    async invalidate(reference) {
+      calls.push("invalidate");
+      return saved.delete(reference);
+    },
+    async delete(reference) {
+      calls.push("delete");
+      saved.delete(reference);
+    },
+  });
+  const reference = createOsPasswordRef();
+  const target = "postgres://ada@db.example.com/shop?sslmode=verify-full";
+
+  assert.equal(await vault.savePassword(reference, target, "s3ntinel"), true);
+  assert.equal(await vault.resolvePassword(reference, target), "s3ntinel");
+  assert.equal(await vault.invalidate(reference), true);
+  assert.equal(await vault.resolvePassword(reference, target), undefined);
+  assert.equal(await vault.forget(reference), true);
+  assert.equal(await vault.save(reference, target, "postgres://ada:s3ntinel@db.example.com/shop"), false);
+  assert.equal(keyring.values.size, 0);
+  assert.deepEqual(calls, [`save ${target}`, `read ${target}`, "invalidate", `read ${target}`, "delete"]);
+
+  const failing = new OsStateQLCredentialVault(keyring.entry, {
+    save: () => Promise.reject(new Error("locked")),
+    read: () => Promise.reject(new Error("locked")),
+    invalidate: () => Promise.reject(new Error("locked")),
+    delete: () => Promise.reject(new Error("locked")),
+  });
+  assert.equal(await failing.savePassword(reference, target, "s3ntinel"), false);
+  assert.equal(await failing.resolvePassword(reference, target), undefined);
+  assert.equal(await failing.invalidate(reference), false);
+  assert.equal(await failing.forget(reference), false);
 });
 
 test("OS credential vault resolves empty and legacy passwords without rewriting v1 records", async () => {
