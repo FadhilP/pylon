@@ -1,11 +1,26 @@
 export type StateQLCommandOrigin = "legacy" | "user" | "model" | "system" | "api";
 
 export type StateQLMongoCommand =
-  | { operation: "find"; collection: string; filter?: Record<string, unknown>; options?: Record<string, unknown> }
+  | {
+      operation: "find";
+      collection: string;
+      filter?: Record<string, unknown>;
+      options?: Record<string, unknown>;
+      explain?: StateQLMongoExplain;
+    }
   | {
       operation: "aggregate";
       collection: string;
       pipeline: Array<Record<string, unknown>>;
+      options?: Record<string, unknown>;
+      explain?: StateQLMongoExplain;
+    }
+  | { operation: "countDocuments"; collection: string; filter?: Record<string, unknown>; options?: Record<string, unknown> }
+  | {
+      operation: "distinct";
+      collection: string;
+      field: string;
+      filter?: Record<string, unknown>;
       options?: Record<string, unknown>;
     }
   | { operation: "insertOne"; collection: string; document: Record<string, unknown>; options?: Record<string, never> }
@@ -34,7 +49,12 @@ export type StateQLMongoCommand =
       collection: string;
       filter: Record<string, unknown>;
       options?: Record<string, unknown>;
-    };
+    }
+  | { operation: "createIndex"; collection: string; keys: Record<string, unknown>; options?: Record<string, unknown> }
+  | { operation: "dropIndex"; collection: string; index: string };
+
+export type StateQLMongoExplain = "queryPlanner" | "executionStats" | "allPlansExecution";
+type StateQLMongoReadOperation = "find" | "aggregate" | "countDocuments" | "distinct";
 
 export type StateQLRedisCommand = { command: string; args?: string[] };
 export type StateQLCatalogKind = "table" | "view" | "collection" | "function" | "trigger" | "enum" | "key";
@@ -134,14 +154,14 @@ export type StateQLPanelCommand =
     }
   | {
       command: "mongo.query";
-      mongo: Extract<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      mongo: Extract<StateQLMongoCommand, { operation: StateQLMongoReadOperation }>;
       cache?: "auto" | "bypass" | "require";
       as?: string;
       timeout_ms?: number;
     }
   | {
       command: "mongo.exec";
-      mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      mongo: Exclude<StateQLMongoCommand, { operation: StateQLMongoReadOperation }>;
       replay?: boolean;
       idempotency_key?: string;
       allow_unbounded?: boolean;
@@ -150,7 +170,7 @@ export type StateQLPanelCommand =
     }
   | {
       command: "mongo.plan";
-      mongo: Exclude<StateQLMongoCommand, { operation: "find" | "aggregate" }>;
+      mongo: Exclude<StateQLMongoCommand, { operation: StateQLMongoReadOperation }>;
       allow_unbounded?: boolean;
       allow_destructive?: boolean;
       timeout_ms?: number;
@@ -201,7 +221,9 @@ const INSPECTION_KINDS = new Set(["schema", "table", "columns", "indexes", "cons
 const CACHE_POLICIES = new Set(["auto", "bypass", "require"]);
 const FORBIDDEN_MONGO_OPERATORS = new Set(["$out", "$merge", "$changeStream", "$where", "$function", "$accumulator"]);
 const UPDATE_PIPELINE_STAGES = new Set(["$addFields", "$set", "$project", "$unset", "$replaceRoot", "$replaceWith"]);
-const READ_OPERATIONS = new Set(["find", "aggregate"]);
+const READ_OPERATIONS = new Set(["find", "aggregate", "countDocuments", "distinct"]);
+const MONGO_EXPLAIN = new Set(["queryPlanner", "executionStats", "allPlansExecution"]);
+const MONGO_INDEX_TYPES = new Set<unknown>([1, -1, "text", "2dsphere", "2d", "hashed"]);
 const CATALOG_KINDS = new Set<StateQLCatalogKind>([
   "table",
   "view",
@@ -229,7 +251,6 @@ const REDIS_DISALLOWED_COMMANDS = new Set([
   "MONITOR",
   "CLIENT",
   "COMMAND",
-  "INFO",
   "FLUSHALL",
   "FLUSHDB",
   "KEYS",
@@ -247,6 +268,8 @@ const WRITE_OPERATIONS = new Set([
   "replaceOne",
   "deleteOne",
   "deleteMany",
+  "createIndex",
+  "dropIndex",
 ]);
 
 const ALLOWED_FIELDS: Record<StateQLPanelCommand["command"], readonly string[]> = {
@@ -425,6 +448,20 @@ function aggregateOptions(value: unknown): boolean {
   return mongoHint(value.hint) && mongoCollation(value.collation);
 }
 
+function mongoExplain(value: unknown): boolean {
+  return value === undefined || MONGO_EXPLAIN.has(value as string);
+}
+
+function indexOptions(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!plainRecord(value) || !safeMongoJson(value)) return false;
+  if (!hasOnlyKeys(value, ["name", "unique", "sparse", "expireAfterSeconds", "partialFilterExpression", "collation"])) return false;
+  if (value.name !== undefined && !boundedString(value.name, 500)) return false;
+  if (!optionalBoolean(value.unique) || !optionalBoolean(value.sparse)) return false;
+  if (value.expireAfterSeconds !== undefined && (!Number.isSafeInteger(value.expireAfterSeconds) || (value.expireAfterSeconds as number) < 0)) return false;
+  return optionalMongoDocument(value.partialFilterExpression) && mongoCollation(value.collation);
+}
+
 function emptyMongoOptions(value: unknown): boolean {
   return value === undefined || (plainRecord(value) && Object.keys(value).length === 0);
 }
@@ -458,16 +495,49 @@ function mongoCommandShape(value: Record<string, unknown>, operation: string): b
   switch (operation) {
     case "find":
       return (
-        hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
+        hasOnlyKeys(value, ["operation", "collection", "filter", "options", "explain"]) &&
         optionalMongoDocument(value.filter) &&
-        findOptions(value.options)
+        findOptions(value.options) &&
+        mongoExplain(value.explain)
       );
     case "aggregate":
       return (
-        hasOnlyKeys(value, ["operation", "collection", "pipeline", "options"]) &&
+        hasOnlyKeys(value, ["operation", "collection", "pipeline", "options", "explain"]) &&
         Array.isArray(value.pipeline) &&
         value.pipeline.every(stage => mongoDocument(stage) && Object.keys(stage).length === 1) &&
-        aggregateOptions(value.options)
+        aggregateOptions(value.options) &&
+        mongoExplain(value.explain)
+      );
+    case "countDocuments":
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "filter", "options"]) &&
+        optionalMongoDocument(value.filter) &&
+        findOptions(value.options) &&
+        (value.options === undefined || hasOnlyKeys(value.options as Record<string, unknown>, ["skip", "limit", "hint", "collation"]))
+      );
+    case "distinct":
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "field", "filter", "options"]) &&
+        boundedString(value.field, 500) &&
+        !value.field.startsWith("$") &&
+        optionalMongoDocument(value.filter) &&
+        (value.options === undefined ||
+          (plainRecord(value.options) && hasOnlyKeys(value.options, ["collation"]) && mongoCollation(value.options.collation)))
+      );
+    case "createIndex":
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "keys", "options"]) &&
+        mongoDocument(value.keys) &&
+        Object.keys(value.keys).length > 0 &&
+        Object.entries(value.keys).every(([field, type]) => !field.startsWith("$") && MONGO_INDEX_TYPES.has(type)) &&
+        indexOptions(value.options)
+      );
+    case "dropIndex":
+      return (
+        hasOnlyKeys(value, ["operation", "collection", "index"]) &&
+        boundedString(value.index, 500) &&
+        value.index !== "*" &&
+        value.index !== "_id_"
       );
     case "insertOne":
       return (

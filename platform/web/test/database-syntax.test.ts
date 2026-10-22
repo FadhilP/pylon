@@ -64,6 +64,15 @@ id = '20677';`,
   await assert.rejects(databaseStatementMode('PRAGMA table_info("users");', "sqlite"), /unsupported SQL statement type/i);
 });
 
+test("reads the browser parser cannot read go to StateQL as queries; unparsed writes stay blocked", async () => {
+  for (const query of [
+    "SELECT id FROM t WHERE payload @> $1::jsonb",
+    "/* audit */\n-- note\nWITH x AS MATERIALIZED (SELECT 1 AS a) SELECT a FROM x",
+    "EXPLAIN SELECT 1",
+  ]) assert.equal(await databaseStatementMode(query, "postgres"), "read", query);
+  await assert.rejects(databaseStatementMode("UPDATE t SET a = 1 WHERE payload @> $1::jsonb", "postgres"));
+});
+
 test("database worker handles SQL/JSON, bounds analysis and recovers without a database connection", { timeout: 15000 }, async () => {
   const url = new URL("../src/client/database/database-syntax.worker.ts", import.meta.url).href;
   const worker = new Worker(`

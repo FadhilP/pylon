@@ -13,6 +13,37 @@ test("accepts bounded catalog and Redis contracts", () => {
   );
 });
 
+test("accepts MongoDB counts, distinct values, explain, and index changes", () => {
+  for (const mongo of [
+    { operation: "countDocuments", collection: "users", filter: { active: true }, options: { limit: 10 } },
+    { operation: "distinct", collection: "users", field: "status", filter: { active: true } },
+    { operation: "find", collection: "users", explain: "executionStats" },
+  ]) {
+    assert.ok(parseStateQLPanelCommand({ command: "mongo.query", mongo }), mongo.operation);
+  }
+  for (const mongo of [
+    { operation: "createIndex", collection: "users", keys: { email: 1 }, options: { unique: true, name: "email_1" } },
+    { operation: "dropIndex", collection: "users", index: "email_1" },
+  ]) {
+    assert.ok(parseStateQLPanelCommand({ command: "mongo.exec", mongo }), mongo.operation);
+  }
+  for (const mongo of [
+    { operation: "countDocuments", collection: "users", options: { sort: { a: 1 } } },
+    { operation: "distinct", collection: "users", field: "$status" },
+    { operation: "find", collection: "users", explain: "verbose" },
+  ]) {
+    assert.equal(parseStateQLPanelCommand({ command: "mongo.query", mongo }), undefined, JSON.stringify(mongo));
+  }
+  for (const mongo of [
+    { operation: "createIndex", collection: "users", keys: { email: 2 } },
+    { operation: "dropIndex", collection: "users", index: "*" },
+    { operation: "dropIndex", collection: "users", index: "_id_" },
+  ]) {
+    assert.equal(parseStateQLPanelCommand({ command: "mongo.exec", mongo }), undefined, JSON.stringify(mongo));
+  }
+  assert.ok(parseStateQLPanelCommand({ command: "redis.query", redis: { command: "INFO", args: ["server"] } }));
+});
+
 test("accepts multiline SQL while rejecting non-whitespace control characters", () => {
   const sql = `UPDATE public.user_roles SET
 role_id = 'admin'::character varying WHERE

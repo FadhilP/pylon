@@ -17,7 +17,7 @@ const loaders: Record<SqlDialect, () => Promise<Parse>> = {
   }),
 };
 const parsers = new Map<SqlDialect, Promise<Parse>>();
-const READ_STATEMENTS = new Set(["select"]);
+const READ_STATEMENTS = new Set(["select", "explain", "show"]);
 const WRITE_STATEMENTS = new Set(["insert", "replace", "update", "delete", "create", "alter", "drop", "truncate"]);
 
 async function databaseParser(dialect: SqlDialect): Promise<Parse> {
@@ -50,12 +50,25 @@ function statementTypes(parsed: unknown, dialect: SqlDialect): string[] {
 }
 
 export async function databaseStatementMode(text: string, dialect: SqlDialect): Promise<DatabaseStatementMode> {
-  const types = statementTypes((await databaseParser(dialect))(text), dialect);
+  const parse = await databaseParser(dialect);
+  let parsed: unknown;
+  try {
+    parsed = parse(text);
+  } catch (error) {
+    // StateQL runs reads the parser cannot read in a read-only transaction, so it decides.
+    if (/^(?:select|with|explain|show|values)\b/i.test(withoutLeadingComments(text))) return "read";
+    throw error;
+  }
+  const types = statementTypes(parsed, dialect);
   if (types.length !== 1) throw new Error("Run exactly one SQL statement at a time.");
   const [type] = types;
   if (READ_STATEMENTS.has(type!)) return "read";
   if (WRITE_STATEMENTS.has(type!)) return "write";
   throw new Error(`Unsupported SQL statement type${type ? ` “${type}”` : ""}.`);
+}
+
+function withoutLeadingComments(text: string): string {
+  return text.replace(/^(?:\s+|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/, "");
 }
 
 export async function databaseSyntaxDiagnostics(text: string, dialect: SqlDialect): Promise<Diagnostic[]> {

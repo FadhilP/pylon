@@ -1,5 +1,19 @@
 [
   {
+    "version": "3.5.7",
+    "date": "Oct 22, 2026",
+    "title": "Wider SQL reads and common MongoDB and Redis commands",
+    "summary": "A maintenance release upgrades StateQL to 0.20.0, runs SQL reads that the browser parser cannot read through StateQL, and allows the common MongoDB and Redis commands that StateQL now supports.",
+    "notes": [
+      "Upgraded StateQL from 0.19.0 to 0.20.0.",
+      "Sent `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, and `VALUES` statements that the browser SQL parser cannot read to StateQL as queries, where the database checks them in a read-only transaction; unparsed writes stay blocked.",
+      "Allowed MongoDB `countDocuments`, `distinct`, and `explain` on `find` and `aggregate` as reads, and `createIndex` and `dropIndex` as writes; `dropIndex` rejects `*` and `_id_`.",
+      "Allowed Redis reads `HGETALL`, `HLEN`, `SMEMBERS`, `SCARD`, `SISMEMBER`, `ZRANGE`, `ZCARD`, `ZSCORE`, `LLEN`, `STRLEN`, `DBSIZE`, and `INFO`.",
+      "Allowed Redis writes `UNLINK`, `EXPIRE`, `PEXPIRE`, `PERSIST`, `INCR`, `INCRBY`, `DECR`, `DECRBY`, and `HINCRBY`, plus multi-key `DEL`, multi-field `HSET`, and `SET` with `EX`, `PX`, `NX`, or `XX`.",
+      "Added regression coverage for the SQL read fallback and the new MongoDB and Redis command shapes."
+    ]
+  },
+  {
     "version": "3.5.6",
     "date": "Oct 22, 2026",
     "title": "Database passwords shared with the stql CLI",

@@ -87,7 +87,7 @@ const DIRECT_WRITE_COMMANDS = new Set<StateQLCommandInput["command"]>([
   "transaction.commit",
   "transaction.rollback",
 ]);
-const MONGO_READ_OPERATIONS = new Set(["find", "aggregate"]);
+const MONGO_READ_OPERATIONS = new Set(["find", "aggregate", "countDocuments", "distinct"]);
 const MONGO_WRITE_OPERATIONS = new Set([
   "insertOne",
   "insertMany",
@@ -96,12 +96,16 @@ const MONGO_WRITE_OPERATIONS = new Set([
   "replaceOne",
   "deleteOne",
   "deleteMany",
+  "createIndex",
+  "dropIndex",
 ]);
 const REDIS_READ_COMMANDS = new Set([
   "GET", "MGET", "TYPE", "EXISTS", "TTL", "PTTL", "HGET", "HMGET", "LRANGE", "SCAN", "HSCAN", "SSCAN", "ZSCAN",
+  "HGETALL", "HLEN", "SMEMBERS", "SCARD", "SISMEMBER", "ZRANGE", "ZCARD", "ZSCORE", "LLEN", "STRLEN", "DBSIZE", "INFO",
 ]);
 const REDIS_WRITE_COMMANDS = new Set([
-  "SET", "DEL", "HSET", "HDEL", "LPUSH", "RPUSH", "SADD", "SREM", "ZADD", "ZREM",
+  "SET", "DEL", "UNLINK", "HSET", "HDEL", "LPUSH", "RPUSH", "SADD", "SREM", "ZADD", "ZREM",
+  "EXPIRE", "PEXPIRE", "PERSIST", "INCR", "INCRBY", "DECR", "DECRBY", "HINCRBY",
 ]);
 
 function nativeStatementMode(driver: Extract<DatabaseDriver, "mongodb" | "redis">, value: unknown): DatabaseStatementMode {
