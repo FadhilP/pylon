@@ -231,7 +231,6 @@ const eventNames = [
   "operational.pi-continuity:state-change",
   "operational.pi-papercut:state-change",
   "operational.pi-timeline:state-change",
-  "operational.pi-sieve:state-change",
 ];
 const HISTORY_MUTATION_EVENTS = new Set([
   "message.start",

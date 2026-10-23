@@ -11,7 +11,7 @@ Pylon is optimized for **cost efficiency and output quality rather than speed**.
 - **Deterministic compaction**: Continuity intercepts manual and automatic `/compact` and rebuilds context from structured session state (goal, plan, todos, constraints, verification, file activity) instead of asking a model to summarize. An optional Compaction Reviewer can refine the result, and any failure falls back to the deterministic one.
 - **Specialized subagents**: Advisor (tool-free reasoning for architecture and failure recovery), Scout (bounded repo and public-web reconnaissance), Grunt (delegated implementation in an isolated Git worktree), and Spawn (resumable private threads and child sessions). Each has its own model, so cheap models do the volume and strong models do the decisions.
 - **File indexing**: Discover keeps a machine-local SQLite index of Git-tracked source files, refreshed on session start and reconciled per turn, backing `symbol_search` and `code_search` so lookups don't cost a full-repo grep. Repositories shared by several workspaces are indexed once.
-- **Bounded context**: Sieve trims old bulky tool output from outbound context without touching stored messages, Discover keeps optional tool schemas deferred until `search_tools` activates them, and every package caps its own output.
+- **Bounded context**: Discover keeps optional tool schemas deferred until `search_tools` activates them, and every package caps its own output.
 - **Checkpoints and safety**: Timeline takes Git-backed filesystem checkpoints tied to each prompt so you can list, restore, or fork them; Guard intercepts destructive shell and file operations and requires confirmation.
 - **Verification built in**: Verify detects and runs your existing project checks under a time and output budget, and task completion is gated on the result.
 - **Planning and task lists**: Explicit plan mode with structured clarifications, a visible task list, and optional `/plan review`.
@@ -68,7 +68,6 @@ Use each command without arguments to show status; `set provider/model[:thinking
 | [pi-scout](./packages/pi-scout) | Bounded repository reconnaissance and isolated public-web research. |
 | [pi-spawn](./packages/pi-spawn) | Private resumable subagent threads and first-class child sessions. |
 | [pi-discover](./packages/pi-discover) | Indexes sources, searches the repo and past Pi sessions, and activates deferred tools via `search_tools`. |
-| [pi-sieve](./packages/pi-sieve) | Trims old bulky tool output from outbound context, leaving stored messages intact. |
 | [pi-timeline](./packages/pi-timeline) | Git-backed checkpoints per prompt: list, restore, fork, clear. |
 | [pi-guard](./packages/pi-guard) | Confirms or blocks destructive shell and file operations. |
 | [pi-verify](./packages/pi-verify) | Finds and runs your project's existing checks with bounded time and output. |

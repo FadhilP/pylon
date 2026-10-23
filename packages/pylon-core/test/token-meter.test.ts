@@ -72,7 +72,7 @@ test("counts each completed tool call once across rebuild and events", () => {
   assert.equal(meter.seenCallIds.size, 1);
 });
 
-test("attributes child model usage, context hashes, recalls, verification, and session cost", () => {
+test("attributes child model usage, context hashes, verification, and session cost", () => {
   const meter = meterFromBranch([
     message("assistant", {
       role: "assistant",
@@ -84,7 +84,6 @@ test("attributes child model usage, context hashes, recalls, verification, and s
           name: "advisor",
           arguments: { request: "review this", evidence: [{ path: "a.ts", start: 1, end: 2 }] },
         },
-        { type: "toolCall", id: "recall-1", name: "sieve_recall", arguments: { toolCallId: "old" } },
       ],
     }),
     message("advisor-result", {
@@ -98,14 +97,6 @@ test("attributes child model usage, context hashes, recalls, verification, and s
         callNumber: 1,
         usage: { input: 100, output: 20, cacheRead: 50, cacheWrite: 5, cost: 0.25 },
       },
-    }),
-    message("recall-result", {
-      role: "toolResult",
-      toolCallId: "recall-1",
-      toolName: "sieve_recall",
-      content: [{ type: "text", text: "restored" }],
-      isError: false,
-      details: { found: true },
     }),
     { type: "custom", customType: "pi-verify-result", data: { version: 1, runId: "run-1", state: "passed" } },
     { type: "custom", customType: "pi-verify-result", data: { version: 1, runId: "run-1", state: "passed" } },
@@ -126,8 +117,6 @@ test("attributes child model usage, context hashes, recalls, verification, and s
   });
   assert.equal(meter.byContext.get("pi-advisor/request")?.records, 1);
   assert.equal(meter.byContext.get("pi-advisor/request")?.hashes.size, 1);
-  assert.equal(meter.quality.sieveRecalls, 1);
-  assert.equal(meter.quality.sieveRecalledChars, 8);
   assert.equal(meter.quality.verification.get("passed"), 1);
   const report = formatTokenMeter(meter);
   assert.match(report, /pi-advisor: 1 calls/);

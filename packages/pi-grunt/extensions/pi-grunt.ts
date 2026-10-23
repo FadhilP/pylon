@@ -48,7 +48,6 @@ import { requestDelegateName } from "pylon-core/delegate-names";
 import { composePackagePrompt } from "pylon-core/package-settings";
 
 const LINE_EDIT_EXTENSION = fileURLToPath(import.meta.resolve("pylon-core/extensions/line-edit.ts"));
-const SIEVE_EXTENSION = fileURLToPath(import.meta.resolve("pi-sieve/extensions/pi-sieve.ts"));
 
 const HEARTBEAT_MS = 1000;
 
@@ -486,13 +485,11 @@ export default function gruntExtension(pi: ExtensionAPI, runWorker = runPi, retr
               "--no-extensions",
               "--extension",
               LINE_EDIT_EXTENSION,
-              "--extension",
-              SIEVE_EXTENSION,
               "--no-skills",
               "--no-prompt-templates",
               "--no-context-files",
               "--tools",
-              "read,grep,find,ls,edit,write,bash,sieve_recall",
+              "read,grep,find,ls,edit,write,bash",
               "--model",
               modelName(model),
               "--thinking",

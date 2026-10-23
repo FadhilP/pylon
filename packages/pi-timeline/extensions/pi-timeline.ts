@@ -1040,7 +1040,14 @@ export default function timelineExtension(
     if (!reuseSessionLease) session.releaseLease = await startSessionGc(artifactRoot, session.id);
     session.ephemeral = !ctx.sessionManager.getSessionFile?.();
     await load(ctx);
-    await establishSessionBaseline(ctx);
+    // tool_call, checkpoint and shutdown await baselinePending, so startup does not need to.
+    const generation = session.generation;
+    void establishSessionBaseline(ctx).then(
+      () => {
+        if (session.generation === generation) publishState();
+      },
+      () => {},
+    );
     checkpoints.paired = false;
     naming.generation++;
     naming.inFlight = undefined;

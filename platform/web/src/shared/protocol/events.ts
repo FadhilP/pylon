@@ -481,83 +481,6 @@ export interface ToolsReadModel {
   policies: ToolPolicyReadModel[];
 }
 
-export interface SieveToolTransformStatsReadModel {
-  scanned: number;
-  transformed: number;
-  sourceChars: number;
-  retainedChars: number;
-  netCharsSaved: number;
-}
-
-export interface SieveTransformStatsReadModel {
-  scanned: number;
-  transformed: number;
-  omittedChars: number;
-  netCharsSaved: number;
-  transformedBy: {
-    ageThreshold: number;
-    budget: number;
-    activeThreshold: number;
-    staleRead: number;
-    duplicate: number;
-    errorCap: number;
-    mixedText: number;
-  };
-  byTool: Record<string, SieveToolTransformStatsReadModel>;
-}
-
-export interface SieveReadModel {
-  availability: FeatureState;
-  mode?: "enabled" | "observe" | "disabled";
-  projectionMode?: "stable" | "legacy" | "standard-v2";
-  threshold?: number;
-  activePruning?: boolean;
-  latestMode?: "enabled" | "observe";
-  latest?: SieveTransformStatsReadModel;
-  cumulativeActual?: SieveTransformStatsReadModel;
-  cumulativeProjected?: SieveTransformStatsReadModel;
-  recalls?: number;
-  recalledChars?: number;
-  recallsByTool?: Record<string, { recalls: number; recalledChars: number }>;
-  epoch?: {
-    id?: string;
-    reason?: string;
-    startedAt?: string;
-    promptFingerprint?: string;
-    frozenResultCount: number;
-    frozenSourceChars: number;
-    frozenRetainedChars: number;
-    rolloverEligibleRetainedChars: number;
-    recoverableEntries: number;
-  };
-  stability?: {
-    newProjections: number;
-    projectionCacheHits: number;
-    recoverableEntries: number;
-    explicitReflows: number;
-    softBudgetExceedances: number;
-    prefixChurnViolations: number;
-    estimatedInvalidatedChars: number;
-    earliestChangedPriorMessageIndex?: number;
-    standardComparisons?: number;
-    standardPrefixChurn?: number;
-    standardEarliestChangedPriorMessageIndex?: number;
-    standardEstimatedInvalidatedChars?: number;
-    standardChangesByKind?: {
-      activeThreshold: number;
-      ageThreshold: number;
-      budget: number;
-      staleRead: number;
-      duplicate: number;
-      errorCap: number;
-      history: number;
-    };
-  };
-  contextUsagePercent?: number;
-  updatedAt?: string;
-  error?: string;
-}
-
 export interface RuntimeHealthReadModel {
   status: "healthy" | "degraded" | "unavailable";
   issues: string[];
@@ -571,7 +494,6 @@ export interface OperationalReadModel {
   papercuts: PapercutSummaryReadModel;
   timeline: TimelineReadModel;
   tools: ToolsReadModel;
-  sieve: SieveReadModel;
   health: RuntimeHealthReadModel;
 }
 

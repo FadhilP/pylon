@@ -34,8 +34,6 @@ export interface ContextUsage {
 }
 
 export interface QualityUsage {
-  sieveRecalls: number;
-  sieveRecalledChars: number;
   verification: Map<string, number>;
 }
 
@@ -107,7 +105,7 @@ export function createTokenMeter(): TokenMeter {
     seenContextHashes: new Map(),
     seenTelemetryIds: new Set(),
     seenVerificationIds: new Set(),
-    quality: { sieveRecalls: 0, sieveRecalledChars: 0, verification: new Map() },
+    quality: { verification: new Map() },
   };
 }
 
@@ -186,14 +184,6 @@ const MODEL_TOOLS: Record<string, { packageName: string; context: string[] }> = 
 
 function recordDerivedTelemetry(meter: TokenMeter, result: ToolResultLike): void {
   const details = result.details ?? {};
-  if (result.toolName === "sieve_recall" && details.found === true) {
-    meter.quality.sieveRecalls++;
-    meter.quality.sieveRecalledChars += result.content.reduce(
-      (sum, part) => sum + (part.type === "text" ? (part.text?.length ?? 0) : 0),
-      0,
-    );
-    return;
-  }
   const modelTool = MODEL_TOOLS[result.toolName];
   if (!modelTool || !details.usage || typeof details.usage !== "object") return;
   const turns = Array.isArray(details.turns) ? details.turns.length : finite(details.turns) || 1;
@@ -432,7 +422,7 @@ export function formatTokenMeter(meter: TokenMeter, toolLimit = Number.POSITIVE_
     ...(packageLines.length ? packageLines : ["none"]),
     "Context sections (counts and hashes only):",
     ...(contextLines.length ? contextLines : ["none"]),
-    `Quality: sieve recalls ${meter.quality.sieveRecalls}; restored ~${estimatedTokens(meter.quality.sieveRecalledChars)} tokens; verification ${verification}`,
+    `Quality: verification ${verification}`,
     `Total session model cost: $${(provider.cost + childCost).toFixed(4)}`,
   ].join("\n");
 }

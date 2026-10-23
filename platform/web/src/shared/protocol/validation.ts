@@ -68,9 +68,6 @@ const toolStatuses = new Set(["running", "completed", "failed", "attention"]);
 const delegatedRunStatuses = new Set(["running", "completed", "failed", "attention"]);
 const healthStatuses = new Set(["healthy", "degraded", "unavailable"]);
 const policyToggles = new Set(["inherit", "enabled", "disabled"]);
-const sieveModes = new Set(["enabled", "observe", "disabled"]);
-const sieveLatestModes = new Set(["enabled", "observe"]);
-const sieveProjectionModes = new Set(["stable", "legacy", "standard-v2"]);
 const spawnExecutionActions = new Set(["create", "continue", "adopt"]);
 
 const usageAgents = new Set(["main", "advisor", "grunt", "scout", "private", "other", "unknown"]);
@@ -573,22 +570,6 @@ export function validPackageSettings(value: unknown): value is PackageSettingsRe
             (profile.thinking === undefined || thinkingLevels.has(String(profile.thinking))))
         );
       })
-    );
-  }
-  if (value.kind === "sieve") {
-    return (
-      typeof value.activePruning === "boolean" &&
-      (value.projectionMode === "stable" ||
-        value.projectionMode === "legacy" ||
-        value.projectionMode === "standard-v2") &&
-      Number.isSafeInteger(value.threshold) &&
-      (value.threshold as number) >= 1_000 &&
-      (value.threshold as number) <= 50_000 &&
-      Number.isSafeInteger(value.rolloverHighMultiplier) &&
-      Number.isSafeInteger(value.rolloverLowMultiplier) &&
-      (value.rolloverLowMultiplier as number) >= 1 &&
-      (value.rolloverHighMultiplier as number) <= 64 &&
-      (value.rolloverHighMultiplier as number) > (value.rolloverLowMultiplier as number)
     );
   }
   if (value.kind === "timeline") {
@@ -2309,126 +2290,6 @@ const validMemoryNote = (note: unknown, expectedScope: "user" | "project") =>
   typeof note.sourceSummary === "string" &&
   note.sourceSummary.length <= 500;
 
-/** Sieve stats blocks all share the same non-negative-integer shape. */
-function validSieveStats(value: unknown): boolean {
-  if (!record(value) || !record(value.transformedBy) || !record(value.byTool) || Object.keys(value.byTool).length > 33)
-    return false;
-  const transformedBy = value.transformedBy;
-  const toolStats = Object.entries(value.byTool).every(
-    ([name, usage]) =>
-      record(usage) &&
-      /^[a-zA-Z0-9_-]{1,64}$/.test(name) &&
-      ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every(
-        key => Number.isSafeInteger(usage[key]) && (usage[key] as number) >= 0,
-      ),
-  );
-  return (
-    toolStats &&
-    ["scanned", "transformed", "omittedChars", "netCharsSaved"].every(
-      key => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0,
-    ) &&
-    ["ageThreshold", "budget", "activeThreshold", "staleRead", "duplicate", "errorCap", "mixedText"].every(
-      key => Number.isSafeInteger(transformedBy[key]) && (transformedBy[key] as number) >= 0,
-    )
-  );
-}
-
-function validSieve(sieve: Record<string, unknown>): boolean {
-  if (
-    !sieveModes.has(String(sieve.mode)) ||
-    !sieveProjectionModes.has(String(sieve.projectionMode)) ||
-    !Number.isSafeInteger(sieve.threshold) ||
-    (sieve.threshold as number) < 1_000 ||
-    typeof sieve.activePruning !== "boolean" ||
-    !sieveLatestModes.has(String(sieve.latestMode)) ||
-    !validSieveStats(sieve.latest) ||
-    !validSieveStats(sieve.cumulativeActual) ||
-    !validSieveStats(sieve.cumulativeProjected) ||
-    !Number.isSafeInteger(sieve.recalls) ||
-    (sieve.recalls as number) < 0 ||
-    !Number.isSafeInteger(sieve.recalledChars) ||
-    (sieve.recalledChars as number) < 0 ||
-    !record(sieve.recallsByTool) ||
-    Object.keys(sieve.recallsByTool).length > 33 ||
-    !Object.entries(sieve.recallsByTool).every(
-      ([name, usage]) =>
-        record(usage) &&
-        /^[a-zA-Z0-9_-]{1,64}$/.test(name) &&
-        Number.isSafeInteger(usage.recalls) &&
-        (usage.recalls as number) >= 0 &&
-        Number.isSafeInteger(usage.recalledChars) &&
-        (usage.recalledChars as number) >= 0,
-    ) ||
-    typeof sieve.updatedAt !== "string" ||
-    Number.isNaN(Date.parse(sieve.updatedAt)) ||
-    (sieve.error !== undefined && !boundedString(sieve.error, 500))
-  )
-    return false;
-  const metrics = (value: Record<string, unknown> | undefined, keys: string[]) =>
-    value !== undefined && keys.every(key => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0);
-  const rawEpoch = sieve.epoch;
-  const epoch = record(rawEpoch) ? rawEpoch : undefined;
-  if (
-    sieve.epoch !== undefined &&
-    (!metrics(epoch, [
-      "frozenResultCount",
-      "frozenSourceChars",
-      "frozenRetainedChars",
-      "rolloverEligibleRetainedChars",
-      "recoverableEntries",
-    ]) ||
-      !["id", "reason", "promptFingerprint"].every(
-        key => epoch![key] === undefined || boundedString(epoch![key], 200),
-      ) ||
-      (epoch!.startedAt !== undefined &&
-        (typeof epoch!.startedAt !== "string" || Number.isNaN(Date.parse(epoch!.startedAt)))))
-  )
-    return false;
-  const rawStability = sieve.stability;
-  const stability = record(rawStability) ? rawStability : undefined;
-  const standardChangesByKind = record(stability?.standardChangesByKind) ? stability.standardChangesByKind : undefined;
-  if (
-    sieve.stability !== undefined &&
-    (!metrics(stability, [
-      "newProjections",
-      "projectionCacheHits",
-      "recoverableEntries",
-      "explicitReflows",
-      "softBudgetExceedances",
-      "prefixChurnViolations",
-      "estimatedInvalidatedChars",
-    ]) ||
-      (stability!.earliestChangedPriorMessageIndex !== undefined &&
-        (!Number.isSafeInteger(stability!.earliestChangedPriorMessageIndex) ||
-          (stability!.earliestChangedPriorMessageIndex as number) < 0)) ||
-      (stability!.standardComparisons !== undefined &&
-        (!Number.isSafeInteger(stability!.standardComparisons) || (stability!.standardComparisons as number) < 0)) ||
-      (stability!.standardPrefixChurn !== undefined &&
-        (!Number.isSafeInteger(stability!.standardPrefixChurn) || (stability!.standardPrefixChurn as number) < 0)) ||
-      (stability!.standardEarliestChangedPriorMessageIndex !== undefined &&
-        (!Number.isSafeInteger(stability!.standardEarliestChangedPriorMessageIndex) ||
-          (stability!.standardEarliestChangedPriorMessageIndex as number) < 0)) ||
-      (stability!.standardEstimatedInvalidatedChars !== undefined &&
-        (!Number.isSafeInteger(stability!.standardEstimatedInvalidatedChars) ||
-          (stability!.standardEstimatedInvalidatedChars as number) < 0)) ||
-      (stability!.standardChangesByKind !== undefined &&
-        (!standardChangesByKind ||
-          !["activeThreshold", "ageThreshold", "budget", "staleRead", "duplicate", "errorCap", "history"].every(
-            key => Number.isSafeInteger(standardChangesByKind[key]) && (standardChangesByKind[key] as number) >= 0,
-          ))))
-  )
-    return false;
-  if (
-    sieve.contextUsagePercent !== undefined &&
-    (typeof sieve.contextUsagePercent !== "number" ||
-      !Number.isFinite(sieve.contextUsagePercent) ||
-      sieve.contextUsagePercent < 0 ||
-      sieve.contextUsagePercent > 100)
-  )
-    return false;
-  return true;
-}
-
 function validContinuityMemory(continuity: Record<string, unknown>): boolean {
   if (
     !Array.isArray(continuity.memory) ||
@@ -2452,7 +2313,6 @@ function validOperational(operational: unknown): boolean {
     !record(operational.papercuts) ||
     !record(operational.timeline) ||
     !record(operational.tools) ||
-    !record(operational.sieve) ||
     !record(operational.health)
   )
     return false;
@@ -2491,13 +2351,11 @@ function validOperational(operational: unknown): boolean {
     !available(operational.tools) ||
     !Array.isArray(operational.tools.policies) ||
     operational.tools.policies.length > 100 ||
-    !available(operational.sieve) ||
     !healthStatuses.has(String(operational.health.status)) ||
     !Array.isArray(operational.health.issues) ||
     operational.health.issues.length > 20
   )
     return false;
-  if (operational.sieve.availability === "available" && !validSieve(operational.sieve)) return false;
   if (operational.continuity.availability === "available" && !validContinuityMemory(operational.continuity))
     return false;
   return true;
@@ -2584,140 +2442,6 @@ function issue(area: string, detail: string): ValidationIssue {
   return { area: `operational.${area}`, detail };
 }
 
-function sieveValidationIssue(sieve: Record<string, unknown>): ValidationIssue | undefined {
-  if (!sieveModes.has(String(sieve.mode))) return issue("sieve.mode", "is invalid");
-  if (!sieveProjectionModes.has(String(sieve.projectionMode))) return issue("sieve.projectionMode", "is invalid");
-  if (!Number.isSafeInteger(sieve.threshold) || (sieve.threshold as number) < 1_000)
-    return issue("sieve.threshold", "must be a safe integer of at least 1000");
-  if (typeof sieve.activePruning !== "boolean") return issue("sieve.activePruning", "must be boolean");
-  if (!sieveLatestModes.has(String(sieve.latestMode))) return issue("sieve.latestMode", "is invalid");
-  const statsIssue = (raw: unknown, path: string) => {
-    if (!record(raw)) return issue(path, "must be an object");
-    if (!record(raw.transformedBy)) return issue(`${path}.transformedBy`, "must be an object");
-    if (!record(raw.byTool)) return issue(`${path}.byTool`, "must be an object");
-    if (Object.keys(raw.byTool).length > 33) return issue(`${path}.byTool`, "must contain at most 33 tools");
-    for (const key of ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const) {
-      if (!Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0)
-        return issue(`${path}.${key}`, "must be a non-negative safe integer");
-    }
-    for (const key of [
-      "ageThreshold",
-      "budget",
-      "activeThreshold",
-      "staleRead",
-      "duplicate",
-      "errorCap",
-      "mixedText",
-    ] as const) {
-      if (!Number.isSafeInteger(raw.transformedBy[key]) || (raw.transformedBy[key] as number) < 0)
-        return issue(`${path}.transformedBy.${key}`, "must be a non-negative safe integer");
-    }
-    for (const [name, usage] of Object.entries(raw.byTool)) {
-      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue(`${path}.byTool`, "contains an invalid tool name");
-      if (!record(usage)) return issue(`${path}.byTool.${name}`, "must be an object");
-      for (const key of ["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"] as const) {
-        if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0)
-          return issue(`${path}.byTool.${name}.${key}`, "must be a non-negative safe integer");
-      }
-    }
-    return undefined;
-  };
-  for (const key of ["latest", "cumulativeActual", "cumulativeProjected"] as const) {
-    const invalid = statsIssue(sieve[key], `sieve.${key}`);
-    if (invalid) return invalid;
-  }
-  for (const key of ["recalls", "recalledChars"] as const)
-    if (!Number.isSafeInteger(sieve[key]) || (sieve[key] as number) < 0)
-      return issue(`sieve.${key}`, "must be a non-negative safe integer");
-  if (!record(sieve.recallsByTool)) return issue("sieve.recallsByTool", "must be an object");
-  if (Object.keys(sieve.recallsByTool).length > 33)
-    return issue("sieve.recallsByTool", "must contain at most 33 tools");
-  for (const [name, usage] of Object.entries(sieve.recallsByTool)) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) return issue("sieve.recallsByTool", "contains an invalid tool name");
-    if (!record(usage)) return issue(`sieve.recallsByTool.${name}`, "must be an object");
-    for (const key of ["recalls", "recalledChars"] as const)
-      if (!Number.isSafeInteger(usage[key]) || (usage[key] as number) < 0)
-        return issue(`sieve.recallsByTool.${name}.${key}`, "must be a non-negative safe integer");
-  }
-  if (typeof sieve.updatedAt !== "string" || Number.isNaN(Date.parse(sieve.updatedAt)))
-    return issue("sieve.updatedAt", "must be a valid timestamp");
-  if (sieve.error !== undefined && !boundedString(sieve.error, 500))
-    return issue("sieve.error", "must be a non-empty string of at most 500 characters");
-  const metricObjectIssue = (raw: unknown, path: string, keys: string[]) => {
-    if (!record(raw)) return issue(path, "must be an object");
-    for (const key of keys)
-      if (!Number.isSafeInteger(raw[key]) || (raw[key] as number) < 0)
-        return issue(`${path}.${key}`, "must be a non-negative safe integer");
-    return undefined;
-  };
-  if (sieve.epoch !== undefined) {
-    const invalid = metricObjectIssue(sieve.epoch, "sieve.epoch", [
-      "frozenResultCount",
-      "frozenSourceChars",
-      "frozenRetainedChars",
-      "rolloverEligibleRetainedChars",
-      "recoverableEntries",
-    ]);
-    if (invalid) return invalid;
-    const epoch = sieve.epoch as Record<string, unknown>;
-    for (const key of ["id", "reason", "promptFingerprint"] as const)
-      if (epoch[key] !== undefined && !boundedString(epoch[key], 200))
-        return issue(`sieve.epoch.${key}`, "must be a non-empty string of at most 200 characters");
-    if (
-      epoch.startedAt !== undefined &&
-      (typeof epoch.startedAt !== "string" || Number.isNaN(Date.parse(epoch.startedAt)))
-    )
-      return issue("sieve.epoch.startedAt", "must be a valid timestamp");
-  }
-  if (sieve.stability !== undefined) {
-    const invalid = metricObjectIssue(sieve.stability, "sieve.stability", [
-      "newProjections",
-      "projectionCacheHits",
-      "recoverableEntries",
-      "explicitReflows",
-      "softBudgetExceedances",
-      "prefixChurnViolations",
-      "estimatedInvalidatedChars",
-    ]);
-    if (invalid) return invalid;
-    const stability = sieve.stability as Record<string, unknown>;
-    for (const key of [
-      "earliestChangedPriorMessageIndex",
-      "standardComparisons",
-      "standardPrefixChurn",
-      "standardEarliestChangedPriorMessageIndex",
-      "standardEstimatedInvalidatedChars",
-    ] as const) {
-      if (stability[key] !== undefined && (!Number.isSafeInteger(stability[key]) || (stability[key] as number) < 0))
-        return issue(`sieve.stability.${key}`, "must be a non-negative safe integer");
-    }
-    if (stability.standardChangesByKind !== undefined) {
-      const changes = stability.standardChangesByKind;
-      if (!record(changes)) return issue("sieve.stability.standardChangesByKind", "must be an object");
-      for (const key of [
-        "activeThreshold",
-        "ageThreshold",
-        "budget",
-        "staleRead",
-        "duplicate",
-        "errorCap",
-        "history",
-      ] as const)
-        if (!Number.isSafeInteger(changes[key]) || (changes[key] as number) < 0)
-          return issue(`sieve.stability.standardChangesByKind.${key}`, "must be a non-negative safe integer");
-    }
-  }
-  if (
-    sieve.contextUsagePercent !== undefined &&
-    (typeof sieve.contextUsagePercent !== "number" ||
-      !Number.isFinite(sieve.contextUsagePercent) ||
-      sieve.contextUsagePercent < 0 ||
-      sieve.contextUsagePercent > 100)
-  )
-    return issue("sieve.contextUsagePercent", "must be a finite percentage from 0 to 100");
-  return undefined;
-}
-
 function continuityMemoryIssue(continuity: Record<string, unknown>): ValidationIssue | undefined {
   const safePath = (path: unknown) =>
     typeof path === "string" &&
@@ -2790,7 +2514,6 @@ function operationalValidationIssue(value: unknown): ValidationIssue | undefined
     "papercuts",
     "timeline",
     "tools",
-    "sieve",
     "health",
   ] as const;
   for (const name of names) if (!record(value[name])) return issue(name, "must be an object");
@@ -2825,10 +2548,6 @@ function operationalValidationIssue(value: unknown): ValidationIssue | undefined
   if (!Array.isArray(operational.health.issues) || operational.health.issues.length > 20)
     return issue("health.issues", "must be an array with at most 20 items");
 
-  if (operational.sieve.availability === "available") {
-    const invalid = sieveValidationIssue(operational.sieve);
-    if (invalid) return invalid;
-  }
   if (operational.continuity.availability === "available") return continuityMemoryIssue(operational.continuity);
   return undefined;
 }
@@ -2944,7 +2663,6 @@ export function runtimeSnapshotValidationIssue(value: unknown): RuntimeSnapshotV
             },
             timeline: { availability: "unavailable", revision: 0, checkpoints: [], failures: [] },
             tools: { availability: "unavailable", policies: [] },
-            sieve: { availability: "unavailable" },
             health: { status: "unavailable", issues: [] },
           },
         },

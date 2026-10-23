@@ -604,26 +604,6 @@ function packageFields(settings: PackageSettingsReadModel | undefined): PackageF
           inline: false,
         },
       ];
-    case "sieve":
-      return [
-        { key: "active", label: "Active pruning", description: "Remove stale tool results from context." },
-        { key: "mode", label: "Projection mode", description: "Choose the context projection algorithm." },
-        { key: "threshold", label: "Pruning threshold", description: "Minimum result size eligible for pruning." },
-        {
-          key: "high",
-          label: "High multiplier",
-          description: "Threshold multiple that begins rollover.",
-          target: settings.projectionMode === "stable" ? undefined : "Projection mode",
-          inline: settings.projectionMode === "stable",
-        },
-        {
-          key: "target",
-          label: "Target multiplier",
-          description: "Threshold multiple that ends rollover.",
-          target: settings.projectionMode === "stable" ? undefined : "Projection mode",
-          inline: settings.projectionMode === "stable",
-        },
-      ];
     case "spawn":
       return [
         {

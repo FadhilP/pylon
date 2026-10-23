@@ -82,7 +82,6 @@
       "./packages/pi-discover/extensions/pi-discover.ts",
       "./packages/pi-scout/extensions/pi-scout.ts",
       "./packages/pi-spawn/extensions/pi-spawn.ts",
-      "./packages/pi-sieve/extensions/pi-sieve.ts",
       "./packages/pi-timeline/extensions/pi-timeline.ts",
       "./packages/pi-verify/extensions/pi-verify.ts"
     ],
@@ -98,12 +97,10 @@
     "ignore": "^7.0.8",
     "jiti": "^2.7.0",
     "node-pty": "^1.1.0",
-    "pi-sieve": "0.1.0",
     "pylon-core": "0.1.0",
     "ws": "^8.21.1"
   },
   "bundleDependencies": [
-    "pi-sieve",
     "pylon-core"
   ],
   "peerDependencies": {

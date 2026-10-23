@@ -4,8 +4,6 @@ import type {
   JobsReadModel,
   OperationalReadModel,
   PapercutSummaryReadModel,
-  SieveReadModel,
-  SieveTransformStatsReadModel,
   TimelineReadModel,
   ToolPolicyReadModel,
   ToolsReadModel,
@@ -69,7 +67,6 @@ export function initialOperational(
     papercuts: { availability: "unavailable", revision: 0, counts: { open: 0, resolved: 0, dismissed: 0, total: 0 } },
     timeline: { availability: "unavailable", revision: 0, checkpoints: [], failures: [] },
     tools: { availability: loaded.has("pylon-core.ts") ? "available" : "unavailable", policies: [] },
-    sieve: { availability: loaded.has("pi-sieve.ts") ? "available" : "unavailable" },
     health: { status: "healthy", issues: [] },
   };
   return withHealth(operational, diagnostics);
@@ -95,7 +92,6 @@ export function withOperationalCapabilities(
     papercuts: current.papercuts.revision ? current.papercuts : fresh.papercuts,
     timeline: current.timeline.revision ? current.timeline : fresh.timeline,
     tools: current.tools.policies.length ? { ...current.tools, availability: fresh.tools.availability } : fresh.tools,
-    sieve: current.sieve.mode ? { ...current.sieve, availability: fresh.sieve.availability } : fresh.sieve,
     health: fresh.health,
   };
   return withHealth(next, diagnostics);
@@ -136,26 +132,6 @@ export function cloneOperational(value: OperationalReadModel): OperationalReadMo
         allowOnly: item.allowOnly ? [...item.allowOnly] : undefined,
       })),
     },
-    sieve: {
-      ...value.sieve,
-      latest: value.sieve.latest ? cloneSieveStats(value.sieve.latest) : undefined,
-      cumulativeActual: value.sieve.cumulativeActual ? cloneSieveStats(value.sieve.cumulativeActual) : undefined,
-      cumulativeProjected: value.sieve.cumulativeProjected
-        ? cloneSieveStats(value.sieve.cumulativeProjected)
-        : undefined,
-      recallsByTool: value.sieve.recallsByTool
-        ? Object.fromEntries(Object.entries(value.sieve.recallsByTool).map(([name, usage]) => [name, { ...usage }]))
-        : undefined,
-      epoch: value.sieve.epoch ? { ...value.sieve.epoch } : undefined,
-      stability: value.sieve.stability
-        ? {
-            ...value.sieve.stability,
-            standardChangesByKind: value.sieve.stability.standardChangesByKind
-              ? { ...value.sieve.stability.standardChangesByKind }
-              : undefined,
-          }
-        : undefined,
-    },
     health: { ...value.health, issues: [...value.health.issues] },
   };
 }
@@ -193,261 +169,8 @@ export function applyOperationalEvent(
   } else if (channel === "pylon:tool-policy") {
     const toolsState = toolPolicy(current.tools, value);
     next = { ...current, tools: toolsState };
-  } else if (channel === "pi-sieve:state-change") {
-    const sieveState = sieve(current.sieve, value);
-    if (sieveState === current.sieve) return current;
-    next = { ...current, sieve: sieveState };
   } else return current;
   return withHealth(next, diagnostics);
-}
-
-function sieveStats(value: unknown): SieveTransformStatsReadModel | undefined {
-  const input = record(value);
-  const transformedBy = record(input?.transformedBy);
-  const rawByTool = record(input?.byTool);
-  if (!input || !transformedBy || !rawByTool || Object.keys(rawByTool).length > 33) return undefined;
-  const keys = ["scanned", "transformed", "omittedChars", "netCharsSaved"] as const;
-  const reasons = [
-    "ageThreshold",
-    "budget",
-    "activeThreshold",
-    "staleRead",
-    "duplicate",
-    "errorCap",
-    "mixedText",
-  ] as const;
-  if (
-    !keys.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0) ||
-    !reasons.every(key => Number.isSafeInteger(transformedBy[key]) && Number(transformedBy[key]) >= 0)
-  )
-    return undefined;
-  const byTool: SieveTransformStatsReadModel["byTool"] = {};
-  for (const [name, rawUsage] of Object.entries(rawByTool)) {
-    const usage = record(rawUsage);
-    if (
-      !/^[a-zA-Z0-9_-]{1,64}$/.test(name) ||
-      !usage ||
-      !["scanned", "transformed", "sourceChars", "retainedChars", "netCharsSaved"].every(
-        key => Number.isSafeInteger(usage[key]) && Number(usage[key]) >= 0,
-      )
-    )
-      return undefined;
-    byTool[name] = {
-      scanned: number(usage.scanned),
-      transformed: number(usage.transformed),
-      sourceChars: number(usage.sourceChars),
-      retainedChars: number(usage.retainedChars),
-      netCharsSaved: number(usage.netCharsSaved),
-    };
-  }
-  return {
-    scanned: number(input.scanned),
-    transformed: number(input.transformed),
-    omittedChars: number(input.omittedChars),
-    netCharsSaved: number(input.netCharsSaved),
-    transformedBy: {
-      ageThreshold: number(transformedBy.ageThreshold),
-      budget: number(transformedBy.budget),
-      activeThreshold: number(transformedBy.activeThreshold),
-      staleRead: number(transformedBy.staleRead),
-      duplicate: number(transformedBy.duplicate),
-      errorCap: number(transformedBy.errorCap),
-      mixedText: number(transformedBy.mixedText),
-    },
-    byTool,
-  };
-}
-
-function cloneSieveStats(value: SieveTransformStatsReadModel): SieveTransformStatsReadModel {
-  return {
-    ...value,
-    transformedBy: { ...value.transformedBy },
-    byTool: Object.fromEntries(Object.entries(value.byTool).map(([name, usage]) => [name, { ...usage }])),
-  };
-}
-
-function sieveRecallStats(value: unknown): NonNullable<SieveReadModel["recallsByTool"]> | undefined {
-  const input = record(value);
-  if (!input || Object.keys(input).length > 33) return undefined;
-  const output: NonNullable<SieveReadModel["recallsByTool"]> = {};
-  for (const [name, rawUsage] of Object.entries(input)) {
-    const usage = record(rawUsage);
-    if (
-      !/^[a-zA-Z0-9_-]{1,64}$/.test(name) ||
-      !usage ||
-      !Number.isSafeInteger(usage.recalls) ||
-      Number(usage.recalls) < 0 ||
-      !Number.isSafeInteger(usage.recalledChars) ||
-      Number(usage.recalledChars) < 0
-    )
-      return undefined;
-    output[name] = { recalls: Number(usage.recalls), recalledChars: Number(usage.recalledChars) };
-  }
-  return output;
-}
-
-function sieveEpoch(value: unknown): SieveReadModel["epoch"] | undefined {
-  const input = record(value);
-  const metrics = [
-    "frozenResultCount",
-    "frozenSourceChars",
-    "frozenRetainedChars",
-    "rolloverEligibleRetainedChars",
-    "recoverableEntries",
-  ];
-  if (!input || !metrics.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0)) return undefined;
-  const startedAt = input.startedAt === undefined ? undefined : timestamp(input.startedAt);
-  if (input.startedAt !== undefined && !startedAt) return undefined;
-  return {
-    ...(string(input.id, 200) ? { id: string(input.id, 200) } : {}),
-    ...(string(input.reason, 200) ? { reason: string(input.reason, 200) } : {}),
-    ...(startedAt ? { startedAt } : {}),
-    ...(string(input.promptFingerprint, 200) ? { promptFingerprint: string(input.promptFingerprint, 200) } : {}),
-    frozenResultCount: Number(input.frozenResultCount),
-    frozenSourceChars: Number(input.frozenSourceChars),
-    frozenRetainedChars: Number(input.frozenRetainedChars),
-    rolloverEligibleRetainedChars: Number(input.rolloverEligibleRetainedChars),
-    recoverableEntries: Number(input.recoverableEntries),
-  };
-}
-
-function sieveStability(value: unknown): SieveReadModel["stability"] | undefined {
-  const input = record(value);
-  const metrics = [
-    "newProjections",
-    "projectionCacheHits",
-    "recoverableEntries",
-    "explicitReflows",
-    "softBudgetExceedances",
-    "prefixChurnViolations",
-    "estimatedInvalidatedChars",
-  ];
-  const standardChangeKinds = [
-    "activeThreshold",
-    "ageThreshold",
-    "budget",
-    "staleRead",
-    "duplicate",
-    "errorCap",
-    "history",
-  ] as const;
-  const standardChangesByKind = record(input?.standardChangesByKind);
-  if (
-    !input ||
-    !metrics.every(key => Number.isSafeInteger(input[key]) && Number(input[key]) >= 0) ||
-    (input.earliestChangedPriorMessageIndex !== undefined &&
-      (!Number.isSafeInteger(input.earliestChangedPriorMessageIndex) ||
-        Number(input.earliestChangedPriorMessageIndex) < 0)) ||
-    (input.standardComparisons !== undefined &&
-      (!Number.isSafeInteger(input.standardComparisons) || Number(input.standardComparisons) < 0)) ||
-    (input.standardPrefixChurn !== undefined &&
-      (!Number.isSafeInteger(input.standardPrefixChurn) || Number(input.standardPrefixChurn) < 0)) ||
-    (input.standardEarliestChangedPriorMessageIndex !== undefined &&
-      (!Number.isSafeInteger(input.standardEarliestChangedPriorMessageIndex) ||
-        Number(input.standardEarliestChangedPriorMessageIndex) < 0)) ||
-    (input.standardEstimatedInvalidatedChars !== undefined &&
-      (!Number.isSafeInteger(input.standardEstimatedInvalidatedChars) ||
-        Number(input.standardEstimatedInvalidatedChars) < 0)) ||
-    (input.standardChangesByKind !== undefined &&
-      (!standardChangesByKind ||
-        !standardChangeKinds.every(
-          key => Number.isSafeInteger(standardChangesByKind[key]) && Number(standardChangesByKind[key]) >= 0,
-        )))
-  )
-    return undefined;
-  return {
-    newProjections: Number(input.newProjections),
-    projectionCacheHits: Number(input.projectionCacheHits),
-    recoverableEntries: Number(input.recoverableEntries),
-    explicitReflows: Number(input.explicitReflows),
-    softBudgetExceedances: Number(input.softBudgetExceedances),
-    prefixChurnViolations: Number(input.prefixChurnViolations),
-    estimatedInvalidatedChars: Number(input.estimatedInvalidatedChars),
-    ...(input.earliestChangedPriorMessageIndex !== undefined
-      ? { earliestChangedPriorMessageIndex: Number(input.earliestChangedPriorMessageIndex) }
-      : {}),
-    ...(input.standardComparisons !== undefined ? { standardComparisons: Number(input.standardComparisons) } : {}),
-    ...(input.standardPrefixChurn !== undefined ? { standardPrefixChurn: Number(input.standardPrefixChurn) } : {}),
-    ...(input.standardEarliestChangedPriorMessageIndex !== undefined
-      ? { standardEarliestChangedPriorMessageIndex: Number(input.standardEarliestChangedPriorMessageIndex) }
-      : {}),
-    ...(input.standardEstimatedInvalidatedChars !== undefined
-      ? { standardEstimatedInvalidatedChars: Number(input.standardEstimatedInvalidatedChars) }
-      : {}),
-    ...(standardChangesByKind
-      ? {
-          standardChangesByKind: {
-            activeThreshold: Number(standardChangesByKind.activeThreshold),
-            ageThreshold: Number(standardChangesByKind.ageThreshold),
-            budget: Number(standardChangesByKind.budget),
-            staleRead: Number(standardChangesByKind.staleRead),
-            duplicate: Number(standardChangesByKind.duplicate),
-            errorCap: Number(standardChangesByKind.errorCap),
-            history: Number(standardChangesByKind.history),
-          },
-        }
-      : {}),
-  };
-}
-
-function sieve(old: SieveReadModel, value: unknown): SieveReadModel {
-  const input = record(value);
-  if (!input || input.version !== 1) return old;
-  if (input.available === false) return { availability: "unavailable" };
-  const latest = sieveStats(input.latest);
-  const cumulativeActual = sieveStats(input.cumulativeActual);
-  const cumulativeProjected = sieveStats(input.cumulativeProjected);
-  const updatedAt = timestamp(input.updatedAt);
-  const recallsByTool = sieveRecallStats(input.recallsByTool);
-  const epoch = input.epoch === undefined ? undefined : sieveEpoch(input.epoch);
-  const stability = input.stability === undefined ? undefined : sieveStability(input.stability);
-  const contextUsagePercent = input.contextUsagePercent;
-  if (
-    input.available !== true ||
-    !["stable", "legacy", "standard-v2"].includes(String(input.projectionMode)) ||
-    (input.epoch !== undefined && !epoch) ||
-    (input.stability !== undefined && !stability) ||
-    (contextUsagePercent !== undefined &&
-      (typeof contextUsagePercent !== "number" ||
-        !Number.isFinite(contextUsagePercent) ||
-        contextUsagePercent < 0 ||
-        contextUsagePercent > 100)) ||
-    !["enabled", "observe", "disabled"].includes(String(input.mode)) ||
-    !["enabled", "observe"].includes(String(input.latestMode)) ||
-    !Number.isSafeInteger(input.threshold) ||
-    Number(input.threshold) < 1_000 ||
-    typeof input.activePruning !== "boolean" ||
-    !Number.isSafeInteger(input.recalls) ||
-    Number(input.recalls) < 0 ||
-    !Number.isSafeInteger(input.recalledChars) ||
-    Number(input.recalledChars) < 0 ||
-    !latest ||
-    !cumulativeActual ||
-    !cumulativeProjected ||
-    !recallsByTool ||
-    !updatedAt
-  ) {
-    return { availability: "unavailable", error: "Pi Sieve returned invalid state." };
-  }
-  return {
-    availability: "available",
-    mode: input.mode as NonNullable<SieveReadModel["mode"]>,
-    projectionMode: input.projectionMode as NonNullable<SieveReadModel["projectionMode"]>,
-    threshold: input.threshold as number,
-    activePruning: input.activePruning,
-    latestMode: input.latestMode as NonNullable<SieveReadModel["latestMode"]>,
-    latest,
-    cumulativeActual,
-    cumulativeProjected,
-    recalls: Number(input.recalls),
-    recalledChars: Number(input.recalledChars),
-    recallsByTool,
-    ...(epoch ? { epoch } : {}),
-    ...(stability ? { stability } : {}),
-    ...(contextUsagePercent !== undefined ? { contextUsagePercent } : {}),
-    updatedAt,
-    ...(string(input.error, 500) ? { error: string(input.error, 500) } : {}),
-  };
 }
 
 function verification(value: unknown, redact: (value: string) => string): VerificationReadModel {

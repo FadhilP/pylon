@@ -25,12 +25,8 @@
     ]
   },
   "dependencies": {
-    "pi-sieve": "0.1.0",
     "pylon-core": "0.1.0"
   },
-  "bundledDependencies": [
-    "pi-sieve"
-  ],
   "pylon": {
     "settings": "./src/web-settings.ts"
   },

@@ -2126,17 +2126,6 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     assert.ok(
       (await driver.listPackages()).packages.some(item => item.id === "pi-timeline" && !item.enabled && item.active),
     );
-    const sieve = (await driver.listPackages()).packages.find(item => item.id === "pi-sieve")?.settings;
-    assert.equal(sieve?.kind, "sieve");
-    if (sieve?.kind !== "sieve") throw new Error("pi-sieve settings are unavailable");
-    const threshold = sieve.threshold === 1_000 ? 2_000 : 1_000;
-    const configured = await driver.updatePackageSettings({ packageId: "pi-sieve", settings: { ...sieve, threshold } });
-    assert.equal(configured.sessionGeneration, 1);
-    assert.deepEqual((await driver.listPackages()).packages.find(item => item.id === "pi-sieve")?.settings, {
-      ...sieve,
-      threshold,
-    });
-
     const spawnConfigured = await driver.updatePackageSettings({
       packageId: "pi-spawn",
       settings: {
@@ -2163,8 +2152,8 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
       privateAgentSystemPrompt: defaultPrompt,
     });
 
-    const generation = configured.sessionGeneration;
-    assert.equal(spawnConfigured.sessionGeneration, generation);
+    const generation = spawnConfigured.sessionGeneration;
+    assert.equal(generation, 1);
     for (const [packageId, settings] of [
       [
         "pi-advisor",
@@ -2215,7 +2204,6 @@ test("repository packages load, toggle, and save settings", { timeout: 45_000 },
     }
     const unchangedRuntime = await driver.snapshot();
     assert.deepEqual(unchangedRuntime.activeTools, initialActiveTools);
-    assert.equal(unchangedRuntime.operational.sieve.threshold, sieve.threshold);
 
     const scoutDisabled = await driver.updatePackageSettings({
       packageId: "pi-scout",

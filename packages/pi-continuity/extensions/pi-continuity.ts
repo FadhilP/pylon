@@ -1312,7 +1312,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
               (verifyState.latest.state === "passed" && verifyState.latest.worktreeId === startupIdentity))
           );
       }
-      if (memory.enabled) {
+      if (memory.enabled && (await hasPendingV4Migration(root))) {
         try {
           const migration = await runV4Migration(ctx, sessionId);
           if (migration.migrated) emitMemoryOutcome("migration_committed");
@@ -1322,8 +1322,8 @@ export default function continuityExtension(pi: ExtensionAPI) {
           await recordPendingV4Migration(root, reason).catch(() => {});
           if (!/Memory Reviewer/.test(reason)) ctx.ui?.notify?.(`Memory V4 migration deferred: ${reason}`, "warning");
         }
-        memory.legacyMigrationAvailable = await hasPendingV4Migration(root);
-      } else memory.legacyMigrationAvailable = false;
+      }
+      memory.legacyMigrationAvailable = memory.enabled && (await hasPendingV4Migration(root));
       gate(work?.mode === "planning");
       tasksVisible = true;
       refresh(ctx);

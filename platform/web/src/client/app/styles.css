@@ -910,48 +910,6 @@
   .file-suggestions strong svg { flex: 0 0 auto; transform: translateY(0.5px); }
   .slash-suggestions span { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
   .composer-surface.slash-suggestions { position: relative; inset: auto; margin-inline: auto; border-radius: 9px 9px 0 0; }
-  .sieve-gauge { padding: 12px 14px 14px; border-bottom: 1px solid var(--line); }
-  .sieve-gauge > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-  .sieve-gauge strong { font-size: 12px; font-weight: 620; }
-  .sieve-gauge b { font-size: 15px; font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: -0.02em; }
-  .sieve-gauge .overview-led-bar { width: 100%; height: 10px; }
-  .sieve-gauge > p { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 14px; margin: 9px 0 0; color: var(--text-muted); font-size: 12px; }
-  .sieve-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
-  .sieve-summary > div { display: grid; min-width: 0; align-content: center; gap: 3px; padding: 12px 10px 13px; }
-  .sieve-summary > div + div { border-left: 1px solid var(--line); }
-  .sieve-summary small, .sieve-summary span { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .sieve-summary strong { font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 650; letter-spacing: -0.02em; }
-  .sieve-savings-heading { display: flex; min-height: 35px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px 5px; color: var(--text-muted); font-size: 12px; }
-  .sieve-savings-heading strong { color: var(--text-soft); font-size: 12px; font-weight: 600; }
-  .sieve-savings-list { display: grid; }
-  .sieve-saving-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 9px 14px; border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }
-  .sieve-saving-row:hover { background: var(--surface-subtle); }
-  .sieve-saving-row > div { display: grid; min-width: 0; gap: 6px; }
-  .sieve-saving-row strong { overflow: hidden; font: 12px ui-monospace, "SFMono-Regular", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-  .sieve-saving-row .overview-led-bar { width: 100%; }
-  .sieve-saving-row > span { color: var(--text-soft); font-size: 12px; text-align: right; white-space: nowrap; }
-  .sieve-no-savings { margin: 0; padding: 12px 14px; border-top: 1px solid var(--line); color: var(--text-muted); font-size: 12px; }
-  .sieve-health-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); }
-  .sieve-health-row > .overview-orb-cell { align-self: start; height: 18px; }
-  .sieve-health-row > div { display: grid; gap: 3px; }
-  .sieve-health-row strong { font-size: 12px; line-height: 18px; }
-  .sieve-health-row small { color: var(--text-muted); font-size: 12px; }
-  .sieve-projection { border-top: 1px solid var(--line); }
-  .sieve-projection > summary { display: grid; min-height: 46px; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer; list-style: none; }
-  .sieve-projection > summary::-webkit-details-marker { display: none; }
-  .sieve-projection > summary > span { display: grid; min-width: 0; gap: 2px; }
-  .sieve-projection > summary strong { font-size: 12px; font-weight: 620; }
-  .sieve-projection > summary small { color: var(--text-muted); font-size: 12px; }
-  .sieve-projection > summary > small { white-space: nowrap; }
-  .sieve-projection > summary .chev { color: var(--text-muted); transition: transform var(--motion-fast) var(--motion-ease-out); }
-  .sieve-projection[open] > summary .chev { transform: rotate(180deg); }
-  .sieve-projection-body { padding: 0 14px 12px 46px; }
-  .sieve-projection dl { display: grid; margin: 0; border-block: 1px solid var(--line); }
-  .sieve-projection dl > div { display: grid; min-height: 32px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 14px; }
-  .sieve-projection dl > div + div { border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }
-  .sieve-projection dt, .sieve-projection dd { min-width: 0; font-size: 12px; }
-  .sieve-projection dt { color: var(--text-muted); }
-  .sieve-projection dd { margin: 0; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
   .prompt-form textarea { display: block; width: 100%; min-height: 48px; max-height: 180px; padding: 5px 4px 10px; border: 0; outline: 0; background: transparent; color: var(--text); field-sizing: content; font-size: 14px; line-height: 1.5; resize: none; }
   .prompt-form textarea::placeholder { color: var(--text-muted); }
   .prompt-images { display: flex; gap: 7px; padding: 1px 2px 8px; overflow-x: auto; }

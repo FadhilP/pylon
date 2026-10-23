@@ -1,5 +1,22 @@
 [
   {
+    "version": "3.6.0",
+    "date": "Oct 23, 2026",
+    "title": "Sieve removed, faster session start, and smaller Helios snapshots",
+    "summary": "Pylon no longer ships pi-sieve. A replay of local sessions showed that pruning tool output saved little prompt cost once compaction was counted, and its rollover made long sessions cost more. Timeline and Continuity also do less work when a session starts, and Helios sends less page text after browser actions.",
+    "notes": [
+      "Removed the pi-sieve package, its `sieve_recall` tool, and its `/sieve` command.",
+      "Removed Sieve from Grunt workers, which now load only the line-edit extension.",
+      "Removed the Sieve settings, the session inspector panel, and the Sieve state from the web runtime protocol.",
+      "Removed the Sieve recall counters from the token meter report.",
+      "Changed Timeline to take its session-start Git baseline in the background; tool calls, checkpoints, and shutdown still wait for it.",
+      "Changed Continuity to run the Memory V4 migration at session start only when a migration is pending.",
+      "Changed Helios action snapshots after a whole-page snapshot to show only the changed lines with their parent lines; refs from the earlier snapshot that are still on the page stay valid.",
+      "Shortened long link URLs in Helios snapshot text by dropping the query string; the full link target still resolves.",
+      "Shortened the `helios_browser` tool description and removed per-field descriptions from batch steps to lower tool schema size.",
+    ]
+  },
+  {
     "version": "3.5.7",
     "date": "Oct 22, 2026",
     "title": "Wider SQL reads and common MongoDB and Redis commands",

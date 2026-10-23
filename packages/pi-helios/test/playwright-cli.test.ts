@@ -1026,3 +1026,44 @@ test("PNG file validation reads only metadata and signature", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("action snapshots return changed lines with parents and fall back when most of the page changed", async () => {
+  const longUrl = `https://example.com/docs/page?${"utm_campaign=x&".repeat(10)}id=1`;
+  let snapshot = [
+    "- main [ref=e1]:",
+    `  - link "Docs" [ref=e2]:`,
+    `    - /url: ${longUrl}`,
+    "  - list [ref=e3]:",
+    '    - listitem [ref=e4]: "One"',
+    '  - button "Save" [ref=e5]',
+  ].join("\n");
+  const cli = await PlaywrightCli.create(async () => ({
+    code: 0,
+    stdout: JSON.stringify({ snapshot }),
+    stderr: "",
+    killed: false,
+  }));
+  try {
+    const page = await cli.run(SESSION, { kind: "snapshot" });
+    assert.match(page.snapshot!, /- \/url: https:\/\/example\.com\/docs\/page\?…$/m);
+    assert.deepEqual(page.snapshotLinks, { e2: longUrl });
+    assert.equal(page.pageReferences, undefined);
+
+    snapshot = snapshot.replace('- listitem [ref=e4]: "One"', '- listitem [ref=e4]: "One"\n    - listitem [ref=e6]: "Two"');
+    const clicked = await cli.run(SESSION, { kind: "click", target: "e5" });
+    assert.deepEqual(clicked.snapshot!.split("\n").slice(1), [
+      "- main [ref=e1]:",
+      "  - list [ref=e3]:",
+      '    - listitem [ref=e6]: "Two"',
+    ]);
+    assert.match(clicked.snapshot!, /^Changes since last page snapshot: 1 added or changed, 0 removed/);
+    assert.deepEqual([...clicked.pageReferences!].sort(), ["e1", "e2", "e3", "e4", "e5", "e6"]);
+
+    snapshot = '- heading "Other page" [ref=e1]\n- button "Next" [ref=e2]';
+    const replaced = await cli.run(SESSION, { kind: "click", target: "e5" });
+    assert.equal(replaced.snapshot, snapshot);
+    assert.equal(replaced.pageReferences, undefined);
+  } finally {
+    await cli.dispose();
+  }
+});

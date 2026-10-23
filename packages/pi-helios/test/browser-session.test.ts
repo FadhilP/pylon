@@ -623,3 +623,22 @@ test("uncertain dispatched failures invalidate all element references", async ()
   await assert.rejects(manager.operate("uncertain-references", { kind: "click", target: "e1" }), /stale or was not/);
   await manager.close("uncertain-references", "close");
 });
+
+test("changed-line action snapshots keep earlier refs that are still on the page", async () => {
+  const cli = fakeCli([]);
+  cli.run = async (_session: string, action: any) => {
+    if (action.kind === "tab-list") return { value: { result: "- 0: (current) [Example](https://example.com/)" } };
+    if (action.kind === "snapshot") return { value: {}, snapshot: "- button [ref=e1]\n- link [ref=e2]" };
+    if (action.kind === "click")
+      return { value: {}, snapshot: "Changes\n- dialog [ref=e3]", pageReferences: new Set(["e1", "e3", "e9"]) };
+    return { value: {} };
+  };
+  const manager = new BrowserSessionManager(exec as any, async () => cli);
+  await manager.start("diff-refs");
+  await manager.operate("diff-refs", { kind: "snapshot" });
+  await manager.operate("diff-refs", { kind: "click", target: "e1" });
+  await assert.rejects(manager.operate("diff-refs", { kind: "click", target: "e2" }), /stale/);
+  await assert.rejects(manager.operate("diff-refs", { kind: "click", target: "e9" }), /stale/);
+  await manager.operate("diff-refs", { kind: "hover", target: "e1" });
+  await manager.close("diff-refs", "close");
+});

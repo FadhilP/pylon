@@ -3863,7 +3863,6 @@ export class SessionRuntime {
       "pi-continuity:state-change",
       "pi-papercut:state-change",
       "pi-timeline:state-change",
-      "pi-sieve:state-change",
     ]) {
       this.busUnsubscribers.push(
         this.eventBus.on(channel, payload => {
@@ -4094,17 +4093,11 @@ export class SessionRuntime {
       "pi-continuity:state-request",
       "pi-papercut:state-request",
       "pi-timeline:state-request",
-      "pi-sieve:state-request",
     ]) {
       let answered = false;
       try {
         this.eventBus.emit(channel, {
-          version:
-            channel === "pi-timeline:state-request"
-              ? 4
-              : channel === "pi-sieve:state-request" || channel === "pi-papercut:state-request"
-                ? 1
-                : 4,
+          version: channel === "pi-papercut:state-request" ? 1 : 4,
           sessionId,
           respond: (payload: unknown) => {
             const raw = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : undefined;

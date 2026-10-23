@@ -248,6 +248,7 @@ test("first checkpoint changes use the persisted session-start baseline", async 
   };
   try {
     await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("tool_call")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
     await writeFile(join(root, "tracked.txt"), "changed during session\n");
     await writeFile(join(root, "session-only.txt"), "new work\n");
     await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
@@ -338,6 +339,7 @@ test("read-only persistent sessions retire unused baseline refs on quit", async 
   };
   try {
     await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("tool_call")![0]({ toolName: "read", toolCallId: "read-1" }, ctx);
     assert.equal(
       (await git("for-each-ref", "--format=%(refname)", "refs/pi-timeline")).split(/\r?\n/).filter(Boolean).length,
       2,

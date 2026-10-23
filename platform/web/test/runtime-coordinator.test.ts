@@ -2234,17 +2234,10 @@ test("settings persist while sessions run, but provider logout waits for idle", 
   internal.slots.set(selected.id, selected);
   internal.slots.set(background.id, background);
 
-  await coordinator.setPackageEnabled({ packageId: "pi-sieve", enabled: false });
+  await coordinator.setPackageEnabled({ packageId: "pi-timeline", enabled: false });
   await coordinator.updatePackageSettings({
-    packageId: "pi-sieve",
-    settings: {
-      kind: "sieve",
-      activePruning: true,
-      threshold: 10_000,
-      projectionMode: "stable",
-      rolloverHighMultiplier: 8,
-      rolloverLowMultiplier: 4,
-    },
+    packageId: "pi-test",
+    settings: { kind: "generic", packageId: "pi-test", fields: [] },
   });
   await coordinator.updateHookSettings({
     settings: { sessionStart: { enabled: false, sources: [] }, beforeAgentStart: { enabled: false, sources: [] } },

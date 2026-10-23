@@ -44,7 +44,7 @@ Only a normal child `stop` can integrate. Blocked, aborted, timed-out, budget/ou
 
 **Direct mode** runs in the current directory, including outside Git. Changes are immediate and a failure/cancellation may leave partial edits; there is no rollback, stale-parent check, patch artifact, or changed-path list. Dynamic mode falls back to direct if later isolation setup fails; explicit isolated mode does not.
 
-Ignored dependency directories (`node_modules`, `.venv`, `venv`) are not copied. The worker is told to skip checks requiring them rather than install or repeatedly probe. It gets a replacement concise system prompt, the handoff, optional bounded redacted parent context, and built-in read/search/edit/shell tools. It loads its line-edit extension and Sieve; unrelated extensions, skills, templates, context files, and persistent child sessions are disabled.
+Ignored dependency directories (`node_modules`, `.venv`, `venv`) are not copied. The worker is told to skip checks requiring them rather than install or repeatedly probe. It gets a replacement concise system prompt, the handoff, optional bounded redacted parent context, and built-in read/search/edit/shell tools. It loads its line-edit extension; unrelated extensions, skills, templates, context files, and persistent child sessions are disabled.
 
 ## Safety and privacy
 

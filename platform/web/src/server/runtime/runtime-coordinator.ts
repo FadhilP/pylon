@@ -323,7 +323,6 @@ const workspaceReadOnlyTools = new Set([
   "repo_scout",
   "rg",
   "search_tools",
-  "sieve_recall",
 ]);
 
 /** A session workspace that has a baseline tree to diff its changes against. */

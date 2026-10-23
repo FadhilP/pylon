@@ -19,7 +19,6 @@ import stateql from "../packages/pi-stateql/extensions/pi-stateql.ts";
 import discover from "../packages/pi-discover/extensions/pi-discover.ts";
 import scout from "../packages/pi-scout/extensions/pi-scout.ts";
 import spawn from "../packages/pi-spawn/extensions/pi-spawn.ts";
-import sieve from "../packages/pi-sieve/extensions/pi-sieve.ts";
 import timeline from "../packages/pi-timeline/extensions/pi-timeline.ts";
 import verify from "../packages/pi-verify/extensions/pi-verify.ts";
 import { mapLimit } from "../scripts/run-packages-lib.mjs";
@@ -290,7 +289,6 @@ test("root bundle discovery integrations run and shut down", async () => {
       discover,
       scout,
       spawn,
-      sieve,
       timeline,
       verify,
     ]) {

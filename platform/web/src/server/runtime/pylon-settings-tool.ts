@@ -42,7 +42,6 @@ const CUSTOM_SETTING_KEYS: Record<string, readonly string[]> = {
     "compactionReviewerMaxOutputTokens",
     "prompt",
   ],
-  sieve: ["activePruning", "threshold", "projectionMode", "rolloverHighMultiplier", "rolloverLowMultiplier"],
   timeline: [
     "editRollbackDefault",
     "checkpointTitleMode",

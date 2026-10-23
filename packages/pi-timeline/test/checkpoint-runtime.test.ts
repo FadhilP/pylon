@@ -685,6 +685,7 @@ test("checkpoint titles are generated after capture and survive reload", async (
   };
   try {
     await handlers.get("session_start")![0]({}, ctx);
+    await handlers.get("tool_call")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
     await writeFile(join(root, "tracked.txt"), "checkout guard\n");
     await handlers.get("tool_result")![0]({ toolName: "write", toolCallId: "write-1" }, ctx);
     await handlers.get("agent_settled")![0]({}, ctx);

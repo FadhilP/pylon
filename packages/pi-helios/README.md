@@ -38,6 +38,7 @@ In Pylon Web, an agent-started owned browser opens a Browser panel with a local 
 
 - Reuse adequate action output. Prefer a narrow `find` query or `snapshot` with a current `target` ref over another whole-page snapshot. Use depth 4–6 for an initial broad view only when needed. For truncated output, narrow the observation first; use `continue` when the remaining content is actually needed.
 - Every snapshot, find result, or continuation replaces usable refs. Mutations such as `fill` and `press` clear refs when they return no snapshot; the result reports this. Refresh with `find` or an untargeted snapshot before using another target. `fill` accepts `text`; `select` accepts `value`.
+- After a whole-page snapshot, click/hover/select/check snapshots show only changed lines with their parents; earlier refs still on the page stay valid. When more than half the page changed, the normal bounded snapshot is returned. Long link URLs in snapshot text drop their query string.
 - Batch predictable action-observation pairs to avoid another model turn. Actions still run sequentially and validate refs at each step; do not guess future refs or assume asynchronous search/loading has finished. Semantic plans remain limited to unique, non-consequential matches.
 
 ```json

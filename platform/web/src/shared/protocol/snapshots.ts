@@ -785,14 +785,6 @@ export type PackageSettingsReadModel =
       promptDefaultText?: string;
     }
   | {
-      kind: "sieve";
-      activePruning: boolean;
-      threshold: number;
-      projectionMode: "stable" | "legacy" | "standard-v2";
-      rolloverHighMultiplier: number;
-      rolloverLowMultiplier: number;
-    }
-  | {
       kind: "timeline";
       defaults?: Record<string, PackageSettingPrimitiveReadModel>;
       editRollbackDefault: boolean;

@@ -636,7 +636,7 @@ export class BrowserSessionManager {
         managed.references.clear();
       throw error;
     }
-    this.updateReferences(managed, action, result.snapshot);
+    this.updateReferences(managed, action, result.snapshot, result.pageReferences);
     if (action.kind === "mouse-up") managed.heldButtons.delete(action.button);
     if (action.kind === "key-up") managed.heldKeys.delete(action.key);
     try {
@@ -725,9 +725,15 @@ export class BrowserSessionManager {
     ].includes(action.kind);
   }
 
-  private updateReferences(managed: Managed, action: BrowserAction, snapshot?: string): void {
+  private updateReferences(
+    managed: Managed,
+    action: BrowserAction,
+    snapshot?: string,
+    pageReferences?: Set<string>,
+  ): void {
     if (snapshot !== undefined) {
-      managed.references = new Set(elementReferences(snapshot));
+      const retained = pageReferences ? [...managed.references].filter(ref => pageReferences.has(ref)) : [];
+      managed.references = new Set([...retained, ...elementReferences(snapshot)]);
       return;
     }
     if (this.invalidatesReferences(action)) managed.references.clear();

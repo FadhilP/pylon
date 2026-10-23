@@ -65,7 +65,6 @@ test("packed package installs and launches its production web app", { timeout: 2
     assert.ok(existsSync(join(packageRoot, "bin", "storage.mjs")));
     assert.ok(existsSync(join(packageRoot, "platform", "web", "dist", "index.html")));
     assert.ok(existsSync(join(packageRoot, "node_modules", "pylon-core", "extensions", "pylon-core.ts")));
-    assert.ok(existsSync(join(packageRoot, "node_modules", "pi-sieve", "extensions", "pi-sieve.ts")));
     assert.ok(existsSync(join(packageRoot, "docs", "web", "README.md")));
     assert.ok(existsSync(join(packageRoot, "docs", "pylon-web.png")));
     assert.ok(existsSync(join(packageRoot, "CHANGELOG.json")));
@@ -94,7 +93,6 @@ test("packed package installs and launches its production web app", { timeout: 2
        const coreExtension = join(packageRoot, "packages", "pylon-core", "extensions", "pylon-core.ts");
        const listedDocs = await docs.listPylonDocs(pathToFileURL(coreExtension).href);
        installedRequire.resolve("pylon-core/extensions/pylon-core.ts");
-       installedRequire.resolve("pi-sieve/extensions/pi-sieve.ts");
        if (typeof settings.readSettings !== "function" || typeof settings.updateSettings !== "function" || typeof tokenMeter.meterFromBranch !== "function" || !listedDocs.some(item => item.path === "docs/web/README.md")) process.exit(1);
        const { WorkerIndex } = await jiti.import(join(packageRoot, "packages", "pi-discover", "src", "worker-index.ts"));
        const project = process.argv[3];

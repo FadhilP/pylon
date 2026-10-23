@@ -21,6 +21,7 @@ const MAX_FIND_LINES = 80;
 const MAX_FIND_BYTES = 8 * 1024;
 const MAX_ACTION_SNAPSHOT_LINES = 60;
 const MAX_ACTION_SNAPSHOT_BYTES = 6 * 1024;
+const MAX_LINK_URL_CHARS = 100;
 const SNAPSHOT_FILE_SETTLE_ATTEMPTS = 20;
 const SNAPSHOT_FILE_SETTLE_MS = 25;
 const PAGE_TEXT_MAX_CHARS = 32 * 1024;
@@ -31,6 +32,7 @@ const MAX_CONTINUATIONS_PER_SESSION = 20;
 const MAX_CONTINUATIONS = 32;
 const MAX_CONTINUATION_BYTES = 4 * 1024 * 1024;
 const CLEARS_CONTINUATIONS = new Set(["open", "attach-cdp", "attach-extension", "close", "detach"]);
+const DIFFS_PAGE_SNAPSHOT = new Set(["click", "fill", "press", "hover", "select", "check", "uncheck"]);
 const INVALIDATES_CONTINUATIONS = new Set([
   "navigate",
   "click",
@@ -153,6 +155,7 @@ export interface CliResult {
   findMatches?: number;
   snapshotContinuation?: string;
   snapshotLinks?: Record<string, string>;
+  pageReferences?: Set<string>;
   artifactPath?: string;
   baseUrl?: string;
   textContentType?: string;
@@ -301,6 +304,48 @@ function snapshotLinkTargets(lines: string[]): Record<string, string> {
     }
   }
   return links;
+}
+
+function shortenLinkUrl(line: string): string {
+  const match = /^(\s*- \/url: )(.+)$/.exec(line);
+  if (!match) return line;
+  const url = snapshotScalar(match[2]);
+  if (url.length <= MAX_LINK_URL_CHARS) return line;
+  const short = Array.from(url.replace(/[?#].*$/s, "?…"));
+  return `${match[1]}${short.length > MAX_LINK_URL_CHARS ? `${short.slice(0, MAX_LINK_URL_CHARS).join("")}…` : short.join("")}`;
+}
+
+function indentation(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+function changedSnapshotLines(previous: string[], current: string[]): string[] | undefined {
+  const unmatched = new Map<string, number>();
+  for (const line of previous) unmatched.set(line, (unmatched.get(line) ?? 0) + 1);
+  const changed = current.map(line => {
+    const count = unmatched.get(line) ?? 0;
+    if (count) unmatched.set(line, count - 1);
+    return !count && Boolean(line.trim());
+  });
+  const changedCount = changed.filter(Boolean).length;
+  if (changedCount * 2 > current.length) return undefined;
+  const removedCount = [...unmatched].reduce((total, [line, count]) => (line.trim() ? total + count : total), 0);
+  const kept = new Set<number>();
+  for (const [index, isChanged] of changed.entries()) {
+    if (!isChanged) continue;
+    kept.add(index);
+    let indent = indentation(current[index]);
+    for (let parent = index - 1; parent >= 0 && indent > 0; parent--) {
+      if (!current[parent].trim() || indentation(current[parent]) >= indent) continue;
+      if (kept.has(parent)) break;
+      kept.add(parent);
+      indent = indentation(current[parent]);
+    }
+  }
+  return [
+    `Changes since last page snapshot: ${changedCount} added or changed, ${removedCount} removed; earlier refs still on the page remain valid.`,
+    ...[...kept].sort((a, b) => a - b).map(index => current[index]),
+  ];
 }
 
 function linksForSnapshot(
@@ -589,6 +634,7 @@ export class PlaywrightCli {
   private readonly configPath: string;
   private readonly options: PlaywrightCliOptions;
   private readonly continuations = new Map<string, PendingContinuation>();
+  private readonly pageSnapshots = new Map<string, string[]>();
   private continuationBytes = 0;
   private configReady?: Promise<void>;
   private client?: Promise<PersistentClient | undefined>;
@@ -615,6 +661,7 @@ export class PlaywrightCli {
 
   async dispose(): Promise<void> {
     this.clearContinuations();
+    this.pageSnapshots.clear();
     const client = await this.client?.catch(() => undefined);
     await client?.dispose().catch(() => {});
     this.client = undefined;
@@ -746,8 +793,10 @@ export class PlaywrightCli {
     if (!SESSION_NAME.test(sessionName)) throw new Error("Unsafe Playwright CLI session name");
     if (signal?.aborted) throw new HeliosCliError("cancelled", "Browser action cancelled");
     if (action.kind === "continue") return this.continueSnapshot(sessionName, action.cursor);
-    if (CLEARS_CONTINUATIONS.has(action.kind)) this.clearContinuations(sessionName);
-    else if (
+    if (CLEARS_CONTINUATIONS.has(action.kind)) {
+      this.clearContinuations(sessionName);
+      this.pageSnapshots.delete(sessionName);
+    } else if (
       !this.options.preserveContinuationsAcrossActions &&
       (INVALIDATES_CONTINUATIONS.has(action.kind) || action.kind === "snapshot" || action.kind === "find")
     )
@@ -783,14 +832,15 @@ export class PlaywrightCli {
     }
     const limits = snapshotLimits(action, this.options);
     const redacted = rawSnapshot === undefined ? undefined : redactSnapshot(rawSnapshot);
+    const fullMode = action.kind === "snapshot" && action.snapshotMode === "full";
     const snapshotLines =
-      redacted === undefined || (action.kind === "snapshot" && action.snapshotMode === "full")
-        ? redacted?.lines
-        : compactSnapshotLines(redacted.lines);
-    const lines =
-      snapshotLines === undefined ? undefined : splitOversizedLines(snapshotLines, Math.max(4, limits.bytes));
+      redacted === undefined || fullMode ? redacted?.lines : compactSnapshotLines(redacted.lines);
+    const snapshotLinks = snapshotLines === undefined ? {} : snapshotLinkTargets(snapshotLines);
+    const pageLines = fullMode ? snapshotLines : snapshotLines?.map(shortenLinkUrl);
+    const changedLines = pageLines && this.pageChanges(sessionName, action, pageLines);
+    const shownLines = changedLines ?? pageLines;
+    const lines = shownLines === undefined ? undefined : splitOversizedLines(shownLines, Math.max(4, limits.bytes));
     const snapshot = lines === undefined ? undefined : boundedSnapshot(lines, 0, limits);
-    const snapshotLinks = lines === undefined ? {} : snapshotLinkTargets(lines);
     const snapshotContinuation =
       snapshot?.nextIndex === undefined
         ? undefined
@@ -806,10 +856,22 @@ export class PlaywrightCli {
       baseUrl: action.kind === "base-url" && typeof value.result === "string" ? value.result : undefined,
       snapshotContinuation,
       snapshotLinks: linksForSnapshot(snapshot?.content, snapshotLinks),
+      pageReferences: changedLines && new Set(elementReferences(pageLines!.join("\n"))),
       artifactPath,
       textContentType: textResult?.contentType,
       textContentTruncated: textResult?.truncated,
     };
+  }
+
+  private pageChanges(sessionName: string, action: BrowserAction, lines: string[]): string[] | undefined {
+    const wholePage =
+      action.kind === "snapshot"
+        ? !action.target && !action.depth && action.snapshotMode !== "full"
+        : action.kind !== "find" && action.kind !== "page-text";
+    if (!wholePage) return undefined;
+    const previous = this.pageSnapshots.get(sessionName);
+    this.pageSnapshots.set(sessionName, lines);
+    return previous && DIFFS_PAGE_SNAPSHOT.has(action.kind) ? changedSnapshotLines(previous, lines) : undefined;
   }
 
   private continueSnapshot(sessionName: string, cursor: string): CliResult {
