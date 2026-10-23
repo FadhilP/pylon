@@ -2603,7 +2603,8 @@ test("new sessions apply the effective workspace policy before the first prompt"
     const androidWorkspace = driver.androidWorkspaceContext(movedSnapshot.sessionGeneration);
     assert.equal(androidWorkspace.projectId, projectId);
     assert.equal(androidWorkspace.workspaceKind, "session-worktree");
-    assert.equal(androidWorkspace.root, driver.terminalTarget().cwd);
+    assert.equal(androidWorkspace.root, registry.workspaceForSession(movedSnapshot.sessionId)?.worktreePath);
+    assert.equal(driver.terminalTarget(projectId)?.cwd, cwd);
     assert.equal(androidWorkspace.registeredRoot, cwd);
     assert.throws(() => driver.androidWorkspaceContext(movedSnapshot.sessionGeneration - 1), /stale/);
 

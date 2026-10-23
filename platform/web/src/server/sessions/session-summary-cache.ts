@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SessionInfo } from "@earendil-works/pi-coding-agent";
-import { mapLimit } from "pylon-core/session-inventory";
+import { mapLimit } from "pylon-core/concurrency";
 import { UsageHistoryAccumulator, type PersistedUsageAtom } from "../usage/usage-history.ts";
 
 const VERSION = 5;
@@ -232,7 +232,7 @@ async function sessionFiles(root: string): Promise<Array<{ path: string; fingerp
     return [];
   }
   const files = (
-    await mapLimit(directories, async directory => {
+    await mapLimit(directories, 16, async directory => {
       const path = join(root, directory.name);
       try {
         return (await readdir(path, { withFileTypes: true }))
@@ -244,7 +244,7 @@ async function sessionFiles(root: string): Promise<Array<{ path: string; fingerp
     })
   ).flat();
   return (
-    await mapLimit(files, async path => {
+    await mapLimit(files, 16, async path => {
       try {
         return { path, fingerprint: fingerprint(await stat(path)) };
       } catch {
@@ -454,7 +454,7 @@ export class SessionSummaryCache {
     const next = new Map<string, CacheRecord>();
     let changed = files.length !== previous.size;
     const unreadablePaths = new Set<string>();
-    const parsed = await mapLimit(files, async file => {
+    const parsed = await mapLimit(files, 16, async file => {
       const key = canonicalPath(file.path);
       const cached = previous.get(key);
       if (cached && sameFingerprint(cached.fingerprint, file.fingerprint)) return cached;

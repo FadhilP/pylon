@@ -314,6 +314,60 @@ test("inspection binds the exported activity or alias to the badging launcher", 
   }
 });
 
+test("inspection accepts aapt2 namespace and boolean output but rejects a private launcher", async () => {
+  const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
+  const tools = { root: fixture.root, version: "35.0.0", aapt2: "aapt2", apksigner: "apksigner" };
+  let exported = "true";
+  const exec = async (_command: string, args: string[]) => ({
+    code: 0,
+    stderr: "",
+    stdout:
+      args[0] === "verify"
+        ? `Signer #1 certificate SHA-256 digest: ${"a".repeat(64)}\n`
+        : args[1] === "badging"
+          ? "package: name='com.example.app' versionCode='1' versionName='1'\nminSdkVersion:'23'\ntargetSdkVersion:'35'\nlaunchable-activity: name='com.example.app.MainActivity'\n"
+          : `N: android=http://schemas.android.com/apk/res/android (line=1)
+  E: manifest (line=1)
+      E: uses-sdk (line=0)
+        A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=23
+        A: http://schemas.android.com/apk/res/android:targetSdkVersion(0x01010270)=35
+      E: application (line=1)
+          E: activity (line=1)
+            A: http://schemas.android.com/apk/res/android:name(0x01010003)=".MainActivity" (Raw: ".MainActivity")
+            A: http://schemas.android.com/apk/res/android:exported(0x01010010)=${exported}
+              E: intent-filter (line=1)
+                  E: action (line=1)
+                    A: http://schemas.android.com/apk/res/android:name(0x01010003)="android.intent.action.MAIN" (Raw: "android.intent.action.MAIN")
+                  E: category (line=1)
+                    A: http://schemas.android.com/apk/res/android:name(0x01010003)="android.intent.category.LAUNCHER" (Raw: "android.intent.category.LAUNCHER")
+          E: activity (line=1)
+            A: http://schemas.android.com/apk/res/android:name(0x01010003)=".OtherActivity" (Raw: ".OtherActivity")
+            A: http://schemas.android.com/apk/res/android:exported(0x01010010)=@0x7f010001
+`,
+  });
+  try {
+    const inspected = await inspectAndroidApk({ path: fixture.apk }, tools, exec);
+    assert.equal(inspected.launchableComponent, "com.example.app/com.example.app.MainActivity");
+    assert.equal(inspected.minSdk, 23);
+    for (exported of ["false", "@0x7f010001", "1", "(type 0x10)0xffffffff"]) {
+      await assert.rejects(inspectAndroidApk({ path: fixture.apk }, tools, exec), /exported/);
+    }
+    exported = "true";
+    await assert.rejects(
+      inspectAndroidApk({ path: fixture.apk }, tools, async (command, args) => {
+        const result = await exec(command, args);
+        return {
+          ...result,
+          stdout: args[1] === "badging" ? result.stdout.replace(/^launchable-activity:.*\n/gm, "") : result.stdout,
+        };
+      }),
+      /launcher is not reported/,
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("a successful build with stale custom output never stages or installs", async () => {
   const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
   try {
@@ -424,6 +478,8 @@ test("build coordinator gates each side effect, cleans staging after install, an
           buildRunner: async input => {
             assert.equal(input.forceRerun, true);
             await writeFile(fixture.apk, "rebuilt APK");
+            const fresh = new Date(Date.now() + 1_000);
+            await utimes(fixture.apk, fresh, fresh);
             return {
               task: "assembleDebug",
               code: 0,
@@ -518,6 +574,8 @@ test("Flutter coordinator forces the fixed output to rebuild and deploys only th
           assert.equal((await lstat(apk)).isFile(), true);
           assert.equal((await lstat(metadata)).isFile(), true);
           await writeFile(apk, "new");
+          const fresh = new Date(Date.now() + 1_000);
+          await utimes(apk, fresh, fresh);
           await writeFile(
             metadata,
             JSON.stringify({

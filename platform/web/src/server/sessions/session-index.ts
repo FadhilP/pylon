@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
-import { mapLimit } from "pylon-core/session-inventory";
+import { mapLimit } from "pylon-core/concurrency";
 import { PROTOCOL_VERSION } from "../../shared/protocol/envelope.ts";
 import type { SessionRuntimeState } from "../../shared/protocol/events.ts";
 import type {
@@ -435,7 +435,7 @@ export class SessionIndex {
     const priorMetadata = this.metadata;
     const unique = new Map<string, SessionInfo>();
     for (const session of sessions) unique.set(this.sessionKey(session.id, session.path), session);
-    const values = await mapLimit([...unique.values()], async session => {
+    const values = await mapLimit([...unique.values()], 16, async session => {
       const candidate = priorMetadata.get(session.id);
       const cached = candidate?.path === session.path ? candidate : undefined;
       try {

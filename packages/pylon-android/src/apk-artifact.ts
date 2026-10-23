@@ -335,7 +335,7 @@ function activityName(packageName: string, name: string): string {
 
 function requireExportedLauncher(manifest: string, packageName: string, launcher: string): void {
   const stack: Array<{ indent: number; name: string }> = [];
-  const components: Array<{ name?: string; exported?: boolean }> = [];
+  const components: Array<{ name?: string; exported?: string }> = [];
   let component: (typeof components)[number] | undefined;
   let componentIndent = -1;
   for (const line of manifest.split(/\r?\n/)) {
@@ -356,19 +356,23 @@ function requireExportedLauncher(manifest: string, packageName: string, launcher
       continue;
     }
     if (!component || stack[stack.length - 1]?.indent !== componentIndent) continue;
-    const name = line.match(/^\s+A: android:name\(0x01010003\)="([^"\r\n]+)"(?:\s|$)/);
+    const name = line.match(
+      /^\s+A: (?:android|http:\/\/schemas\.android\.com\/apk\/res\/android):name\(0x01010003\)="([^"\r\n]+)"(?:\s|$)/,
+    );
     if (name) {
       if (component.name !== undefined) throw new Error("Android launcher name is ambiguous");
       component.name = activityName(packageName, name[1]);
     }
-    if (/^\s+A: android:exported\(0x01010010\)=/.test(line)) {
-      const exported = line.match(/=\(type 0x12\)0x(ffffffff|0)\s*$/);
-      if (!exported || component.exported !== undefined) throw new Error("Android launcher export status is invalid");
-      component.exported = exported[1] === "ffffffff";
+    const exported = line.match(
+      /^\s+A: (?:android|http:\/\/schemas\.android\.com\/apk\/res\/android):exported\(0x01010010\)=(.*)$/,
+    );
+    if (exported) {
+      if (component.exported !== undefined) throw new Error("Android launcher export status is ambiguous");
+      component.exported = exported[1].trim();
     }
   }
   const matches = components.filter(candidate => candidate.name === activityName(packageName, launcher));
-  if (matches.length !== 1 || matches[0].exported !== true) {
+  if (matches.length !== 1 || !["true", "(type 0x12)0xffffffff"].includes(matches[0].exported ?? "")) {
     throw new Error("Android APK launcher must be explicitly exported");
   }
 }
@@ -398,16 +402,16 @@ export async function inspectAndroidApk(
     }),
   );
   const packageMatch = badging.match(/^package: name='([^']+)' versionCode='([^']+)' versionName='([^']*)'/m),
-    min = badging.match(/^sdkVersion:'(\d+)'$/m),
+    min = badging.match(/^(?:minSdkVersion|sdkVersion):'(\d+)'$/m),
     target = badging.match(/^targetSdkVersion:'(\d+)'$/m),
     launch = badging.match(/^launchable-activity: name='([^']+)'/m);
+  if (!launch) throw new Error("Android APK launcher is not reported by aapt2 badging");
   if (
     !packageMatch ||
     !PACKAGE_ID.test(packageMatch[1]) ||
     !packageMatch[2] ||
     !min ||
     !target ||
-    !launch ||
     !/^(?:\.)?[A-Za-z_][A-Za-z0-9_.$]*$/.test(launch[1]) ||
     (expectedPackageName !== undefined && packageMatch[1] !== expectedPackageName)
   )

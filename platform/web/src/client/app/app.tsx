@@ -13,6 +13,7 @@ import {
 import {
   Component,
   Suspense,
+  lazy,
   type ReactNode,
   useEffect,
   useLayoutEffect,

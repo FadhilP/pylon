@@ -79,10 +79,9 @@ const textResult = (text: string, details: Details) => ({
   usage: toolResultUsage(details.usage),
 });
 const configuredModel = (ctx: any, config: AdvisorConfig): Model<any> | undefined => {
-  const effective = effectiveAdvisor(config);
-  if (effective.useMainModel) return ctx.model;
-  if (!effective.advisorModel) return undefined;
-  const ref = parseModelRef(effective.advisorModel);
+  if (config.useMainModel) return ctx.model;
+  if (!config.advisorModel) return undefined;
+  const ref = parseModelRef(config.advisorModel);
   return ref ? ctx.modelRegistry.find(ref.provider, ref.id) : undefined;
 };
 type AdvisorModelOverride = { model?: string; thinking?: ThinkingLevel; useMainModel?: boolean };
