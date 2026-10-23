@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, lstat, realpath } from "node:fs/promises";
 import { isAbsolute, win32 } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import {
   discoverAndroidProject,
   discoverAndroidWorkspace,
@@ -187,23 +188,26 @@ export async function runAndroidGradleBuild(
   let output = "";
   let outputBytes = 0;
   let truncated = false;
-  const append = (value: Buffer | string) => {
+  const appendFrom = (decoder: StringDecoder) => (value: Buffer | string) => {
     const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
     const remaining = Math.max(0, maxOutputBytes - outputBytes);
     const accepted = bytes.subarray(0, remaining);
+    const clipped = accepted.byteLength < bytes.byteLength;
     outputBytes += accepted.byteLength;
-    if (accepted.byteLength) {
-      const chunk = safeBuildOutput(accepted.toString("utf8"));
+    const chunk = accepted.byteLength ? safeBuildOutput(decoder.write(accepted)) : "";
+    if (chunk) {
       output += chunk;
-      input.onOutput?.(chunk, truncated || accepted.byteLength < bytes.byteLength);
+      input.onOutput?.(chunk, truncated || clipped);
     }
-    if (accepted.byteLength < bytes.byteLength && !truncated) {
+    if (clipped && !truncated) {
       truncated = true;
-      if (!accepted.byteLength) input.onOutput?.("", true);
+      if (!chunk) input.onOutput?.("", true);
     }
   };
-  child.stdout?.on("data", append);
-  child.stderr?.on("data", append);
+  const appendStdout = appendFrom(new StringDecoder("utf8"));
+  const appendStderr = appendFrom(new StringDecoder("utf8"));
+  child.stdout?.on("data", appendStdout);
+  child.stderr?.on("data", appendStderr);
 
   let stopReason: "cancelled" | "timeout" | undefined;
   let stopResolve!: () => void;
@@ -214,7 +218,9 @@ export async function runAndroidGradleBuild(
   const requestStop = (reason: "cancelled" | "timeout") => {
     if (stopReason) return;
     stopReason = reason;
-    termination = Promise.resolve().then(() => terminate(child, "Android Gradle"));
+    termination = Promise.resolve().then(() =>
+      terminate(child, "Android Gradle", undefined, undefined, { processGroup: platform !== "win32" }),
+    );
     stopResolve();
   };
   const cancelled = () => requestStop("cancelled");
@@ -248,7 +254,7 @@ export async function runAndroidGradleBuild(
   } finally {
     clearTimeout(timer);
     input.signal?.removeEventListener("abort", cancelled);
-    child.stdout?.off("data", append);
-    child.stderr?.off("data", append);
+    child.stdout?.off("data", appendStdout);
+    child.stderr?.off("data", appendStderr);
   }
 }

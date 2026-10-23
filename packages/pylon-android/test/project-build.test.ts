@@ -268,6 +268,67 @@ test("Gradle builds derive one task, sanitize environment, bound output, and nev
   }
 });
 
+test("a flavored module is skipped without hiding the project's other application modules", async () => {
+  const root = await project();
+  try {
+    await writeFile(join(root, "settings.gradle.kts"), 'include(":app", ":flavored")\n');
+    await mkdir(join(root, "flavored"));
+    await writeFile(
+      join(root, "flavored", "build.gradle.kts"),
+      'plugins { id("com.android.application") }\nandroid { productFlavors { create("free") } }\n',
+    );
+    const mixed = await discoverAndroidProject(root);
+    assert.deepEqual(mixed.modules, [{ modulePath: ":app", variants: ["debug", "release"] }]);
+    assert.equal(mixed.issue, undefined);
+
+    await writeFile(join(root, "settings.gradle.kts"), 'include(":flavored")\n');
+    const onlyFlavored = await discoverAndroidProject(root);
+    assert.deepEqual(onlyFlavored.modules, []);
+    assert.match(onlyFlavored.issue ?? "", /product flavors/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Gradle output keeps a multi-byte character split across stdout chunks", async () => {
+  const root = await project();
+  try {
+    const discovery = await discoverAndroidProject(root, { platform: "linux" });
+    assert.ok(discovery.wrapper);
+    const encoded = Buffer.from("build ✓ done");
+    const split = encoded.indexOf(Buffer.from("✓")) + 1;
+    const spawnProcess = (() => {
+      const child = childProcess();
+      queueMicrotask(() => {
+        child.stderr?.emit("data", Buffer.from("warn "));
+        child.stdout?.emit("data", encoded.subarray(0, split));
+        child.stdout?.emit("data", encoded.subarray(split));
+        Object.assign(child, { exitCode: 0 });
+        child.emit("close", 0);
+      });
+      return child;
+    }) as unknown as typeof spawn;
+
+    const result = await runAndroidGradleBuild(
+      {
+        workspace: {
+          canonicalRoot: discovery.canonicalRoot,
+          wrapperPath: discovery.wrapper.executablePath,
+          wrapperFingerprint: discovery.wrapper.fingerprint,
+          modulePath: ":app",
+          variant: "debug",
+        },
+        stateDirectory: join(root, ".pylon-gradle"),
+      },
+      { spawnProcess, platform: "linux", env: { PATH: "/usr/bin" } },
+    );
+
+    assert.equal(result.output, "warn build ✓ done");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Gradle build refuses a wrapper changed after authorization", async () => {
   const root = await project();
   try {

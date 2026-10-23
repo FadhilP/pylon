@@ -319,6 +319,7 @@ export async function discoverAndroidProject(
     const wrapper = await wrapperIdentity(canonicalRoot, options.platform ?? process.platform, budget);
     const included = parseIncludedModules((await boundedRead(settings.path!, budget)).toString("utf8"));
     const modules: AndroidProjectModuleSuggestion[] = [];
+    let unsupportedModuleIssue: string | undefined;
     for (const modulePath of included) {
       const directory = moduleDirectory(canonicalRoot, modulePath);
       const directoryState = await lstat(directory).catch(() => undefined);
@@ -335,7 +336,11 @@ export async function discoverAndroidProject(
       if (scripts.length !== 1) continue;
       const source = withoutComments((await boundedRead(scripts[0], budget)).toString("utf8"));
       if (!applicationPlugin(source)) continue;
-      modules.push({ modulePath, variants: moduleVariants(source) });
+      try {
+        modules.push({ modulePath, variants: moduleVariants(source) });
+      } catch (error) {
+        unsupportedModuleIssue ??= error instanceof Error ? error.message : "Android module is unsupported";
+      }
     }
     return {
       canonicalRoot,
@@ -345,7 +350,7 @@ export async function discoverAndroidProject(
       ...(!wrapper
         ? { issue: "A complete Gradle wrapper was not found" }
         : !modules.length
-          ? { issue: "No statically explicit Android application module was found" }
+          ? { issue: unsupportedModuleIssue ?? "No statically explicit Android application module was found" }
           : {}),
     };
   } catch (error) {

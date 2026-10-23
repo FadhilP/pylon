@@ -1,4 +1,5 @@
 import type { spawn, ChildProcess } from "node:child_process";
+import type { ProcessTreeTerminationOptions } from "./process.js";
 
 export interface AndroidExecOptions {
   signal?: AbortSignal;
@@ -23,4 +24,5 @@ export type AndroidProcessTerminator = (
   label: string,
   gracefulMs?: number,
   forceMs?: number,
+  options?: ProcessTreeTerminationOptions,
 ) => Promise<void>;

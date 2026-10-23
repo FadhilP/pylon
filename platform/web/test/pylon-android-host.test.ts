@@ -291,6 +291,22 @@ test("PylonAndroidHost binds configuration, trust, build, and cancellation to on
     assert.equal(current.build?.state, "running");
     assert.equal(acceptedRoot, root);
 
+    await assert.rejects(
+      host.command({
+        type: "saveRunConfiguration",
+        commandId: randomUUID(),
+        expectedServiceRevision: current.serviceRevision,
+        expectedGeneration: 1,
+        expectedConfigRevision: 0,
+        candidateId: "root",
+        modulePath: ":app",
+        variant: "release",
+      }),
+      /configuration changed/,
+    );
+    current = await host.snapshot(false);
+    assert.equal(current.build?.state, "running");
+
     await host.command({
       type: "cancelBuild",
       commandId: randomUUID(),

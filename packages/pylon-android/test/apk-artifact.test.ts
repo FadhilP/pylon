@@ -513,6 +513,104 @@ test("build coordinator gates each side effect, cleans staging after install, an
   }
 });
 
+test("pre-install failures are not install-uncertain and install errors keep a staging cleanup failure", async () => {
+  const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
+  const tools = { root: fixture.root, version: "35.0.0", aapt2: "aapt2", apksigner: "apksigner" };
+  const deviceResult = { pm: { code: 0, stderr: "", stdout: "" }, install: { code: 0, stderr: "", stdout: "Success" } };
+  const exec = async (_command: string, args: string[]) => {
+    if (args[1] === "xmltree") return { code: 0, stderr: "", stdout: launcherManifest() };
+    if (args[0] === "dump")
+      return {
+        code: 0,
+        stderr: "",
+        stdout:
+          "package: name='com.example.app' versionCode='1' versionName='1'\nsdkVersion:'23'\ntargetSdkVersion:'35'\nlaunchable-activity: name='.Main'\n",
+      };
+    if (args[0] === "verify")
+      return {
+        code: 0,
+        stderr: "",
+        stdout:
+          "Signer #1 certificate SHA-256 digest: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+      };
+    if (args.includes("pm")) return deviceResult.pm;
+    return deviceResult.install;
+  };
+  const run = (phases: string[], failCleanup = false) =>
+    runAndroidBuildAndRun(
+      {
+        build: {
+          workspace: {
+            canonicalRoot: fixture.root,
+            wrapperPath: join(fixture.root, "gradlew"),
+            wrapperFingerprint: "x",
+            modulePath: ":app",
+            variant: "debug",
+          },
+          stateDirectory: join(fixture.root, "state"),
+        },
+        sdkRoot: fixture.root,
+        buildToolsVersion: "35.0.0",
+        stagingRoot: join(fixture.root, ".private"),
+        serial: "emulator-5554",
+        revalidate: () => {},
+        onPhase: phase => phases.push(phase),
+      },
+      {
+        device: new AndroidAppDevice("adb", exec),
+        exec,
+        buildRunner: async () => {
+          const fresh = new Date(Date.now() + 1_000);
+          await utimes(fixture.apk, fresh, fresh);
+          return {
+            task: "assembleDebug",
+            code: 0,
+            succeeded: true,
+            cancelled: false,
+            timedOut: false,
+            output: "",
+            truncated: false,
+          };
+        },
+        resolveTools: async () => tools,
+        stage: async (source, root, identity) => {
+          const staged = await stageAndroidApk(source, root, identity);
+          if (!failCleanup) return staged;
+          return {
+            ...staged,
+            cleanup: async () => {
+              await staged.cleanup();
+              throw new Error("staging cleanup failed");
+            },
+          };
+        },
+      },
+    );
+  try {
+    deviceResult.pm = { code: 1, stderr: "error: device offline", stdout: "" };
+    const preInstall: string[] = [];
+    await assert.rejects(
+      run(preInstall),
+      (error: unknown) =>
+        error instanceof AndroidBuildAndRunError && error.phase === "installing" && !error.installUncertain,
+    );
+    assert.equal(preInstall.includes("install-uncertain"), false);
+
+    deviceResult.pm = { code: 1, stderr: "", stdout: "" };
+    deviceResult.install = { code: 1, stderr: "Failure", stdout: "" };
+    await assert.rejects(
+      run([], true),
+      (error: unknown) =>
+        error instanceof AndroidBuildAndRunError &&
+        error.installUncertain &&
+        error.cause instanceof AggregateError &&
+        error.cause.errors.some(cause => cause instanceof Error && cause.message === "staging cleanup failed"),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("Flutter coordinator forces the fixed output to rebuild and deploys only the resulting APK", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-flutter-run-"));
   const outputRoot = join(root, "build", "app", "outputs", "apk", "debug");

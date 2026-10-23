@@ -449,20 +449,24 @@ export class AndroidAppDevice {
     readonly adb: string,
     private readonly exec: AndroidExec,
   ) {}
-  private async run(serial: string, args: string[], signal?: AbortSignal): Promise<string> {
+  private async execAdb(serial: string, args: string[], signal?: AbortSignal): Promise<AndroidExecResult> {
     if (!SERIAL.test(serial)) throw new Error("Android device serial is invalid");
-    return checked(
-      "adb",
-      await this.exec(this.adb, ["-s", serial, ...args], {
-        signal,
-        timeout: 20_000,
-        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-      }),
-    );
+    return this.exec(this.adb, ["-s", serial, ...args], {
+      signal,
+      timeout: 20_000,
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+    });
+  }
+  private async run(serial: string, args: string[], signal?: AbortSignal): Promise<string> {
+    return checked("adb", await this.execAdb(serial, args, signal));
   }
   async isPackageInstalled(serial: string, packageName: string, signal?: AbortSignal): Promise<boolean> {
     validatePackage(packageName);
-    const value = (await this.run(serial, ["shell", "pm", "path", packageName], signal)).trim();
+    const result = await this.execAdb(serial, ["shell", "pm", "path", packageName], signal);
+    // `pm path` exits 1 without output when the package is not installed; adb errors still print to stderr.
+    const notInstalled = !result.killed && result.code === 1 && !result.stdout.trim() && !result.stderr.trim();
+    if (notInstalled) return false;
+    const value = checked("adb", result).trim();
     if (!value) return false;
     if (!value.split(/\r?\n/).every(line => /^package:\S+$/.test(line)))
       throw new Error("Android package query is malformed");

@@ -120,3 +120,16 @@ test("process cleanup rejects unbounded deadlines", async () => {
   await assert.rejects(terminateProcessTree(child, "test", Infinity, 5), /Graceful cleanup timeout/);
   await assert.rejects(terminateProcessTree(child, "test", 5, Infinity), /Forced cleanup timeout/);
 });
+
+test(
+  "an exited group leader still has its surviving descendants killed",
+  { skip: process.platform === "win32", timeout: 10_000 },
+  async () => {
+    const child = spawn("sh", ["-c", "sleep 30 & exit 0"], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
+    const closed = new Promise(resolve => child.once("close", resolve));
+    await new Promise(resolve => child.once("exit", resolve));
+    await terminateProcessTree(child, "test", 0, 0, { processGroup: true });
+    // `close` waits for the backgrounded sleep, which still holds stdout open.
+    await closed;
+  },
+);

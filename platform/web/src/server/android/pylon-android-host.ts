@@ -500,8 +500,6 @@ export class PylonAndroidHost {
     if (!suggestion?.variants.includes(command.variant)) {
       throw new AndroidHostError(409, "Android module or variant is stale or unsupported");
     }
-    this.cancelBuildForProject(state.workspace.projectId);
-    this.cancelRunForProject(state.workspace.projectId);
     this.settings!.saveConfiguration(
       state.workspace.projectId,
       command.expectedConfigRevision,
@@ -509,6 +507,8 @@ export class PylonAndroidHost {
       command.variant,
       command.candidateId,
     );
+    this.cancelBuildForProject(state.workspace.projectId);
+    this.cancelRunForProject(state.workspace.projectId);
     await this.refreshProject(command.expectedGeneration);
   }
 
@@ -524,8 +524,6 @@ export class PylonAndroidHost {
     if (!command.trusted) {
       const prior = state.stored.trust;
       if (!prior?.trusted) throw new AndroidHostError(409, "Android workspace is already untrusted");
-      this.cancelBuildForProject(state.workspace.projectId);
-      this.cancelRunForProject(state.workspace.projectId);
       this.settings!.setTrust(state.workspace.projectId, command.expectedTrustRevision, {
         trusted: false,
         configRevision: configuration.revision,
@@ -534,6 +532,8 @@ export class PylonAndroidHost {
         wrapperRelativePath: prior.wrapperRelativePath,
         wrapperFingerprint: prior.wrapperFingerprint,
       });
+      this.cancelBuildForProject(state.workspace.projectId);
+      this.cancelRunForProject(state.workspace.projectId);
       await this.refreshProject(command.expectedGeneration);
       return;
     }

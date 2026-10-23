@@ -9,6 +9,8 @@ export interface ProcessTreeTerminationOptions {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   spawnProcess?: typeof spawn;
+  /** The child was spawned with `detached` on POSIX, so its PID is also its process group ID. */
+  processGroup?: boolean;
 }
 
 function exited(child: ChildProcess): boolean {
@@ -120,9 +122,17 @@ export async function terminateProcessTree(
 ): Promise<void> {
   validateWait(gracefulMs, "Graceful cleanup timeout");
   validateWait(forceMs, "Forced cleanup timeout");
-  if (exited(child)) return;
-  if (!child.pid) throw new Error(`${label} process has no PID`);
   const platform = options.platform ?? process.platform;
+  if (exited(child)) {
+    // A descendant can outlive the leader and keep its pipes open. POSIX does not reuse a live group ID as a PID.
+    if (options.processGroup && platform !== "win32" && child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    }
+    return;
+  }
+  if (!child.pid) throw new Error(`${label} process has no PID`);
   let helperFailure: TaskkillHelperCleanupError | undefined;
   if (platform === "win32") {
     try {

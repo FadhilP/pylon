@@ -174,6 +174,7 @@ export class AndroidRunner {
     const operationSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     this.activeControllers.add(controller);
     return this.mutate(async () => {
+      const previous = { discovery: this.discovery, issue: this.issue };
       this.discovery = "refreshing";
       this.issue = undefined;
       this.changed();
@@ -194,7 +195,12 @@ export class AndroidRunner {
         this.issue = undefined;
         this.changed();
       } catch (error) {
-        if (operationSignal.aborted) throw error;
+        if (operationSignal.aborted) {
+          this.discovery = previous.discovery;
+          this.issue = previous.issue;
+          this.changed();
+          throw error;
+        }
         this.discovery = "unavailable";
         this.issue = boundedIssue(error);
         this.changed();

@@ -45,6 +45,23 @@ test("AndroidRunner construction and disposal are inert until an operation reque
   assert.equal(runner.snapshot().lifecycle, "disposed");
 });
 
+test("an aborted refresh restores the prior discovery state instead of staying refreshing", async () => {
+  const controller = new AbortController();
+  const runner = new AndroidRunner({
+    createSdk: async () => ({
+      ...controlledSdk([]),
+      async listAvds() {
+        controller.abort();
+        throw new Error("aborted");
+      },
+    }),
+  });
+
+  await assert.rejects(runner.refresh(controller.signal), /aborted/);
+  assert.equal(runner.snapshot().discovery, "idle");
+  await runner.dispose();
+});
+
 test("AndroidRunner tracks only owned handles and serializes start and stop", async () => {
   const stops: string[] = [];
   const events: number[] = [];

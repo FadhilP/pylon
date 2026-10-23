@@ -182,7 +182,7 @@ export async function runAndroidBuildAndRun(
     replaced = await options.device.isPackageInstalled(input.serial, inspected.packageName, signal);
     const deploymentArtifact = (): AndroidDeployedArtifact | undefined =>
       inspected ? { ...inspected, sha256: stagedSha256, bytes: stagedBytes } : undefined;
-    let installError: AndroidBuildAndRunError | undefined;
+    let installFailure: { error: unknown } | undefined;
     try {
       await options.device.install(input.serial, staged.path, signal);
       installed = true;
@@ -190,15 +190,7 @@ export async function runAndroidBuildAndRun(
       ensureLive(input);
     } catch (error) {
       if (!installed) announce(input, "install-uncertain");
-      installError = new AndroidBuildAndRunError(
-        "installing",
-        !installed,
-        installed,
-        error,
-        deploymentArtifact(),
-        replaced,
-        installationIdentity,
-      );
+      installFailure = { error };
     }
     const completedStaging = staged;
     staged = undefined;
@@ -206,7 +198,19 @@ export async function runAndroidBuildAndRun(
       () => undefined,
       error => error,
     );
-    if (installError) throw installError;
+    if (installFailure) {
+      throw new AndroidBuildAndRunError(
+        "installing",
+        !installed,
+        installed,
+        cleanupError
+          ? new AggregateError([installFailure.error, cleanupError], "Android install and staging cleanup failed")
+          : installFailure.error,
+        deploymentArtifact(),
+        replaced,
+        installationIdentity,
+      );
+    }
     if (cleanupError) {
       throw new AndroidBuildAndRunError(
         "installing",
@@ -237,11 +241,10 @@ export async function runAndroidBuildAndRun(
     return { artifact: deploymentArtifact()!, installed, replaced, installationIdentity: installationIdentity! };
   } catch (error) {
     if (error instanceof AndroidBuildAndRunError) throw error;
-    const uncertain = phase === "installing";
-    if (uncertain) announce(input, "install-uncertain");
+    // `adb install` failures are wrapped above, so no error reaching here leaves the install uncertain.
     throw new AndroidBuildAndRunError(
       phase,
-      uncertain,
+      false,
       installed,
       error,
       inspected ? { ...inspected, sha256: stagedSha256, bytes: stagedBytes } : undefined,
