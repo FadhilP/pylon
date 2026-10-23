@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtemp, mkdir, writeFile, chmod, realpath, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, chmod, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, spawn } from "node:child_process";
@@ -97,7 +97,10 @@ test("workspace discovery finds explicit nested Gradle and conventional Flutter 
     await mkdir(join(android, "gradle", "wrapper"), { recursive: true });
     await mkdir(join(android, "app"));
     await writeFile(join(flutter, "pubspec.yaml"), "name: customer\ndependencies:\n  flutter:\n    sdk: flutter\n");
-    await writeFile(join(android, "settings.gradle"), "include ':app'\nincludeBuild('../flutter-tools')\n");
+    await writeFile(
+      join(android, "settings.gradle"),
+      'pluginManagement {\n  includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")\n}\ninclude \":app\"\n',
+    );
     await writeFile(join(android, "app", "build.gradle"), "apply plugin: 'com.android.application'\n");
     await writeFile(join(android, "gradlew"), "#!/bin/sh\nexit 0\n");
     await chmod(join(android, "gradlew"), 0o700);
@@ -164,7 +167,49 @@ test("workspace discovery finds explicit nested Gradle and conventional Flutter 
     assert.equal(build.succeeded, true);
     assert.deepEqual(invocation?.args, [":app:assembleDebug", "--no-daemon", "--console=plain", "--rerun-tasks"]);
     assert.match((await discoverAndroidProject(root)).issue ?? "", /settings file not found/);
+    for (const settings of [
+      'include(":app")\n',
+      "// include ':ghost'\ninclude 'app'\n",
+      'pluginManagement {\n  val flutterSdkPath = "sdk"\n  includeBuild("${flutterSdkPath}/packages/flutter_tools/gradle")\n}\ninclude(":app")\n',
+    ]) {
+      await writeFile(join(android, "settings.gradle"), settings);
+      const candidate = (await discoverAndroidWorkspace(root)).candidates.find(item => item.kind === "flutter");
+      assert.deepEqual(candidate?.modules, [{ modulePath: ":app", variants: ["debug"] }]);
+    }
+    for (const settings of [
+      'include(":app")\ninclude(":app")\n',
+      'include(":app", ":app")\n',
+      'include(":app", ":other")\n',
+      'include(":app")\ninclude(moduleName)\n',
+      'include(":app" + suffix)\n',
+      'if (enabled) {\ninclude(":app")\n}\n',
+      'if (enabled)\ninclude(":app")\n',
+      'include(":app")\nincludeBuild("../other")\n',
+      'include(":app")\nsettings.include(":other")\n',
+      'pluginManagement {\nincludeBuild("../other")\n}\ninclude(":app")\n',
+      'include(":app")\nproject(":app").projectDir = file("elsewhere")\n',
+      'include(":app")\nincludeFlat("other")\n',
+    ]) {
+      await writeFile(join(android, "settings.gradle"), settings);
+      const candidate = (await discoverAndroidWorkspace(root)).candidates.find(item => item.kind === "flutter");
+      assert.deepEqual(candidate?.modules, [], settings);
+      assert.match(candidate?.issue ?? "", /not statically included/, settings);
+    }
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("discovery rejects linked project and workspace roots before canonicalization", async () => {
+  const root = await project();
+  const parent = await mkdtemp(join(tmpdir(), "pylon-project-link-"));
+  try {
+    const linked = join(parent, "linked");
+    await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(discoverAndroidProject(linked), /unavailable/);
+    await assert.rejects(discoverAndroidWorkspace(linked), /unavailable|unsafe/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
     await rm(root, { recursive: true, force: true });
   }
 });

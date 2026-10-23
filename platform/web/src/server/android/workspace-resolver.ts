@@ -45,11 +45,7 @@ export async function resolveAndroidWorkspace(
   ) {
     throw new Error("Android workspace selection is stale or invalid");
   }
-  const [canonicalRoot, canonicalRegisteredRoot] = await Promise.all([
-    realpath(selected.root),
-    realpath(selected.registeredRoot),
-  ]);
-  const [rootState, registeredState] = await Promise.all([lstat(canonicalRoot), lstat(canonicalRegisteredRoot)]);
+  const [rootState, registeredState] = await Promise.all([lstat(selected.root), lstat(selected.registeredRoot)]);
   if (
     !rootState.isDirectory() ||
     rootState.isSymbolicLink() ||
@@ -57,6 +53,26 @@ export async function resolveAndroidWorkspace(
     registeredState.isSymbolicLink()
   ) {
     throw new Error("Android workspace is unavailable");
+  }
+  const [canonicalRoot, canonicalRegisteredRoot] = await Promise.all([
+    realpath(selected.root),
+    realpath(selected.registeredRoot),
+  ]);
+  const [canonicalState, canonicalRegisteredState] = await Promise.all([
+    lstat(canonicalRoot),
+    lstat(canonicalRegisteredRoot),
+  ]);
+  if (
+    !canonicalState.isDirectory() ||
+    canonicalState.isSymbolicLink() ||
+    !canonicalRegisteredState.isDirectory() ||
+    canonicalRegisteredState.isSymbolicLink() ||
+    canonicalState.dev !== rootState.dev ||
+    canonicalState.ino !== rootState.ino ||
+    canonicalRegisteredState.dev !== registeredState.dev ||
+    canonicalRegisteredState.ino !== registeredState.ino
+  ) {
+    throw new Error("Android workspace changed while resolving");
   }
   return {
     projectId: selected.projectId,

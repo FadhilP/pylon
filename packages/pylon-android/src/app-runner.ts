@@ -154,17 +154,19 @@ export async function runAndroidBuildAndRun(
       }
     }
     await gate(input, phase);
-    const build = await (options.buildRunner ?? runAndroidGradleBuild)({ ...input.build, signal });
+    const buildStartedAt = Date.now();
+    const build = await (options.buildRunner ?? runAndroidGradleBuild)({ ...input.build, forceRerun: true, signal });
     if (!build.succeeded || build.cancelled) throw new Error("Android Gradle build did not succeed");
     phase = "finding-artifact";
     await gate(input, phase);
-    const artifact = await discoverAndroidApk(
-      input.artifact ?? {
+    const artifact = await discoverAndroidApk({
+      ...(input.artifact ?? {
         workspaceRoot: input.build.workspace.canonicalRoot,
         modulePath: input.build.workspace.modulePath,
         variant: input.build.workspace.variant,
-      },
-    );
+      }),
+      buildStartedAt,
+    });
     phase = "staging";
     await gate(input, phase);
     staged = await (options.stage ?? stageAndroidApk)(artifact.sourcePath, input.stagingRoot, artifact.sourceIdentity);

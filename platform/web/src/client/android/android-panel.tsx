@@ -66,7 +66,9 @@ function act(operation: Promise<void>, focusAfter?: () => HTMLElement | null): v
       if (!focusAfter) return;
       setTimeout(() => {
         const active = document.activeElement;
-        if (!active || active === document.body || !document.contains(active)) focusAfter()?.focus();
+        if (!active || active === document.body || !document.contains(active) || active.matches(":disabled")) {
+          focusAfter()?.focus();
+        }
       }, 0);
     });
 }
@@ -94,12 +96,7 @@ function outputData(
           truncated: build.outputTruncated,
           issue: build.issue,
         }
-      : {
-          summary: "never run",
-          output: "",
-          empty: "No build has run in this host.",
-          truncated: false,
-        };
+      : { summary: "never run", output: "", empty: "No build has run in this host.", truncated: false };
   }
   const logs = run?.logs;
   return logs
@@ -112,15 +109,18 @@ function outputData(
         truncated: logs.outputTruncated,
         issue: logs.issue,
       }
-    : {
-        summary: "no run",
-        output: "",
-        empty: "Run an app to collect package-scoped logs.",
-        truncated: false,
-      };
+    : { summary: "no run", output: "", empty: "Run an app to collect package-scoped logs.", truncated: false };
 }
 
-function AndroidOutputTools({ run, busy }: { run: AndroidRunReadModel | undefined; busy: boolean }) {
+function AndroidOutputTools({
+  run,
+  busy,
+  focusAfter,
+}: {
+  run: AndroidRunReadModel | undefined;
+  busy: boolean;
+  focusAfter: () => HTMLElement | null;
+}) {
   if (!run) {
     return (
       <span className="android-output-tools">
@@ -141,7 +141,10 @@ function AndroidOutputTools({ run, busy }: { run: AndroidRunReadModel | undefine
         className="secondary"
         disabled={busy || (!running && run.phase !== "running")}
         onClick={() =>
-          act(running ? androidStore.stopLogs(run.runId, run.revision) : androidStore.startLogs(run.runId, run.revision))
+          act(
+            running ? androidStore.stopLogs(run.runId, run.revision) : androidStore.startLogs(run.runId, run.revision),
+            focusAfter,
+          )
         }>
         {running ? "Stop logs" : "Start logs"}
       </button>
@@ -149,7 +152,7 @@ function AndroidOutputTools({ run, busy }: { run: AndroidRunReadModel | undefine
         type="button"
         className="icon-button"
         disabled={busy || !run.logs.output}
-        onClick={() => act(androidStore.clearRetainedOutput(run.runId, run.revision))}
+        onClick={() => act(androidStore.clearRetainedOutput(run.runId, run.revision), focusAfter)}
         aria-label="Clear retained logs"
         title="Clear retained logs">
         <IconTrash size={13} />
@@ -168,9 +171,7 @@ function AndroidOutputBody({ which, data }: { which: AndroidOutputKind; data: Ou
         {data.output || data.empty}
       </pre>
       {which === "logs" && (
-        <p className="android-output-foot is-quiet">
-          May contain secrets. Clearing here does not clear device Logcat.
-        </p>
+        <p className="android-output-foot is-quiet">May contain secrets. Clearing here does not clear device Logcat.</p>
       )}
       {data.truncated && (
         <p className="android-output-foot">
@@ -207,6 +208,7 @@ function AndroidOutputSection({
   onFocus: () => void;
   onDock: () => void;
 }) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const data = outputData(which, build, run);
   const label = which === "build" ? "Build output" : "App logs";
   return (
@@ -214,18 +216,24 @@ function AndroidOutputSection({
       className={`android-output${focused ? " is-focus" : " is-aside"}${docked ? " is-docked" : ""}`}
       style={style}>
       <header className="android-output-head">
-        <button
-          type="button"
-          className="android-output-title"
-          disabled={docked}
-          onClick={onFocus}
-          aria-expanded={!docked && focused}
-          aria-label={`${label}, ${docked ? "in bottom panel" : focused ? "expanded" : "collapsed"}`}>
-          <strong>{label}</strong>
-          <span className={`android-output-summary${data.tone ? ` is-${data.tone}` : ""}`}>{data.summary}</span>
-        </button>
+        <h3 className="android-output-heading" ref={headingRef} tabIndex={-1}>
+          <button
+            type="button"
+            className="android-output-title"
+            disabled={docked}
+            onClick={onFocus}
+            aria-expanded={!docked && focused}
+            aria-label={`${label}, ${docked ? "in bottom panel" : focused ? "expanded" : "collapsed"}`}>
+            <strong>{label}</strong>
+            <span className={`android-output-summary${data.tone ? ` is-${data.tone}` : ""}`}>{data.summary}</span>
+          </button>
+        </h3>
         <span className="android-spacer" />
-        {docked ? <span className="android-tag">Bottom panel</span> : which === "logs" ? <AndroidOutputTools run={run} busy={busy} /> : undefined}
+        {docked ? (
+          <span className="android-tag">Bottom panel</span>
+        ) : which === "logs" ? (
+          <AndroidOutputTools run={run} busy={busy} focusAfter={() => headingRef.current} />
+        ) : undefined}
         <button
           id={`android-${which}-dock-control`}
           type="button"
@@ -254,6 +262,7 @@ export function AndroidBottomOutput({
   tabId: string;
   onRestore: (which: AndroidOutputKind) => void;
 }) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const state = useAndroidStore();
   const build = state.service?.build;
   const run = state.service?.run;
@@ -261,17 +270,14 @@ export function AndroidBottomOutput({
   const label = which === "build" ? "Build output" : "App logs";
   const busy = Boolean(state.busy) || !state.connected;
   return (
-    <section
-      id={panelId}
-      className="android-bottom-output"
-      role="tabpanel"
-      aria-labelledby={tabId}
-      hidden={!active}>
+    <section id={panelId} className="android-bottom-output" role="tabpanel" aria-labelledby={tabId} hidden={!active}>
       <header className="android-bottom-output-head">
-        <strong>{label}</strong>
+        <h3 className="android-output-heading" ref={headingRef} tabIndex={-1}>
+          {label}
+        </h3>
         <span className={`android-output-summary${data.tone ? ` is-${data.tone}` : ""}`}>{data.summary}</span>
         <span className="android-spacer" />
-        {which === "logs" && <AndroidOutputTools run={run} busy={busy} />}
+        {which === "logs" && <AndroidOutputTools run={run} busy={busy} focusAfter={() => headingRef.current} />}
         <button
           type="button"
           className="secondary"

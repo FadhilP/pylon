@@ -7,8 +7,6 @@ import type { AndroidExec, AndroidExecResult } from "./types.js";
 
 const MAX_METADATA_BYTES = 256 * 1024;
 const MAX_APK_BYTES = 512 * 1024 * 1024;
-const MAX_OUTPUT_ENTRIES = 512;
-const MAX_OUTPUT_DEPTH = 8;
 const MAX_COMMAND_OUTPUT_BYTES = 256 * 1024;
 const PACKAGE_ID = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
 const BUILD_TOOLS_VERSION = /^\d+(?:\.\d+){1,3}$/;
@@ -28,6 +26,7 @@ export interface ApkDiscoveryInput {
   readonly variant: string;
   readonly outputRoot?: string;
   readonly expectedOutputFile?: string;
+  readonly buildStartedAt?: number;
 }
 export interface FileIdentity {
   readonly dev: number;
@@ -89,30 +88,12 @@ async function regular(path: string, label: string, maxBytes = MAX_APK_BYTES): P
   const info = await lstat(path).catch(() => {
     throw new Error(`${label} is unavailable`);
   });
-  if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > maxBytes)
-    throw new Error(`${label} must be a bounded non-symlink regular file`);
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size < 1 || info.size > maxBytes)
+    throw new Error(`${label} must be a bounded unlinked regular file`);
   return { dev: info.dev, ino: info.ino, size: info.size, mtimeMs: info.mtimeMs };
 }
 function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
-}
-async function metadataPaths(
-  path: string,
-  state = { entries: 0, paths: [] as string[] },
-  depth = 0,
-): Promise<string[]> {
-  if (depth > MAX_OUTPUT_DEPTH) throw new Error("Android APK output tree exceeds depth limit");
-  const info = await lstat(path);
-  if (info.isSymbolicLink()) throw new Error("Android APK output tree contains a symbolic link");
-  if (!info.isDirectory()) return state.paths;
-  for (const entry of await readdir(path, { withFileTypes: true })) {
-    if (++state.entries > MAX_OUTPUT_ENTRIES) throw new Error("Android APK output tree exceeds entry limit");
-    const child = join(path, entry.name);
-    if (entry.isSymbolicLink()) throw new Error("Android APK output tree contains a symbolic link");
-    if (entry.isDirectory()) await metadataPaths(child, state, depth + 1);
-    else if (entry.isFile() && entry.name === "output-metadata.json") state.paths.push(child);
-  }
-  return state.paths;
 }
 async function parseMetadata(
   path: string,
@@ -158,43 +139,34 @@ async function parseMetadata(
   return { packageName: value.applicationId, variant: value.variantName, outputFile: element.outputFile };
 }
 
-/** Finds one AGP record for the requested variant; stale records for other variants are ignored. */
 export async function discoverAndroidApk(input: ApkDiscoveryInput): Promise<AndroidApkArtifact> {
   if (!validAndroidVariant(input.variant)) throw new Error("Android build variant is invalid");
   if (input.expectedOutputFile && !/^[^/\\\0]+\.apk$/.test(input.expectedOutputFile)) {
     throw new Error("Android expected APK filename is invalid");
   }
-  const root = await realpath(input.workspaceRoot);
-  const configuredOutput = input.outputRoot ?? join(moduleDirectory(root, input.modulePath), "build", "outputs", "apk");
-  const outputRoot = await safeOutputDirectory(root, configuredOutput);
-  const metadataCandidates = input.expectedOutputFile
-    ? [join(outputRoot, "output-metadata.json")]
-    : await metadataPaths(outputRoot);
-  const candidates: AndroidApkArtifact[] = [];
-  for (const metadataPath of metadataCandidates) {
-    const metadata = await parseMetadata(metadataPath, outputRoot);
-    if (metadata.variant !== input.variant) continue;
-    if (input.expectedOutputFile && metadata.outputFile !== input.expectedOutputFile) {
-      throw new Error("Android APK output filename does not match the configured layout");
-    }
-    const sourcePath = resolve(join(metadataPath, "..", metadata.outputFile));
-    if (!within(outputRoot, sourcePath)) throw new Error("Android APK output resolves outside configured module");
-    const canonicalSource = await realpath(sourcePath).catch(() => "");
-    if (canonicalSource !== sourcePath || !within(outputRoot, canonicalSource)) {
-      throw new Error("Android APK output path is unsafe");
-    }
-    const sourceIdentity = await regular(sourcePath, "Android APK");
-    candidates.push({
-      sourcePath,
-      sourceIdentity,
-      metadataPath,
-      packageName: metadata.packageName,
-      variant: metadata.variant,
-    });
+  if (input.buildStartedAt !== undefined && (!Number.isFinite(input.buildStartedAt) || input.buildStartedAt < 0)) {
+    throw new Error("Android build start time is invalid");
   }
-  if (candidates.length !== 1)
-    throw new Error(`Android build must produce exactly one ${input.variant} APK metadata record`);
-  return candidates[0];
+  const root = await realpath(input.workspaceRoot);
+  const configuredOutput =
+    input.outputRoot ?? join(moduleDirectory(root, input.modulePath), "build", "outputs", "apk", input.variant);
+  const outputRoot = await safeOutputDirectory(root, configuredOutput);
+  const metadataPath = join(outputRoot, "output-metadata.json");
+  const metadata = await parseMetadata(metadataPath, outputRoot);
+  if (metadata.variant !== input.variant) throw new Error("Android APK metadata does not match the requested variant");
+  if (input.expectedOutputFile && metadata.outputFile !== input.expectedOutputFile) {
+    throw new Error("Android APK output filename does not match the configured layout");
+  }
+  const sourcePath = join(outputRoot, metadata.outputFile);
+  const canonicalSource = await realpath(sourcePath).catch(() => "");
+  if (canonicalSource !== sourcePath || !within(outputRoot, canonicalSource)) {
+    throw new Error("Android APK output path is unsafe");
+  }
+  const sourceIdentity = await regular(sourcePath, "Android APK");
+  if (input.buildStartedAt !== undefined && sourceIdentity.mtimeMs < input.buildStartedAt) {
+    throw new Error("Android APK output is stale");
+  }
+  return { sourcePath, sourceIdentity, metadataPath, packageName: metadata.packageName, variant: metadata.variant };
 }
 
 async function hashFile(path: string): Promise<{ sha256: string; bytes: number }> {
@@ -356,7 +328,50 @@ function sdk(value: string, label: string): number {
   if (!/^\d{1,5}$/.test(value) || Number(value) > 100_000) throw new Error(`Android APK ${label} is invalid`);
   return Number(value);
 }
-/** Inspects a staged copy only and optionally binds it to AGP's applicationId. */
+function activityName(packageName: string, name: string): string {
+  if (name.startsWith(".")) return `${packageName}${name}`;
+  return name.includes(".") ? name : `${packageName}.${name}`;
+}
+
+function requireExportedLauncher(manifest: string, packageName: string, launcher: string): void {
+  const stack: Array<{ indent: number; name: string }> = [];
+  const components: Array<{ name?: string; exported?: boolean }> = [];
+  let component: (typeof components)[number] | undefined;
+  let componentIndent = -1;
+  for (const line of manifest.split(/\r?\n/)) {
+    const element = line.match(/^(\s*)E: ([\w-]+)(?:\s|$)/);
+    if (element) {
+      const indent = element[1].length;
+      while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+      if (indent <= componentIndent) component = undefined;
+      if (
+        (element[2] === "activity" || element[2] === "activity-alias") &&
+        stack.map(parent => parent.name).join("/") === "manifest/application"
+      ) {
+        component = {};
+        components.push(component);
+        componentIndent = indent;
+      }
+      stack.push({ indent, name: element[2] });
+      continue;
+    }
+    if (!component || stack[stack.length - 1]?.indent !== componentIndent) continue;
+    const name = line.match(/^\s+A: android:name\(0x01010003\)="([^"\r\n]+)"(?:\s|$)/);
+    if (name) {
+      if (component.name !== undefined) throw new Error("Android launcher name is ambiguous");
+      component.name = activityName(packageName, name[1]);
+    }
+    if (/^\s+A: android:exported\(0x01010010\)=/.test(line)) {
+      const exported = line.match(/=\(type 0x12\)0x(ffffffff|0)\s*$/);
+      if (!exported || component.exported !== undefined) throw new Error("Android launcher export status is invalid");
+      component.exported = exported[1] === "ffffffff";
+    }
+  }
+  const matches = components.filter(candidate => candidate.name === activityName(packageName, launcher));
+  if (matches.length !== 1 || matches[0].exported !== true) {
+    throw new Error("Android APK launcher must be explicitly exported");
+  }
+}
 export async function inspectAndroidApk(
   staged: Pick<StagedApkArtifact, "path">,
   tools: AndroidBuildTools,
@@ -399,6 +414,15 @@ export async function inspectAndroidApk(
     throw new Error("Android APK badging is malformed or does not match AGP metadata");
   if ((badging.match(/^launchable-activity:/gm) ?? []).length !== 1)
     throw new Error("Android APK has ambiguous launchable activities");
+  const manifest = checked(
+    "aapt2 dump xmltree",
+    await exec(tools.aapt2, ["dump", "xmltree", "--file", "AndroidManifest.xml", staged.path], {
+      signal,
+      timeout: 20_000,
+      maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+    }),
+  );
+  requireExportedLauncher(manifest, packageMatch[1], launch[1]);
   const signerIds = [...new Set([...signing.matchAll(/^Signer #(\d+) certificate /gm)].map(match => match[1]))];
   const signerDigests = [...signing.matchAll(/^Signer #(\d+) certificate SHA-256 digest: ([0-9A-Fa-f:]{64,95})$/gm)];
   if (signerIds.length !== 1 || signerIds[0] !== "1" || signerDigests.length !== 1 || signerDigests[0][1] !== "1")
@@ -413,7 +437,7 @@ export async function inspectAndroidApk(
     targetSdk: sdk(target[1], "target SDK"),
     debuggable: /^application-debuggable$/m.test(badging),
     certificateSha256,
-    launchableComponent: `${packageMatch[1]}/${launch[1].startsWith(".") ? packageMatch[1] + launch[1] : launch[1]}`,
+    launchableComponent: `${packageMatch[1]}/${activityName(packageMatch[1], launch[1])}`,
   };
 }
 export class AndroidAppDevice {

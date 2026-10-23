@@ -285,9 +285,17 @@ export async function discoverAndroidProject(
   options: AndroidProjectDiscoveryOptions = {},
 ): Promise<AndroidProjectDiscovery> {
   if (!isAbsolute(root) || root.length > 4096) throw new Error("Android workspace root is invalid");
-  const canonicalRoot = await realpath(root);
-  const rootStat = await lstat(canonicalRoot);
+  const rootStat = await lstat(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Android workspace is unavailable");
+  const canonicalRoot = await realpath(root);
+  const canonicalStat = await lstat(canonicalRoot);
+  if (
+    !canonicalStat.isDirectory() ||
+    canonicalStat.isSymbolicLink() ||
+    canonicalStat.dev !== rootStat.dev ||
+    canonicalStat.ino !== rootStat.ino
+  )
+    throw new Error("Android workspace changed while resolving");
   const budget = { bytes: 0 };
   try {
     const settingsCandidates = (
@@ -365,12 +373,43 @@ function flutterPubspec(source: string): boolean {
 
 function flutterIncludesApp(settings: string): boolean {
   const source = withoutComments(settings);
-  if (/\bproject\s*\(\s*["']:app["']\s*\)\s*\.\s*projectDir\b/.test(source)) return false;
-  return [...source.matchAll(/^\s*include\s*(?:\(([^()]*)\)|([^\r\n;]+))/gm)].some(match =>
-    [...(match[1] ?? match[2] ?? "").matchAll(/(["'])(.*?)\1/g)].some(
-      value => value[2] === ":app" || value[2] === "app",
-    ),
-  );
+  const syntax = syntaxOnly(source, stringRanges(source));
+  if (/\.projectDir\b|\bproject\s*\(/.test(syntax)) return false;
+  const blocks: string[] = [];
+  let appIncludes = 0;
+  let sdkIncludes = 0;
+  for (const token of syntax.matchAll(/\b(?:includeBuild|includeFlat|include|if|for|while)\b|[{}]/g)) {
+    const index = token.index!;
+    if (token[0] === "{") {
+      blocks.push(/\bpluginManagement\s*$/.test(syntax.slice(0, index)) ? "pluginManagement" : "other");
+      continue;
+    }
+    if (token[0] === "}") {
+      if (!blocks.length) return false;
+      blocks.pop();
+      continue;
+    }
+    if (["if", "for", "while"].includes(token[0])) {
+      if (!blocks.length) return false;
+      continue;
+    }
+    const lineStart = Math.max(source.lastIndexOf("\n", index - 1), source.lastIndexOf(";", index - 1));
+    if (source.slice(lineStart + 1, index).trim()) return false;
+    if (token[0] === "includeBuild") {
+      if (blocks.length !== 1 || blocks[0] !== "pluginManagement" || ++sdkIncludes !== 1) return false;
+      if (
+        !/^includeBuild\s*\(\s*(["'])\$(?:flutterSdkPath|\{flutterSdkPath\})\/packages\/flutter_tools\/gradle\1\s*\)(?=\s*(?:;|\r?\n|$))/.test(
+          source.slice(index),
+        )
+      )
+        return false;
+      continue;
+    }
+    if (token[0] !== "include" || blocks.length || ++appIncludes !== 1) return false;
+    if (!/^include\s*(?:\(\s*(["']):?app\1\s*\)|(["']):?app\2)(?=\s*(?:;|\r?\n|$))/.test(source.slice(index)))
+      return false;
+  }
+  return blocks.length === 0 && appIncludes === 1;
 }
 
 async function discoverFlutterProject(

@@ -6,7 +6,7 @@ import type {
   AndroidServiceSnapshot,
 } from "../../shared/protocol/android";
 import { ANDROID_EVENT_MAX_BYTES, ANDROID_PROTOCOL_VERSION } from "../../shared/protocol/android";
-import { ApiClient } from "../runtime/api-client";
+import { ApiClient, ApiHttpError } from "../runtime/api-client";
 
 interface EventSourcePort {
   addEventListener(type: string, listener: EventListener): void;
@@ -198,6 +198,14 @@ export class AndroidStore {
       const result = await this.api.androidCommand(command);
       this.adopt(result.snapshot);
     } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 409 && !this.disposed) {
+        try {
+          await this.reload();
+        } catch (refreshError) {
+          this.fail(new Error(`${message(error)}. Snapshot refresh failed: ${message(refreshError)}`));
+          throw error;
+        }
+      }
       this.set({ ...this.snapshot, error: message(error) });
       throw error;
     } finally {

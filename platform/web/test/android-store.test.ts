@@ -252,3 +252,59 @@ test("AndroidStore applies ordered host-global events and snapshot-recovers gaps
     await vite.close();
   }
 });
+
+test("AndroidStore refreshes a stale command without retrying it and retains refresh failures", async () => {
+  const vite = await createServer({
+    root: fileURLToPath(new URL("..", import.meta.url)),
+    server: { middlewareMode: true },
+    appType: "custom",
+  });
+  let store: { dispose(): void } | undefined;
+  try {
+    const { AndroidStore } = await vite.ssrLoadModule("/src/client/android/android-store.ts");
+    const { ApiHttpError } = await vite.ssrLoadModule("/src/client/runtime/api-client.ts");
+    const sources: FakeSource[] = [];
+    let snapshotCalls = 0;
+    let commandCalls = 0;
+    let failRefresh = false;
+    const androidStore = new AndroidStore({
+      bootstrap: async () => ({}),
+      androidSnapshot: async () => {
+        snapshotCalls++;
+        if (failRefresh) throw new Error("snapshot unavailable");
+        return snapshot(snapshotCalls);
+      },
+      androidEvents: () => {
+        const source = new FakeSource();
+        sources.push(source);
+        return source;
+      },
+      androidCommand: async () => {
+        commandCalls++;
+        throw new ApiHttpError(409, "stale selection");
+      },
+    });
+    store = androidStore;
+    androidStore.start();
+    await until(() => androidStore.getSnapshot().status === "ready");
+    sources[0].onopen?.({} as Event);
+    await assert.rejects(androidStore.startEmulator("Pixel_Test"), /stale selection/);
+    assert.equal(snapshotCalls, 2);
+    assert.equal(commandCalls, 1);
+    assert.equal(sources[0].closed, true);
+    assert.equal(androidStore.getSnapshot().service?.sequence, 2);
+    assert.match(androidStore.getSnapshot().error ?? "", /stale selection/);
+    assert.equal(androidStore.getSnapshot().busy, undefined);
+    sources[1].onopen?.({} as Event);
+    failRefresh = true;
+    await assert.rejects(androidStore.startEmulator("Pixel_Test"), /stale selection/);
+    assert.equal(commandCalls, 2);
+    assert.equal(snapshotCalls, 3);
+    assert.equal(androidStore.getSnapshot().status, "error");
+    assert.match(androidStore.getSnapshot().error ?? "", /stale selection.*snapshot unavailable/);
+    assert.equal(androidStore.getSnapshot().busy, undefined);
+  } finally {
+    store?.dispose();
+    await vite.close();
+  }
+});

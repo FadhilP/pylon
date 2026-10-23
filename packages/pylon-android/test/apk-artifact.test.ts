@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { lstat, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, mkdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, spawn } from "node:child_process";
@@ -15,6 +15,19 @@ import {
   cleanupStaleAndroidStaging,
 } from "pylon-android/apk-artifact";
 import { AndroidBuildAndRunError, AndroidPidLogcat, runAndroidBuildAndRun } from "pylon-android/app-runner";
+
+function launcherManifest(name = ".Main", exported = "(type 0x12)0xffffffff", kind = "activity"): string {
+  return `E: manifest (line=1)
+  E: application (line=2)
+    E: ${kind} (line=3)
+      A: android:name(0x01010003)="${name}" (Raw: "${name}")
+${exported ? `      A: android:exported(0x01010010)=${exported}\n` : ""}      E: intent-filter (line=4)
+        E: action (line=5)
+          A: android:name(0x01010003)="android.intent.action.MAIN"
+        E: category (line=6)
+          A: android:name(0x01010003)="android.intent.category.LAUNCHER"
+`;
+}
 
 async function output(elements: unknown[]): Promise<{ root: string; apk: string }> {
   const root = await mkdtemp(join(tmpdir(), "pylon-apk-"));
@@ -77,6 +90,32 @@ test("APK discovery rejects split output and staging detects a replaced source",
       discoverAndroidApk({ workspaceRoot: fixture.root, modulePath: ":app", variant: "debug" }),
       /malformed or ambiguous/,
     );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("Gradle discovery reads only the exact variant metadata and rejects stale or linked APKs", async () => {
+  const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
+  const input = { workspaceRoot: fixture.root, modulePath: ":app", variant: "debug" };
+  const metadata = join(fixture.apk, "..", "output-metadata.json");
+  try {
+    const nested = join(fixture.apk, "..", "old");
+    await mkdir(nested);
+    await writeFile(join(nested, "output-metadata.json"), "malformed stale metadata");
+    assert.equal((await discoverAndroidApk(input)).sourcePath, fixture.apk);
+    await utimes(fixture.apk, new Date(0), new Date(0));
+    await assert.rejects(discoverAndroidApk({ ...input, buildStartedAt: Date.now() }), /stale/);
+    await writeFile(fixture.apk, "new APK");
+    const found = await discoverAndroidApk(input);
+    const staged = await stageAndroidApk(found.sourcePath, join(fixture.root, ".private"), found.sourceIdentity);
+    await link(fixture.apk, join(fixture.root, "linked.apk"));
+    await assert.rejects(discoverAndroidApk(input), /unlinked regular file/);
+    await assert.rejects(stageAndroidApk(found.sourcePath, join(fixture.root, ".private")), /unlinked regular file/);
+    await assert.rejects(staged.revalidate(), /unlinked regular file/);
+    await staged.cleanup();
+    await rm(metadata);
+    await assert.rejects(discoverAndroidApk(input), /unsafe|unavailable/);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -162,6 +201,7 @@ test("inspection uses fixed tools, requires one signer, and device commands rema
     const calls: string[][] = [];
     const exec = async (_command: string, args: string[]) => {
       calls.push(args);
+      if (args[1] === "xmltree") return { code: 0, stderr: "", stdout: launcherManifest(".MainActivity") };
       if (args[0] === "dump")
         return {
           code: 0,
@@ -231,6 +271,102 @@ test("inspection uses fixed tools, requires one signer, and device commands rema
   }
 });
 
+test("inspection binds the exported activity or alias to the badging launcher", async () => {
+  const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
+  const tools = { root: fixture.root, version: "35.0.0", aapt2: "aapt2", apksigner: "apksigner" };
+  let manifest = "";
+  const exec = async (_command: string, args: string[]) => ({
+    code: 0,
+    stderr: "",
+    stdout:
+      args[1] === "xmltree"
+        ? manifest
+        : args[0] === "verify"
+          ? `Signer #1 certificate SHA-256 digest: ${"a".repeat(64)}\n`
+          : "package: name='com.example.app' versionCode='1' versionName='1'\nsdkVersion:'23'\ntargetSdkVersion:'35'\nlaunchable-activity: name='.Main'\n",
+  });
+  try {
+    for (const name of [".Main", "Main", "com.example.app.Main"]) {
+      for (const kind of ["activity", "activity-alias"]) {
+        manifest = launcherManifest(name, "(type 0x12)0xffffffff", kind);
+        const inspected = await inspectAndroidApk({ path: fixture.apk }, tools, exec);
+        assert.equal(inspected.launchableComponent, "com.example.app/com.example.app.Main");
+      }
+    }
+    for (const invalid of [
+      launcherManifest(".Main", "(type 0x12)0x0"),
+      launcherManifest(".Main", ""),
+      launcherManifest(".Main", "(type 0x10)0xffffffff"),
+      launcherManifest(".Main", "(type 0x12)0x0", "activity-alias"),
+      launcherManifest(".Other"),
+      launcherManifest() + launcherManifest(),
+      launcherManifest().replace("      A: android:exported", "      E: meta-data\n        A: android:exported"),
+      launcherManifest().replace(
+        "      E: intent-filter",
+        "      A: android:exported(0x01010010)=(type 0x12)0x0\n      E: intent-filter",
+      ),
+    ]) {
+      manifest = invalid;
+      await assert.rejects(inspectAndroidApk({ path: fixture.apk }, tools, exec), /export|ambiguous/);
+    }
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("a successful build with stale custom output never stages or installs", async () => {
+  const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
+  try {
+    await utimes(fixture.apk, new Date(0), new Date(0));
+    await assert.rejects(
+      runAndroidBuildAndRun(
+        {
+          build: {
+            workspace: {
+              canonicalRoot: fixture.root,
+              wrapperPath: join(fixture.root, "gradlew"),
+              wrapperFingerprint: "x",
+              modulePath: ":app",
+              variant: "debug",
+            },
+            stateDirectory: join(fixture.root, "state"),
+          },
+          artifact: {
+            workspaceRoot: fixture.root,
+            modulePath: ":app",
+            variant: "debug",
+            outputRoot: join(fixture.apk, ".."),
+            buildStartedAt: 0,
+          },
+          sdkRoot: fixture.root,
+          stagingRoot: join(fixture.root, ".private"),
+          serial: "emulator-5554",
+        },
+        {
+          device: new AndroidAppDevice("adb", async () => {
+            assert.fail("stale output must not reach ADB");
+          }),
+          buildRunner: async () => ({
+            task: "assembleDebug",
+            code: 0,
+            succeeded: true,
+            cancelled: false,
+            timedOut: false,
+            output: "",
+            truncated: false,
+          }),
+          stage: async () => {
+            assert.fail("stale output must not be staged");
+          },
+        },
+      ),
+      (error: unknown) => error instanceof AndroidBuildAndRunError && error.phase === "finding-artifact",
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("build coordinator gates each side effect, cleans staging after install, and reports launch as installed", async () => {
   const fixture = await output([{ type: "SINGLE", filters: [], outputFile: "app-debug.apk" }]);
   const phases: string[] = [];
@@ -239,6 +375,7 @@ test("build coordinator gates each side effect, cleans staging after install, an
   try {
     let packageQueries = 0;
     const exec = async (_command: string, args: string[]) => {
+      if (args[1] === "xmltree") return { code: 0, stderr: "", stdout: launcherManifest() };
       if (args[0] === "dump")
         return {
           code: 0,
@@ -284,15 +421,19 @@ test("build coordinator gates each side effect, cleans staging after install, an
         {
           device: new AndroidAppDevice("adb", exec),
           exec,
-          buildRunner: async () => ({
-            task: "assembleDebug",
-            code: 0,
-            succeeded: true,
-            cancelled: false,
-            timedOut: false,
-            output: "",
-            truncated: false,
-          }),
+          buildRunner: async input => {
+            assert.equal(input.forceRerun, true);
+            await writeFile(fixture.apk, "rebuilt APK");
+            return {
+              task: "assembleDebug",
+              code: 0,
+              succeeded: true,
+              cancelled: false,
+              timedOut: false,
+              output: "",
+              truncated: false,
+            };
+          },
           resolveTools: async () => ({ root: fixture.root, version: "35.0.0", aapt2: "aapt2", apksigner: "apksigner" }),
           stage: async (source, root) => {
             const staged = await stageAndroidApk(source, root);
@@ -327,6 +468,7 @@ test("Flutter coordinator forces the fixed output to rebuild and deploys only th
     await writeFile(apk, "old");
     await writeFile(metadata, "old metadata");
     const exec = async (_command: string, args: string[]) => {
+      if (args[1] === "xmltree") return { code: 0, stderr: "", stdout: launcherManifest() };
       if (args[0] === "dump")
         return {
           code: 0,
