@@ -13,7 +13,7 @@
       "Changed Continuity to run the Memory V4 migration at session start only when a migration is pending.",
       "Changed Helios action snapshots after a whole-page snapshot to show only the changed lines with their parent lines; refs from the earlier snapshot that are still on the page stay valid.",
       "Shortened long link URLs in Helios snapshot text by dropping the query string; the full link target still resolves.",
-      "Shortened the `helios_browser` tool description and removed per-field descriptions from batch steps to lower tool schema size.",
+      "Shortened the `helios_browser` tool description and removed per-field descriptions from batch steps to lower tool schema size."
     ]
   },
   {
