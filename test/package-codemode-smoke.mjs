@@ -253,7 +253,8 @@ try {
   settings.fields.find(field => field.key === "codemodeEnabled").value = false;
   await command(owner, "updatePackageSettings", { packageId: "pylon-core", settings });
   assert.equal(lastTool(await script(owner, 'text("existing runtime unchanged");')).tool.status, "completed");
-  await command(owner, "newSession");
+  // A parent forces a fresh runtime instead of reusing the earlier empty session.
+  await command(owner, "newSession", { parentSessionId: originalSessionId });
   assert.equal(
     lastTool(await script(owner, `await tools.write({path:${JSON.stringify(cancelledPath)},content:"bad"});`)).tool
       .status,
@@ -262,7 +263,7 @@ try {
   await absent(cancelledPath);
   settings.fields.find(field => field.key === "codemodeEnabled").value = true;
   await command(owner, "updatePackageSettings", { packageId: "pylon-core", settings });
-  await command(owner, "newSession");
+  await command(owner, "newSession", { parentSessionId: originalSessionId });
   assert.equal(lastTool(await script(owner, 'text("enabled again");')).tool.status, "completed");
   console.log("Installed Web codemode: native worker, HTTP/SSE, approvals, reconnect, replacement and settings passed");
 } finally {
