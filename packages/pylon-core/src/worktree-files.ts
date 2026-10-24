@@ -195,20 +195,18 @@ async function scopeListings(scope: WorkspaceScope): Promise<{ present: string[]
 }
 
 async function changesBetween(cwd: string, baselineTree: string, tree: string): Promise<WorkspaceFile[]> {
-  const [numstat, names] = await Promise.all([
-    git(cwd, ["diff", "--numstat", "-z", "--no-renames", baselineTree, tree]),
-    git(cwd, ["diff", "--name-status", "-z", "--no-renames", baselineTree, tree]),
-  ]);
+  // Raw records (":<modes> <objects> <status>", path) precede the numstat records in one diff.
+  const records = splitNul(await git(cwd, ["diff", "--raw", "--numstat", "-z", "--no-renames", baselineTree, tree]));
   const status = new Map<string, "added" | "modified" | "deleted">();
-  const nameParts = splitNul(names);
-  for (let index = 0; index + 1 < nameParts.length; index += 2) {
-    const kind = nameParts[index].slice(0, 1);
-    const path = nameParts[index + 1];
-    if (!path) continue;
+  let index = 0;
+  for (; index + 1 < records.length && records[index].startsWith(":"); index += 2) {
+    const meta = records[index];
+    const kind = meta.slice(meta.lastIndexOf(" ") + 1, meta.lastIndexOf(" ") + 2);
+    const path = records[index + 1];
     status.set(path, kind === "A" ? "added" : kind === "D" ? "deleted" : "modified");
   }
   const files: WorkspaceFile[] = [];
-  for (const record of splitNul(numstat).slice(0, 5_000)) {
+  for (const record of records.slice(index, index + 5_000)) {
     const [added, deleted, ...pathParts] = record.split("\t");
     const path = pathParts.join("\t");
     if (!path) continue;

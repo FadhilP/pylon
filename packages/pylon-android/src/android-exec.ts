@@ -30,7 +30,8 @@ export function createAndroidExec(): AndroidExec {
       }
       let executable = command;
       let invocationArgs = args;
-      if (process.platform === "win32" && command.toLowerCase().endsWith(".bat")) {
+      const windowsBatch = process.platform === "win32" && command.toLowerCase().endsWith(".bat");
+      if (windowsBatch) {
         const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
         if (!systemRoot || !isAbsolute(systemRoot) || ![command, ...args].every(value => SAFE_CMD_VALUE.test(value))) {
           reject(new Error("Android batch command is unsafe"));
@@ -51,6 +52,7 @@ export function createAndroidExec(): AndroidExec {
           cwd: options.cwd,
           shell: false,
           windowsHide: true,
+          windowsVerbatimArguments: windowsBatch,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {

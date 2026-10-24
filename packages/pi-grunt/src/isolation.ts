@@ -205,7 +205,10 @@ export async function collectWorkerPatch(
   exec: Exec,
   isolated: IsolatedWorktree,
 ): Promise<{ patch: string; changedPaths: string[] }> {
-  const intent = await exec("git", ["-C", isolated.workerRoot, "add", "-N", "--", "."], { timeout: 60_000 });
+  // Worktrees share the parent's object store; concurrent writes of one object fail on Windows.
+  const intent = await withRepositoryTransaction(isolated.parentRoot, () =>
+    exec("git", ["-C", isolated.workerRoot, "add", "-N", "--", "."], { timeout: 60_000 }),
+  );
   if (intent.code !== 0) throw failure("Unable to inspect worker changes", intent);
   const [diff, names] = await Promise.all([
     exec("git", ["-C", isolated.workerRoot, "diff", "--binary", isolated.workerHead, "--"], { timeout: 60_000 }),

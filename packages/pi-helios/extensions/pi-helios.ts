@@ -922,7 +922,9 @@ export default function heliosExtension(
         const approved = await ctx.ui.confirm(
           "List installed Android packages?",
           `Helios will query system and user-installed package IDs from ${serial}. Package IDs may reveal sensitive apps, and the complete list may enter model/session history.`,
+          { signal },
         );
+        signal?.throwIfAborted();
         if (!approved)
           return {
             content: [{ type: "text" as const, text: "User declined Android package inventory." }],
@@ -977,7 +979,9 @@ export default function heliosExtension(
           approved = await ctx.ui.confirm(
             "Start Android emulator?",
             `Helios will launch and control AVD “${avd}” for package ${packageName}, start a private loopback Appium server, and stop this emulator when closed. UI source and screenshots may contain secrets and enter model/session history.`,
+            { signal },
           );
+          signal?.throwIfAborted();
           if (!approved)
             return {
               content: [{ type: "text" as const, text: "User declined Android emulator start." }],
@@ -1006,7 +1010,9 @@ export default function heliosExtension(
         approved = await ctx.ui.confirm(
           "Attach to Android emulator?",
           `Helios will control existing emulator ${serial} for package ${packageName} through a private loopback Appium server. Existing app data and UI may become accessible to the selected model and retained in Pi history. Helios will detach without stopping the emulator.`,
+          { signal },
         );
+        signal?.throwIfAborted();
         if (!approved)
           return {
             content: [{ type: "text" as const, text: "User declined Android emulator attachment." }],
@@ -1081,7 +1087,9 @@ export default function heliosExtension(
       const approved = await ctx.ui.confirm(
         "Allow screenshot?",
         `Helios will capture ${source}. Screenshots may contain secrets. Image and selected window metadata will be sent to selected model provider and retained in Pi session history.`,
+        { signal },
       );
+      signal?.throwIfAborted();
       if (!approved)
         return {
           content: [{ type: "text" as const, text: "User declined screenshot capture." }],
@@ -1169,7 +1177,9 @@ export default function heliosExtension(
             const approved = await ctx.ui.confirm(
               "Attach to existing browser?",
               `Helios will connect to ${endpoint}. Existing tabs, logins, and page data exposed by this endpoint may become accessible to selected model provider and retained in Pi session history. Helios will detach without closing browser.`,
+              { signal },
             );
+            signal?.throwIfAborted();
             if (!approved)
               return {
                 content: [{ type: "text" as const, text: "User declined browser attachment." }],
@@ -1186,7 +1196,9 @@ export default function heliosExtension(
           const approved = await ctx.ui.confirm(
             "Attach through browser extension?",
             `Helios will connect through enabled Playwright bridge in ${browser}. Tabs, logins, and page data allowed by extension may become accessible to selected model provider and retained in Pi session history. Helios will detach without closing browser.`,
+            { signal },
           );
+          signal?.throwIfAborted();
           if (!approved)
             return {
               content: [{ type: "text" as const, text: "User declined browser attachment." }],
@@ -1215,6 +1227,7 @@ export default function heliosExtension(
             !(await ctx.ui.confirm(
               "Close user browser tab?",
               `Helios will close tab ${params.tabIndex ?? "current"} in attached user browser.`,
+              { signal },
             ))
           ) {
             return {
@@ -1222,6 +1235,7 @@ export default function heliosExtension(
               details: { declined: true },
             };
           }
+          signal?.throwIfAborted();
         }
         onUpdate?.({ content: [{ type: "text" as const, text: `Running browser ${params.action}...` }], details: {} });
         const result = await withBrowserStatus(ctx, params.action, () =>

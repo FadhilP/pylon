@@ -25,7 +25,7 @@ import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../
 import { useSyncExternalStore } from "react";
 import { isDatabaseCommandResult } from "../database/database-workspace";
 import type { GuardRuleOverrides } from "../../shared/settings/guard-policy";
-import type { AcceptedCommand, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
+import type { AcceptedCommand, ModelCompactionInput, QueuedPromptPayload, WebCommand } from "../../shared/protocol/commands";
 import { PROTOCOL_VERSION, type WebEvent } from "../../shared/protocol/envelope";
 import { STATEQL_GLOBAL_UI_ACTOR } from "../../shared/protocol/snapshots";
 import type { HeliosBrowserCommand, HeliosBrowserResult } from "../../shared/protocol/helios";
@@ -1699,6 +1699,16 @@ export class RuntimeEventStore {
       type: "setModel",
       provider,
       modelId,
+      commandId: commandId(),
+      expectedGeneration: runtime.sessionGeneration,
+    });
+  }
+
+  async setModelCompaction(input: ModelCompactionInput): Promise<void> {
+    const runtime = this.requireReadyRuntime();
+    await this.sendCommand({
+      ...input,
+      type: "setModelCompaction",
       commandId: commandId(),
       expectedGeneration: runtime.sessionGeneration,
     });

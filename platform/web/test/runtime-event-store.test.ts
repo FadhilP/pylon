@@ -16,6 +16,13 @@ import {
   validCompletionSessionIds,
 } from "../src/shared/sessions/session-completions.ts";
 
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+});
+test.after(() => vite.close());
+
 test("extension slash commands bypass the prompt queue while prompt and skill commands preserve ordering", () => {
   assert.equal(promptCommandType(true, false, "extension"), "prompt");
   assert.equal(promptCommandType(false, true, "extension"), "prompt");
@@ -102,7 +109,6 @@ test("completed background sessions survive sleeping and bootstrap authoritative
 });
 
 test("database approval routing survives renewal and stale closes without retaining a closed or unowned request", async () => {
-  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
   const store = new RuntimeEventStore();
   const original = { window: (globalThis as any).window, requestAnimationFrame: (globalThis as any).requestAnimationFrame, cancelAnimationFrame: (globalThis as any).cancelAnimationFrame };
@@ -131,12 +137,10 @@ test("database approval routing survives renewal and stale closes without retain
   } finally {
     store.dispose();
     Object.assign(globalThis, original);
-    await vite.close();
   }
 });
 
 test("runtime inventory sharing preserves cache identity and rejects changes in revision, mode, generation or lifecycle", async () => {
-  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
   const store = new RuntimeEventStore();
   const originalWindow = (globalThis as any).window;
@@ -233,15 +237,9 @@ test("runtime inventory sharing preserves cache identity and rejects changes in 
     store.dispose();
     if (originalWindow === undefined) delete (globalThis as any).window;
     else (globalThis as any).window = originalWindow;
-    await vite.close();
   }
 });
 test("switching sessions keeps loaded transcript history available to the replacement bootstrap", async () => {
-  const vite = await createServer({
-    root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true },
-    appType: "custom",
-  });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
   const store = new RuntimeEventStore();
   const cached = {
@@ -253,17 +251,12 @@ test("switching sessions keeps loaded transcript history available to the replac
   store.historyCache.set("target-session", cached);
   store.sendCommand = async () => ({ sessionGeneration: 4 });
   store.waitForRuntime = async () => {};
-  try {
-    await store.switchSession("target-session");
-    assert.strictEqual(store.historyCache.get("target-session"), cached);
-  } finally {
-    await vite.close();
-  }
+  await store.switchSession("target-session");
+  assert.strictEqual(store.historyCache.get("target-session"), cached);
 });
 
 
 test("display previews survive expiry and failed refresh without accepting obsolete reads or leaking workspace content", async t => {
-  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
   const { ApiHttpError } = await vite.ssrLoadModule("/src/client/runtime/api-client.ts");
   const store = new RuntimeEventStore();
@@ -391,13 +384,11 @@ test("display previews survive expiry and failed refresh without accepting obsol
     if (originalWindow === undefined) delete (globalThis as any).window;
     else (globalThis as any).window = originalWindow;
     t.mock.restoreAll();
-    await vite.close();
   }
 });
 
 
 test("nested tool events update execution state but never become standalone transcript messages", async () => {
-  const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), server: { middlewareMode: true }, appType: "custom" });
   const { RuntimeEventStore } = await vite.ssrLoadModule("/src/client/runtime/event-store.ts");
   const store = new RuntimeEventStore();
   const original = { window: (globalThis as any).window, requestAnimationFrame: (globalThis as any).requestAnimationFrame, cancelAnimationFrame: (globalThis as any).cancelAnimationFrame };
@@ -428,5 +419,5 @@ test("nested tool events update execution state but never become standalone tran
     const stopped = store.getSnapshot().runtime.conversation.messages.find((message: any) => message.tool.id === "stopped");
     assert.equal(stopped.tool.nestedCalls.calls[0].status, "failed");
     assert.equal(stopped.tool.nestedCalls.complete, false);
-  } finally { store.dispose(); Object.assign(globalThis, original); await vite.close(); }
+  } finally { store.dispose(); Object.assign(globalThis, original); }
 });

@@ -18,6 +18,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { saveConfig } from "pylon-core/src/config.ts";
 import { createPylonRuntimeFactory } from "../src/server/runtime/runtime-factory.ts";
+import heartbeat from "../../../packages/pi-heartbeat/extensions/pi-heartbeat.ts";
+import { createToolDiscovery } from "../../../packages/pi-discover/src/tool-discovery.ts";
 
 async function fixture(
   enabled = true,
@@ -196,6 +198,17 @@ test(
         );
         for (const [name, exposure, defaultActive] of [
           ["verify", "direct", true],
+          ["continuity_update", "direct", true],
+          ["pylon_settings", "direct", true],
+          ["apply_session_changes", "direct", true],
+          ["advisor", "direct", true],
+          ["grunt", "direct", true],
+          ["repo_scout", "direct", true],
+          ["web_scout", "direct", true],
+          ["spawn_agent", "direct", true],
+          ["spawn_session", "direct", true],
+          ["memory", "direct", true],
+          ["hidden_utility", "hidden", true],
           ["code_search", "deferred", true],
           ["symbol_search", "model-only", true],
           ["rg", "direct", false],
@@ -218,7 +231,11 @@ test(
     try {
       const result =
         await value.run(`text(ALL_TOOLS.map(t=>t.name)); text(typeof models); const r = await Promise.allSettled([
-      tools.fd({value:"one"}), tools.fd({value:"two"}), tools.fd({value:"blocked"})]); text(r.map(v=>v.status)); store("cursor", "page-one");`);
+      tools.fd({value:"one"}), tools.fd({value:"two"}), tools.fd({value:"blocked"})]); text(r.map(v=>v.status));
+      for (const name of ["codemode", "verify", "continuity_update", "pylon_settings", "apply_session_changes", "advisor",
+        "grunt", "repo_scout", "web_scout", "spawn_agent", "spawn_session", "memory", "hidden_utility",
+        "code_search", "symbol_search", "rg"]) { try { await tools[name]({}); } catch {} }
+      store("cursor", "page-one");`);
       assert.equal(result.isError, false);
       assert.equal(maxActive, 2);
       assert.equal(calls, 2);
@@ -257,6 +274,173 @@ test(
   },
 );
 
+test("ordinary stateful tools retain sequential execution and validation in scripts", { timeout: 30_000 }, async () => {
+  let balance = 0,
+    active = 0,
+    peak = 0;
+  let revoke = false;
+  const value = await fixture(true, [
+    pi => {
+      pi.registerTool({
+        name: "stateql",
+        label: "stateql",
+        description: "Fixture stateful operation",
+        executionMode: "sequential",
+        parameters: Type.Object({ amount: Type.Number() }),
+        async execute(_id, { amount }) {
+          active++;
+          peak = Math.max(peak, active);
+          const before = balance;
+          await new Promise(resolve => setTimeout(resolve, 20));
+          balance = before + amount;
+          active--;
+          if (revoke) pi.setActiveTools(pi.getActiveTools().filter(name => name !== "stateql"));
+          return { content: [{ type: "text", text: String(balance) }], details: {} };
+        },
+      });
+      pi.on("tool_call", event =>
+        event.toolName === "stateql" && event.input.amount === -1 ? { block: true, reason: "Write denied" } : undefined,
+      );
+    },
+  ]);
+  try {
+    const result = await value.run(`const results = await Promise.allSettled([
+      tools.stateql({amount:1}), tools.stateql({amount:2}), tools.stateql({amount:-1}),
+      tools.stateql({amount:"invalid"})]); text(results.map(result=>result.status));`);
+    assert.equal(result.isError, false, output(result));
+    assert.equal(balance, 3);
+    assert.equal(peak, 1);
+    assert.match(output(result), /fulfilled.*fulfilled.*rejected.*rejected/);
+    revoke = true;
+    const queued = await value.run(`const results = await Promise.allSettled([
+      tools.stateql({amount:1}), tools.stateql({amount:2})]); text(results.map(result=>result.status));`);
+    assert.equal(queued.isError, false, output(queued));
+    assert.match(output(queued), /fulfilled.*rejected/);
+    assert.equal(balance, 4);
+  } finally {
+    await value.close();
+  }
+});
+
+test("nested tool discovery activates an ordinary tool only for a later script", { timeout: 30_000 }, async () => {
+  let calls = 0;
+  const value = await fixture(
+    true,
+    [
+      pi => {
+        createToolDiscovery(pi);
+        pi.registerTool({
+          name: "ordinary_tool",
+          label: "Ordinary tool",
+          description: "Fixture deferred operation",
+          defaultActive: false,
+          parameters: Type.Object({}),
+          async execute() {
+            calls++;
+            return { content: [{ type: "text", text: "operation completed" }], details: {} };
+          },
+        });
+        pi.on("session_start", () => {
+          pi.events.emit("pylon:tool-overrides", { version: 1, overrides: { ordinary_tool: "deferred" } });
+        });
+      },
+    ],
+    true,
+  );
+  try {
+    const first = await value.run(`text(await tools.search_tools({query:"ordinary_tool"}));
+      try { await tools.ordinary_tool({}); } catch { text("not callable yet"); }`);
+    assert.equal(first.isError, false, output(first));
+    assert.match(output(first), /not callable yet/);
+    assert.equal(calls, 0);
+    const second = await value.run("text(await tools.ordinary_tool({}));");
+    assert.equal(second.isError, false, output(second));
+    assert.equal(calls, 1);
+  } finally {
+    await value.close();
+  }
+});
+
+test("background jobs started in scripts remain cancellable after the script ends", { timeout: 30_000 }, async () => {
+  const value = await fixture(true, [heartbeat], true);
+  try {
+    const started = await value.run(`const result = await tools.heartbeat_start({
+      command:'node -e "setTimeout(()=>{},60000)"', otherWork:"inspect job lifecycle", timeoutMs:60000});
+      store("job", result.match(/Started job (\\S+)/)[1]); text(result);`);
+    assert.equal(started.isError, false, output(started));
+    const status = await value.run('text(await tools.heartbeat_status({id:load("job")}));');
+    assert.equal(status.isError, false, output(status));
+    assert.match(output(status), /Check too soon/);
+    const cancelled = await value.run('text(await tools.heartbeat_cancel({id:load("job")}));');
+    assert.equal(cancelled.isError, false, output(cancelled));
+    assert.match(output(cancelled), /Cancellation requested/);
+  } finally {
+    await value.close();
+  }
+});
+
+test(
+  "ordinary tools recheck policy and activation after asynchronous approval hooks",
+  { timeout: 30_000 },
+  async () => {
+    let calls = 0;
+    let api!: ExtensionAPI;
+    const value = await fixture(
+      true,
+      [
+        pi => {
+          api = pi;
+          pi.registerTool({
+            name: "stateql",
+            label: "stateql",
+            description: "Fixture guarded operation",
+            parameters: Type.Object({ revoke: Type.String() }),
+            async execute() {
+              calls++;
+              return { content: [{ type: "text", text: "must not execute" }], details: {} };
+            },
+          });
+          pi.on("tool_call", async event => {
+            if (event.toolName !== "stateql") return;
+            await new Promise(resolve => setTimeout(resolve, 10));
+            if (event.input.revoke === "active")
+              pi.setActiveTools(pi.getActiveTools().filter(name => name !== "stateql"));
+            if (event.input.revoke === "override") {
+              pi.events.emit("pylon:tool-overrides", { version: 1, overrides: { stateql: "disabled" } });
+              pi.setActiveTools([...pi.getActiveTools(), "stateql"]);
+            }
+            if (event.input.revoke === "gate") {
+              pi.events.emit("pylon:tool-policy", {
+                version: 1,
+                kind: "register",
+                owner: "pi-test",
+                managedTools: [],
+                enabledTools: [],
+                allowOnly: ["codemode", "read"],
+              });
+              pi.setActiveTools([...pi.getActiveTools(), "stateql"]);
+            }
+          });
+        },
+      ],
+      true,
+    );
+    try {
+      for (const revoke of ["active", "override", "gate"]) {
+        api.events.emit("pylon:tool-overrides", { version: 1, overrides: {} });
+        api.setActiveTools([...api.getActiveTools(), "stateql"]);
+        const result = await value.run(`await tools.stateql({revoke:${JSON.stringify(revoke)}});`);
+        assert.equal(result.isError, true, output(result));
+        assert.match(output(result), /no longer permitted/);
+        assert.equal(calls, 0);
+      }
+      assert.equal((await value.run('await tools.stateql({revoke:"none"});')).isError, true);
+      assert.equal(calls, 0);
+    } finally {
+      await value.close();
+    }
+  },
+);
 test("source options are validated and cannot increase native output limits", { timeout: 30_000 }, async () => {
   const value = await fixture();
   try {

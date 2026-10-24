@@ -44,6 +44,34 @@ test("manager uses configured timeout and completed-job retention", async () => 
   await manager.shutdown();
 });
 
+test("completion observers see a finished job before retention evicts it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hb-"));
+  let job: Job | undefined;
+  let observed = false;
+  const manager = new JobManager(
+    dir,
+    () => {
+      if (job?.state === "completed") observed = manager.jobs.has(job.id);
+    },
+    5_000,
+    undefined,
+    1_800_000,
+    1,
+  );
+  await manager.init();
+  try {
+    job = await manager.start(`node -e "setTimeout(()=>{},100)"`, process.cwd());
+    manager.jobs.set("newer", { ...job, id: "newer", state: "completed", finishedAt: Date.now() + 60_000 });
+    await closed(job);
+    await job.finalizing;
+    assert.equal(observed, true);
+    assert.equal(manager.jobs.has(job.id), false);
+    assert.equal(manager.jobs.has("newer"), true);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
 test("shutdown removes the current session directory", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hb-"));
   const manager = new JobManager(dir);

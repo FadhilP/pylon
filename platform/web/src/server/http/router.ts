@@ -890,7 +890,8 @@ export class ServerTransport {
       throw httpError(400, "invalid cursor");
     if (query && query.length > 200) throw httpError(400, "query is too long");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw httpError(400, "invalid limit");
-    const result = await this.driver.listSessions({ projectId, cursor, query, limit });
+    const draftSessionIds = new Set(this.keyboardSettings.listComposers().map(draft => draft.sessionId));
+    const result = await this.driver.listSessions({ projectId, cursor, query, limit }, draftSessionIds);
     if (result.sessionGeneration !== this.journal.sessionGeneration)
       throw httpError(409, "session changed while listing sessions");
     this.send(response, 200, result);
@@ -1986,6 +1987,17 @@ export class ServerTransport {
           }
           return accepted(command.expectedGeneration);
         })();
+      case "setModelCompaction":
+        if (!this.driver.setModelCompaction) return Promise.reject(httpError(409, "model compaction settings are unavailable"));
+        return this.driver.setModelCompaction({
+          provider: command.provider,
+          modelId: command.modelId,
+          compactAtTokens: command.compactAtTokens,
+          expectedReserveTokens: command.expectedReserveTokens,
+        }).then(async () => {
+          this.projection.refresh(await this.driver.snapshot());
+          return accepted(command.expectedGeneration);
+        });
       case "setModel":
         return this.driver.setModel({ provider: command.provider, modelId: command.modelId }).then(async () => {
           this.projection.refresh(await this.driver.snapshot());

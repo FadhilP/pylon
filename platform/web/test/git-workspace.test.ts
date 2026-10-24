@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,9 +14,10 @@ async function repository() {
   const cwd = await mkdtemp(join(tmpdir(), "pylon-git-workspace-"));
   const git = (...args: string[]) => run("git", args, { cwd });
   await git("init");
-  await git("config", "core.autocrlf", "false");
-  await git("config", "user.name", "Test User");
-  await git("config", "user.email", "test@example.test");
+  await appendFile(
+    join(cwd, ".git", "config"),
+    "\n[core]\n\tautocrlf = false\n[user]\n\tname = Test User\n\temail = test@example.test\n",
+  );
   return { cwd, git };
 }
 async function state(cwd: string) {

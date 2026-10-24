@@ -53,9 +53,12 @@ const run = ({ name, cwd, script }) =>
 
 for (const script of scripts) {
   const jobs = packages.map(name => ({ name, cwd: join(root, "packages", name), script }));
-  // Web uses one existing slot, including its build; do not add another worker pool.
+  // Web tests and build are independent jobs in this bounded pool, queued first because they are the longest; do not add another worker pool.
   if (includeWeb && script === "test")
-    jobs.unshift({ name: "@pylon/web", cwd: join(root, "platform", "web"), script: "verify" });
+    jobs.unshift(
+      { name: "@pylon/web", cwd: join(root, "platform", "web"), script: "test" },
+      { name: "@pylon/web", cwd: join(root, "platform", "web"), script: "build" },
+    );
   const results = await mapLimit(jobs, concurrency, run);
   for (const result of results) {
     if (script !== "install" && result.code === 0 && !verbose) continue;

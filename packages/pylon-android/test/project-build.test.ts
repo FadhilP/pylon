@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtemp, mkdir, writeFile, chmod, realpath, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, chmod, realpath, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, spawn } from "node:child_process";
 import { discoverAndroidProject, discoverAndroidWorkspace } from "pylon-android/project-discovery";
+import { createAndroidExec } from "pylon-android/android-exec";
 import {
   androidGradleInvocation,
   runAndroidGradleBuild,
@@ -290,17 +291,22 @@ test("a flavored module is skipped without hiding the project's other applicatio
   }
 });
 
-test("Gradle output keeps a multi-byte character split across stdout chunks", async () => {
+test("Gradle output filters split download dots without losing diagnostics or split UTF-8", async () => {
   const root = await project();
   try {
     const discovery = await discoverAndroidProject(root, { platform: "linux" });
     assert.ok(discovery.wrapper);
     const encoded = Buffer.from("build ✓ done");
     const split = encoded.indexOf(Buffer.from("✓")) + 1;
+    const streamed: string[] = [];
     const spawnProcess = (() => {
       const child = childProcess();
       queueMicrotask(() => {
-        child.stderr?.emit("data", Buffer.from("warn "));
+        child.stdout?.emit("data", Buffer.from("Down"));
+        child.stdout?.emit("data", Buffer.from("loading https://services.gradle.org/distributions/gradle-8.3-all.zip\n.."));
+        child.stdout?.emit("data", Buffer.from(".".repeat(300_000)));
+        child.stderr?.emit("data", Buffer.from("warn ...\n"));
+        child.stdout?.emit("data", Buffer.from("..10%...100%\n"));
         child.stdout?.emit("data", encoded.subarray(0, split));
         child.stdout?.emit("data", encoded.subarray(split));
         Object.assign(child, { exitCode: 0 });
@@ -319,11 +325,86 @@ test("Gradle output keeps a multi-byte character split across stdout chunks", as
           variant: "debug",
         },
         stateDirectory: join(root, ".pylon-gradle"),
+        maxOutputBytes: 256,
+        onOutput: chunk => streamed.push(chunk),
       },
       { spawnProcess, platform: "linux", env: { PATH: "/usr/bin" } },
     );
 
-    assert.equal(result.output, "warn build ✓ done");
+    assert.equal(result.output, "Downloading https://services.gradle.org/distributions/gradle-8.3-all.zip\nwarn ...\n10%100%\nbuild ✓ done");
+    assert.equal(streamed.join(""), result.output);
+    assert.equal(result.truncated, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Gradle retries the Java 17 failure once using PATH without changing the caller environment", async t => {
+  const root = await project();
+  try {
+    const discovery = await discoverAndroidProject(root);
+    assert.ok(discovery.wrapper);
+    for (const scenario of [
+      { name: "retry succeeds", diagnostic: true, firstCode: 1, retryCode: 0, attempts: 2 },
+      { name: "retry fails without looping", diagnostic: true, firstCode: 1, retryCode: 1, attempts: 2 },
+      { name: "already using PATH is not retried", diagnostic: true, firstCode: 1, retryCode: 0, attempts: 1, pathOnly: true },
+      { name: "unrelated failure", diagnostic: false, firstCode: 1, retryCode: 0, attempts: 1 },
+      { name: "successful old Java build is unchanged", diagnostic: false, firstCode: 0, retryCode: 0, attempts: 1 },
+      { name: "cancellation prevents retry", diagnostic: true, firstCode: 1, retryCode: 0, attempts: 1, cancel: true },
+    ]) {
+      await t.test(scenario.name, async () => {
+        const environments: NodeJS.ProcessEnv[] = [];
+        const controller = new AbortController();
+        const javaHome = scenario.pathOnly ? undefined : join(root, "Java 11");
+        const sourceEnv = {
+          SystemRoot: process.env.SystemRoot,
+          JAVA_HOME: javaHome,
+          PATH: join(root, "bin"),
+          JAVA_TOOL_OPTIONS: "unsafe",
+        };
+        const result = await runAndroidGradleBuild({
+          workspace: {
+            canonicalRoot: discovery.canonicalRoot!,
+            wrapperPath: discovery.wrapper!.executablePath,
+            wrapperFingerprint: discovery.wrapper!.fingerprint,
+            modulePath: ":app",
+            variant: "debug",
+          },
+          stateDirectory: join(root, ".pylon-gradle"),
+          signal: controller.signal,
+          maxOutputBytes: 16,
+        }, {
+          env: sourceEnv,
+          spawnProcess: ((_executable, _args, options) => {
+            environments.push(options!.env!);
+            const child = childProcess();
+            queueMicrotask(() => {
+              child.stdout?.emit("data", Buffer.from("output beyond retained budget\n"));
+              if (scenario.diagnostic) {
+                child.stderr?.emit("data", Buffer.from("Android Gradle plugin requires Ja"));
+                child.stderr?.emit("data", Buffer.from("va 17 to run. You are currently using Java 11.\n" + "x".repeat(2048)));
+              }
+              const code = environments.length === 1 ? scenario.firstCode : scenario.retryCode;
+              Object.assign(child, { exitCode: code });
+              child.emit("close", code);
+              if (scenario.cancel) controller.abort();
+            });
+            return child;
+          }) as typeof spawn,
+          terminateProcess: async () => {},
+        });
+        assert.equal(environments.length, scenario.attempts);
+        assert.equal(environments[0].JAVA_HOME, javaHome);
+        assert.equal(sourceEnv.JAVA_HOME, javaHome);
+        assert.equal(environments.at(-1)?.JAVA_TOOL_OPTIONS, undefined);
+        for (const env of environments) assert.equal(env.PATH, sourceEnv.PATH);
+        if (scenario.attempts === 2) assert.equal(environments[1].JAVA_HOME, undefined);
+        assert.equal(result.succeeded, !scenario.cancel && (scenario.attempts === 2 ? scenario.retryCode : scenario.firstCode) === 0);
+        assert.equal(result.cancelled, !!scenario.cancel);
+        assert.equal(Buffer.byteLength(result.output), 16);
+        assert.equal(result.truncated, true);
+      });
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -402,6 +483,45 @@ test("Gradle cancellation terminates the retained process tree and reports cance
     assert.equal(result.succeeded, false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Windows batch execution preserves wrapper paths and arguments with spaces", { skip: process.platform !== "win32" }, async () => {
+  const original = await project();
+  const root = `${original} with spaces`;
+  try {
+    await rename(original, root);
+    await writeFile(
+      join(root, "gradlew.bat"),
+      "@echo off\r\necho first=[%~1]\r\necho second=[%~2]\r\necho args=%*\r\nexit /b 0\r\n",
+    );
+    const discovery = await discoverAndroidProject(root);
+    assert.ok(discovery.wrapper);
+    const result = await runAndroidGradleBuild({
+      workspace: {
+        canonicalRoot: discovery.canonicalRoot,
+        wrapperPath: discovery.wrapper.executablePath,
+        wrapperFingerprint: discovery.wrapper.fingerprint,
+        modulePath: ":app",
+        variant: "debug",
+      },
+      stateDirectory: join(root, ".pylon-gradle"),
+      forceRerun: true,
+    });
+    assert.equal(result.code, 0, result.output);
+    assert.equal(result.succeeded, true);
+    assert.match(result.output, /first=\[:app:assembleDebug\]/);
+    assert.match(result.output, /args=:app:assembleDebug --no-daemon --console=plain --rerun-tasks/);
+
+    const exec = createAndroidExec();
+    const executed = await exec(discovery.wrapper.executablePath, ["argument with spaces", "tail"]);
+    assert.equal(executed.code, 0, executed.stderr);
+    assert.match(executed.stdout, /first=\[argument with spaces\]/);
+    assert.match(executed.stdout, /second=\[tail\]/);
+    await assert.rejects(exec(discovery.wrapper.executablePath, ["unsafe&echo injected"]), /unsafe/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(original, { recursive: true, force: true });
   }
 });
 

@@ -144,13 +144,16 @@ export async function confinedFile(root: string, path: string): Promise<string> 
 }
 
 export async function assertSafeCheckout(workspace: GitWorkspace): Promise<void> {
-  if ((await git(workspace.root, ["rev-parse", "--is-bare-repository"])) === "true") {
+  const [bare, gitDir] = (
+    await git(workspace.root, ["rev-parse", "--is-bare-repository", "--path-format=absolute", "--git-dir"])
+  ).split(/\r?\n/);
+  if (bare === "true") {
     throw Error("Bare repositories are unsupported.");
   }
+  if (!gitDir) throw Error("Git returned no repository directory.");
   if ((await git(workspace.root, ["ls-files", "-u"])).trim()) {
     throw Error("Unmerged Git index is unsupported.");
   }
-  const gitDir = await git(workspace.root, ["rev-parse", "--path-format=absolute", "--git-dir"]);
   for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"]) {
     if (
       await stat(join(gitDir, name))

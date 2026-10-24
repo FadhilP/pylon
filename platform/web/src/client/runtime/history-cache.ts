@@ -21,26 +21,30 @@ function historyRange(messages: MessageReadModel[]): { start?: number; end?: num
   return { start, end };
 }
 
+function historyMessageKey(message: MessageReadModel): string {
+  if (message.tool?.id) return `tool:${message.tool.id}`;
+  return message.entryId ? `entry:${message.entryId}` : `message:${message.id}`;
+}
+
 export function mergeHistoryMessages(previous: MessageReadModel[], fresh: MessageReadModel[]): MessageReadModel[] {
   const order = new Map<string, number>();
+  const merged = new Map<string, MessageReadModel>();
   const messages = [...previous, ...fresh];
   messages.forEach((message, index) => {
-    const key = message.entryId ? `entry:${message.entryId}` : `message:${message.id}`;
+    const key = historyMessageKey(message);
     if (!order.has(key)) order.set(key, index);
+    const existing = merged.get(key);
+    // Saved tool results retain their full output and transcript position over live summaries.
+    if (existing?.tool && historyIndex(existing) !== undefined && historyIndex(message) === undefined) return;
+    merged.set(key, message);
   });
-  return [
-    ...new Map(
-      messages.map(message => [message.entryId ? `entry:${message.entryId}` : `message:${message.id}`, message]),
-    ).values(),
-  ].sort((left, right) => {
+  return [...merged.values()].sort((left, right) => {
     const leftIndex = historyIndex(left);
     const rightIndex = historyIndex(right);
     if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex;
     if (leftIndex !== undefined) return -1;
     if (rightIndex !== undefined) return 1;
-    const leftKey = left.entryId ? `entry:${left.entryId}` : `message:${left.id}`;
-    const rightKey = right.entryId ? `entry:${right.entryId}` : `message:${right.id}`;
-    return order.get(leftKey)! - order.get(rightKey)!;
+    return order.get(historyMessageKey(left))! - order.get(historyMessageKey(right))!;
   });
 }
 

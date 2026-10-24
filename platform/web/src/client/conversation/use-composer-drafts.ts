@@ -30,7 +30,7 @@ export function useComposerDrafts() {
   const blocked = useRef(new Set<string>());
   const writing = useRef(new Set<string>());
   const timers = useRef(new Map<string, number>());
-  const loadedProjects = useRef(new Set<string>());
+  const loadedProjects = useRef(new Map<string, Promise<void>>());
 
   const persistRecovery = () => {
     const recovery = new Map(
@@ -122,14 +122,19 @@ export function useComposerDrafts() {
   };
 
   const loadProject = (projectId: string) => {
-    if (loadedProjects.current.has(projectId)) return;
-    loadedProjects.current.add(projectId);
-    void runtimeStore
+    const existing = loadedProjects.current.get(projectId);
+    if (existing) return existing;
+    const loading = runtimeStore
       .composerDrafts(projectId)
       .then(response => {
         for (const draft of response.drafts) receive({ sessionId: draft.sessionId, draft });
       })
-      .catch(() => loadedProjects.current.delete(projectId));
+      .catch(error => {
+        loadedProjects.current.delete(projectId);
+        throw error;
+      });
+    loadedProjects.current.set(projectId, loading);
+    return loading;
   };
 
   const adopt = (sessionId: string, projectId: string, text: string, recoveredSessionId?: string) => {
@@ -145,7 +150,7 @@ export function useComposerDrafts() {
 
   const rememberProject = (session: SessionSummary): boolean => {
     projects.current.set(session.id, session.projectId);
-    loadProject(session.projectId);
+    void loadProject(session.projectId).catch(() => {});
     const draft = drafts.current.get(session.id);
     if (!draft || draft.projectId === session.projectId) return false;
     drafts.current.set(session.id, { ...draft, projectId: session.projectId });
@@ -176,6 +181,7 @@ export function useComposerDrafts() {
     textFor: (id: string) => drafts.current.get(id)?.text,
     latestForProject: (id: string) => latestProjectDraft(drafts.current, id),
     save,
+    loadProject,
     adopt,
     rememberProject,
     dropSession: (id: string) => {

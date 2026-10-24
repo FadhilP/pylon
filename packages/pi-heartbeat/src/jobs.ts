@@ -172,8 +172,8 @@ export class JobManager {
           j.file.once("error", () => resolve());
         }
       }).then(() => {
-        this.prune();
         this.onChange();
+        this.prune();
       });
     });
     child.on("error", () => {

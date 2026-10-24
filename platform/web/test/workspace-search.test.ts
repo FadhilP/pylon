@@ -24,9 +24,10 @@ for (const engine of engines) {
     `${engine}: searches literals, case, words, globs and changed-file scope without interpreting filenames`,
     { skip: !has(engine) },
     async t => {
+      const literal = "price: .*[a]+(b)?{2}|^$";
       const data = {
         "src/a.ts": "é😀 needle NEEDLE needles\nliteral.*\n",
-        "src/b.txt": "needle\n",
+        "src/b.txt": `needle\n${literal}\n${literal.toUpperCase()}\n`,
         "src/c.tsx": "      needle deep\n\t    needle\n",
         "-": "needle\n",
         "space name.ts": "needle\n",
@@ -75,6 +76,11 @@ for (const engine of engines) {
         );
       }
       assert.equal((await run({ query: "literal.*" })).files[0].matches[0].line, 2);
+      const literals = await run({ query: literal });
+      assert.deepEqual(literals.files.map(file => file.path), ["src/b.txt"]);
+      assert.deepEqual(literals.files[0].matches.map(match => match.text), [literal, literal.toUpperCase()]);
+      const caseSensitive = await run({ query: literal, caseSensitive: true });
+      assert.deepEqual(caseSensitive.files[0].matches.map(match => match.text), [literal]);
       const indented = (await run({ query: "needle", glob: "*.tsx" })).files[0].matches;
       assert.deepEqual(indented.map(match => match.text), ["needle deep", "needle"]);
       if (engine === "rg") {

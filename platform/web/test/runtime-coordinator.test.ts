@@ -2498,7 +2498,7 @@ test("General sessions use the built-in home scope instead of the selected proje
   }
 });
 
-test("unsent draft sessions remain listed and reopenable after switching and restarting", { timeout: 30_000 }, async () => {
+test("blank sessions stay hidden and New Session reuses drafts across projects and restarts", { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-reopen-draft-"));
   const cwd = join(root, "workspace");
   const agentDir = join(root, "agent");
@@ -2524,14 +2524,31 @@ test("unsent draft sessions remain listed and reopenable after switching and res
     assert.equal(existsSync(failedPath), false, "failed creation must not leave a catalog-visible session file");
     const created = await driver.newSession({ expectedGeneration: startup.sessionGeneration });
     const projectId = projectIdForCwd(cwd);
+    const blankCatalog = await driver.listSessions({ projectId }, new Set());
+    assert.equal(blankCatalog.projects.find(project => project.id === projectId)?.totalCount, 0);
+    assert.equal(blankCatalog.activeSessions.some(session => session.id === created.sessionId), false);
+    const reused = await driver.newSession({ projectId, expectedGeneration: created.sessionGeneration });
+    assert.equal(reused.sessionId, created.sessionId);
+    assert.ok(reused.sessionGeneration > created.sessionGeneration);
+    const files = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    assert.equal(files.length, 1);
     settings.updateComposer(null, { sessionId: created.sessionId, projectId, text: "unfinished work" });
-    const catalog = await driver.listSessions({ projectId });
+    const draftSessionIds = new Set([created.sessionId]);
+    const catalog = await driver.listSessions({ projectId }, draftSessionIds);
     const listed = catalog.projects.flatMap(project => project.sessions).find(session => session.id === created.sessionId);
     assert.equal(listed?.userMessageCount, 0);
 
-    const second = await driver.newSession({ expectedGeneration: created.sessionGeneration });
+    const otherCwd = join(root, "other");
+    await mkdir(otherCwd);
+    const otherProject = await internal.registry().add(otherCwd);
+    const second = await driver.newSession({ projectId: otherProject.id, expectedGeneration: reused.sessionGeneration });
     assert.notEqual(second.sessionId, created.sessionId);
-    await driver.switchSession({ sessionId: created.sessionId });
+    internal.select = async () => { throw new Error("reuse failed"); };
+    await assert.rejects(driver.newSession({ projectId }), /reuse failed/);
+    internal.select = select;
+    assert.equal(existsSync(files[0]!.path), true, "failed reuse must not delete the saved draft");
+    const returned = await driver.newSession({ projectId });
+    assert.equal(returned.sessionId, created.sessionId);
     assert.equal((await driver.snapshot()).metrics.userMessages, 0);
     assert.equal(settings.readComposer(created.sessionId)?.text, "unfinished work");
 
@@ -2540,15 +2557,28 @@ test("unsent draft sessions remain listed and reopenable after switching and res
     settings = new KeyboardSettingsStore(settingsPath);
     driver = new RuntimeCoordinator();
     await driver.start(target);
-    const restoredCatalog = await driver.listSessions({ projectId });
+    const restoredCatalog = await driver.listSessions({ projectId }, draftSessionIds);
     const restored = restoredCatalog.projects.flatMap(project => project.sessions);
     assert.ok(restored.some(session => session.id === created.sessionId && session.userMessageCount === 0));
-    assert.ok(restored.some(session => session.id === second.sessionId));
-    await driver.switchSession({ sessionId: created.sessionId });
+    const reopened = await driver.newSession({ projectId });
+    assert.equal(reopened.sessionId, created.sessionId);
     const snapshot = await driver.snapshot();
     assert.equal(snapshot.sessionId, created.sessionId);
     assert.equal(snapshot.metrics.userMessages, 0);
     assert.equal(settings.readComposer(snapshot.sessionId)?.text, "unfinished work");
+
+    const selected = (driver as any).selected();
+    const canSleep = selected.driver.canSleep;
+    selected.driver.canSleep = () => false;
+    const whileBusy = await driver.newSession({ projectId });
+    assert.notEqual(whileBusy.sessionId, created.sessionId, "busy drafts must not be reused");
+    selected.driver.canSleep = canSleep;
+    const manager = selected.driver.requireRuntime().session.sessionManager;
+    manager.appendMessage({ role: "user", content: [{ type: "text", text: "prior work" }], timestamp: Date.now() });
+    manager.resetLeaf();
+    await driver.switchSession({ sessionId: created.sessionId });
+    const afterRewind = await driver.newSession({ projectId });
+    assert.notEqual(afterRewind.sessionId, created.sessionId, "rewinding does not make a used session reusable");
   } finally {
     settings.close();
     await driver.dispose();
@@ -2613,9 +2643,8 @@ test("new sessions apply the effective workspace policy before the first prompt"
     assert.equal(isolatedSnapshot.workspace?.mode, isolatedSnapshot.runtimePolicy.effective.workspace);
     assert.equal(isolatedSnapshot.workspace?.mode, "worktree");
     assert.equal(registry.workspaceForSession(isolated.sessionId)?.mode, "worktree");
-    const catalog = await driver.listSessions({ projectId });
-    assert.ok(catalog.projects.flatMap(project => project.sessions).some(session =>
-      session.id === isolated.sessionId && session.userMessageCount === 0));
+    const catalog = await driver.listSessions({ projectId }, new Set());
+    assert.equal(catalog.projects.flatMap(project => project.sessions).some(session => session.id === isolated.sessionId), false);
     const files = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
     const selectedIds = new Set([created.sessionId, movedSnapshot.sessionId, isolated.sessionId]);
     assert.ok(files.every(session => selectedIds.has(session.id)), "provisional precursor sessions must not be persisted");

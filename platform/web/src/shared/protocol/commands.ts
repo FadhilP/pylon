@@ -50,6 +50,7 @@ export const COMMAND_NAMES = [
   "rebuildDiscoverIndex",
   "refreshModelCatalogs",
   "setModel",
+  "setModelCompaction",
   "setThinkingLevel",
   "setSessionControls",
   "startProviderLogin",
@@ -95,6 +96,13 @@ interface MessageCommand extends CommandBase {
 
 interface PromptCommand extends MessageCommand {
   planMode?: boolean;
+}
+
+export interface ModelCompactionInput {
+  provider: string;
+  modelId: string;
+  compactAtTokens: number | null;
+  expectedReserveTokens: number | null;
 }
 
 export type WebCommand =
@@ -148,6 +156,7 @@ export type WebCommand =
   | ({ type: "rebuildDiscoverIndex" } & CommandBase)
   | ({ type: "refreshModelCatalogs" } & CommandBase)
   | ({ type: "setModel"; provider: string; modelId: string } & CommandBase)
+  | ({ type: "setModelCompaction" } & ModelCompactionInput & CommandBase)
   | ({ type: "setThinkingLevel"; level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" } & CommandBase)
   | ({
       type: "setSessionControls";

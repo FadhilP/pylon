@@ -897,6 +897,17 @@ function commandControlsError(value: Record<string, unknown>, type: string): str
   if (type === "setModel" && (!boundedString(value.provider) || !boundedString(value.modelId))) {
     return "invalid model";
   }
+  if (type === "setModelCompaction") {
+    if (!boundedString(value.provider) || !boundedString(value.modelId)) return "invalid model";
+    if (
+      value.compactAtTokens !== null &&
+      (!Number.isSafeInteger(value.compactAtTokens) || (value.compactAtTokens as number) <= 0)
+    ) return "invalid compaction trigger";
+    if (
+      value.expectedReserveTokens !== null &&
+      (!Number.isSafeInteger(value.expectedReserveTokens) || (value.expectedReserveTokens as number) < 0)
+    ) return "invalid compaction reserve";
+  }
   if (type === "setThinkingLevel" && !thinkingLevels.has(String(value.level))) {
     return "invalid thinking level";
   }
@@ -2236,6 +2247,11 @@ function validRuntimeMetrics(metrics: unknown): boolean {
       "assistantMessages",
       "toolCalls",
     ].every(key => typeof metrics[key] === "number" && Number.isFinite(metrics[key] as number)) ||
+    (metrics.contextBudget !== undefined &&
+      (typeof metrics.contextBudget !== "number" ||
+        !Number.isFinite(metrics.contextBudget) ||
+        metrics.contextBudget < 0 ||
+        metrics.contextBudget > (metrics.contextLimit as number))) ||
     (metrics.toolUsage !== undefined &&
       (!Array.isArray(metrics.toolUsage) ||
         metrics.toolUsage.length > 200 ||

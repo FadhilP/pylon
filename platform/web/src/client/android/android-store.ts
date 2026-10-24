@@ -88,6 +88,7 @@ export class AndroidStore {
   }
 
   refresh(): Promise<void> {
+    this.set({ ...this.snapshot, error: undefined });
     if (!this.snapshot.connected) {
       return this.authenticate().catch(error => {
         this.fail(error);
@@ -317,7 +318,7 @@ export class AndroidStore {
     if (!replaceEpoch && current) {
       if (service.serviceEpoch !== current.serviceEpoch || service.sequence < current.sequence) return;
     }
-    this.set({ status: "ready", service, connected: this.snapshot.connected, busy: this.snapshot.busy });
+    this.set({ ...this.snapshot, status: "ready", service });
   }
 
   private fail(error: unknown): void {

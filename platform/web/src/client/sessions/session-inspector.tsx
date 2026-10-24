@@ -53,7 +53,7 @@ import {
   useResponsiveUsageLedCells,
   type OverviewState,
 } from "../ui/overview-primitives";
-import { displayTime, displayTimelineTime, formatDuration } from "../ui/display-format";
+import { contextUsageTitle, displayTime, displayTimelineTime, formatDuration } from "../ui/display-format";
 import { ActionDialog } from "../ui/action-dialog";
 import { RuntimePolicyTimeoutControl } from "../settings/runtime-policy-timeout";
 import { runtimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
@@ -1768,7 +1768,7 @@ function SessionUsage({ metrics }: { metrics?: SessionMetricsReadModel }) {
               aria-label={`Cache input: ${cacheHitRate}. Share of prompt tokens served from cache`}>
               <strong>Cache input</strong> {cacheHitRate}
             </span>
-            <span>
+            <span title={contextUsageTitle(metrics)}>
               <strong>Context</strong> {Math.round(metrics?.contextPercent ?? 0)}%
             </span>
           </div>

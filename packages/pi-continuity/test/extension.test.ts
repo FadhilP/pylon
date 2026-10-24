@@ -786,12 +786,19 @@ test("over-threshold tool work compacts and resumes through public extension API
     await saveConfig({ version: 2, memoryEnabled: false, keepRecentTokens: 50_000 });
     await writeFile(
       join(agentDir, "settings.json"),
-      JSON.stringify({ compaction: { enabled: true, reserveTokens: 30_000 } }),
+      JSON.stringify({
+        compaction: {
+          enabled: true,
+          reserveTokens: 16_384,
+          modelOverrides: { "test/large": { reserveTokens: 30_000 } },
+        },
+      }),
     );
     const app = runtime();
     const compactCalls: any[] = [];
     const ctx: any = {
       cwd,
+      model: { provider: "test", id: "large" },
       hasUI: false,
       mode: "json",
       signal: new AbortController().signal,
@@ -865,6 +872,18 @@ test("over-threshold tool work compacts and resumes through public extension API
     const laterUserAbort = { role: "assistant", stopReason: "aborted", content: [{ type: "text", text: "partial" }] };
     const laterAnnotation = await messageEnd({ message: laterUserAbort }, ctx);
     assert.equal(laterAnnotation, undefined, "completed continuation no longer annotates unrelated user aborts");
+
+    turnCtx.model = { provider: "test", id: "other" };
+    for (const handler of app.handlers.get("turn_end") ?? [])
+      await handler(
+        {
+          message: { role: "assistant", content: [{ type: "toolCall", id: "model-switch", name: "read", arguments: {} }] },
+          toolResults: [{ role: "toolResult", toolCallId: "model-switch" }],
+        },
+        turnCtx,
+      );
+    assert.equal(compactCalls.length, 1, "switching models must use the new model's compaction threshold");
+    turnCtx.model = ctx.model;
 
     for (const handler of app.handlers.get("tool_execution_end") ?? [])
       await handler({ toolCallId: "send-failure", result: { terminate: false } }, turnCtx);

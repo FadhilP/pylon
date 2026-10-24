@@ -38,7 +38,10 @@ export function precompressAssets(): Plugin {
           try {
             await writeFile(temporary, source);
             await rename(temporary, variant);
-          } finally { await rm(temporary, { force: true }); }
+          } catch (error) {
+            await rm(temporary, { force: true });
+            throw error;
+          }
         }
       }
     },

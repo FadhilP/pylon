@@ -814,6 +814,50 @@ test("crafted Web Scout grant path cannot delete attacker-selected directory", a
   }
 });
 
+test("cancelled tool confirmations cannot authorize later device or browser work", async () => {
+  let executions = 0;
+  const { tools } = runtime({
+    exec: async () => {
+      executions++;
+      return successfulLookup();
+    },
+  });
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["helios_android", { action: "packages", serial: "emulator-5554" }],
+    ["helios_android", { action: "start", avd: "Pixel_Test", appPackage: "com.example.app" }],
+    ["helios_android", { action: "attach", serial: "emulator-5554", appPackage: "com.example.app" }],
+    ["helios_browser", { action: "attach", attachMode: "cdp", endpoint: "http://127.0.0.1:9222" }],
+    ["helios_browser", { action: "attach", attachMode: "extension", browser: "chrome" }],
+    ["helios_browser", { action: "tabs", tabAction: "close", tabIndex: 0 }],
+    ...(process.platform === "win32"
+      ? [["helios_capture", { target: "window", title: "Code" }] as [string, Record<string, unknown>]]
+      : []),
+  ];
+  for (const [name, params] of cases) {
+    const controller = new AbortController();
+    const expectedExecutions = executions + (name === "helios_capture" ? 1 : 0);
+    await assert.rejects(
+      tools.get(name).execute(
+        "cancelled",
+        params,
+        controller.signal,
+        undefined,
+        context({
+          ui: {
+            async confirm(_title: string, _message: string, options: { signal?: AbortSignal }) {
+              assert.equal(options.signal, controller.signal);
+              controller.abort(new Error("script ended"));
+              return true;
+            },
+            notify() {},
+          },
+        }),
+      ),
+      /script ended/,
+    );
+    assert.equal(executions, expectedExecutions);
+  }
+});
 test("window capture consent names resolved title", { skip: process.platform !== "win32" }, async () => {
   const { tools } = runtime({ exec: async () => successfulLookup() });
   let confirmation = "";

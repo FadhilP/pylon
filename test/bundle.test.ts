@@ -64,6 +64,82 @@ test("quiet test reporting preserves assertion, startup, and late-activity failu
   }
 });
 
+test("shared web suites run serially, finish cleanup, and preserve failures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-web-test-runner-"));
+  const runner = fileURLToPath(new URL("../scripts/run-tests.mjs", import.meta.url));
+  const events = join(root, "events.jsonl");
+  try {
+    await copyFile(new URL("../platform/web/test/run.mjs", import.meta.url), join(root, "run.mjs"));
+    await writeFile(join(root, "shared.mjs"), "export const state = { runs: 0 };\n");
+    for (const scenario of ["pass", "assertion", "startup", "hook", "late", "rejection"]) {
+      await writeFile(events, "");
+      await writeFile(
+        join(root, "a.test.ts"),
+        `
+        import test, { after } from "node:test";
+        import assert from "node:assert/strict";
+        import { appendFile } from "node:fs/promises";
+        import { state } from "./shared.mjs";
+        after(async () => {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          delete process.env.PYLON_SUITE_ACTIVE;
+          await appendFile(${JSON.stringify(events)}, JSON.stringify({ event: "cleanup", pid: process.pid }) + "\\n");
+          ${scenario === "hook" ? 'throw new Error("hook failure details");' : ""}
+        });
+        test("first fixture", async () => {
+          process.env.PYLON_SUITE_ACTIVE = "1";
+          state.runs++;
+          await new Promise(resolve => setTimeout(resolve, 10).unref());
+          ${scenario === "assertion" ? 'assert.fail("assertion failure details");' : ""}
+          ${scenario === "late" ? 'setTimeout(() => { throw new Error("late failure details"); }, 30);' : ""}
+          ${scenario === "rejection" ? 'setTimeout(() => { Promise.reject(new Error("rejection failure details")); }, 30);' : ""}
+        });
+        ${scenario === "startup" ? 'throw new Error("startup failure details");' : ""}
+      `,
+      );
+      await writeFile(
+        join(root, "b.test.ts"),
+        `
+        import test from "node:test";
+        import assert from "node:assert/strict";
+        import { appendFile, readFile } from "node:fs/promises";
+        import { state } from "./shared.mjs";
+        assert.equal(process.env.PYLON_SUITE_ACTIVE, undefined);
+        assert.equal(JSON.parse((await readFile(${JSON.stringify(events)}, "utf8")).trim()).event, "cleanup");
+        test("second fixture", async () => {
+          ${scenario === "pass" ? "assert.equal(state.runs, 1);" : ""}
+          await appendFile(${JSON.stringify(events)}, JSON.stringify({ event: "second", pid: process.pid }) + "\\n");
+          await new Promise(resolve => setTimeout(resolve, 50));
+        });
+      `,
+      );
+      const run = promisify(execFile)(process.execPath, [
+        runner,
+        "--experimental-transform-types",
+        join(root, "run.mjs"),
+      ]);
+      if (scenario === "pass") await run;
+      else
+        await assert.rejects(run, (error: any) => {
+          assert.equal(error.code, 1);
+          assert.ok(error.stdout.includes(`${scenario} failure details`), error.stdout);
+          return true;
+        });
+      const recorded = (await readFile(events, "utf8"))
+        .trim()
+        .split("\n")
+        .map(line => JSON.parse(line));
+      assert.deepEqual(
+        recorded.map(entry => entry.event),
+        ["cleanup", "second"],
+      );
+      assert.equal(new Set(recorded.map(entry => entry.pid)).size, 1);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("verification forwards verbosity to tests, preserves phase ordering, and stops on failures", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-verify-runner-"));
   const eventsFile = join(root, "events.jsonl");
@@ -106,7 +182,7 @@ test("verification forwards verbosity to tests, preserves phase ordering, and st
       else {
         assert.deepEqual(scripts.slice(0, 5), ["test:bundle", "test:update", "test:storage", "test:install", "check"]);
         if (scenario.mode === "fast") assert.deepEqual(scripts.slice(5), ["build"]);
-        else assert.deepEqual(new Set(scripts.slice(5)), new Set(["test", "verify"]));
+        else assert.deepEqual(new Set(scripts.slice(5)), new Set(["test", "build"]));
       }
       for (const event of events) {
         if (event.script === "build") assert.deepEqual(event.args, scenario.mode === "fast" ? ["--workspace", "@pylon/web"] : []);
@@ -164,7 +240,8 @@ test("package verification shares its bounded pool with web and preserves phase 
     for (const scenario of [
       { web: true, fail: "", verbose: false },
       { web: true, fail: "a:check", verbose: false },
-      { web: true, fail: "web:verify", verbose: false },
+      { web: true, fail: "web:test", verbose: false },
+      { web: true, fail: "web:build", verbose: false },
       { web: false, fail: "", verbose: false },
       { web: false, fail: "", verbose: true },
     ]) {
@@ -195,7 +272,7 @@ test("package verification shares its bounded pool with web and preserves phase 
       for (const event of events) {
         const key = `${event.name}:${event.script}`;
         if (event.kind === "start") {
-          assert.deepEqual(event.args, scenario.verbose && event.script !== "check" ? ["--", "--verbose"] : []);
+          assert.deepEqual(event.args, scenario.verbose && event.script === "test" ? ["--", "--verbose"] : []);
           assert.ok(!active.has(key));
           active.add(key);
           started.push(key);
@@ -213,7 +290,7 @@ test("package verification shares its bounded pool with web and preserves phase 
       else {
         assert.deepEqual(
           new Set(tests),
-          new Set([...(scenario.web ? ["web:verify"] : []), ...names.map(name => `${name}:test`)]),
+          new Set([...(scenario.web ? ["web:test", "web:build"] : []), ...names.map(name => `${name}:test`)]),
         );
       }
     }

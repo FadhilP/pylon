@@ -4,7 +4,6 @@ import { git } from "./git.ts";
 import {
   assertSafeCheckout,
   canonical,
-  commonDirectory,
   currentIndexTree,
   currentTree,
   head,
@@ -24,9 +23,25 @@ import { type CheckoutState, type GitWorkspace } from "./worktree-types.ts";
 /** Inspection of a checkout: its repository, HEAD, trees, and registered submodules. */
 
 export async function inspectGitWorkspace(cwd: string): Promise<GitWorkspace | undefined> {
+  // An unborn HEAD fails the query after Git prints the repository paths.
+  const output = await git(cwd, [
+    "rev-parse",
+    "--show-toplevel",
+    "--path-format=absolute",
+    "--git-common-dir",
+    "HEAD",
+    "--symbolic-full-name",
+    "HEAD",
+    "--",
+  ]).catch((error: { stdout?: string }) => error.stdout ?? "");
+  const [topLevel, commonDir, commit, ref] = output.split(/\r?\n/);
+  if (!topLevel || !commonDir) return undefined;
   try {
-    const root = await realpath(await git(cwd, ["rev-parse", "--show-toplevel"]));
-    return { root, commonDir: await commonDirectory(root), head: await head(root), headRef: await headRef(root) };
+    const root = await realpath(topLevel);
+    const resolvedCommonDir = await realpath(commonDir);
+    if (commit && ref)
+      return { root, commonDir: resolvedCommonDir, head: commit, headRef: ref === "HEAD" ? undefined : ref };
+    return { root, commonDir: resolvedCommonDir, head: await head(root), headRef: await headRef(root) };
   } catch {
     return undefined;
   }
@@ -41,16 +56,13 @@ export async function captureCheckoutState(cwd: string, validateForMutation = fa
 
 /** Capture with the caller's Git runner so its timeout policy also covers tree construction. */
 export async function captureCheckoutTrees(root: string, expectedHead: string | undefined, runGit = git) {
-  const readHead = () => {
-    const pending = runGit(root, ["rev-parse", "--verify", "HEAD"]);
-    return expectedHead ? pending : pending.catch(() => undefined);
-  };
-  // Recheck status/HEAD after construction, including the cheap clean path.
+  // Recheck status after construction, including the cheap clean path; its branch header carries HEAD.
   for (let attempt = 0; attempt <= snapshotRetryDelaysMs.length; attempt++) {
     const rawStatus = await runGit(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
     const status = parseWorktreeStatus(rawStatus);
-    const observedHead = await readHead();
-    if (status.head !== (observedHead ?? "(initial)") || observedHead !== expectedHead) {
+    // Keep Git's own error when an expected HEAD cannot be resolved.
+    if (expectedHead && status.head === "(initial)") await runGit(root, ["rev-parse", "--verify", "HEAD"]);
+    if (status.head !== (expectedHead ?? "(initial)")) {
       if (attempt === snapshotRetryDelaysMs.length) break;
       await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
       continue;
@@ -74,11 +86,8 @@ export async function captureCheckoutTrees(root: string, expectedHead: string | 
       worktreeTree = worktree.value;
     }
 
-    const [latestStatus, latestHead] = await Promise.all([
-      runGit(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
-      readHead(),
-    ]);
-    if (latestStatus === rawStatus && latestHead === expectedHead) return { indexTree, worktreeTree };
+    const latestStatus = await runGit(root, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
+    if (latestStatus === rawStatus) return { indexTree, worktreeTree };
     if (attempt < snapshotRetryDelaysMs.length)
       await new Promise(resolve => setTimeout(resolve, snapshotRetryDelaysMs[attempt]));
   }
@@ -173,10 +182,11 @@ export async function discoverSubmodules(
       const physical = await realpath(absolute);
       if (outside(physicalTop, physical)) continue;
       // Only an initialized submodule rooted here qualifies; never follow arbitrary nested repositories.
-      const topLevel = await git(absolute, ["rev-parse", "--show-toplevel"]).catch(() => undefined);
-      if (!topLevel || canonical(await realpath(topLevel)) !== canonical(physical)) continue;
-      const current = await captureCheckoutState(absolute).catch(() => undefined);
-      if (!current) continue;
+      const workspace = await inspectGitWorkspace(absolute);
+      if (!workspace || canonical(workspace.root) !== canonical(physical)) continue;
+      const trees = await captureCheckoutTrees(workspace.root, workspace.head).catch(() => undefined);
+      if (!trees) continue;
+      const current: CheckoutState = { ...workspace, ...trees };
       const identity = canonical(current.commonDir);
       if (visited.has(identity) || nodes.length >= MAX_TURN_REPOSITORIES) continue;
       visited.add(identity);

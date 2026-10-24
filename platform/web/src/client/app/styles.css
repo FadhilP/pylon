@@ -2065,10 +2065,22 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
    cause, so it starts at the rail and spans the rest of the width. */
 .settings-provider > .provider-auth-task { grid-column: 2 / -1; }
 .settings-option-list > div { grid-template-columns: minmax(0, 1fr) auto; }
-.settings-model-row { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 3px 12px; }
+.settings-model-row { grid-template-columns: 18px minmax(0, 1fr) 258px 92px; min-height: 64px; gap: 6px 12px; }
 .settings-model-row > .overview-orb-cell { align-self: center; height: 18px; }
 .settings-row-control { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .settings-model-row .package-switch > small { min-width: 46px; }
+.settings-model-compaction { grid-column: 3; grid-row: 1; display: grid; grid-template-columns: minmax(0, 1fr) 152px 26px; align-items: center; gap: 4px 8px; font-size: 12px; }
+.settings-model-compaction > span:first-child { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.settings-model-row .settings-model-compaction > small, .settings-model-compaction > [role="alert"] { grid-column: 1 / -1; overflow: visible; font-size: 11px; line-height: 1.4; white-space: normal; }
+.settings-model-compaction > [role="alert"] { color: var(--red); }
+.settings-model-reset { display: grid; width: 26px; height: 28px; place-items: center; border-radius: var(--radius-control); color: var(--text-muted); }
+.settings-model-reset:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.settings-model-reset:disabled { cursor: default; opacity: 0.25; }
+.settings-model-row > .settings-model-visibility { grid-column: 4; grid-row: 1; display: flex; justify-content: flex-end; }
+.settings-model-help { margin: -6px 0 20px; padding-block: 10px; border-block: 1px solid var(--line); color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.settings-model-help > summary { width: fit-content; color: var(--text-soft); cursor: pointer; }
+.settings-model-help > p { max-width: 680px; margin-top: 10px; }
+#settings-panel-models > .settings-provider-groups { gap: 18px; }
 .settings-provider:hover, .settings-model-row:hover, .settings-option-list > div:hover { background: var(--surface-subtle); }
 .settings-provider-copy, .settings-provider-copy > span, .settings-model-row > span, .settings-option-list > div > span { display: grid; min-width: 0; gap: 2px; }
 .settings-provider strong, .settings-model-row strong, .settings-option-list strong { overflow: hidden; font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
@@ -2369,7 +2381,7 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .settings-theme-options { flex-wrap: wrap; }
   .settings-theme-options label { flex: 1 1 calc(50% - 7px); }
   .settings-pane-header { display: grid; }
-  .settings-pane-header input[type="search"] { width: 100%; }
+  .settings-pane-header input[type="search"] { flex-basis: auto; width: 100%; }
   .settings-pane-actions { align-items: stretch; flex-direction: column; }
   .settings-pane-actions .text-button { align-self: flex-start; min-height: 30px; }
   .package-workbench, .hooks-editor { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
@@ -2396,6 +2408,10 @@ button.seam:hover .seam-open, button.seam:hover .seam-label, .seam-block > summa
   .package-row-control.is-pair { grid-template-columns: 1fr 1fr; }
   .workbench-tool-row { grid-template-columns: 22px minmax(0, 1fr); row-gap: 6px; }
   .workbench-tool-row select { grid-column: 2; }
+  .settings-model-row { grid-template-columns: 18px minmax(0, 1fr) 92px; }
+  .settings-model-row > .settings-model-visibility { grid-column: 3; }
+  .settings-model-compaction { grid-column: 2 / -1; grid-row: 2; grid-template-columns: 152px 26px; justify-self: start; padding-top: 2px; }
+  .settings-model-compaction > span:first-child { grid-column: 1 / -1; }
   .settings-theme-options label { flex: 1; }
   .theme-preview { width: 100%; }
 }

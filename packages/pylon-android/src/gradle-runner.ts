@@ -122,6 +122,29 @@ function safeBuildOutput(value: string): string {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, "");
 }
 
+function gradleDownloadFilter(): (value: string) => string {
+  let line = "";
+  let progress = false;
+  return value => {
+    let result = "";
+    for (let part of value.split(/(?<=\n)/)) {
+      if (progress) {
+        const prefix = /^[.\d% \r]*/.exec(part)![0];
+        result += prefix.replaceAll(".", "");
+        part = part.slice(prefix.length);
+        if (part && part !== "\n") progress = false;
+      }
+      result += part;
+      line = (line + part).slice(-1024);
+      if (part.endsWith("\n")) {
+        progress = /^Downloading https?:\/\/[^\r\n]+\.zip\s*$/i.test(line);
+        line = "";
+      }
+    }
+    return result;
+  };
+}
+
 export async function runAndroidGradleBuild(
   input: AndroidGradleBuildInput,
   options: AndroidGradleRunnerOptions = {},
@@ -172,24 +195,15 @@ export async function runAndroidGradleBuild(
   if (!state.isDirectory() || state.isSymbolicLink()) throw new Error("Android build state directory is unsafe");
   const env = sanitizedGradleEnvironment(options.env ?? process.env, stateDirectory);
   const task = taskFor(input.workspace.modulePath, input.workspace.variant);
-  const command = androidGradleInvocation(platform, input.workspace.wrapperPath, task, env, input.forceRerun);
   const spawnProcess = options.spawnProcess ?? spawn;
   const terminate = options.terminateProcess ?? terminateProcessTree;
-  if (input.signal?.aborted) throw new Error("Android build was cancelled");
-  const child = spawnProcess(command.executable, command.args, {
-    cwd: input.workspace.canonicalRoot,
-    env,
-    shell: false,
-    windowsHide: true,
-    detached: platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
+  const deadline = Date.now() + timeoutMs;
   let output = "";
   let outputBytes = 0;
   let truncated = false;
-  const appendFrom = (decoder: StringDecoder) => (value: Buffer | string) => {
-    const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  let retried = false;
+  const append = (value: string, decoder: StringDecoder) => {
+    const bytes = Buffer.from(value);
     const remaining = Math.max(0, maxOutputBytes - outputBytes);
     const accepted = bytes.subarray(0, remaining);
     const clipped = accepted.byteLength < bytes.byteLength;
@@ -204,57 +218,93 @@ export async function runAndroidGradleBuild(
       if (!chunk) input.onOutput?.("", true);
     }
   };
-  const appendStdout = appendFrom(new StringDecoder("utf8"));
-  const appendStderr = appendFrom(new StringDecoder("utf8"));
-  child.stdout?.on("data", appendStdout);
-  child.stderr?.on("data", appendStderr);
 
-  let stopReason: "cancelled" | "timeout" | undefined;
-  let stopResolve!: () => void;
-  const stopRequested = new Promise<void>(resolveStop => {
-    stopResolve = resolveStop;
-  });
-  let termination: Promise<void> | undefined;
-  const requestStop = (reason: "cancelled" | "timeout") => {
-    if (stopReason) return;
-    stopReason = reason;
-    termination = Promise.resolve().then(() =>
-      terminate(child, "Android Gradle", undefined, undefined, { processGroup: platform !== "win32" }),
-    );
-    stopResolve();
-  };
-  const cancelled = () => requestStop("cancelled");
-  input.signal?.addEventListener("abort", cancelled, { once: true });
-  if (input.signal?.aborted) requestStop("cancelled");
-  const timer = setTimeout(() => requestStop("timeout"), timeoutMs);
-  timer.unref?.();
+  while (true) {
+    if (input.signal?.aborted) throw new Error("Android build was cancelled");
+    const command = androidGradleInvocation(platform, input.workspace.wrapperPath, task, env, input.forceRerun);
+    const child = spawnProcess(command.executable, command.args, {
+      cwd: input.workspace.canonicalRoot,
+      env: { ...env },
+      shell: false,
+      windowsHide: true,
+      windowsVerbatimArguments: platform === "win32",
+      detached: platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let requiresJava17 = false;
+    const appendFrom = () => {
+      const incoming = new StringDecoder("utf8");
+      const retained = new StringDecoder("utf8");
+      const filter = gradleDownloadFilter();
+      let diagnostic = "";
+      return (value: Buffer | string) => {
+        const decoded = incoming.write(Buffer.isBuffer(value) ? value : Buffer.from(value));
+        diagnostic += safeBuildOutput(decoded);
+        if (/Android Gradle plugin requires Java 17 to run\./.test(diagnostic)) requiresJava17 = true;
+        diagnostic = diagnostic.slice(-1024);
+        append(filter(decoded), retained);
+      };
+    };
+    const appendStdout = appendFrom();
+    const appendStderr = appendFrom();
+    child.stdout?.on("data", appendStdout);
+    child.stderr?.on("data", appendStderr);
 
-  const closed = new Promise<number>((resolveClose, reject) => {
-    child.once("error", reject);
-    child.once("close", code => resolveClose(code ?? -1));
-  });
-  try {
-    const code = await Promise.race([
-      closed,
-      stopRequested.then(async () => {
-        await termination;
-        return child.exitCode ?? -1;
-      }),
-    ]);
-    if (termination) await termination;
+    let stopReason: "cancelled" | "timeout" | undefined;
+    let stopResolve!: () => void;
+    const stopRequested = new Promise<void>(resolveStop => {
+      stopResolve = resolveStop;
+    });
+    let termination: Promise<void> | undefined;
+    const requestStop = (reason: "cancelled" | "timeout") => {
+      if (stopReason) return;
+      stopReason = reason;
+      termination = Promise.resolve().then(() =>
+        terminate(child, "Android Gradle", undefined, undefined, { processGroup: platform !== "win32" }),
+      );
+      stopResolve();
+    };
+    const cancelled = () => requestStop("cancelled");
+    input.signal?.addEventListener("abort", cancelled, { once: true });
+    if (input.signal?.aborted) requestStop("cancelled");
+    const timer = setTimeout(() => requestStop("timeout"), Math.max(1, deadline - Date.now()));
+    timer.unref?.();
+    const closed = new Promise<number>((resolveClose, reject) => {
+      child.once("error", reject);
+      child.once("close", code => resolveClose(code ?? -1));
+    });
+    let code: number;
+    try {
+      code = await Promise.race([
+        closed,
+        stopRequested.then(async () => {
+          await termination;
+          return child.exitCode ?? -1;
+        }),
+      ]);
+      if (termination) await termination;
+    } finally {
+      clearTimeout(timer);
+      input.signal?.removeEventListener("abort", cancelled);
+      child.stdout?.off("data", appendStdout);
+      child.stderr?.off("data", appendStderr);
+    }
+    if (code !== 0 && !stopReason && requiresJava17 && !retried) {
+      if (env.JAVA_HOME && !input.signal?.aborted && Date.now() < deadline) {
+        delete env.JAVA_HOME;
+        retried = true;
+        append("\nRetrying Android build with Java from PATH.\n", new StringDecoder("utf8"));
+        continue;
+      }
+    }
     return {
       task,
       code,
       succeeded: code === 0 && !stopReason,
-      cancelled: stopReason === "cancelled",
+      cancelled: stopReason === "cancelled" || input.signal?.aborted === true,
       timedOut: stopReason === "timeout",
       output,
       truncated,
     };
-  } finally {
-    clearTimeout(timer);
-    input.signal?.removeEventListener("abort", cancelled);
-    child.stdout?.off("data", appendStdout);
-    child.stderr?.off("data", appendStderr);
   }
 }

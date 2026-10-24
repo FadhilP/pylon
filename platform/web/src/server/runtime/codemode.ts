@@ -4,25 +4,21 @@ import { allowsIndirectTool, isMcpTool } from "pylon-core/src/tools.ts";
 const TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_TOKENS = 2_000;
 const MAX_CALLS = 32;
-// Workflow controls, tool activation and delegates stay outside scripts.
-const SCRIPT_TOOLS = new Set([
-  "read",
-  "edit",
-  "write",
-  "bash",
-  "powershell",
-  "grep",
-  "find",
-  "ls",
-  "fd",
-  "rg",
-  "code_search",
-  "symbol_search",
-  "relationship_graph",
-  "index_status",
+const EXCLUDED_TOOLS = new Set([
+  "codemode",
+  "continuity_update",
+  "verify",
+  "pylon_settings",
+  "apply_session_changes",
+  "advisor",
+  "grunt",
+  "repo_scout",
+  "web_scout",
+  "spawn_agent",
+  "spawn_session",
+  "memory",
 ]);
 
-/** Clamp the two native first-line options; leave JavaScript parsing to Pi. */
 export function boundedSource(source: string): { code: string; timeoutMs: number } {
   let options: Record<string, unknown> = {};
   const newline = source.indexOf("\n");
@@ -57,11 +53,12 @@ export function boundedSource(source: string): { code: string; timeoutMs: number
 
 export function createPylonCodemodeExtension(): ExtensionFactory {
   return pi => {
+    const scopes = new Map<string, AbortSignal>();
     const permitted = (name: string, exposure: string): boolean => {
       if (isMcpTool(name)) {
         return ["direct", "codemode", "deferred"].includes(exposure) && allowsIndirectTool(pi, name);
       }
-      return SCRIPT_TOOLS.has(name) && exposure === "direct";
+      return !EXCLUDED_TOOLS.has(name) && exposure === "direct" && allowsIndirectTool(pi, name);
     };
     const eligible = (name: string): boolean => {
       const tool = pi.getAllTools().find(tool => tool.name === name);
@@ -85,7 +82,7 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
               if (changes?.descriptions?.codemode)
                 changes.descriptions = {
                   ...changes.descriptions,
-                  codemode: `${changes.descriptions.codemode}\n\nPylon Web: active direct coding/search tools and permitted MCP tools; no workflow controls or models. At most ${MAX_CALLS} calls, ${TIMEOUT_MS / 1_000}s execution, ${MAX_OUTPUT_TOKENS} output tokens. Lower first-line limits are respected. Completed side effects are not rolled back.`,
+                  codemode: `${changes.descriptions.codemode}\n\nPylon Web: active direct tools and permitted MCP tools. ALL_TOOLS and discovery helpers list only tools callable in this script, not every Pylon tool. Call these tools directly outside codemode: ${[...EXCLUDED_TOOLS].join(", ")}. Model APIs are unavailable. search_tools activation takes effect next turn, not within the current script. At most ${MAX_CALLS} calls, ${TIMEOUT_MS / 1_000}s execution, ${MAX_OUTPUT_TOKENS} output tokens. Lower first-line limits are respected. Completed side effects are not rolled back. Background jobs have their own lifecycle and can outlive scripts.`,
                 };
               return changes;
             },
@@ -100,10 +97,12 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
               let calls = 0,
                 pending = 0,
                 finished = false;
-              // Native tool_call hooks see the turn signal, not the nested call's signal.
-              // Keep the association until dispatches settle, so delayed Guard hooks cannot outlive the script.
-              const publishScope = (active: boolean) =>
+              // Retain cancelled scopes until pending approval hooks settle.
+              const publishScope = (active: boolean) => {
+                if (active) scopes.set(id, boundedSignal);
+                else scopes.delete(id);
                 pi.events.emit("pylon:codemode-scope", { version: 1, toolCallId: id, active, signal: boundedSignal });
+              };
               const context = Object.create(ctx, {
                 tools: { value: ctx.tools.filter(candidate => eligible(candidate.name)) },
                 signal: { value: boundedSignal },
@@ -115,7 +114,7 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
                       deadline.abort(error); // Stop caught-error retry loops as well as excess fan-out.
                       throw error;
                     }
-                    if (!eligible(name)) throw new Error(`Tool "${name}" is not a permitted coding/search or MCP tool`);
+                    if (!eligible(name)) throw new Error(`Tool "${name}" is not permitted in codemode`);
                     pending++;
                     // The native sandbox also cancels unawaited calls on successful exit.
                     const cancelScope = () => lifecycle.abort(new Error("Codemode nested work cancelled"));
@@ -149,5 +148,11 @@ export function createPylonCodemodeExtension(): ExtensionFactory {
       },
     });
     createCodemodeExtension({ mode: "on", models: false })(nativeApi);
+    pi.on("tool_call", event => {
+      const scope = event.parentToolCallId ? scopes.get(event.parentToolCallId) : undefined;
+      if (!scope) return;
+      if (scope.aborted) return { block: true, reason: "Codemode operation aborted" };
+      if (!eligible(event.toolName)) return { block: true, reason: "Tool is no longer permitted in codemode" };
+    });
   };
 }

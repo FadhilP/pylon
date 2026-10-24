@@ -1,3 +1,5 @@
+import type { ModelCompactionInput } from "../../shared/protocol/commands.ts";
+import { contextUsageMetrics, modelCompactionSettings, updateModelCompaction } from "../settings/model-compaction.ts";
 import { validMcpSettingsAction, type McpSettingsQuery, type McpSettingsAction, type McpSettingsSnapshot } from "../../shared/settings/mcp.ts";
 import type { McpManagement } from "./mcp-settings.ts";
 import { randomUUID } from "node:crypto";
@@ -1126,7 +1128,8 @@ export class SessionRuntime {
     const turnAtStart = this.nextTurnId;
     if (capture) this.commandCapture = capture;
     if (files.length) this.promptAttachments.stage(input.commandId, files);
-    if (!knownCommand) this.pendingUserMessageIds.push(input.commandId);
+    // Pi emits a new prompt before any steering or follow-up input retained after abort.
+    if (!knownCommand) this.pendingUserMessageIds.unshift(input.commandId);
     return new Promise<AcceptedCommand>((resolve, reject) => {
       let decided = false;
       let commandPending = false;
@@ -1886,7 +1889,7 @@ export class SessionRuntime {
   editPrompt(input: EditPromptInput): Promise<AcceptedCommand> {
     return this.withSessionMutation("lifecycle", async () => {
       const session = this.sessionFor(input.expectedGeneration);
-      if (this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+      if (this.runtimeState() !== "idle" || session.pendingMessageCount > 0 || this.packageUpdate || this.indexUpdate) {
         throw new Error("prompts can only be edited while the session is idle");
       }
       const branch = session.sessionManager.getBranch();
@@ -1935,7 +1938,7 @@ export class SessionRuntime {
   rewindPrompt(input: RewindPromptInput): Promise<AcceptedCommand> {
     return this.withSessionMutation("lifecycle", async () => {
       const session = this.sessionFor(input.expectedGeneration);
-      if (this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+      if (this.runtimeState() !== "idle" || session.pendingMessageCount > 0 || this.packageUpdate || this.indexUpdate) {
         throw new Error("prompts can only be rewound while the session is idle");
       }
       const branch = session.sessionManager.getBranch();
@@ -1986,7 +1989,13 @@ export class SessionRuntime {
   fork(input: ForkInput): Promise<ReplacementResult> {
     return this.withSessionMutation("lifecycle", async () => {
       const session = this.sessionFor(input.expectedGeneration);
-      if (!session.isIdle || this.runtimeState() !== "idle" || this.packageUpdate || this.indexUpdate) {
+      if (
+        !session.isIdle ||
+        this.runtimeState() !== "idle" ||
+        session.pendingMessageCount > 0 ||
+        this.packageUpdate ||
+        this.indexUpdate
+      ) {
         throw new Error("Session controls can only change while the session is idle");
       }
       const target = session.sessionManager.getBranch().find(entry => entry.id === input.entryId);
@@ -2267,6 +2276,28 @@ export class SessionRuntime {
       .find(item => item.provider === input.provider && item.id === input.modelId);
     if (!model) throw new Error("model is unavailable or has no configured credentials");
     await session.setModel(model);
+    this.refreshSnapshot();
+  }
+
+  async setModelCompaction(input: ModelCompactionInput): Promise<void> {
+    if (!this.canSleep()) throw new Error("Compaction settings can only change while the session is idle");
+    const runtime = this.requireRuntime();
+    const model = runtime.services.modelRuntime.getAvailableSnapshot()
+      .find(item => item.provider === input.provider && item.id === input.modelId);
+    if (!model) throw new Error("model is unavailable or has no configured credentials");
+    const target = this.target;
+    if (!target) throw new Error("runtime has not started");
+    await this.withSettingsUpdate(() => updateModelCompaction(target.agentDir, model.contextWindow, input));
+    await this.refreshCompactionSettings();
+  }
+
+  async refreshCompactionSettings(): Promise<void> {
+    const manager = this.requireRuntime().services.settingsManager;
+    const { compaction: _compaction, ...otherSettings } = manager.getSettings();
+    // Resolve tool modifiers before restoring them so Pi does not append them again.
+    otherSettings.defaultTools = manager.getDefaultTools();
+    await manager.reload();
+    manager.applyOverrides(otherSettings);
     this.refreshSnapshot();
   }
 
@@ -2622,18 +2653,19 @@ export class SessionRuntime {
     if (this.ui.hasPendingDialog) return "attention";
     // Pi remains streaming while post-turn extension handlers settle; terminal agent_end has already cleared this timer.
     const agentTurnActive = runtime.session.isStreaming && this.workStartedAt !== undefined;
-    if (
-      agentTurnActive ||
-      runtime.session.pendingMessageCount > 0 ||
-      this.indexUpdate ||
-      this.operational.jobs.items.some(job => job.state === "running")
-    )
+    if (agentTurnActive || this.indexUpdate || this.operational.jobs.items.some(job => job.state === "running"))
       return "running";
     return "idle";
   }
 
   canSleep(): boolean {
-    return this.runtimeState() === "idle" && !this.sessionMutation && !this.packageUpdate && !this.indexUpdate;
+    return (
+      this.runtimeState() === "idle" &&
+      this.requireRuntime().session.pendingMessageCount === 0 &&
+      !this.sessionMutation &&
+      !this.packageUpdate &&
+      !this.indexUpdate
+    );
   }
 
   /** Explicitly created sessions must be reopenable before their first prompt. */
@@ -2675,6 +2707,7 @@ export class SessionRuntime {
     promptReady: boolean;
     todoProgress?: SessionTodoProgress;
     userMessageCount: number;
+    hasMessages: boolean;
   } {
     const runtime = this.requireRuntime();
     const todoProgress = this.todoProgress();
@@ -2688,6 +2721,7 @@ export class SessionRuntime {
       promptReady: runtime.session.isIdle,
       ...(todoProgress ? { todoProgress } : {}),
       userMessageCount: runtime.session.getSessionStats().userMessages,
+      hasMessages: runtime.session.sessionManager.getEntries().some(entry => entry.type === "message"),
     };
   }
 
@@ -3462,6 +3496,9 @@ export class SessionRuntime {
           };
     });
     const model = session.model;
+    const compactionManager = runtime.services.settingsManager;
+    const globalCompaction = compactionManager.getGlobalSettings().compaction;
+    const effectiveCompaction = compactionManager.getSettings().compaction;
     const models = runtime.services.modelRuntime
       .getAvailableSnapshot()
       .slice(0, 500)
@@ -3471,6 +3508,7 @@ export class SessionRuntime {
         name: item.name,
         thinkingLevels: [...supportedThinkingLevels(item)],
         ...modelCatalogFacts(item),
+        compaction: modelCompactionSettings(item, globalCompaction, effectiveCompaction),
       }))
       .sort((left, right) => left.provider.localeCompare(right.provider) || left.name.localeCompare(right.name));
     const commands = runtime.services.resourceLoader
@@ -3548,9 +3586,7 @@ export class SessionRuntime {
         outputTokens: stats.tokens.output,
         cacheReadTokens: stats.tokens.cacheRead,
         cacheWriteTokens: stats.tokens.cacheWrite,
-        contextTokens: context?.tokens ?? 0,
-        contextLimit: context?.contextWindow ?? 0,
-        contextPercent: context?.percent ?? 0,
+        ...contextUsageMetrics(context, compactionManager.getCompactionSettings(model)),
         cost: reconciledSessionCost(stats.cost, session.sessionManager.getEntries(), delegatedRuns),
         userMessages: stats.userMessages,
         assistantMessages: stats.assistantMessages,

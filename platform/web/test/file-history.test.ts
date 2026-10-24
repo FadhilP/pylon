@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import childProcess, { execFile } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { applyPatch, parsePatch } from "diff";
-import { mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,9 +15,10 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "pylon-file-history-"));
   const git = async (...args: string[]) => (await exec("git", args, { cwd: root })).stdout.trim();
   await git("init", "-q");
-  await git("config", "user.name", "History Author");
-  await git("config", "user.email", "history@example.test");
-  await git("config", "core.autocrlf", "false");
+  await appendFile(
+    join(root, ".git", "config"),
+    "\n[user]\n\tname = History Author\n\temail = history@example.test\n[core]\n\tautocrlf = false\n",
+  );
   await writeFile(join(root, "old name.txt"), "baseline\nkeep\n");
   await git("add", ".");
   await git("commit", "-qm", "Create file");

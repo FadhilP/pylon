@@ -759,11 +759,14 @@ export function App() {
     if (
       live.connection !== "connected" ||
       runtime?.ready !== true ||
-      runtime.sessionGeneration !== pendingSession.expectedGeneration ||
-      runtime.sessionId === pendingSession.previousSessionId
+      runtime.sessionGeneration !== pendingSession.expectedGeneration
     )
       return;
-    const draft = pendingSessionDraft.current;
+    const savedDraft = composerDrafts.textFor(runtime.sessionId) ?? "";
+    const pendingDraft = pendingSessionDraft.current ?? "";
+    const draft = savedDraft && pendingDraft && savedDraft !== pendingDraft
+      ? `${savedDraft}\n\n${pendingDraft}`
+      : pendingDraft || savedDraft;
     composerDrafts.adopt(runtime.sessionId, pendingSession.project.id, draft);
     if (document.activeElement instanceof HTMLTextAreaElement && document.activeElement.id === "runtime-prompt") {
       pendingSessionSelection.current = {
@@ -895,6 +898,7 @@ export function App() {
     setSessionBusy(project.id);
     let accepted = false;
     try {
+      await composerDrafts.loadProject(project.id);
       const expectedGeneration = await runtimeStore.newSession(project.id);
       accepted = true;
       setPendingSession(current => (current?.requestId === requestId ? { ...current, expectedGeneration } : current));
@@ -1291,7 +1295,7 @@ export function App() {
     }
   };
 
-  const currentProjectPage = sessionPages.find(page => page.id === activeSession?.projectId);
+  const currentProjectPage = sessionPages.find(page => page.id === (activeSession?.projectId ?? live.runtime?.projectId));
   const currentProject = currentProjectPage ? toSessionProject(currentProjectPage) : (projects[0] ?? general);
   const composerProject =
     pendingSession?.project ??
@@ -1644,18 +1648,10 @@ export function App() {
       onDraftChange={draft => {
         if (pendingSession) {
           pendingSessionDraft.current = draft;
-          const runtime = live.runtime;
-          if (
-            pendingSession.expectedGeneration !== undefined &&
-            runtime?.ready === true &&
-            runtime.sessionGeneration === pendingSession.expectedGeneration &&
-            runtime.sessionId !== pendingSession.previousSessionId
-          )
-            composerDrafts.save(runtime.sessionId, pendingSession.project.id, draft);
           return;
         }
         const sessionId = live.runtime?.sessionId;
-        if (sessionId) composerDrafts.save(sessionId, activeSession?.projectId, draft);
+        if (sessionId) composerDrafts.save(sessionId, activeSession?.projectId ?? live.runtime?.projectId, draft);
       }}
       onSelectAgent={id => {
         setSelectedAgentId(id);
@@ -1763,7 +1759,7 @@ export function App() {
           onClose={() => setReference(null)}>
           <AndroidPanel
             workspaceLabel={live.runtime?.cwdLabel}
-            sessionGeneration={live.runtime?.ready ? live.runtime.sessionGeneration : undefined}
+            sessionGeneration={live.connection === "connected" && live.runtime?.ready ? live.runtime.sessionGeneration : undefined}
             dockedOutputs={{ build: androidDockLayout.build, logs: androidDockLayout.logs }}
             onDockOutput={dockOutput}
             onRestoreOutput={restoreOutput}
@@ -1864,7 +1860,7 @@ export function App() {
         <FilesPanel
           key={`files:${live.runtime?.sessionId ?? "loading"}`}
           live={live}
-          projectId={activeSession?.projectId}
+          projectId={live.runtime?.projectId ?? activeSession?.projectId}
           stateStore={changesStates}
           requestedPath={requestedFile}
           applyRequest={applyRequest}
@@ -2219,7 +2215,7 @@ export function App() {
           <DeferredPanel>
             <FileWorkspace
               live={live}
-              projectId={activeSession?.projectId}
+              projectId={live.runtime?.projectId ?? activeSession?.projectId}
               requestedPath={requestedFile}
               stateStore={fileWorkspaceStates}
               dock={
@@ -2368,6 +2364,12 @@ export function App() {
               modelRefreshBusy={modelRefreshBusy}
               modelRefreshDisabled={live.connection !== "connected" || live.runtime?.ready !== true}
               onRefreshModels={refreshModels}
+              onModelCompactionChange={(model, compactAtTokens) => runtimeStore.setModelCompaction({
+                provider: model.provider,
+                modelId: model.id,
+                compactAtTokens,
+                expectedReserveTokens: model.compaction?.reserveTokens ?? null,
+              })}
               sessionThinkingLevels={live.runtime?.sessionControls.thinkingLevels ?? []}
               theme={theme}
               onThemeChange={setTheme}

@@ -7,7 +7,7 @@ import type {
   WorkspaceMutationResult,
 } from "../../shared/workspace/workspace-mutations.ts";
 import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
-import type { AcceptedCommand, WebCommand } from "../../shared/protocol/commands.ts";
+import type { AcceptedCommand, ModelCompactionInput, WebCommand } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
   HeliosAndroidToolingCommand,
@@ -458,7 +458,7 @@ export interface PiDriver {
     signal: AbortSignal,
   ): Promise<void>;
   heliosAndroidTooling?(input: HeliosAndroidToolingCommand): Promise<HeliosAndroidToolingResult>;
-  listSessions(input?: SessionListQuery): Promise<SessionListSnapshot>;
+  listSessions(input?: SessionListQuery, draftSessionIds?: ReadonlySet<string>): Promise<SessionListSnapshot>;
   listLocalBranches?(): Promise<LocalBranchListSnapshot>;
   usage(input?: UsageQuery): Promise<UsageSnapshot>;
   listArchived(input?: ArchiveListQuery): Promise<ArchiveListSnapshot>;
@@ -512,6 +512,7 @@ export interface PiDriver {
   rebuildDiscoverIndex(): Promise<void>;
   refreshModelCatalogs?(expectedGeneration: number): Promise<void>;
   setModel(input: SetModelInput): Promise<void>;
+  setModelCompaction?(input: ModelCompactionInput): Promise<void>;
   setThinkingLevel(input: SetThinkingLevelInput): void;
   setSessionControls(input: SetSessionControlsInput): Promise<void>;
   startProviderLogin?(input: StartProviderLoginInput): Promise<void>;

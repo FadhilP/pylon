@@ -76,7 +76,7 @@ import type {
   TimelineCheckpointReadModel,
 } from "../../shared/protocol/events";
 import type { ConversationTurnIndexItem, ConversationTurnIndexPage } from "../../shared/protocol/snapshots";
-import { agentRequestLabel, thinkingLabel } from "../ui/display-format";
+import { agentRequestLabel, contextUsageTitle, thinkingLabel } from "../ui/display-format";
 import { runtimeStore, type RuntimeStoreSnapshot } from "../runtime/event-store";
 import { agentColor, type AgentColorMap } from "../sessions/agent-color";
 import { modelThinkingLevels, moveRailSelection, railThinkingAxis } from "./model-rail";
@@ -1172,7 +1172,7 @@ export function ConversationPanel({
                 <RunSeam
                   state="running"
                   label="Compacting context"
-                  value={`${formatCompactNumber(runtime.metrics.contextTokens)} used · ${Math.round(runtime.metrics.contextPercent)}% of the window`}
+                  value={`${formatCompactNumber(runtime.metrics.contextTokens)} used · ${Math.round(runtime.metrics.contextPercent)}% of context budget`}
                 />
               )}
               {runtime.conversation.workStartedAt ? (
@@ -1461,8 +1461,7 @@ export function ConversationPanel({
           </div>
           <div className="prompt-right">
             <div className="prompt-metrics" aria-label="Session usage">
-              <span
-                title={`${runtime?.metrics.contextTokens.toLocaleString() ?? 0} of ${runtime?.metrics.contextLimit.toLocaleString() ?? 0} tokens`}>
+              <span title={contextUsageTitle(runtime?.metrics)}>
                 {runtime ? `${runtime.metrics.contextPercent.toFixed(2)}%` : "—"}
               </span>
               <span>{runtime ? `$${runtime.metrics.cost.toFixed(2)}` : "—"}</span>

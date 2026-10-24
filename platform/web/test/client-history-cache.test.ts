@@ -10,6 +10,7 @@ import type { MessageReadModel } from "../src/shared/protocol/events.ts";
 import type { RuntimeSnapshot } from "../src/shared/protocol/snapshots.ts";
 import { PROTOCOL_VERSION } from "../src/shared/protocol/envelope.ts";
 import { initialOperational } from "../src/server/runtime/operational-projections.ts";
+import { liveToolMessage } from "../src/shared/sessions/transcript.ts";
 
 function messages(start: number, end: number): MessageReadModel[] {
   return Array.from({ length: end - start }, (_, offset) => ({
@@ -155,4 +156,27 @@ test("history pages deduplicate overlapping entries with newest content and stab
   assert.equal(merged[5].text, "finished");
   assert.deepEqual(first.map(item => item.text), ["0", "1", "2", "live-a"]);
   assert.deepEqual(mergeHistorySegments([]), []);
+});
+test("history merges reconcile tool calls without losing saved results or distinct executions", () => {
+  const live = liveToolMessage({
+    id: "call-one", name: "codemode", input: '{"code":"same input"}',
+    status: "completed", summary: "short summary", durationMs: 2_600,
+  });
+  const persisted: MessageReadModel = {
+    ...live, id: "history-1", entryId: "entry-one", text: "full saved result",
+  };
+  const anotherCall: MessageReadModel = {
+    ...live, id: "live-tool-call-two", tool: { ...live.tool!, id: "call-two" },
+  };
+  const history = [...messages(0, 1), persisted, ...messages(2, 3)];
+  const expected = [...history, anotherCall];
+
+  for (const duplicate of [live, { ...live, id: "message-7" }]) {
+    const activity = [duplicate, anotherCall];
+    assert.deepEqual(mergeHistorySegments([history, activity]), expected);
+    assert.deepEqual(mergeHistorySegments([activity, history]), expected);
+  }
+
+  const updated = { ...persisted, text: "updated saved result" };
+  assert.deepEqual(mergeHistoryMessages([persisted], [updated]), [updated]);
 });

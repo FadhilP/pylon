@@ -222,6 +222,7 @@ export interface SessionMetricsReadModel {
   cacheWriteTokens: number;
   contextTokens: number;
   contextLimit: number;
+  contextBudget?: number;
   contextPercent: number;
   cost: number;
   userMessages: number;
@@ -238,6 +239,12 @@ export interface ModelOptionReadModel {
   name: string;
   thinkingLevels?: ThinkingLevelReadModel[];
   contextWindow?: number;
+  compaction?: {
+    reserveTokens: number | null;
+    triggerTokens: number;
+    defaultTriggerTokens: number;
+    effectiveTriggerTokens: number;
+  };
   /** USD per million tokens, as advertised by the provider. */
   cost?: { input: number; output: number };
 }

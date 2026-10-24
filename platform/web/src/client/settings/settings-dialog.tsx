@@ -192,6 +192,7 @@ interface SettingsDialogProps {
   onProviderLogout: (provider: string) => void;
   onProviderCancel: () => void;
   onRefreshModels: () => Promise<void>;
+  onModelCompactionChange: (model: ModelOptionReadModel, compactAtTokens: number | null) => Promise<void>;
   onSetEnabled: (item: PackageSummary, enabled: boolean) => void;
   onUpdate: (item: PackageSummary, settings: PackageSettingsReadModel) => void;
   onUpdateProjectAgentModels: (
@@ -255,6 +256,7 @@ export function SettingsDialog({
   onProviderLogout,
   onProviderCancel,
   onRefreshModels,
+  onModelCompactionChange,
   onSetEnabled,
   onUpdate,
   onUpdateProjectAgentModels,
@@ -548,7 +550,14 @@ export function SettingsDialog({
     }
     if (control.kind === "model") {
       const model = models.find(item => modelKey(item) === control.modelKey);
-      return model ? <ModelVisibilityControl model={model} hidden={hiddenModelKeys.has(control.modelKey)} /> : null;
+      return model ? (
+        <ModelSettingsControl
+          model={model}
+          hidden={hiddenModelKeys.has(control.modelKey)}
+          disabled={modelRefreshDisabled || providerLogoutDisabled}
+          onCompactionChange={onModelCompactionChange}
+        />
+      ) : null;
     }
     const item = packages.find(candidate => candidate.id === control.packageId);
     if (!item) return null;
@@ -1219,7 +1228,7 @@ export function SettingsDialog({
                 <div>
                   <h2>Models</h2>
                   <p>
-                    Choose which models appear in the model selector. The active session model always stays visible.
+                    Choose visible models and when each model compacts. The active session model always stays visible.
                   </p>
                 </div>
                 <div className="settings-pane-actions">
@@ -1241,6 +1250,18 @@ export function SettingsDialog({
                   />
                 </div>
               </div>
+              <details className="settings-model-help">
+                <summary>Compaction limits &amp; warnings</summary>
+                <p>
+                  Compact at is an approximate token trigger, not a hard context limit. Changes require all sessions to
+                  be idle. Very low values can cause repeated compaction.
+                </p>
+                <p>
+                  Project settings can override these global values; model capacity changes move the trigger.
+                  Without Continuity, an earlier trigger also increases Pi's summary output budget, capped by the
+                  model's output limit.
+                </p>
+              </details>
               {models.length === 0 && (
                 <div className="settings-empty">
                   <strong>No models available</strong>
@@ -1287,10 +1308,12 @@ export function SettingsDialog({
                         {expanded && (
                           <div id={listId} className="settings-provider-list">
                             {group.items.map(item => (
-                              <ModelVisibilityControl
+                              <ModelSettingsControl
                                 key={modelKey(item)}
                                 model={item}
                                 hidden={hiddenModelKeys.has(modelKey(item))}
+                                disabled={modelRefreshDisabled || providerLogoutDisabled}
+                                onCompactionChange={onModelCompactionChange}
                               />
                             ))}
                           </div>
@@ -1437,24 +1460,69 @@ function toolOrbState(effective: string): OverviewState {
   return effective === "deferred" ? "attention" : "neutral";
 }
 
-/* The orb reports whether the model is actually in the switcher: green when
-   it is, grey when you have hidden it. Hiding is also the only way this row
-   can differ from its default, so the reset hangs off the same condition. */
-function ModelVisibilityControl({ model, hidden }: { model: ModelOptionReadModel; hidden: boolean }) {
+function ModelSettingsControl({ model, hidden, disabled, onCompactionChange }: {
+  model: ModelOptionReadModel;
+  hidden: boolean;
+  disabled: boolean;
+  onCompactionChange: (model: ModelOptionReadModel, compactAtTokens: number | null) => Promise<void>;
+}) {
   const key = modelKey(model);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const compaction = model.compaction;
+  const update = async (value: number | null) => {
+    setBusy(true);
+    setError("");
+    try {
+      await onCompactionChange(model, value);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <label
+    <div
       className="settings-model-row"
       data-settings-search-target={`model-${settingSearchTarget(`${model.provider}-${model.id}`)}`}>
       <OverviewOrb state={hidden ? "neutral" : "done"} label={hidden ? "hidden" : "shown"} />
-      <span>
+      <span className="settings-model-copy">
         <strong>{model.name}</strong>
         <small>{model.id}</small>
       </span>
-      {/* No reset here: the switch is the reset. Every model is shown by
-          default, so flipping it back is the whole revert. */}
-      <span className="settings-row-control">
-        <span className="package-switch">
+      {compaction && (
+        <div className="settings-model-compaction" aria-busy={busy}>
+          <span>Compact at</span>
+          <PackageNumber
+            key={`${compaction.triggerTokens}:${busy}`}
+            label={`Compact ${model.name} at tokens`}
+            value={compaction.triggerTokens}
+            min={1}
+            max={compaction.defaultTriggerTokens}
+            unit="tokens"
+            disabled={disabled || busy || compaction.defaultTriggerTokens <= 0}
+            onChange={value => void update(value)}
+          />
+          <button
+            type="button"
+            className="settings-model-reset"
+            title={`Reset to ${compaction.defaultTriggerTokens.toLocaleString()} tokens`}
+            aria-label={`Reset ${model.name} compaction to default`}
+            disabled={disabled || busy || compaction.reserveTokens === null}
+            onClick={() => void update(null)}>
+            <IconRefresh size={14} aria-hidden="true" />
+          </button>
+          {compaction.reserveTokens !== null && (
+            <small>Default: {compaction.defaultTriggerTokens.toLocaleString()} tokens</small>
+          )}
+          {compaction.effectiveTriggerTokens !== compaction.triggerTokens && (
+            <small>Project effective trigger: {compaction.effectiveTriggerTokens.toLocaleString()} tokens</small>
+          )}
+          {error && <span role="alert">{error}</span>}
+        </div>
+      )}
+      <span className="settings-row-control settings-model-visibility">
+        <label className="package-switch">
           <input
             type="checkbox"
             role="switch"
@@ -1463,9 +1531,9 @@ function ModelVisibilityControl({ model, hidden }: { model: ModelOptionReadModel
             onChange={event => setHiddenModelVisible(key, event.target.checked)}
           />
           <small>{hidden ? "Hidden" : "Shown"}</small>
-        </span>
+        </label>
       </span>
-    </label>
+    </div>
   );
 }
 

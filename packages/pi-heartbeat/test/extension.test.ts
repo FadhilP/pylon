@@ -12,11 +12,13 @@ function harness() {
   const commands = new Map<string, any>();
   const events: Array<{ name: string; value: any }> = [];
   let sessionId = `heartbeat-test-${process.pid}-${Date.now()}`;
+  const messages: Array<{ message: any; options: any }> = [];
   extension({
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
     events: { emit: (name: string, value: any) => events.push({ name, value }) },
+    sendMessage: (message: any, options: any) => messages.push({ message, options }),
   } as any);
   const ctx = { cwd: process.cwd(), hasUI: false, mode: "print", sessionManager: { getSessionId: () => sessionId } };
   return {
@@ -25,17 +27,27 @@ function harness() {
     commands,
     ctx,
     events,
+    messages,
     setSessionId: (value: string) => {
       sessionId = value;
     },
   };
 }
 
+async function completion(messages: ReturnType<typeof harness>["messages"], id: string) {
+  for (let i = 0; i < 250; i++) {
+    const delivered = messages.find(item => item.message.details.id === id);
+    if (delivered) return delivered;
+    await delay(20);
+  }
+  assert.fail(`No completion message for ${id}`);
+}
+
 test("session_start shuts down the previous manager before replacing it", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   const agentDir = await mkdtemp(join(tmpdir(), "heartbeat-agent-"));
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  const { handlers, tools, ctx, events, setSessionId } = harness();
+  const { handlers, tools, ctx, events, messages, setSessionId } = harness();
   const first = "first";
   try {
     setSessionId(first);
@@ -68,6 +80,7 @@ test("session_start shuts down the previous manager before replacing it", async 
       firstJobEvents.every(event => event.value.sessionId === first),
       "terminal events retain the creating session",
     );
+    assert.equal(messages.length, 0, "session replacement must not send old-job completions");
   } finally {
     await handlers.get("session_shutdown")!();
     assert.deepEqual(events.at(-1), {
@@ -113,8 +126,8 @@ test("early targeted and list checks are rejected without conflicting context", 
   }
 });
 
-test("completed job remains in context until its output is fetched", async () => {
-  const { handlers, tools, ctx, events } = harness();
+test("completion delivers output once without status polling and remains manually inspectable", async () => {
+  const { handlers, tools, ctx, events, messages } = harness();
   await handlers.get("session_start")!({}, ctx);
   try {
     const started = await tools
@@ -126,29 +139,20 @@ test("completed job remains in context until its output is fetched", async () =>
         undefined,
         ctx,
       );
-    for (let i = 0; i < 100; i++) {
-      if (
-        events.some(
-          event =>
-            event.name === "pi-heartbeat:job" &&
-            event.value.id === started.details.id &&
-            event.value.state === "completed",
-        )
-      ) break;
-      await delay(20);
-    }
-    const injected = handlers.get("context")!({ messages: [] });
-    assert.match(injected.messages.at(-1).content, /completed/);
-    assert.match(injected.messages.at(-1).content, /status available now/);
+    const delivered = await completion(messages, started.details.id);
+    assert.deepEqual(delivered.options, { deliverAs: "followUp", triggerTurn: true });
+    assert.equal(delivered.message.details.state, "completed");
+    assert.equal(delivered.message.details.exitCode, 0);
+    assert.match(delivered.message.content, /stdout tail:\ndone/);
+    assert.ok(delivered.message.content.includes(delivered.message.details.logPath));
+    assert.equal(handlers.get("context")!({ messages: [] }), undefined);
     assert.deepEqual(events.filter(event => event.name === "pylon:tool-policy").at(-1)?.value.enabledTools, [
       "heartbeat_start",
-      "heartbeat_status",
     ]);
     const lifecycle = events.filter(event => event.name === "pi-heartbeat:job");
     assert.ok(lifecycle.length >= 2);
     assert.equal(lifecycle.at(-1)?.value.state, "completed");
     assert.ok(lifecycle.every(event => event.value.sessionId === ctx.sessionManager.getSessionId()));
-    assert.match(handlers.get("context")!({ messages: [] }).messages.at(-1).content, /completed/);
 
     const status = await tools.get("heartbeat_status").execute("status", { id: started.details.id });
     assert.match(status.content[0].text, /stdout tail:\ndone/);
@@ -156,9 +160,115 @@ test("completed job remains in context until its output is fetched", async () =>
       "heartbeat_start",
     ]);
     assert.equal(handlers.get("context")!({ messages: [] }), undefined);
+    assert.equal(messages.length, 1, "status inspection must not repeat completion");
   } finally {
     await handlers.get("session_shutdown")!();
   }
+});
+
+for (const exitCode of [0, 7]) {
+  test(`completion bounds output and reports exit ${exitCode}`, async () => {
+    const { handlers, tools, ctx, messages } = harness();
+    await handlers.get("session_start")!({}, ctx);
+    try {
+      const started = await tools
+        .get("heartbeat_start")
+        .execute(
+          "start",
+          {
+            command: `node -e "console.log('x'.repeat(20000)); console.error('failure detail'); process.exitCode=${exitCode}"`,
+            otherWork: "inspect another file",
+          },
+          undefined,
+          undefined,
+          ctx,
+        );
+      const { message } = await completion(messages, started.details.id);
+      assert.equal(message.details.state, exitCode ? "failed" : "completed");
+      assert.equal(message.details.exitCode, exitCode);
+      assert.match(message.content, /failure detail/);
+      assert.match(message.content, /\[tail truncated\]/);
+      assert.ok(Buffer.byteLength(message.content) < (exitCode ? 14000 : 4000));
+      assert.equal(messages.length, 1);
+    } finally {
+      await handlers.get("session_shutdown")!();
+    }
+  });
+}
+
+test("spawn failure delivers one result after the process closes", async () => {
+  const { handlers, tools, ctx, messages } = harness();
+  await handlers.get("session_start")!({}, ctx);
+  const missingDir = await mkdtemp(join(tmpdir(), "heartbeat-missing-"));
+  await rm(missingDir, { recursive: true });
+  try {
+    const started = await tools
+      .get("heartbeat_start")
+      .execute("start", { command: "echo unreachable", otherWork: "inspect another file" }, undefined, undefined, {
+        ...ctx,
+        cwd: missingDir,
+      });
+    const { message } = await completion(messages, started.details.id);
+    assert.equal(message.details.state, "failed");
+    assert.notEqual(message.details.exitCode, undefined);
+    assert.notEqual(message.details.exitCode, 0);
+    await tools.get("heartbeat_status").execute("status", { id: started.details.id });
+    assert.equal(messages.length, 1);
+  } finally {
+    await handlers.get("session_shutdown")!();
+  }
+});
+
+test("cancellation and timeout each deliver one terminal result", async () => {
+  const { handlers, tools, ctx, messages } = harness();
+  await handlers.get("session_start")!({}, ctx);
+  try {
+    for (const state of ["cancelled", "timed_out"]) {
+      const started = await tools
+        .get("heartbeat_start")
+        .execute(
+          "start",
+          {
+            command: `node -e "setTimeout(()=>{},10000)"`,
+            otherWork: "inspect another file",
+            timeoutMs: state === "timed_out" ? 1000 : 10000,
+          },
+          undefined,
+          undefined,
+          ctx,
+        );
+      if (state === "cancelled") await tools.get("heartbeat_cancel").execute("cancel", { id: started.details.id });
+      const { message } = await completion(messages, started.details.id);
+      assert.equal(message.details.state, state);
+      assert.notEqual(message.details.exitCode, undefined);
+      await tools.get("heartbeat_status").execute("status", { id: started.details.id });
+      assert.equal(messages.filter(item => item.message.details.id === started.details.id).length, 1);
+    }
+  } finally {
+    await handlers.get("session_shutdown")!();
+  }
+});
+
+test("shutdown suppresses completion even while it waits for job termination", async () => {
+  const { handlers, tools, ctx, events, messages } = harness();
+  await handlers.get("session_start")!({}, ctx);
+  try {
+    await tools
+      .get("heartbeat_start")
+      .execute(
+        "start",
+        { command: `node -e "setTimeout(()=>{},10000)"`, otherWork: "inspect another file" },
+        undefined,
+        undefined,
+        ctx,
+      );
+  } finally {
+    await handlers.get("session_shutdown")!();
+  }
+  assert.ok(events.some(event => event.name === "pi-heartbeat:job" && event.value.state === "cancelled"));
+  assert.equal(messages.length, 0);
+  await handlers.get("session_shutdown")!();
+  assert.equal(messages.length, 0);
 });
 
 test("/heartbeat validates syntax, reports unavailable state, and cancels known jobs", async () => {

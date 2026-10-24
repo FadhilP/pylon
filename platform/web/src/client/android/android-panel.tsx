@@ -9,7 +9,7 @@ import {
   IconShield,
   IconTrash,
 } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type Ref } from "react";
 import type { AndroidBuildReadModel, AndroidRunReadModel } from "../../shared/protocol/android";
 import { rememberSetting } from "../app/use-chrome";
 import {
@@ -25,7 +25,18 @@ import "./android-panel.css";
 
 export type AndroidDockedOutputs = Record<AndroidOutputKind, boolean>;
 
-type Notice = { key: string; tone: "danger" | "warning" | "info"; title?: string; body: string };
+type NoticePlace = "panel" | "app" | "device" | "run";
+type Notice = { key: string; at: NoticePlace; tone: "danger" | "warning" | "info"; title?: string; body: string };
+type StationTone = "success" | "active" | "warning" | "danger" | undefined;
+
+const DEVICE_TONE: Partial<Record<string, StationTone>> = {
+  ready: "success",
+  starting: "active",
+  booting: "active",
+  stopping: "active",
+  "cleanup-required": "warning",
+  cancelled: "danger",
+};
 type OutputData = {
   summary: string;
   output: string;
@@ -124,7 +135,7 @@ function AndroidOutputTools({
   if (!run) {
     return (
       <span className="android-output-tools">
-        <button type="button" className="secondary" disabled>
+        <button type="button" className="secondary-button" disabled>
           Start logs
         </button>
         <button type="button" className="icon-button" disabled aria-label="Clear retained logs">
@@ -138,7 +149,7 @@ function AndroidOutputTools({
     <span className="android-output-tools">
       <button
         type="button"
-        className="secondary"
+        className="secondary-button"
         disabled={busy || (!running && run.phase !== "running")}
         onClick={() =>
           act(
@@ -224,6 +235,7 @@ function AndroidOutputSection({
             onClick={onFocus}
             aria-expanded={!docked && focused}
             aria-label={`${label}, ${docked ? "in bottom panel" : focused ? "expanded" : "collapsed"}`}>
+            <span className={`android-orb${data.tone ? ` is-${data.tone}` : ""}`} />
             <strong>{label}</strong>
             <span className={`android-output-summary${data.tone ? ` is-${data.tone}` : ""}`}>{data.summary}</span>
           </button>
@@ -280,7 +292,7 @@ export function AndroidBottomOutput({
         {which === "logs" && <AndroidOutputTools run={run} busy={busy} focusAfter={() => headingRef.current} />}
         <button
           type="button"
-          className="secondary"
+          className="secondary-button"
           onClick={() => onRestore(which)}
           aria-label={`Return ${label.toLowerCase()} to the inspector`}>
           <IconChevronUp size={13} /> Return to inspector
@@ -313,12 +325,13 @@ export function AndroidPanelHeader() {
   );
 }
 
-function AndroidRibbon({ notices }: { notices: Notice[] }) {
-  if (!notices.length) return null;
+function AndroidNotices({ notices, at }: { notices: Notice[]; at: NoticePlace }) {
+  const shown = notices.filter(notice => notice.at === at);
+  if (!shown.length) return null;
   return (
-    <div className="android-ribbon">
-      {notices.map(notice => (
-        <div key={notice.key} className={`android-ribbon-item is-${notice.tone}`}>
+    <div className={`android-notices is-${at}`}>
+      {shown.map(notice => (
+        <div key={notice.key} className={`android-notice is-${notice.tone}`}>
           {notice.tone === "info" ? <IconInfoCircle size={13} /> : <IconAlertTriangle size={13} />}
           <div>
             {notice.title && <strong>{notice.title}</strong>}
@@ -332,14 +345,64 @@ function AndroidRibbon({ notices }: { notices: Notice[] }) {
 
 const PHASES = ["Build", "Inspect", "Install", "Launch", "Run"] as const;
 
-
-function AndroidPhaseRail({ run, build }: { run: AndroidRunReadModel; build: AndroidBuildReadModel | undefined }) {
-  if (run.phase === "stopped") return null;
-  const phase = androidRunPhaseStep(run.phase, {
+function runPhaseStep(run: AndroidRunReadModel, build: AndroidBuildReadModel | undefined) {
+  return androidRunPhaseStep(run.phase, {
     buildSucceeded: build?.state === "succeeded",
     hasArtifact: Boolean(run.artifact),
     installed: Boolean(run.installed),
   });
+}
+
+/* A station takes its worst notice, except that a live step stays live. */
+function stationTone(notices: Notice[], at: NoticePlace, base: StationTone): StationTone {
+  const tones = notices.filter(notice => notice.at === at).map(notice => notice.tone);
+  if (tones.includes("danger")) return "danger";
+  if (tones.includes("warning") && base !== "active") return "warning";
+  return base;
+}
+
+function runStationTone(run: AndroidRunReadModel | undefined, build: AndroidBuildReadModel | undefined): StationTone {
+  if (!run || run.phase === "stopped") return outputData("build", build, run).tone;
+  if (run.phase === "running") return "success";
+  return runPhaseStep(run, build).tone;
+}
+
+function AndroidStation({
+  headingId,
+  headingRef,
+  title,
+  tone,
+  facts,
+  terminus = false,
+  children,
+}: {
+  headingId: string;
+  headingRef?: Ref<HTMLHeadingElement>;
+  title: string;
+  tone: StationTone;
+  facts?: ReactNode;
+  terminus?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={`android-station${terminus ? " is-terminus" : ""}${tone ? ` is-${tone}` : ""}`}
+      aria-labelledby={headingId}>
+      <span className="android-station-node" aria-hidden="true" />
+      <div className="android-station-head">
+        <h3 id={headingId} ref={headingRef} tabIndex={-1}>
+          {title}
+        </h3>
+        {facts}
+      </div>
+      <div className="android-station-body">{children}</div>
+    </section>
+  );
+}
+
+function AndroidPhaseRail({ run, build }: { run: AndroidRunReadModel; build: AndroidBuildReadModel | undefined }) {
+  if (run.phase === "stopped") return null;
+  const phase = runPhaseStep(run, build);
   return (
     <div className="android-phases" role="group" aria-label="Run progress">
       {PHASES.map((name, index) => {
@@ -472,7 +535,7 @@ export function AndroidPanel({
       setSelectedVariant("");
       return;
     }
-    if (selectedModule !== module.modulePath && !candidate.modules.some(item => item.modulePath === selectedModule)) {
+    if (projectChanged || !candidate.modules.some(item => item.modulePath === selectedModule)) {
       setSelectedModule(module.modulePath);
       setSelectedVariant(
         module.variants.includes(configured?.variant ?? "") ? configured!.variant : (module.variants[0] ?? ""),
@@ -519,44 +582,49 @@ export function AndroidPanel({
     }
   };
   if (!state.connected)
-    addNotice({ tone: "danger", title: "Reconnecting", body: "Showing the last known state until it returns." });
+    addNotice({ at: "panel", tone: "danger", title: "Reconnecting", body: "Showing the last known state until it returns." });
   if (service?.lastError || state.error || runner?.issue)
     addNotice({
+      at: "panel",
       tone: "danger",
       title: "Android Runner unavailable",
       body: service?.lastError ?? state.error ?? runner?.issue ?? "Android SDK discovery is unavailable.",
     });
   else if (runner?.discovery === "unavailable")
     addNotice({
+      at: "device",
       tone: "danger",
       title: "Android SDK discovery is unavailable",
       body: "Install it with Android Studio, then refresh.",
     });
-  if (project?.issue) addNotice({ tone: "warning", title: "Project discovery", body: project.issue });
+  if (project?.issue) addNotice({ at: "app", tone: "warning", title: "Project discovery", body: project.issue });
   if (selectedProjectCandidate?.issue)
-    addNotice({ tone: "warning", title: selectedProjectCandidate.label, body: selectedProjectCandidate.issue });
+    addNotice({ at: "app", tone: "warning", title: selectedProjectCandidate.label, body: selectedProjectCandidate.issue });
   if (project?.trust.status === "untrusted")
     addNotice({
+      at: "app",
       tone: "warning",
       title: "Workspace not trusted",
       body: "Gradle, build logic and any Flutter SDK run with your permissions, and can read files and reach the network.",
     });
   if (project?.trust.status === "stale")
     addNotice({
+      at: "app",
       tone: "warning",
       title: "Build trust is stale",
       body: "The selected configuration or Gradle wrapper changed since you trusted it.",
     });
   if (run?.replacementInstall)
     addNotice({
+      at: "run",
       tone: "warning",
       title: "Replacement install",
       body: "App data is kept where Android allows it. Migrations may still change it.",
     });
   if (run?.installUncertain)
-    addNotice({ tone: "warning", title: "Install interrupted", body: "The device may still have accepted the APK." });
-  if (build?.issue) addNotice({ tone: "danger", title: "Build issue", body: build.issue });
-  if (run?.issue) addNotice({ tone: "danger", title: "Run issue", body: run.issue });
+    addNotice({ at: "run", tone: "warning", title: "Install interrupted", body: "The device may still have accepted the APK." });
+  if (build?.issue) addNotice({ at: "run", tone: "danger", title: "Build issue", body: build.issue });
+  if (run?.issue) addNotice({ at: "run", tone: "danger", title: "Run issue", body: run.issue });
 
   const saveConfiguration = () => {
     if (!sessionGeneration || !project) return;
@@ -617,10 +685,18 @@ export function AndroidPanel({
         ? "Choose and save a project, module and variant."
         : configurationChanged
           ? "Save the configuration first."
-          : !selectedDevice
-            ? "Launch or select a ready emulator first."
-            : undefined;
+          : project.trust.status !== "trusted"
+            ? "Trust this wrapper before building."
+            : !selectedDevice
+              ? "Build & Run needs a ready emulator. Build only does not."
+              : undefined;
   const bothDocked = dockedOutputs.build && dockedOutputs.logs;
+  let appTone: StationTone;
+  if (project?.discovery === "ready" && project.configuration)
+    appTone = configurationChanged || project.trust.status !== "trusted" ? "warning" : "success";
+  const targetDevice = runner?.devices.find(device => device.deviceId === selectedDevice) ?? runner?.devices[0];
+  const deviceTone: StationTone =
+    runner?.discovery === "unavailable" ? "danger" : targetDevice ? DEVICE_TONE[targetDevice.state] : undefined;
   const splitStyle = (which: AndroidOutputKind): CSSProperties | undefined => {
     if (outputSplit === undefined || dockedOutputs.build || dockedOutputs.logs) return undefined;
     return { flex: `${which === "build" ? outputSplit : 1 - outputSplit} 1 0` };
@@ -631,13 +707,17 @@ export function AndroidPanel({
     setOutputSplit(next);
     rememberSetting(ANDROID_OUTPUT_SPLIT_KEY, next);
   };
+  const focusOutput = (which: AndroidOutputKind) => {
+    setFocusedOutput(which);
+    if (outputSplit !== undefined) applySplit(which === "build" ? 0.75 : 0.25);
+  };
 
   let action: ReactNode;
   if (cancellableOperation) {
     action = (
       <button
         type="button"
-        className="secondary android-danger-button"
+        className="secondary-button android-danger-button"
         disabled={!state.connected || state.busy === "cancelBuild" || build?.state === "cancelling"}
         onClick={() =>
           act(androidStore.cancelBuild(cancellableOperation.operationId, cancellableOperation.revision), () => appHeading.current)
@@ -649,7 +729,7 @@ export function AndroidPanel({
     action = (
       <button
         type="button"
-        className="secondary android-danger-button"
+        className="secondary-button android-danger-button"
         disabled={busy}
         onClick={() => act(androidStore.stopApp(run.runId, run.revision), () => appHeading.current)}>
         <IconPlayerStop size={13} /> Stop app
@@ -657,7 +737,7 @@ export function AndroidPanel({
     );
   } else if (project?.configuration && project.trust.status !== "trusted") {
     action = (
-      <button type="button" disabled={busy || operationActive} onClick={() => setTrust(true)}>
+      <button type="button" className="primary-button" disabled={busy || operationActive} onClick={() => setTrust(true)}>
         <IconShield size={13} /> Trust this wrapper
       </button>
     );
@@ -666,11 +746,12 @@ export function AndroidPanel({
       <>
         <button
           type="button"
+          className="primary-button"
           disabled={busy}
           onClick={() => act(androidStore.relaunchApp(run.runId, run.revision), () => appHeading.current)}>
           Relaunch
         </button>
-        <button type="button" className="secondary" disabled={!canRun} onClick={buildAndRun}>
+        <button type="button" className="secondary-button" disabled={!canRun} onClick={buildAndRun}>
           Build &amp; Run
         </button>
       </>
@@ -678,10 +759,10 @@ export function AndroidPanel({
   } else {
     action = (
       <>
-        <button type="button" disabled={!canRun} onClick={buildAndRun}>
+        <button type="button" className="primary-button" disabled={!canRun} onClick={buildAndRun}>
           Build &amp; Run
         </button>
-        <button type="button" className="secondary" disabled={!canBuild} onClick={buildOnly}>
+        <button type="button" className="secondary-button" disabled={!canBuild} onClick={buildOnly}>
           Build only
         </button>
       </>
@@ -697,36 +778,183 @@ export function AndroidPanel({
             ? `Android ${state.busy} request accepted`
             : announcement || lifecycle}
       </div>
-      <AndroidRibbon notices={notices} />
-      {run && <AndroidPhaseRail run={run} build={build} />}
+      <AndroidNotices notices={notices} at="panel" />
 
       <div className="android-config-body">
-        <section aria-labelledby="android-device-heading">
-          <div className="android-group-heading">
-            <h3 id="android-device-heading" ref={deviceHeading} tabIndex={-1}>
-              Device
-            </h3>
-            <span className="android-count">{runner?.devices.length ?? 0} running</span>
-            <span className="android-spacer" />
-            <span className="android-fact">
-              SDK <b className={runner?.discovery === "ready" ? "is-success" : "is-danger"}>{runner?.discovery === "ready" ? "Ready" : (runner?.discovery ?? "Unavailable")}</b>
-            </span>
-            <span className="android-fact">
-              <b>{runner?.avds.length ?? 0}</b> AVDs
-            </span>
-            <button
-              type="button"
-              className="icon-button"
-              disabled={Boolean(state.busy)}
-              onClick={() => act(androidStore.refresh())}
-              aria-label="Refresh Android devices"
-              title="Refresh Android devices">
-              <IconRefresh className={runner?.discovery === "refreshing" ? "feedback-spinner" : undefined} size={13} />
-            </button>
-          </div>
-          <div className="android-section-body">
+        <AndroidStation
+          headingId="android-app-heading"
+          headingRef={appHeading}
+          title="App"
+          tone={stationTone(notices, "app", appTone)}
+          facts={
+            <>
+              <span className="android-facts">
+                <span>
+                  Gradle <b className={project?.discovery === "ready" ? "is-success" : undefined}>{project?.discovery ?? "Not inspected"}</b>
+                </span>
+                <span>
+                  Tools <b>{run?.artifact ? "Ready" : "at run"}</b>
+                </span>
+              </span>
+              {sessionGeneration && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  disabled={busy}
+                  onClick={() => act(androidStore.refreshProject(sessionGeneration))}
+                  aria-label="Refresh Android project"
+                  title="Refresh Android project">
+                  <IconRefresh size={13} />
+                </button>
+              )}
+            </>
+          }>
+          <p className="android-workspace">
+            {project ? (
+              <>
+                Selected workspace <b>{project.workspaceLabel}</b>
+                <span className="android-tag">{project.workspaceKind}</span>
+              </>
+            ) : workspaceLabel ? (
+              <>
+                Selected workspace <b>{workspaceLabel}</b>
+              </>
+            ) : (
+              "Select a ready workspace to configure an app."
+            )}
+          </p>
+          {project?.discovery === "ready" ? (
+            <>
+              <div className="android-fields">
+                <label className="android-field">
+                  Project
+                  <select
+                    value={selectedCandidate}
+                    disabled={busy || operationActive}
+                    onChange={event => {
+                      const candidateId = event.target.value;
+                      const candidate = project.candidates.find(item => item.candidateId === candidateId);
+                      const module = candidate?.modules[0];
+                      setSelectedCandidate(candidateId);
+                      setSelectedModule(module?.modulePath ?? "");
+                      setSelectedVariant(module?.variants[0] ?? "");
+                    }}>
+                    {!selectedCandidate || project.candidates.length > 1 ? <option value="">Choose a project…</option> : undefined}
+                    {project.candidates.map(candidate => (
+                      <option key={candidate.candidateId} value={candidate.candidateId} disabled={candidate.discovery !== "ready"}>
+                        {candidate.label} ({candidate.kind === "flutter" ? "Flutter" : "Android"})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="android-duo">
+                  <label className="android-field">
+                    Application module
+                    <select
+                      value={selectedModule}
+                      disabled={busy || operationActive || !selectedProjectCandidate}
+                      onChange={event => {
+                        const modulePath = event.target.value;
+                        const module = selectedProjectCandidate?.modules.find(candidate => candidate.modulePath === modulePath);
+                        setSelectedModule(modulePath);
+                        setSelectedVariant(module?.variants[0] ?? "");
+                      }}>
+                      {(selectedProjectCandidate?.modules ?? []).map(module => (
+                        <option key={module.modulePath} value={module.modulePath}>
+                          {module.modulePath}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="android-field">
+                    Variant
+                    <select
+                      value={selectedVariant}
+                      disabled={busy || operationActive || !selectedModuleSuggestion}
+                      onChange={event => setSelectedVariant(event.target.value)}>
+                      {(selectedModuleSuggestion?.variants ?? []).map(variant => (
+                        <option key={variant} value={variant}>
+                          {variant}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {configurationChanged && selectedCandidate && selectedModule && selectedVariant && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy || operationActive || !sessionGeneration}
+                    onClick={saveConfiguration}>
+                    <IconDeviceFloppy size={13} /> Save configuration
+                  </button>
+                )}
+              </div>
+              <div className="android-trust">
+                <IconShield size={13} />
+                Build trust
+                <span className={`android-trust-status is-${project.trust.status === "trusted" ? "success" : "warning"}`}>
+                  {project.trust.status}
+                </span>
+                <span className="android-spacer" />
+                {project.configuration ? (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy || operationActive || !sessionGeneration}
+                    onClick={() => setTrust(project.trust.status !== "trusted")}>
+                    {project.trust.status === "trusted" ? "Revoke build trust" : "Trust this wrapper"}
+                  </button>
+                ) : (
+                  <span>Save configuration to enable trust.</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="android-empty">
+              {project?.discovery === "unsupported"
+                ? "No conventional Android application module was found."
+                : "Looking for a project…"}
+            </p>
+          )}
+          <AndroidNotices notices={notices} at="app" />
+        </AndroidStation>
+
+        <AndroidStation
+          headingId="android-device-heading"
+          headingRef={deviceHeading}
+          title="Device"
+          tone={stationTone(notices, "device", deviceTone)}
+          facts={
+            <>
+              <span className="android-facts">
+                <span>
+                  <b>{runner?.devices.length ?? 0}</b> running
+                </span>
+                <span>
+                  SDK{" "}
+                  <b className={runner?.discovery === "ready" ? "is-success" : "is-danger"}>
+                    {runner?.discovery === "ready" ? "Ready" : (runner?.discovery ?? "Unavailable")}
+                  </b>
+                </span>
+                <span>
+                  <b>{runner?.avds.length ?? 0}</b> AVDs
+                </span>
+              </span>
+              <button
+                type="button"
+                className="icon-button"
+                disabled={Boolean(state.busy)}
+                onClick={() => act(androidStore.refresh())}
+                aria-label="Refresh Android devices"
+                title="Refresh Android devices">
+                <IconRefresh className={runner?.discovery === "refreshing" ? "feedback-spinner" : undefined} size={13} />
+              </button>
+            </>
+          }>
+          {runner?.devices.length ? (
             <div className="android-devices">
-              {(runner?.devices ?? []).map(device => {
+              {runner.devices.map(device => {
                 const selectable = device.state === "ready" && !!device.serial;
                 const selected = selectedDevice === device.deviceId;
                 const cancellable =
@@ -742,18 +970,23 @@ export function AndroidPanel({
                       onClick={() => setSelectedDevice(device.deviceId)}
                       aria-pressed={selected}
                       title={selectable ? `Deploy to ${device.avd}` : undefined}>
-                      <span className={`android-orb is-${device.state}`} />
+                      {selectable ? (
+                        <span className="android-device-pick" />
+                      ) : (
+                        <span className={`android-orb is-${device.state}`} />
+                      )}
                       <strong>{device.avd}</strong>
                       <span className="android-device-meta">
-                        {device.serial ?? "Waiting for emulator identity"} · {device.ownership === "runner" ? "Pylon-owned" : "External"} · {device.state}
+                        <span className="android-mono">{device.serial ?? "Waiting for emulator identity"}</span>
+                        <span>{device.ownership === "runner" ? "Pylon-owned" : "External"}</span>
+                        <span>{device.state}</span>
                       </span>
                     </button>
                     <span className="android-device-actions">
-                      {selected && <span className="android-tag is-target">Deploy target</span>}
                       {cancellable ? (
                         <button
                           type="button"
-                          className="secondary"
+                          className="secondary-button"
                           disabled={!state.connected || state.busy === "cancelOperation"}
                           onClick={() =>
                             act(androidStore.cancelOperation(device.deviceId, device.revision), () => deviceHeading.current)
@@ -763,7 +996,7 @@ export function AndroidPanel({
                       ) : stoppable ? (
                         <button
                           type="button"
-                          className="secondary"
+                          className="secondary-button"
                           disabled={busy}
                           onClick={() =>
                             act(androidStore.stopEmulator(device.deviceId, device.revision), () => deviceHeading.current)
@@ -775,165 +1008,52 @@ export function AndroidPanel({
                   </article>
                 );
               })}
-              {runner?.discovery === "ready" && !runner.devices.length && (
-                <p className="android-empty">No running emulators.</p>
-              )}
             </div>
-            <label className="android-field">
-              Existing AVD
-              <span className="android-with-button">
-                <select
-                  value={selectedAvd}
-                  disabled={busy || !runner?.avds.length}
-                  onChange={event => setSelectedAvd(event.target.value)}>
-                  {(runner?.avds ?? []).map(avd => (
-                    <option key={avd} value={avd}>
-                      {avd}
-                    </option>
-                  ))}
-                  {!runner?.avds.length && <option value="">No AVDs configured</option>}
-                </select>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy || runner?.discovery !== "ready" || !selectedAvd}
-                  onClick={() => act(androidStore.startEmulator(selectedAvd))}>
-                  Launch emulator
-                </button>
-              </span>
-            </label>
-          </div>
-        </section>
-
-        <section aria-labelledby="android-app-heading">
-          <div className="android-group-heading">
-            <h3 id="android-app-heading" ref={appHeading} tabIndex={-1}>
-              App
-            </h3>
-            <span className="android-spacer" />
-            <span className="android-fact">
-              Gradle <b className={project?.discovery === "ready" ? "is-success" : undefined}>{project?.discovery ?? "Not inspected"}</b>
-            </span>
-            <span className="android-fact">
-              Tools <b>{run?.artifact ? "Ready" : "at run"}</b>
-            </span>
-            {sessionGeneration && (
+          ) : (
+            runner?.discovery === "ready" && <p className="android-empty">No running emulators.</p>
+          )}
+          <label className="android-field">
+            Existing AVD
+            <span className="android-with-button">
+              <select
+                value={selectedAvd}
+                disabled={busy || !runner?.avds.length}
+                onChange={event => setSelectedAvd(event.target.value)}>
+                {(runner?.avds ?? []).map(avd => (
+                  <option key={avd} value={avd}>
+                    {avd}
+                  </option>
+                ))}
+                {!runner?.avds.length && <option value="">No AVDs configured</option>}
+              </select>
               <button
                 type="button"
-                className="icon-button"
-                disabled={busy}
-                onClick={() => act(androidStore.refreshProject(sessionGeneration))}
-                aria-label="Refresh Android project"
-                title="Refresh Android project">
-                <IconRefresh size={13} />
+                className="secondary-button"
+                disabled={busy || runner?.discovery !== "ready" || !selectedAvd}
+                onClick={() => act(androidStore.startEmulator(selectedAvd))}>
+                Launch emulator
               </button>
-            )}
-          </div>
-          <div className="android-section-body">
-            <p className="android-workspace">
-              {project
-                ? `Selected workspace: ${project.workspaceLabel} · ${project.workspaceKind}`
-                : workspaceLabel
-                  ? `Selected workspace: ${workspaceLabel}`
-                  : "Select a ready workspace to configure an app."}
-            </p>
-            {run?.artifact && (
-              <p className="android-artifact">
-                <b>{run.artifact.packageName}</b> · {run.artifact.versionName ?? run.artifact.versionCode} · {run.artifact.debuggable ? "debuggable" : "not debuggable"}
-              </p>
-            )}
-            {project?.discovery === "ready" ? (
-              <>
-                <div className="android-fields">
-                  <label className="android-field">
-                    Project
-                    <select
-                      value={selectedCandidate}
-                      disabled={busy || operationActive}
-                      onChange={event => {
-                        const candidateId = event.target.value;
-                        const candidate = project.candidates.find(item => item.candidateId === candidateId);
-                        const module = candidate?.modules[0];
-                        setSelectedCandidate(candidateId);
-                        setSelectedModule(module?.modulePath ?? "");
-                        setSelectedVariant(module?.variants[0] ?? "");
-                      }}>
-                      {!selectedCandidate || project.candidates.length > 1 ? <option value="">Choose a project…</option> : undefined}
-                      {project.candidates.map(candidate => (
-                        <option key={candidate.candidateId} value={candidate.candidateId} disabled={candidate.discovery !== "ready"}>
-                          {candidate.label} · {candidate.kind === "flutter" ? "Flutter" : "Android"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="android-duo">
-                    <label className="android-field">
-                      Application module
-                      <select
-                        value={selectedModule}
-                        disabled={busy || operationActive || !selectedProjectCandidate}
-                        onChange={event => {
-                          const modulePath = event.target.value;
-                          const module = selectedProjectCandidate?.modules.find(candidate => candidate.modulePath === modulePath);
-                          setSelectedModule(modulePath);
-                          setSelectedVariant(module?.variants[0] ?? "");
-                        }}>
-                        {(selectedProjectCandidate?.modules ?? []).map(module => (
-                          <option key={module.modulePath} value={module.modulePath}>
-                            {module.modulePath}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="android-field">
-                      Variant
-                      <select
-                        value={selectedVariant}
-                        disabled={busy || operationActive || !selectedModuleSuggestion}
-                        onChange={event => setSelectedVariant(event.target.value)}>
-                        {(selectedModuleSuggestion?.variants ?? []).map(variant => (
-                          <option key={variant} value={variant}>
-                            {variant}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {configurationChanged && selectedCandidate && selectedModule && selectedVariant && (
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy || operationActive || !sessionGeneration}
-                      onClick={saveConfiguration}>
-                      <IconDeviceFloppy size={13} /> Save configuration
-                    </button>
-                  )}
-                </div>
-                <div className="android-trust">
-                  <IconShield size={13} />
-                  <span>
-                    Build trust: <b>{project.trust.status}</b>
-                  </span>
-                  <span className="android-spacer" />
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || operationActive || !sessionGeneration || !project.configuration}
-                    onClick={() => setTrust(project.trust.status !== "trusted")}>
-                    {project.trust.status === "trusted" ? "Revoke build trust" : "Trust this wrapper"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="android-empty">
-                {project?.discovery === "unsupported"
-                  ? "No conventional Android application module was found."
-                  : "Looking for a project…"}
-              </p>
-            )}
-          </div>
-        </section>
+            </span>
+          </label>
+          <AndroidNotices notices={notices} at="device" />
+        </AndroidStation>
       </div>
+
+      <AndroidStation headingId="android-run-heading" title="Run" tone={stationTone(notices, "run", runStationTone(run, build))} terminus>
+        {run && <AndroidPhaseRail run={run} build={build} />}
+        {run?.artifact && (
+          <p className="android-artifact">
+            <span className="android-mono">{run.artifact.packageName}</span>
+            <span>{run.artifact.versionName ?? run.artifact.versionCode}</span>
+            <span>{run.artifact.debuggable ? "Debuggable" : "Not debuggable"}</span>
+          </p>
+        )}
+        <AndroidNotices notices={notices} at="run" />
+        <div className={`android-actions${project?.configuration && project.trust.status !== "trusted" ? " is-gate" : ""}`}>
+          {action}
+          {!cancellableOperation && run?.phase !== "running" && actionReason && <p>{actionReason}</p>}
+        </div>
+      </AndroidStation>
 
       <div
         ref={outputsRef}
@@ -946,7 +1066,7 @@ export function AndroidPanel({
           focused={focusedOutput === "build"}
           docked={dockedOutputs.build}
           style={splitStyle("build")}
-          onFocus={() => setFocusedOutput("build")}
+          onFocus={() => focusOutput("build")}
           onDock={() => (dockedOutputs.build ? onRestoreOutput("build") : onDockOutput("build"))}
         />
         {(build || run) && !dockedOutputs.build && !dockedOutputs.logs && (
@@ -995,14 +1115,9 @@ export function AndroidPanel({
           focused={focusedOutput === "logs"}
           docked={dockedOutputs.logs}
           style={splitStyle("logs")}
-          onFocus={() => setFocusedOutput("logs")}
+          onFocus={() => focusOutput("logs")}
           onDock={() => (dockedOutputs.logs ? onRestoreOutput("logs") : onDockOutput("logs"))}
         />
-      </div>
-
-      <div className={`android-action-bar${project?.configuration && project.trust.status !== "trusted" ? " is-gate" : ""}`}>
-        {action}
-        {!cancellableOperation && run?.phase !== "running" && actionReason && <p>{actionReason}</p>}
       </div>
     </div>
   );

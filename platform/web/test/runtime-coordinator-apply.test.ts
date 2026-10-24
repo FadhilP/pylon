@@ -41,42 +41,10 @@ test("session changes apply from a worktree and Project folder without committin
     await (driver as any).ensureDraftWorkspace(slot);
     await (driver as any).moveSelectedFromLocal(slot, projectIdForCwd(cwd), "worktree");
     const editable = await driver.workspaceEntry("README.md");
-    const mutation = { action: "save" as const, path: "README.md", expectedVersion: editable.version, text: "base\nisolated\n" };
-    await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration - 1, mutation }), /generation/i);
-    await assert.rejects(driver.mutateWorkspace({ sessionId: "wrong-session", expectedGeneration: editable.sessionGeneration, mutation }), /different session/);
-    const canSleep = slot.driver.canSleep.bind(slot.driver);
-    slot.driver.canSleep = () => false;
-    try {
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation });
-      await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { ...mutation, text: "stale overwrite\n" } }), /changed on disk/);
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "createDirectory", path: "during-run" } });
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "createFile", path: "during-run/new.txt" } });
-      const created = await driver.workspaceEntry("during-run/new.txt");
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "copy", path: created.path, destination: "during-run/copied.txt", expectedVersion: created.version } });
-      assert.equal((await driver.workspaceEntry("during-run/copied.txt")).text, "");
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "move", path: created.path, destination: "during-run/moved.txt", expectedVersion: created.version } });
-      const moved = await driver.workspaceEntry("during-run/moved.txt");
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "delete", path: moved.path, expectedVersion: moved.version, confirmed: true } });
-      const copied = await driver.workspaceEntry("during-run/copied.txt");
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "delete", path: copied.path, expectedVersion: copied.version, confirmed: true } });
-      const folder = await driver.workspaceEntry("during-run");
-      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
-        mutation: { action: "delete", path: folder.path, expectedVersion: folder.version, confirmed: true } });
-      assert.ok(!(await driver.workspaceFiles({})).files.some(file => file.path === "during-run"));
-    } finally { slot.driver.canSleep = canSleep; }
+    await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+      mutation: { action: "save", path: "README.md", expectedVersion: editable.version, text: "base\nisolated\n" } });
     assert.equal((await readFile(join(cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\n");
     assert.equal((await readFile(join(slot.driver.runtimeDetails().cwd, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "base\nisolated\n");
-    const beforeFolder = (await driver.snapshot()).workspace?.fileRevision ?? 0;
-    await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation: { action: "createDirectory", path: "empty" } });
-    assert.ok(((await driver.snapshot()).workspace?.fileRevision ?? 0) > beforeFolder);
-    assert.ok((await driver.workspaceFiles({})).files.some(file => file.path === "empty" && file.kind === "directory"));
     await writeFile(join(cwd, "local.txt"), "keep local\n");
     const worktreeSnapshot = await driver.snapshot();
     assert.equal(worktreeSnapshot.workspace?.mode, "worktree");
@@ -136,6 +104,61 @@ test("session changes apply from a worktree and Project folder without committin
     assert.equal(finalReadme.replaceAll("\r\n", "\n"), "base\nisolated\nproject-folder\n");
     assert.equal(localized.sessionId, slot.id);
     assert.equal(latestCommit.stdout.trim(), "Initial");
+  } finally {
+    await driver.dispose();
+    const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));
+    await Promise.all(sessions.map(session => rm(session.path, { force: true })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("workspace mutations remain available during a run and invalidate empty-folder listings", { timeout: 20_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-coordinator-mutations-"));
+  const cwd = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+  await writeFile(join(cwd, "README.md"), "base\n");
+  const driver = new RuntimeCoordinator();
+  try {
+    await driver.start({ cwd, agentDir, repositoryRoot: root });
+    const slot = (driver as any).selected();
+    const editable = await driver.workspaceEntry("README.md");
+    const mutation = { action: "save" as const, path: "README.md", expectedVersion: editable.version, text: "base\nisolated\n" };
+    await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration - 1, mutation }), /generation/i);
+    await assert.rejects(driver.mutateWorkspace({ sessionId: "wrong-session", expectedGeneration: editable.sessionGeneration, mutation }), /different session/);
+    const canSleep = slot.driver.canSleep.bind(slot.driver);
+    slot.driver.canSleep = () => false;
+    try {
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation });
+      await assert.rejects(driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { ...mutation, text: "stale overwrite\n" } }), /changed on disk/);
+      assert.equal(await readFile(join(cwd, "README.md"), "utf8"), "base\nisolated\n");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "createDirectory", path: "during-run" } });
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "createFile", path: "during-run/new.txt" } });
+      const created = await driver.workspaceEntry("during-run/new.txt");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "copy", path: created.path, destination: "during-run/copied.txt", expectedVersion: created.version } });
+      assert.equal((await driver.workspaceEntry("during-run/copied.txt")).text, "");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "move", path: created.path, destination: "during-run/moved.txt", expectedVersion: created.version } });
+      const moved = await driver.workspaceEntry("during-run/moved.txt");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "delete", path: moved.path, expectedVersion: moved.version, confirmed: true } });
+      const copied = await driver.workspaceEntry("during-run/copied.txt");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "delete", path: copied.path, expectedVersion: copied.version, confirmed: true } });
+      const folder = await driver.workspaceEntry("during-run");
+      await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration,
+        mutation: { action: "delete", path: folder.path, expectedVersion: folder.version, confirmed: true } });
+      assert.ok(!(await driver.workspaceFiles({})).files.some(file => file.path === "during-run"));
+    } finally { slot.driver.canSleep = canSleep; }
+    const beforeFolder = (await driver.snapshot()).workspace?.fileRevision ?? 0;
+    await driver.mutateWorkspace({ sessionId: slot.id, expectedGeneration: editable.sessionGeneration, mutation: { action: "createDirectory", path: "empty" } });
+    assert.ok(((await driver.snapshot()).workspace?.fileRevision ?? 0) > beforeFolder);
+    assert.ok((await driver.workspaceFiles({})).files.some(file => file.path === "empty" && file.kind === "directory"));
   } finally {
     await driver.dispose();
     const sessions = (await SessionManager.listAll()).filter(session => session.cwd.startsWith(root));

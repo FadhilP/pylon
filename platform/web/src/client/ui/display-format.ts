@@ -1,3 +1,13 @@
+import type { SessionMetricsReadModel } from "../../shared/protocol/events";
+
+export function contextUsageTitle(metrics: SessionMetricsReadModel | undefined): string {
+  if (!metrics || metrics.contextLimit <= 0) return "Context usage unavailable";
+  const budget = metrics.contextBudget ?? metrics.contextLimit;
+  const usage = `${metrics.contextTokens.toLocaleString()} of ${budget.toLocaleString()} tokens`;
+  if (budget === metrics.contextLimit) return `${usage} (model capacity)`;
+  return `${usage} before compaction · Model capacity: ${metrics.contextLimit.toLocaleString()} tokens`;
+}
+
 export function displayTime(value: string): string {
   const time = Date.parse(value);
   return Number.isNaN(time) ? "Unknown" : new Date(time).toLocaleString();

@@ -12,7 +12,7 @@ import { readGitIndexText } from "../workspace/git-index.ts";
 import { readGitDetail, readGitState, readGitOperation, runGitAction } from "../workspace/git.ts";
 import { GitReadPool } from "../workspace/git-reads.ts";
 import type { GitActionInput, GitDetail, GitDetailQuery, GitState } from "../../shared/workspace/git.ts";
-import type { AcceptedCommand } from "../../shared/protocol/commands.ts";
+import type { AcceptedCommand, ModelCompactionInput } from "../../shared/protocol/commands.ts";
 import type { PromptImage, PromptTextFile, QueuedPromptPayload } from "../../shared/protocol/commands.ts";
 import type { HeliosBrowserInput, HeliosBrowserResult } from "../../shared/protocol/helios.ts";
 import type {
@@ -649,7 +649,7 @@ export class RuntimeCoordinator implements PiDriver {
     return this.readSelected("loading turn index", driver => driver.conversationTurnIndex(input));
   }
 
-  async listSessions(input: SessionListQuery = {}): Promise<SessionListSnapshot> {
+  async listSessions(input: SessionListQuery = {}, draftSessionIds?: ReadonlySet<string>): Promise<SessionListSnapshot> {
     let result: SessionListSnapshot | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       const selectedId = this.selectedId;
@@ -659,6 +659,7 @@ export class RuntimeCoordinator implements PiDriver {
       result = await this.sessionIndex.list(input, {
         activeId: selectedId,
         generation,
+        draftSessionIds,
         stateFor: sessionId =>
           this.externalSpawnRuns.get(sessionId)?.state ??
           this.slots.get(sessionId)?.driver.runtimeState() ??
@@ -1267,6 +1268,41 @@ export class RuntimeCoordinator implements PiDriver {
       if (parent && this.registry().isSessionArchived(parent.id)) throw new Error("parent session is archived");
       const project = input.projectId ? this.registry().get(input.projectId) : undefined;
       if (input.projectId && (!project || project.archivedAt)) throw new Error("project is unavailable");
+      const projectId = project?.id ?? (parent
+        ? this.registry().projectForSession(parent.id, parent.cwd)?.id
+        : this.slots.get(this.selectedId)?.target.projectId);
+      if (!parent && projectId) {
+        const policy = this.registry().runtimePolicy(projectId, this.selectedId);
+        const workspaceMode = policy.project.workspace ?? policy.global.workspace;
+        const sessions = await this.sessionIndex.all();
+        const matchesProject = (sessionId: string) => {
+          if (this.registry().isSessionArchived(sessionId)) return false;
+          const workspace = this.registry().workspaceForSession(sessionId);
+          return workspace?.projectId === projectId && workspace.mode === workspaceMode;
+        };
+        const awake = [...this.slots.values()].find(slot => {
+          if (!matchesProject(slot.id) || slot.receivedInput || !this.slotCanSleep(slot)) return false;
+          return sessions.some(session => session.id === slot.id) && !slot.driver.runtimeDetails().hasMessages;
+        });
+        if (awake) return this.select(awake);
+        const saved = sessions
+          .filter(session => matchesProject(session.id) && session.messageCount === 0 && !this.slots.has(session.id))
+          .sort((left, right) => right.modified.getTime() - left.modified.getTime())[0];
+        if (saved) {
+          const slot = await this.createSlot({
+            ...this.baseTarget(),
+            cwd: this.registry().effectiveCwd(saved.id, saved.cwd),
+            sessionPath: saved.path,
+            projectId,
+          });
+          try {
+            return await this.select(slot);
+          } catch (error) {
+            await this.disposeSlot(slot).catch(() => {});
+            throw error;
+          }
+        }
+      }
       const current = this.slots.get(this.selectedId)?.driver.runtimeDetails();
       const draft = await this.createSlot({
         ...this.baseTarget(),
@@ -2076,6 +2112,19 @@ export class RuntimeCoordinator implements PiDriver {
 
   async setModel(input: SetModelInput): Promise<void> {
     await this.selected().driver.setModel(input);
+  }
+
+  async setModelCompaction(input: ModelCompactionInput): Promise<void> {
+    await this.withLifecycle(async () => {
+      for (const slot of this.slots.values()) {
+        if (!this.slotCanSleep(slot)) throw new Error("Compaction settings can only change while every session is idle");
+      }
+      const selected = this.selected();
+      await selected.driver.setModelCompaction(input);
+      for (const slot of this.slots.values()) {
+        if (slot !== selected) await slot.driver.refreshCompactionSettings();
+      }
+    });
   }
 
   setThinkingLevel(input: SetThinkingLevelInput): void {

@@ -19,11 +19,28 @@ const tooSoonText = (waitMs: number) => `Check too soon. Continue other work; re
 export default function heartbeatExtension(pi: ExtensionAPI) {
   let manager: JobManager | undefined,
     lastCtx: any,
-    lastToolPolicy = "";
+    lastToolPolicy = "",
+    notificationsEnabled = false;
   const announced = new Map<string, string>();
   const jobMeta = new Map<string, { todoId?: string; purpose?: string }>();
   const refresh = () => {
     if (!manager || !lastCtx) return;
+    if (notificationsEnabled) {
+      for (const job of manager.jobs.values()) {
+        if (isActive(job) || job.completionAnnounced || job.exitCode === undefined) continue;
+        if (job.sessionId !== lastCtx.sessionManager.getSessionId()) continue;
+        job.completionAnnounced = true;
+        pi.sendMessage(
+          {
+            customType: "pi-heartbeat-completion",
+            content: `${job.label}\n${manager.format(job).text}`,
+            display: true,
+            details: { id: job.id, state: job.state, exitCode: job.exitCode, logPath: job.logPath },
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+      }
+    }
     const running = manager.running();
     const statusNeeded = running.length > 0 || [...manager.jobs.values()].some(job => !job.completionAnnounced);
     const enabledTools = [
@@ -77,7 +94,6 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
           : undefined,
       );
   };
-  /** Shared by heartbeat_status and /heartbeat status: enforces the polling gate, then formats. */
   const inspectJob = (job: Job) => {
     const waitMs = checkWaitMs(job);
     if (waitMs) return { waitMs, text: tooSoonText(waitMs) };
@@ -121,6 +137,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", async (_e, ctx) => {
+    notificationsEnabled = false;
     try {
       await manager?.shutdown();
     } catch {
@@ -145,9 +162,11 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
       settings.completedJobRetention,
     );
     await manager.init();
+    notificationsEnabled = true;
     refresh();
   });
   pi.on("session_shutdown", async () => {
+    notificationsEnabled = false;
     try {
       await manager?.shutdown();
     } finally {
@@ -174,7 +193,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
     label: "Heartbeat Start",
     description: "Start a long shell command only while other independent work remains; returns job ID immediately.",
     promptGuidelines: [
-      "Call heartbeat_start only when command is long-running and you can name concrete independent work to do while it runs. If no independent work remains, use bash and wait instead. After heartbeat_start, do that work before checking. heartbeat_status rejects running-job checks until more than 30 seconds after start or prior check.",
+      "Call heartbeat_start only when command is long-running and you can name concrete independent work to do while it runs. If no independent work remains, use bash and wait instead. After heartbeat_start, do that work. Completion is delivered automatically and resumes an idle agent; do not poll for completion. Use heartbeat_status only for a needed progress snapshot; running-job checks must be more than 30 seconds apart.",
     ],
     parameters: Type.Object(
       {
@@ -202,7 +221,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: `Started job ${j.id} (${j.label}). Continue: ${p.otherWork}. Do not check for at least 30 seconds.`,
+            text: `Started job ${j.id} (${j.label}). Continue: ${p.otherWork}. Completion will be delivered automatically; do not poll. Progress checks are blocked for at least 30 seconds.`,
           },
         ],
         details: {

@@ -28,6 +28,7 @@ import {
   SessionRuntime,
   terminalAgentError,
 } from "../src/server/runtime/session-runtime.ts";
+import { RuntimeCoordinator } from "../src/server/runtime/runtime-coordinator.ts";
 import { encodeHistoryCursor, RuntimeProjection } from "../src/server/runtime/projections.ts";
 import { PROMPT_IMAGE_ATTACHMENT_VERSION, promptFilesMessage } from "../src/server/runtime/prompt-attachments.ts";
 import { mergeHistoryMessages } from "../src/client/runtime/history-cache.ts";
@@ -409,6 +410,145 @@ test("custom continuations retain startup hooks without consuming the next user'
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("stopped steering preserves input and lets later queued prompts run", async t => {
+  for (const delivery of ["direct", "queued"] as const) {
+    await t.test(delivery, { timeout: 15_000 }, async () => {
+      const root = await mkdtemp(join(tmpdir(), "pylon-stopped-steering-"));
+      const cwd = join(root, "workspace"),
+        agentDir = join(root, "agent");
+      await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+      const faux = fauxProvider();
+      let firstStarted!: () => void;
+      const started = new Promise<void>(resolve => {
+        firstStarted = resolve;
+      });
+      faux.setResponses([
+        async (_context, options) => {
+          firstStarted();
+          await new Promise<void>(resolve => {
+            if (options?.signal?.aborted) resolve();
+            else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return fauxAssistantMessage("", { stopReason: "aborted" });
+        },
+        fauxAssistantMessage("Resumed answer"),
+        fauxAssistantMessage("Attachment answer"),
+        fauxAssistantMessage("Follow-up answer"),
+        fauxAssistantMessage("Later answer"),
+      ]);
+      const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
+      modelRuntime.registerNativeProvider(faux.provider);
+      await modelRuntime.refresh({ allowNetwork: false });
+      const coordinator = new RuntimeCoordinator({ modelRuntime });
+      const events: any[] = [];
+      const image = {
+        mimeType: "image/png" as const,
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      };
+      const unsubscribe = coordinator.subscribe(event => events.push(event));
+      const file = (text: string) => ({ name: "context.txt", text, size: text.length });
+      try {
+        const handle = await coordinator.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+        const internal = coordinator as any;
+        const slot = internal.slots.get(handle.sessionId);
+        const driver = slot.driver;
+        const session = driver.runtime.session;
+        await session.setModel(faux.getModel());
+        const input = (commandId: string, message: string) => ({
+          commandId,
+          message,
+          expectedGeneration: handle.sessionGeneration,
+        });
+        await coordinator.prompt(input("first", "First prompt"));
+        await started;
+        const steering = {
+          ...input("steer", "Steering prompt"),
+          images: [image],
+          files: [file("Steering attachment")],
+        };
+        if (delivery === "direct") {
+          await coordinator.steer(steering);
+        } else {
+          await coordinator.queuePrompt(steering);
+          const queued = internal.queueReadModel(slot).items[0];
+          await coordinator.steerQueuedPrompt({ queueId: queued.id, expectedGeneration: handle.sessionGeneration });
+        }
+        await coordinator.followUp(input("follow-up", "Follow-up prompt"));
+        await coordinator.abort();
+        await coordinator.abort();
+        assert.equal(session.isIdle, true);
+        assert.equal(session.pendingMessageCount, 2);
+        assert.equal(driver.runtimeState(), "idle");
+        assert.equal(driver.canSleep(), false);
+        assert.equal((await driver.snapshot()).conversation.stopping ?? false, false);
+        const entryId = session.sessionManager
+          .getBranch()
+          .find((entry: any) => entry.type === "message" && entry.message.role === "user").id;
+        await assert.rejects(
+          driver.editPrompt({ ...input("edit", "Edited prompt"), entryId, rollbackFiles: false }),
+          /idle/,
+        );
+        await assert.rejects(driver.rewindPrompt({ ...input("rewind", ""), entryId }), /idle/);
+        await assert.rejects(
+          driver.fork({ expectedGeneration: handle.sessionGeneration, entryId, name: "Fork" }),
+          /idle/,
+        );
+
+        const next = { ...input("next", "Next prompt"), files: [file("Next attachment")] };
+        if (delivery === "direct") await coordinator.prompt(next);
+        else await coordinator.queuePrompt(next);
+        await coordinator.queuePrompt(input("later", "Later prompt"));
+        const deadline = Date.now() + 8_000;
+        while (Date.now() < deadline) {
+          if (
+            session.getLastAssistantText() === "Later answer" &&
+            session.isIdle &&
+            !internal.queueReadModel(slot).items.length
+          )
+            break;
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        assert.equal(session.getLastAssistantText(), "Later answer");
+        assert.equal(session.isIdle, true);
+        assert.equal(session.pendingMessageCount, 0);
+        assert.equal(driver.runtimeState(), "idle");
+        assert.equal(driver.canSleep(), true);
+        assert.deepEqual(internal.queueReadModel(slot).items, []);
+        assert.deepEqual(
+          events
+            .filter(
+              event =>
+                event.type === "session.event" &&
+                event.payload.type === "message_start" &&
+                event.payload.message.role === "user",
+            )
+            .map(event => [event.payload.clientMessageId, event.payload.message.content[0].text]),
+          [
+            ["first", "First prompt"],
+            ["next", "Next prompt"],
+            ["steer", "Steering prompt"],
+            ["follow-up", "Follow-up prompt"],
+            ["later", "Later prompt"],
+          ],
+        );
+        const messages = session.sessionManager.buildSessionContext().messages;
+        const steeringMessage = messages.find(
+          (message: any) => message.role === "user" && message.content[0]?.text === "Steering prompt",
+        );
+        assert.ok(steeringMessage.content.some((part: any) => part.type === "image"));
+        const history = JSON.stringify(messages);
+        assert.equal(history.split("Steering attachment").length - 1, 1);
+        assert.equal(history.split("Next attachment").length - 1, 1);
+      } finally {
+        unsubscribe();
+        await coordinator.dispose();
+        await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+});
+
 test("agent_settled recovers missed agent_end state and abort does not latch stopping", async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-settled-fallback-"));
   const cwd = join(root, "workspace"),

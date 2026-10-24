@@ -1,5 +1,30 @@
 [
   {
+    "version": "3.7.0",
+    "date": "Oct 24, 2026",
+    "title": "Android runner, per-model compaction, and broader tool orchestration",
+    "summary": "Pylon 3.7 adds an Android emulator and app runner, per-model compaction controls, broader Web codemode tool access, and automatic Heartbeat results. It also adds project and session agent-model overrides and improves storage recovery, drafts, stopped runs, and Windows reliability.",
+    "notes": [
+      "Added an Android panel to discover and start local emulators, select Android or supported Flutter projects, choose app modules and variants, and build, install, launch, stop, or relaunch apps with PID-scoped logs; external emulators remain outside Pylon's cleanup authority.",
+      "Added explicit Gradle-wrapper build trust tied to project configuration and wrapper identity, bounded static project discovery that does not execute build scripts, and a shared Android runner package used by Web and Helios; Appium and agent automation remain in Helios.",
+      "Added per-model Compact at controls in Models settings with reset-to-default support, earlier-than-default trigger validation, stale-write checks, and live refresh while every session is idle; overrides are stored as reserve tokens, so model capacity changes also move the trigger.",
+      "Changed context usage percentages to use the effective automatic-compaction trigger as the budget, with full model capacity shown separately; Continuity now checks the active model's compaction settings.",
+      "Expanded Web codemode from a fixed coding/search allowlist to eligible active direct tools, including Heartbeat, StateQL, Helios, discovery, and third-party tools, while retaining permitted MCP access and excluding workflow controls, delegates, memory, and model APIs.",
+      "Rechecked codemode tool eligibility and cancellation after extension approval hooks, keeping policy changes and cancelled approvals from authorizing nested work; tool activation still takes effect on the next turn.",
+      "Made Heartbeat deliver one completion message with bounded output, exit status, and log path when a job finishes, fails, times out, or is cancelled; busy agents receive a follow-up and idle agents resume automatically, while session replacement and shutdown suppress notifications.",
+      "Made New Session reuse an empty session in the same project and workspace mode, load saved drafts before creation, and preserve both saved text and text typed during preparation; session lists hide empty sessions without saved drafts.",
+      "Fixed stopped runs with retained steering or follow-up input so later prompts can resume, message IDs stay matched, and attachments are preserved; prompt editing, rewinding, forking, and session sleep remain blocked while messages are pending.",
+      "Deduplicated live and saved tool history by tool-call ID while preserving full saved output and transcript position, and kept file views and composer drafts scoped to the runtime's project.",
+      "Reduced Git subprocess calls during workspace inspection, checkout capture, submodule discovery, and file-change reads while preserving unborn-HEAD handling and checkout validation; serialized Grunt patch collection against the parent repository to avoid concurrent Windows object-store writes.",
+      "Removed Verify's fixed five-minute check timeout while retaining cancellation, and made Web shutdown report cleanup failures with a nonzero exit status.",
+      "Tightened memory-proposal guidance to require evidence of a durable behavioral rule and keep current-task constraints in active context or Continuity state.",
+      "Made Helios consent prompts cancellation-aware for Android inventory, start and attach, screenshots, browser attach, and tab closure, preventing work from continuing after cancellation.",
+      "Reduced discovery-worker startup work by loading only the needed agent leaf modules when available, and fixed Windows workspace search crashes caused by Git for Windows grep's C locale.",
+      "Ran shared Web test suites sequentially, split Web test and build jobs in package verification, improved Windows Git discovery for tests, and cleaned up temporary compressed assets after write failures.",
+      "Expanded behavioral regression coverage for Android emulator ownership, APK validation, installation and cleanup, project discovery, storage recovery, model overrides, compaction persistence and validation, codemode policy and cancellation, Heartbeat completion, draft recovery, stopped steering, tool history, workspace isolation, and test-runner failures."
+    ]
+  },
+  {
     "version": "3.6.0",
     "date": "Oct 23, 2026",
     "title": "Sieve removed, faster session start, and smaller Helios snapshots",

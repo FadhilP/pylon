@@ -67,7 +67,11 @@ function run(executable: string, args: string[], cwd: string, signal: AbortSigna
     execFile(
       executable,
       args,
-      { cwd, encoding: "utf8", windowsHide: true, maxBuffer: MAX_OUTPUT, timeout, signal },
+      {
+        cwd, encoding: "utf8", windowsHide: true, maxBuffer: MAX_OUTPUT, timeout, signal,
+        // Git for Windows grep 3.0 crashes on -F -i in the C locale.
+        env: process.platform === "win32" ? { ...process.env, LC_ALL: "C.UTF-8" } : process.env,
+      },
       (error, stdout, stderr) => {
         if (signal.aborted) return reject(signal.reason ?? new Error("Search cancelled"));
         const failure = error as (NodeJS.ErrnoException & { killed?: boolean }) | null;

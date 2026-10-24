@@ -170,6 +170,38 @@ test("apply rechecks parent state immediately before integration", async () => {
   }
 });
 
+test("concurrent patch collection serializes writes to the shared object store", { timeout: 10_000 }, async () => {
+  const root = await repository();
+  const first = await createIsolatedWorktree(exec, root);
+  const second = await createIsolatedWorktree(exec, root);
+  let active = 0;
+  let overlapped = false;
+  const tracked = async (command: string, args: string[]) => {
+    if (!args.includes("add")) return exec(command, args);
+    overlapped ||= ++active > 1;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return await exec(command, args);
+    } finally {
+      active--;
+    }
+  };
+  try {
+    await writeFile(join(first.workerRoot, "empty-first.txt"), "");
+    await writeFile(join(second.workerRoot, "empty-second.txt"), "");
+    const [firstPatch, secondPatch] = await Promise.all([
+      collectWorkerPatch(tracked, first),
+      collectWorkerPatch(tracked, second),
+    ]);
+    assert.equal(overlapped, false);
+    assert.deepEqual(firstPatch.changedPaths, ["empty-first.txt"]);
+    assert.deepEqual(secondPatch.changedPaths, ["empty-second.txt"]);
+  } finally {
+    await removeIsolatedWorktree(exec, second);
+    await removeIsolatedWorktree(exec, first);
+  }
+});
+
 test("concurrent integration serializes stale check and patch apply", { timeout: 10_000 }, async () => {
   const root = await repository();
   const first = await createIsolatedWorktree(exec, root);

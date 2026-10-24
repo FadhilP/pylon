@@ -11,7 +11,7 @@ export function jobContext(jobs: Job[], now = Date.now()) {
     return `- ${j.id} ${j.label}: ${j.state}${j.exitCode !== undefined ? `, exit ${j.exitCode}` : ""} (${wait ? `do not check for ${Math.ceil(wait / 1000)}s` : "status available now"})`;
   });
   const instruction = available.length
-    ? "Call heartbeat_status only with a job ID marked status available now."
-    : "Do not call heartbeat_status yet; continue other work.";
+    ? "Completion is delivered automatically; do not poll. Use heartbeat_status only if you need a progress snapshot."
+    : "Do not call heartbeat_status yet; continue other work. Completion is delivered automatically; do not poll.";
   return `Background jobs:\n${lines.join("\n")}\n${instruction}`.slice(0, 1200);
 }

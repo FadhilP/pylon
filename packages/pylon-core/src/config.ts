@@ -23,7 +23,7 @@ export const pylonCoreSettings = definePackageSettings({
       label: "Web codemode",
       type: "boolean",
       defaultValue: false,
-      description: "Opt into bounded native JavaScript batches of active coding/search tools in Pylon Web. Workflow controls remain direct calls; script model APIs are disabled.",
+      description: "Opt into bounded native JavaScript batches of active direct tools and permitted MCP tools in Pylon Web. Workflow controls and delegates remain direct calls; script model APIs are disabled.",
       apply: "next-session",
     },
     {

@@ -1578,7 +1578,7 @@ export default function continuityExtension(pi: ExtensionAPI) {
       return;
     const settings = SettingsManager.create(ctx.cwd, getAgentDir(), {
       projectTrusted: ctx.isProjectTrusted?.() ?? false,
-    }).getCompactionSettings();
+    }).getCompactionSettings(ctx.model);
     if (!settings.enabled || usage.tokens <= usage.contextWindow - settings.reserveTokens) return;
 
     const request: CompactionContinuationRequest = {

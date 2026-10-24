@@ -4,6 +4,13 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import type { AndroidCommand, AndroidServiceSnapshot } from "../src/shared/protocol/android.ts";
 
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+});
+test.after(() => vite.close());
+
 class FakeSource {
   readonly listeners = new Map<string, EventListener>();
   onerror: ((event: Event) => void) | null = null;
@@ -39,11 +46,6 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 test("AndroidStore applies ordered host-global events and snapshot-recovers gaps", async () => {
-  const vite = await createServer({
-    root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true },
-    appType: "custom",
-  });
   let store: { dispose(): void } | undefined;
   try {
     const { AndroidStore, androidProjectForGeneration } = await vite.ssrLoadModule(
@@ -249,16 +251,10 @@ test("AndroidStore applies ordered host-global events and snapshot-recovers gaps
     assert.equal(sources[2].closed, true);
   } finally {
     store?.dispose();
-    await vite.close();
   }
 });
 
-test("AndroidStore refreshes a stale command without retrying it and retains refresh failures", async () => {
-  const vite = await createServer({
-    root: fileURLToPath(new URL("..", import.meta.url)),
-    server: { middlewareMode: true },
-    appType: "custom",
-  });
+test("AndroidStore retains command errors across events and clears them on explicit retry", async () => {
   let store: { dispose(): void } | undefined;
   try {
     const { AndroidStore } = await vite.ssrLoadModule("/src/client/android/android-store.ts");
@@ -267,6 +263,7 @@ test("AndroidStore refreshes a stale command without retrying it and retains ref
     let snapshotCalls = 0;
     let commandCalls = 0;
     let failRefresh = false;
+    let failCommand = true;
     const androidStore = new AndroidStore({
       bootstrap: async () => ({}),
       androidSnapshot: async () => {
@@ -279,9 +276,10 @@ test("AndroidStore refreshes a stale command without retrying it and retains ref
         sources.push(source);
         return source;
       },
-      androidCommand: async () => {
+      androidCommand: async (command: AndroidCommand) => {
         commandCalls++;
-        throw new ApiHttpError(409, "stale selection");
+        if (failCommand) throw new ApiHttpError(409, "stale selection");
+        return { commandId: command.commandId, snapshot: snapshot(4) };
       },
     });
     store = androidStore;
@@ -296,15 +294,38 @@ test("AndroidStore refreshes a stale command without retrying it and retains ref
     assert.match(androidStore.getSnapshot().error ?? "", /stale selection/);
     assert.equal(androidStore.getSnapshot().busy, undefined);
     sources[1].onopen?.({} as Event);
+    sources[1].emit("android.snapshot", {
+      protocolVersion: 4,
+      serviceEpoch: "epoch-a",
+      sequence: 3,
+      serviceRevision: 3,
+      type: "android.snapshot",
+      payload: { runner: snapshot(3).runner },
+    });
+    assert.equal(androidStore.getSnapshot().service?.sequence, 3);
+    assert.match(androidStore.getSnapshot().error ?? "", /stale selection/);
+
+    failCommand = false;
+    const retry = androidStore.setWorkspaceTrust(9, 1, 0, true);
+    assert.equal(androidStore.getSnapshot().error, undefined);
+    await retry;
+    assert.equal(androidStore.getSnapshot().busy, undefined);
+    assert.equal(androidStore.getSnapshot().service?.sequence, 4);
+
+    failCommand = true;
     failRefresh = true;
     await assert.rejects(androidStore.startEmulator("Pixel_Test"), /stale selection/);
-    assert.equal(commandCalls, 2);
+    assert.equal(commandCalls, 3);
     assert.equal(snapshotCalls, 3);
     assert.equal(androidStore.getSnapshot().status, "error");
     assert.match(androidStore.getSnapshot().error ?? "", /stale selection.*snapshot unavailable/);
     assert.equal(androidStore.getSnapshot().busy, undefined);
+
+    failRefresh = false;
+    await androidStore.refresh();
+    assert.equal(androidStore.getSnapshot().status, "ready");
+    assert.equal(androidStore.getSnapshot().error, undefined);
   } finally {
     store?.dispose();
-    await vite.close();
   }
 });

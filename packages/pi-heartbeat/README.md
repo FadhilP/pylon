@@ -21,8 +21,10 @@ Reload Pi afterward. Pylon Web exposes package settings. Configuration is stored
 
 Up to four jobs run at once. Jobs use Pi's configured Bash shell on every platform, so commands use normal `bash` syntax. Use normal `bash` when there is no independent work to do while waiting. Optional `todoId` links a Continuity todo; `purpose` is `verification`, `build`, or `other`. Pylon only exposes status while a job is active or has an unread result, and cancel while it is active. Targeted status snapshots may repeat or omit prior output; list status is metadata-only, and running-job checks must be more than 30 seconds apart.
 
+When a job completes, fails, times out, or is cancelled, Heartbeat sends its owning agent one completion message with the job ID, state, exit code, bounded output tails, and captured-log path. Busy agents receive it as a follow-up without interrupting current work; idle agents resume automatically. No completion polling is needed. Use `heartbeat_status` for progress snapshots or `/heartbeat status ID` to inspect retained results.
+
 ## Lifecycle, safety, and limits
 
-Jobs and logs exist only in the current extension runtime. Reload, session replacement, or exit kills their process trees, waits up to five seconds, and deletes external logs. UTF-8 output tails, full logs, and returned output are bounded. There is no automatic polling or extra model call. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity explicitly updates linked todos.
+Jobs and logs exist only in the current extension runtime. Reload, session replacement, or exit suppresses completion messages, kills process trees, waits up to five seconds, and deletes external logs. UTF-8 output tails, full logs, and returned output are bounded. Completion messages can cause an additional model turn; there is no automatic polling. Versioned `pi-heartbeat:job` events contain lifecycle metadata only; Continuity explicitly updates linked todos.
 
 Jobs have the same authority as Pi `bash`, can modify files, and are not sandboxed. Deliberately detached grandchildren may escape process-tree termination. Continuity plan mode blocks Heartbeat tools.

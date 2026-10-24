@@ -86,6 +86,9 @@ export async function createPylonRuntimeFactory(options: {
               });
             }
           }
+          // Recheck codemode eligibility after every extension's approval hooks.
+          const codemodeIndex = loaded.extensions.findIndex(extension => extension.path === "<inline:pylon-codemode>");
+          if (codemodeIndex >= 0) loaded.extensions.push(...loaded.extensions.splice(codemodeIndex, 1));
           if (!options.onStartupHook) return loaded;
           for (const extension of loaded.extensions) {
             for (const event of ["session_start", "resources_discover"] as const) {

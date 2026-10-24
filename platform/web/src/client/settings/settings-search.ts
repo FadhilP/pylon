@@ -111,9 +111,9 @@ const STATIC_ENTRIES: SettingsSearchEntry[] = [
     id: "models",
     tab: "models",
     section: "Models",
-    label: "Visible models",
-    description: "Choose which models appear in the model selector.",
-    keywords: "hide show provider",
+    label: "Model visibility and compaction",
+    description: "Choose visible models and per-model compaction triggers.",
+    keywords: "hide show provider context window compact tokens threshold reserve",
   }),
   entry({
     id: "agent-models",

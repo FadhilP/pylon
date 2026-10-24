@@ -4,7 +4,28 @@ import { readFileSync } from "node:fs";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
+const AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
+
+// The agent entry loads the whole runtime (~1s per worker); the index graph only imports these leaf modules.
+// Falls back to the entry when the package layout differs.
+async function agentLeafModules() {
+  try {
+    const entry = import.meta.resolve(AGENT_PACKAGE);
+    const leaves = ["./core/tools/truncate.js", "./config.js"].map(path => JSON.stringify(new URL(path, entry).href));
+    const url = `data:text/javascript,${encodeURIComponent(leaves.map(leaf => `export * from ${leaf};`).join("\n"))}`;
+    await import(url);
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+const agentLeaves = await agentLeafModules();
+
 registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (agentLeaves && specifier === AGENT_PACKAGE) return { url: agentLeaves, shortCircuit: true };
+    return nextResolve(specifier, context);
+  },
   load(url, context, nextLoad) {
     if (!url.startsWith("file:") || !url.endsWith(".ts")) return nextLoad(url, context);
     return {

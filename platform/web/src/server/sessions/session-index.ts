@@ -62,6 +62,7 @@ export interface SessionIndexOptions {
   activeFallback?: SessionInfo;
   fallbacks?: SessionInfo[];
   userCountFor?: (sessionId: string) => number | undefined;
+  draftSessionIds?: ReadonlySet<string>;
   /** Model pricing, used to split a delegated total that was logged without one. */
   rates?: UsageRateLookup;
   workStartedAtFor?: (sessionId: string) => string | undefined;
@@ -182,6 +183,11 @@ export class SessionIndex {
       return (options.userCountFor?.(fallback.id) ?? fallback.messageCount) > 0;
     });
     const source = [...missing, ...this.sessions]
+      .filter(session => {
+        if (!options.draftSessionIds) return true;
+        if (session.messageCount > 0 || (options.userCountFor?.(session.id) ?? 0) > 0) return true;
+        return options.draftSessionIds.has(session.id);
+      })
       .filter(session => !registeredIds || registeredIds.has(projectIdFor(session)))
       .filter(session => !archivedIds.has(session.id));
     const query = input.query?.trim().toLowerCase() ?? "";
