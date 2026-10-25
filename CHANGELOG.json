@@ -1,5 +1,14 @@
 [
   {
+    "version": "3.7.2",
+    "date": "Oct 25, 2026",
+    "title": "Heartbeat completion steering",
+    "summary": "A maintenance release delivers Heartbeat completion results as steering, so busy agents receive them without waiting for the current work loop to finish.",
+    "notes": [
+      "Changed Heartbeat completion messages from follow-up delivery to steering at the next steering boundary, without interrupting a running tool; idle agents still resume automatically."
+    ]
+  },
+  {
     "version": "3.7.0",
     "date": "Oct 24, 2026",
     "title": "Android runner, per-model compaction, and broader tool orchestration",

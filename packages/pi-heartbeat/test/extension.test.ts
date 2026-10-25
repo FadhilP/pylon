@@ -140,7 +140,7 @@ test("completion delivers output once without status polling and remains manuall
         ctx,
       );
     const delivered = await completion(messages, started.details.id);
-    assert.deepEqual(delivered.options, { deliverAs: "followUp", triggerTurn: true });
+    assert.deepEqual(delivered.options, { deliverAs: "steer", triggerTurn: true });
     assert.equal(delivered.message.details.state, "completed");
     assert.equal(delivered.message.details.exitCode, 0);
     assert.match(delivered.message.content, /stdout tail:\ndone/);

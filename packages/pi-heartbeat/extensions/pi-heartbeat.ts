@@ -37,7 +37,7 @@ export default function heartbeatExtension(pi: ExtensionAPI) {
             display: true,
             details: { id: job.id, state: job.state, exitCode: job.exitCode, logPath: job.logPath },
           },
-          { deliverAs: "followUp", triggerTurn: true },
+          { deliverAs: "steer", triggerTurn: true },
         );
       }
     }
