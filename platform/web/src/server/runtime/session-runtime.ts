@@ -2122,8 +2122,9 @@ export class SessionRuntime {
     const catalog = this.packageCatalog;
     const runtime = this.requireRuntime();
     if (!catalog) throw new Error("runtime is not ready");
-    this.assertPackageModels(input.settings);
     return this.withSettingsUpdate(async () => {
+      const previous = await catalog.readSettings(input.packageId);
+      this.assertPackageModels(input.settings, previous);
       await catalog.updateSettings(input.packageId, input.settings);
       return { cancelled: false, sessionId: runtime.session.sessionId, sessionGeneration: this.gate.generation };
     });
@@ -2172,7 +2173,7 @@ export class SessionRuntime {
     return this.withSettingsUpdate(async () => {
       const prepared = await prepare();
       if (prepared.changes.length === 0) return prepared;
-      this.assertPackageModels(prepared.settings);
+      this.assertPackageModels(prepared.settings, (await read()).settings);
       await catalog.updateSettings(request.packageId, prepared.settings);
       const updated = await read();
       return { ...updated, changes: prepared.changes };
@@ -2223,36 +2224,50 @@ export class SessionRuntime {
     }
   }
 
-  private assertPackageModels(settings: PackageSettingsReadModel): void {
+  private assertPackageModels(settings: PackageSettingsReadModel, previous?: PackageSettingsReadModel): void {
     const runtime = this.requireRuntime();
     const available = new Map(
       runtime.services.modelRuntime.getAvailableSnapshot().map(model => [`${model.provider}/${model.id}`, model]),
     );
-    const assertProfile = (modelRef: string | undefined, thinking: string | undefined) => {
+    const assertProfile = (
+      modelRef: string | undefined,
+      thinking: string | undefined,
+      previousModelRef?: string,
+      previousThinking?: string,
+    ) => {
       const model = modelRef ? available.get(modelRef) : undefined;
-      if (!model) throw new Error("package model is unavailable or has no configured credentials");
+      if (!model) {
+        if (modelRef && modelRef === previousModelRef && thinking === previousThinking) return;
+        throw new Error("package model is unavailable or has no configured credentials");
+      }
       if (thinking && !supportedThinkingLevels(model).includes(thinking as ThinkingLevel)) {
         throw new Error("package thinking level is unavailable for the selected model");
       }
     };
     if (settings.kind === "generic") {
-      for (const field of settings.fields)
-        if (field.type === "model" && field.value) assertProfile(field.value, undefined);
+      for (const field of settings.fields) {
+        if (field.type !== "model" || !field.value) continue;
+        const previousField =
+          previous?.kind === "generic" ? previous.fields.find(candidate => candidate.key === field.key) : undefined;
+        assertProfile(field.value, undefined, previousField?.type === "model" ? previousField.value : undefined);
+      }
       return;
     }
 
     if (settings.kind === "continuity") {
-      if (settings.planner) assertProfile(settings.planner.model, settings.planner.thinking);
-      if (settings.executor) assertProfile(settings.executor.model, settings.executor.thinking);
-      if (settings.memoryReviewer) assertProfile(settings.memoryReviewer.model, settings.memoryReviewer.thinking);
-      if (settings.compactionReviewer)
-        assertProfile(settings.compactionReviewer.model, settings.compactionReviewer.thinking);
+      for (const key of ["planner", "executor", "memoryReviewer", "compactionReviewer"] as const) {
+        const profile = settings[key];
+        if (!profile) continue;
+        const previousProfile = previous?.kind === "continuity" ? previous[key] : undefined;
+        assertProfile(profile.model, profile.thinking, previousProfile?.model, previousProfile?.thinking);
+      }
       return;
     }
     if (settings.kind === "advisor" || settings.kind === "scout") {
       if (settings.mode === "disabled") return;
       if (settings.mode === "model") {
-        assertProfile(settings.model, settings.thinking);
+        const previousProfile = previous?.kind === settings.kind && previous.mode === "model" ? previous : undefined;
+        assertProfile(settings.model, settings.thinking, previousProfile?.model, previousProfile?.thinking);
         return;
       }
       if (settings.thinking && !runtime.session.getAvailableThinkingLevels().includes(settings.thinking)) {
@@ -2261,11 +2276,15 @@ export class SessionRuntime {
       return;
     }
     if (settings.kind === "grunt" && settings.mode === "model") {
-      assertProfile(settings.model, undefined);
+      const previousModel = previous?.kind === "grunt" && previous.mode === "model" ? previous.model : undefined;
+      assertProfile(settings.model, undefined, previousModel);
       return;
     }
     if (settings.kind === "spawn" && settings.models) {
-      for (const model of settings.models) assertProfile(model, undefined);
+      for (const model of settings.models) {
+        const previousModel = previous?.kind === "spawn" && previous.models?.includes(model) ? model : undefined;
+        assertProfile(model, undefined, previousModel);
+      }
     }
   }
 
@@ -2347,6 +2366,7 @@ export class SessionRuntime {
       throw new Error("this provider is configured outside Pylon");
     }
 
+    const settingsManager = this.requireRuntime().services.settingsManager;
     const id = randomUUID();
     const authGeneration = this.gate.generation;
     const abort = new AbortController();
@@ -2364,73 +2384,78 @@ export class SessionRuntime {
     this.publishProviderAuth();
 
     void modelRuntime
-      .login(provider.id, input.authType, {
-        signal: abort.signal,
-        prompt: async prompt => {
-          this.updateAuthFlow(id, { message: prompt.message });
-          const safePrompt: ProviderAuthPrompt =
-            prompt.type === "select"
-              ? {
-                  type: "select",
-                  message: prompt.message,
-                  options: prompt.options.map(option => ({
-                    id: option.id,
-                    label: option.label,
-                    ...(option.description ? { description: option.description } : {}),
-                  })),
-                  ...(prompt.signal ? { signal: prompt.signal } : {}),
-                }
-              : {
-                  type: prompt.type,
-                  message: prompt.message,
-                  ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
-                  ...(prompt.signal ? { signal: prompt.signal } : {}),
-                };
-          const value = await this.ui.authPrompt(session.sessionId, authGeneration, safePrompt, abort.signal);
-          if (value === undefined) throw new Error("Login cancelled");
-          return value;
-        },
-        notify: event => {
-          if (event.type === "auth_url") {
-            const authUrl = this.safeProviderUrl(event.url);
-            this.updateAuthFlow(id, {
-              message: authUrl
-                ? (event.instructions ?? "Continue authentication in your browser.")
-                : "The provider returned an invalid sign-in URL.",
-              authUrl,
-              instructions: event.instructions,
-            });
-          } else if (event.type === "device_code") {
-            const verificationUri = this.safeProviderUrl(event.verificationUri);
-            this.updateAuthFlow(id, {
-              message: verificationUri
-                ? "Enter the code on the provider sign-in page."
-                : "The provider returned an invalid verification URL.",
-              ...(verificationUri
+      .login(
+        provider.id,
+        input.authType,
+        {
+          signal: abort.signal,
+          prompt: async prompt => {
+            this.updateAuthFlow(id, { message: prompt.message });
+            const safePrompt: ProviderAuthPrompt =
+              prompt.type === "select"
                 ? {
-                    deviceCode: {
-                      userCode: event.userCode,
-                      verificationUri,
-                      ...(event.expiresInSeconds
-                        ? { expiresAt: new Date(Date.now() + event.expiresInSeconds * 1_000).toISOString() }
-                        : {}),
-                    },
+                    type: "select",
+                    message: prompt.message,
+                    options: prompt.options.map(option => ({
+                      id: option.id,
+                      label: option.label,
+                      ...(option.description ? { description: option.description } : {}),
+                    })),
+                    ...(prompt.signal ? { signal: prompt.signal } : {}),
                   }
-                : {}),
-            });
-          } else if (event.type === "info") {
-            this.updateAuthFlow(id, {
-              message: event.message,
-              links: event.links?.flatMap(link => {
-                const url = this.safeProviderUrl(link.url);
-                return url ? [{ url, ...(link.label ? { label: link.label } : {}) }] : [];
-              }),
-            });
-          } else {
-            this.updateAuthFlow(id, { message: event.message });
-          }
+                : {
+                    type: prompt.type,
+                    message: prompt.message,
+                    ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+                    ...(prompt.signal ? { signal: prompt.signal } : {}),
+                  };
+            const value = await this.ui.authPrompt(session.sessionId, authGeneration, safePrompt, abort.signal);
+            if (value === undefined) throw new Error("Login cancelled");
+            return value;
+          },
+          notify: event => {
+            if (event.type === "auth_url") {
+              const authUrl = this.safeProviderUrl(event.url);
+              this.updateAuthFlow(id, {
+                message: authUrl
+                  ? (event.instructions ?? "Continue authentication in your browser.")
+                  : "The provider returned an invalid sign-in URL.",
+                authUrl,
+                instructions: event.instructions,
+              });
+            } else if (event.type === "device_code") {
+              const verificationUri = this.safeProviderUrl(event.verificationUri);
+              this.updateAuthFlow(id, {
+                message: verificationUri
+                  ? "Enter the code on the provider sign-in page."
+                  : "The provider returned an invalid verification URL.",
+                ...(verificationUri
+                  ? {
+                      deviceCode: {
+                        userCode: event.userCode,
+                        verificationUri,
+                        ...(event.expiresInSeconds
+                          ? { expiresAt: new Date(Date.now() + event.expiresInSeconds * 1_000).toISOString() }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              });
+            } else if (event.type === "info") {
+              this.updateAuthFlow(id, {
+                message: event.message,
+                links: event.links?.flatMap(link => {
+                  const url = this.safeProviderUrl(link.url);
+                  return url ? [{ url, ...(link.label ? { label: link.label } : {}) }] : [];
+                }),
+              });
+            } else {
+              this.updateAuthFlow(id, { message: event.message });
+            }
+          },
         },
-      })
+        { getDeviceId: () => settingsManager.getOrCreateDeviceId() },
+      )
       .then(() => {
         this.storedProviderIds.add(provider.id);
         this.updateAuthFlow(id, {
@@ -4128,11 +4153,7 @@ export class SessionRuntime {
   }
 
   private requestPackageStates(sessionId: string): void {
-    for (const channel of [
-      "pi-continuity:state-request",
-      "pi-papercut:state-request",
-      "pi-timeline:state-request",
-    ]) {
+    for (const channel of ["pi-continuity:state-request", "pi-papercut:state-request", "pi-timeline:state-request"]) {
       let answered = false;
       try {
         this.eventBus.emit(channel, {

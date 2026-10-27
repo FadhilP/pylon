@@ -186,6 +186,69 @@ test("user completion resolves its entry ID after persistence", async () => {
 });
 
 test(
+  "provider OAuth login reuses the installation device ID across runtime restarts",
+  { timeout: 20_000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "pylon-provider-login-"));
+    const agentDir = join(root, "agent");
+    const credentials = new InMemoryCredentialStore();
+    const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+    const faux = fauxProvider();
+    const deviceIds: string[] = [];
+    faux.provider.auth.oauth = {
+      name: "Test OAuth",
+      async login(_interaction, options) {
+        const deviceId = options?.getDeviceId?.();
+        assert.ok(deviceId, "OAuth login requires an installation device ID");
+        assert.match(deviceId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+        assert.equal(options?.getDeviceId?.(), deviceId);
+        deviceIds.push(deviceId);
+        return { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Date.now() + 3_600_000 };
+      },
+      async refresh(credential) {
+        return credential;
+      },
+      async toAuth(credential) {
+        return { apiKey: credential.access };
+      },
+    };
+    modelRuntime.registerNativeProvider(faux.provider);
+    await modelRuntime.refresh({ allowNetwork: false });
+
+    try {
+      for (const workspace of ["first", "second"]) {
+        const cwd = join(root, workspace);
+        await mkdir(cwd);
+        const driver = new SessionRuntime({ modelRuntime });
+        let stop = () => {};
+        try {
+          await driver.start({ cwd, agentDir, repositoryRoot: root, inMemory: true });
+          const completed = new Promise<string>(resolve => {
+            stop = driver.subscribe(event => {
+              if (event.type !== "provider.auth") return;
+              const status = event.providerAuth.flow?.status;
+              if (status && status !== "running") resolve(status);
+            });
+          });
+          await driver.startProviderLogin({ expectedGeneration: 1, provider: faux.provider.id, authType: "oauth" });
+          assert.equal(await completed, "succeeded");
+          assert.equal((await credentials.read(faux.provider.id))?.type, "oauth");
+        } finally {
+          stop();
+          await driver.dispose();
+        }
+      }
+      assert.equal(deviceIds.length, 2);
+      assert.equal(deviceIds[0], deviceIds[1]);
+      const settings = JSON.parse(await readFile(join(agentDir, "settings.json"), "utf8"));
+      assert.equal(settings.deviceId, deviceIds[0]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   "prompt dispositions preserve handled input, rejection cleanup, attachments, and user-message correlation",
   { timeout: 20_000 },
   async () => {
@@ -2169,6 +2232,136 @@ test("public SDK binds RPC UI, aborts, replaces, discovers Pylon, and shuts down
   assert.equal(observations.shutdowns, 6);
 });
 
+test("package models can be replaced one at a time after provider logout", { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "pylon-disconnected-models-"));
+  const credentials = new InMemoryCredentialStore();
+  const disconnected = fauxProvider({ provider: "disconnected" });
+  disconnected.provider.auth.apiKey = {
+    name: "Test credentials",
+    async resolve({ credential }) {
+      return credential?.key ? { auth: { apiKey: credential.key } } : undefined;
+    },
+  };
+  await credentials.modify(disconnected.provider.id, async () => ({ type: "api_key", key: "test-key" }));
+  const available = fauxProvider();
+  const modelRuntime = await ModelRuntime.create({ credentials, modelsPath: null });
+  modelRuntime.registerNativeProvider(disconnected.provider);
+  modelRuntime.registerNativeProvider(available.provider);
+  await modelRuntime.refresh({ allowNetwork: false });
+  const oldRef = `${disconnected.provider.id}/${disconnected.getModel().id}`;
+  const newRef = `${available.provider.id}/${available.getModel().id}`;
+  const driver = new SessionRuntime({ modelRuntime });
+  try {
+    await driver.start({ cwd: root, agentDir: join(root, "agent"), repositoryRoot, inMemory: true });
+    const packages = (await driver.listPackages()).packages;
+    let continuity = packages.find(item => item.id === "pi-continuity")!.settings!;
+    let core = packages.find(item => item.id === "pylon-core")!.settings!;
+    let spawn = packages.find(item => item.id === "pi-spawn")!.settings!;
+    assert.ok(continuity.kind === "continuity");
+    assert.ok(core.kind === "generic");
+    assert.ok(spawn.kind === "spawn");
+    const profiles = ["planner", "executor", "memoryReviewer", "compactionReviewer"] as const;
+    for (const key of profiles) continuity = { ...continuity, [key]: { model: oldRef } };
+    core = {
+      ...core,
+      fields: core.fields.map(field => (field.type === "model" ? { ...field, value: oldRef } : field)),
+    };
+    spawn = { ...spawn, models: [oldRef] };
+    await driver.updatePackageSettings({ packageId: "pi-continuity", settings: continuity });
+    await driver.updatePackageSettings({ packageId: "pylon-core", settings: core });
+    await driver.updatePackageSettings({ packageId: "pi-spawn", settings: spawn });
+    await driver.logoutProvider(disconnected.provider.id, 1);
+    assert.ok(!modelRuntime.getAvailableSnapshot().some(model => model.provider === disconnected.provider.id));
+
+    await assert.rejects(
+      driver.updatePackageSettings({
+        packageId: "pi-continuity",
+        settings: { ...continuity, planner: { model: "missing/model" } },
+      }),
+      /unavailable/,
+    );
+    await assert.rejects(
+      driver.updatePackageSettings({
+        packageId: "pi-continuity",
+        settings: { ...continuity, planner: { model: oldRef, thinking: "high" } },
+      }),
+      /unavailable/,
+    );
+    await assert.rejects(
+      driver.updatePackageSettings({
+        packageId: "pi-continuity",
+        settings: { ...continuity, planner: { model: newRef, thinking: "high" } },
+      }),
+      /thinking level is unavailable/,
+    );
+    for (const key of profiles) {
+      continuity = { ...continuity, [key]: { model: newRef } };
+      await driver.updatePackageSettings({ packageId: "pi-continuity", settings: continuity });
+    }
+    await assert.rejects(
+      driver.updatePackageSettings({
+        packageId: "pi-continuity",
+        settings: { ...continuity, executor: { model: oldRef } },
+      }),
+      /unavailable/,
+    );
+
+    const tool = (driver as any).runtime.session.getToolDefinition("pylon_settings");
+    const resultText = (result: any) => result.content.map((part: any) => part.text ?? "").join("");
+    const current = JSON.parse(
+      resultText(
+        await tool.execute("read", { action: "get", packageId: "pylon-core" }, undefined, undefined, { hasUI: false }),
+      ),
+    );
+    const repaired = await tool.execute(
+      "repair",
+      { action: "update", packageId: "pylon-core", revision: current.revision, changes: { mainAgentModel: newRef } },
+      undefined,
+      undefined,
+      { hasUI: true, ui: { confirm: async () => true } },
+    );
+    const updated = JSON.parse(resultText(repaired));
+    assert.equal(updated.settings.fields.find((field: any) => field.key === "mainAgentModel").value, newRef);
+    core = updated.settings;
+    assert.ok(core.kind === "generic");
+    await assert.rejects(
+      driver.updatePackageSettings({
+        packageId: "pylon-core",
+        settings: {
+          ...core,
+          fields: core.fields.map(field =>
+            field.type === "model" && field.key === "mainAgentModel" ? { ...field, value: oldRef } : field,
+          ),
+        },
+      }),
+      /unavailable/,
+    );
+    core = {
+      ...core,
+      fields: core.fields.map(field => (field.type === "model" ? { ...field, value: newRef } : field)),
+    };
+    await driver.updatePackageSettings({ packageId: "pylon-core", settings: core });
+
+    spawn = { ...spawn, models: [oldRef, newRef] };
+    await driver.updatePackageSettings({ packageId: "pi-spawn", settings: spawn });
+    spawn = { ...spawn, models: [newRef] };
+    await driver.updatePackageSettings({ packageId: "pi-spawn", settings: spawn });
+    await assert.rejects(
+      driver.updatePackageSettings({ packageId: "pi-spawn", settings: { ...spawn, models: [oldRef, newRef] } }),
+      /unavailable/,
+    );
+    const saved = (await driver.listPackages()).packages;
+    const savedContinuity = saved.find(item => item.id === "pi-continuity")!.settings!;
+    assert.ok(savedContinuity.kind === "continuity");
+    for (const key of profiles) assert.equal(savedContinuity[key]?.model, newRef);
+    const savedSpawn = saved.find(item => item.id === "pi-spawn")!.settings!;
+    assert.ok(savedSpawn.kind === "spawn");
+    assert.deepEqual(savedSpawn.models, [newRef]);
+  } finally {
+    await driver.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("repository packages load, toggle, and save settings", { timeout: 45_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "pylon-web-packages-"));
   const cwd = join(root, "workspace");

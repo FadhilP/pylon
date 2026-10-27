@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { HookSettingsReadModel } from "../../shared/protocol/snapshots.ts";
@@ -11,14 +10,6 @@ interface HookSettingsConfig {
 }
 
 const MAX_CONFIG_BYTES = 300 * 1024;
-const PONYTAIL_SKILL_PATHS = [
-  new URL("../../../../../skills/ponytail/SKILL.md", import.meta.url),
-  new URL("../../../../skills/ponytail/SKILL.md", import.meta.url),
-];
-const PONYTAIL_SKILL = readFileSync(
-  PONYTAIL_SKILL_PATHS.find(path => existsSync(path)) ?? PONYTAIL_SKILL_PATHS[0],
-  "utf8",
-).replaceAll("\r\n", "\n");
 
 const TOOL_RETRY_INSTRUCTIONS = `# Tool retry policy
 
@@ -30,13 +21,6 @@ export function defaultHookSettings(): HookSettingsReadModel {
     sessionStart: {
       enabled: true,
       sources: [
-        {
-          id: "ponytail-skill",
-          name: "ponytail/SKILL.md",
-          kind: "file",
-          content: PONYTAIL_SKILL,
-          reinjectOnCompaction: true,
-        },
         {
           id: "tool-retry-policy",
           name: "Tool retry policy",

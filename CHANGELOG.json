@@ -1,5 +1,16 @@
 [
   {
+    "version": "3.7.3",
+    "date": "Oct 28, 2026",
+    "title": "Model settings recovery and OAuth device identity",
+    "summary": "A maintenance release lets users repair unavailable package models one setting at a time, supplies a persistent device ID during Web OAuth login, and removes the bundled Ponytail skill from default session hooks.",
+    "notes": [
+      "Allowed unchanged unavailable models to remain in package settings while other entries are updated, so users can replace disconnected models one at a time; newly selected models and changed thinking levels still require validation.",
+      "Passed the installation's persistent device ID to Web OAuth provider login, with regression coverage for reuse across runtime restarts and storage in settings.",
+      "Removed the bundled Ponytail skill and its default session-start hook source while retaining the tool retry policy."
+    ]
+  },
+  {
     "version": "3.7.2",
     "date": "Oct 25, 2026",
     "title": "Heartbeat completion steering",
