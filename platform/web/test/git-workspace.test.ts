@@ -323,6 +323,7 @@ test("stash detail includes untracked content and pop removes only the applied e
     await git("add", ".");
     await git("commit", "-m", "base");
     await writeFile(join(cwd, "new.txt"), "shelved\n");
+    await writeFile(join(cwd, "a.txt"), "tracked change\n");
     await runGitAction(cwd, {
       action: "stash",
       includeUntracked: true,
@@ -331,8 +332,16 @@ test("stash detail includes untracked content and pop removes only the applied e
     });
     const current = await state(cwd),
       stash = current.stashes[0];
-    const detail = await readGitDetail(cwd, { kind: "stash", oid: stash.oid });
+    const detail = await readGitDetail(cwd, { kind: "stash", oid: stash.oid, path: "new.txt" });
     assert.equal(detail.files.find(file => file.path === "new.txt")?.afterText, "shelved\n");
+    assert.match(detail.unifiedDiff, /\+shelved/);
+    assert.doesNotMatch(detail.unifiedDiff, /tracked change|a\.txt/);
+    const tracked = await readGitDetail(cwd, { kind: "stash", oid: stash.oid, path: "a.txt" });
+    assert.equal(tracked.files.find(file => file.path === "a.txt")?.beforeText, "base\n");
+    assert.equal(tracked.files.find(file => file.path === "a.txt")?.afterText, "tracked change\n");
+    assert.match(tracked.unifiedDiff, /-base/);
+    assert.match(tracked.unifiedDiff, /\+tracked change/);
+    assert.doesNotMatch(tracked.unifiedDiff, /shelved|new\.txt/);
     await runGitAction(cwd, {
       action: "stashPop",
       expectedRevision: current.revision,

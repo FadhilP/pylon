@@ -1542,27 +1542,24 @@ export async function readGitDetail(cwd: string, query: GitDetailQuery): Promise
       ? names.find(file => file.path === query.path || file.oldPath === query.path)
       : names[0];
     if (!selected) throw Error("Selected path is not changed by this comparison.");
-    await detailFile(
-      repo,
-      selected,
-      `${query.oid}^:`,
-      untracked.includes(selected) && parents[2] ? `${parents[2]}:` : `${query.oid}:`,
-      cacheBlobs,
-    );
-    const files = names;
+    const untrackedParent = untracked.includes(selected) ? parents[2] : undefined;
+    const before = untrackedParent
+      ? (await git(repo.root, ["hash-object", "-t", "tree", "--stdin"], Buffer.alloc(0))).toString("utf8").trim()
+      : `${query.oid}^`;
+    const after = untrackedParent ?? query.oid;
+    await detailFile(repo, selected, `${before}:`, `${after}:`, cacheBlobs);
     const paths = selected.oldPath ? [selected.oldPath, selected.path] : [selected.path];
     const unified = await diffOutput(repo, [
       "--literal-pathspecs",
-      "stash",
-      "show",
-      "--include-untracked",
-      "-p",
+      "diff",
       "--no-ext-diff",
       "--no-textconv",
-      query.oid,
-      ...(files.some(file => file.oldPath) ? [] : ["--", ...paths]),
+      before,
+      after,
+      "--",
+      ...paths,
     ]);
-    return historicalDetail(revision, files, selected, unified);
+    return historicalDetail(revision, names, selected, unified);
   }
   const oldest = query.kind === "commit" ? undefined : query.oldest,
     newest = query.kind === "commit" ? query.oid : query.newest;
